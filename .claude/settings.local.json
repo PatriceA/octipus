@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.bun/bin/bun add:*)",
+      "Bash(~/.bun/bin/bun test --preload ./src/test-setup.ts)",
+      "Bash(python3:*)",
+      "Bash(npx tsc:*)",
+      "Bash(bun:*)",
+      "Bash(curl:*)",
+      "Bash(docker exec:*)",
+      "WebSearch"
+    ]
+  }
+}

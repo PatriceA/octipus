@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Assistant
+GenericName=Development Assistant
+Comment=Autonomous Development Assistant with multi-channel support
+Exec=bash -c 'cd "$(dirname "$(readlink -f "%k")")" && bin/assistant open'
+Icon=assistant
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+Keywords=assistant;ai;agent;development;
+StartupNotify=true
+StartupWMClass=Assistant

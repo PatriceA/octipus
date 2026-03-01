@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Brain/Circuit icon -->
+  <g transform="translate(256,256)" stroke="white" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Central circle -->
+    <circle cx="0" cy="0" r="40" fill="white" fill-opacity="0.2" stroke="white"/>
+    <!-- Top branch -->
+    <line x1="0" y1="-40" x2="0" y2="-100"/>
+    <circle cx="0" cy="-115" r="15" fill="white"/>
+    <!-- Top-right branch -->
+    <line x1="28" y1="-28" x2="75" y2="-75"/>
+    <circle cx="87" cy="-87" r="15" fill="white"/>
+    <!-- Right branch -->
+    <line x1="40" y1="0" x2="100" y2="0"/>
+    <circle cx="115" cy="0" r="15" fill="white"/>
+    <!-- Bottom-right branch -->
+    <line x1="28" y1="28" x2="75" y2="75"/>
+    <circle cx="87" cy="87" r="15" fill="white"/>
+    <!-- Bottom branch -->
+    <line x1="0" y1="40" x2="0" y2="100"/>
+    <circle cx="0" cy="115" r="15" fill="white"/>
+    <!-- Bottom-left branch -->
+    <line x1="-28" y1="28" x2="-75" y2="75"/>
+    <circle cx="-87" cy="87" r="15" fill="white"/>
+    <!-- Left branch -->
+    <line x1="-40" y1="0" x2="-100" y2="0"/>
+    <circle cx="-115" cy="0" r="15" fill="white"/>
+    <!-- Top-left branch -->
+    <line x1="-28" y1="-28" x2="-75" y2="-75"/>
+    <circle cx="-87" cy="-87" r="15" fill="white"/>
+    <!-- Inner dot -->
+    <circle cx="0" cy="0" r="8" fill="white"/>
+  </g>
+</svg>

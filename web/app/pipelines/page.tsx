@@ -1,0 +1,485 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import {
+  GitBranch,
+  Plus,
+  Trash2,
+  Pencil,
+  X,
+  GripVertical,
+  ChevronDown,
+  ChevronUp,
+  Play,
+  CheckCircle,
+  Shield,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { api } from '@/lib/api';
+
+interface PipelineStep {
+  name: string;
+  description?: string;
+  topic: string;
+  skillIds?: string[];
+  requiresApproval?: boolean;
+  promptTemplate?: string;
+}
+
+interface PipelineTemplate {
+  id: string;
+  userId: string;
+  name: string;
+  description?: string;
+  steps: PipelineStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+const TOPICS = [
+  'coding',
+  'analysis',
+  'research',
+  'writing',
+  'review',
+  'testing',
+  'documentation',
+  'general',
+];
+
+export default function PipelinesPage() {
+  const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showEditor, setShowEditor] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<PipelineTemplate | null>(null);
+
+  const fetchTemplates = useCallback(async () => {
+    try {
+      const data = await api.get<{ templates: PipelineTemplate[] }>('/pipelines/templates');
+      setTemplates(data?.templates ?? []);
+    } catch {
+      // Ignore
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this pipeline template?')) return;
+    try {
+      await api.delete(`/pipelines/templates/${id}`);
+      setTemplates(prev => prev.filter(t => t.id !== id));
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleEdit = (template: PipelineTemplate) => {
+    setEditingTemplate(template);
+    setShowEditor(true);
+  };
+
+  const handleCreate = () => {
+    setEditingTemplate(null);
+    setShowEditor(true);
+  };
+
+  const handleSave = async (data: { name: string; description?: string; steps: PipelineStep[] }) => {
+    try {
+      if (editingTemplate) {
+        const updated = await api.put<PipelineTemplate>(`/pipelines/templates/${editingTemplate.id}`, data);
+        setTemplates(prev => prev.map(t => t.id === editingTemplate.id ? updated : t));
+      } else {
+        const created = await api.post<PipelineTemplate>('/pipelines/templates', data);
+        setTemplates(prev => [created, ...prev]);
+      }
+      setShowEditor(false);
+      setEditingTemplate(null);
+    } catch {
+      // Ignore
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Pipelines</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Create multi-step pipeline templates for complex workflows
+          </p>
+        </div>
+        <button
+          onClick={handleCreate}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+        >
+          <Plus className="w-4 h-4" />
+          New Template
+        </button>
+      </div>
+
+      {/* Template list */}
+      {templates.length === 0 ? (
+        <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          <GitBranch className="w-12 h-12 mx-auto text-gray-400 mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No pipeline templates</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Create a template to define reusable multi-step workflows.
+          </p>
+          <button
+            onClick={handleCreate}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            Create Template
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {templates.map(template => (
+            <TemplateCard
+              key={template.id}
+              template={template}
+              onEdit={() => handleEdit(template)}
+              onDelete={() => handleDelete(template.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Editor modal */}
+      {showEditor && (
+        <TemplateEditor
+          template={editingTemplate}
+          onSave={handleSave}
+          onClose={() => { setShowEditor(false); setEditingTemplate(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TemplateCard({
+  template,
+  onEdit,
+  onDelete,
+}: {
+  template: PipelineTemplate;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <GitBranch className="w-5 h-5 text-blue-500" />
+            <h3 className="font-medium text-gray-900 dark:text-white">{template.name}</h3>
+            <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-2 py-0.5 rounded">
+              {template.steps.length} step{template.steps.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          {template.description && (
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{template.description}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded"
+          >
+            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={onEdit}
+            className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded"
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Steps preview */}
+      {expanded && template.steps.length > 0 && (
+        <div className="mt-4 border-t border-gray-100 dark:border-gray-700 pt-3 space-y-2">
+          {template.steps.map((step, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 text-sm pl-2"
+            >
+              <span className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center justify-center text-xs font-medium">
+                {i + 1}
+              </span>
+              <span className="font-medium text-gray-800 dark:text-gray-200">{step.name}</span>
+              <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 px-1.5 py-0.5 rounded font-mono">
+                {step.topic}
+              </span>
+              {step.requiresApproval && (
+                <span title="Requires approval">
+                  <Shield className="w-3.5 h-3.5 text-orange-500" />
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TemplateEditor({
+  template,
+  onSave,
+  onClose,
+}: {
+  template: PipelineTemplate | null;
+  onSave: (data: { name: string; description?: string; steps: PipelineStep[] }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(template?.name ?? '');
+  const [description, setDescription] = useState(template?.description ?? '');
+  const [steps, setSteps] = useState<PipelineStep[]>(template?.steps ?? []);
+  const [expandedStep, setExpandedStep] = useState<number | null>(null);
+
+  const addStep = () => {
+    setSteps(prev => [
+      ...prev,
+      { name: '', topic: 'general', requiresApproval: false },
+    ]);
+    setExpandedStep(steps.length);
+  };
+
+  const updateStep = (index: number, update: Partial<PipelineStep>) => {
+    setSteps(prev => prev.map((s, i) => i === index ? { ...s, ...update } : s));
+  };
+
+  const removeStep = (index: number) => {
+    setSteps(prev => prev.filter((_, i) => i !== index));
+    setExpandedStep(null);
+  };
+
+  const moveStep = (index: number, direction: 'up' | 'down') => {
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= steps.length) return;
+    const newSteps = [...steps];
+    [newSteps[index], newSteps[newIndex]] = [newSteps[newIndex], newSteps[index]];
+    setSteps(newSteps);
+    setExpandedStep(newIndex);
+  };
+
+  const handleSubmit = () => {
+    if (!name.trim()) return;
+    onSave({ name, description: description || undefined, steps });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+            {template ? 'Edit Template' : 'New Template'}
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Code Review Pipeline"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+            <input
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="What does this pipeline do?"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:text-white"
+            />
+          </div>
+
+          {/* Steps */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Steps</label>
+              <button
+                onClick={addStep}
+                className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" />
+                Add Step
+              </button>
+            </div>
+
+            {steps.length === 0 ? (
+              <div className="text-center py-8 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">No steps yet</p>
+                <button
+                  onClick={addStep}
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  Add your first step
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {steps.map((step, i) => (
+                  <div
+                    key={i}
+                    className="border border-gray-200 dark:border-gray-700 rounded-lg"
+                  >
+                    {/* Step header */}
+                    <div
+                      className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                      onClick={() => setExpandedStep(expandedStep === i ? null : i)}
+                    >
+                      <GripVertical className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center justify-center text-xs font-medium flex-shrink-0">
+                        {i + 1}
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 dark:text-gray-200 flex-1 truncate">
+                        {step.name || 'Untitled step'}
+                      </span>
+                      <span className="text-xs text-gray-400 font-mono">{step.topic}</span>
+                      {step.requiresApproval && (
+                        <Shield className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />
+                      )}
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          onClick={e => { e.stopPropagation(); moveStep(i, 'up'); }}
+                          disabled={i === 0}
+                          className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+                        >
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={e => { e.stopPropagation(); moveStep(i, 'down'); }}
+                          disabled={i === steps.length - 1}
+                          className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+                        >
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={e => { e.stopPropagation(); removeStep(i); }}
+                          className="p-0.5 text-gray-400 hover:text-red-600"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Expanded step editor */}
+                    {expandedStep === i && (
+                      <div className="px-3 pb-3 space-y-3 border-t border-gray-100 dark:border-gray-700 pt-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Step Name</label>
+                            <input
+                              value={step.name}
+                              onChange={e => updateStep(i, { name: e.target.value })}
+                              placeholder="e.g. Analyze Code"
+                              className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Topic</label>
+                            <select
+                              value={step.topic}
+                              onChange={e => updateStep(i, { topic: e.target.value })}
+                              className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white"
+                            >
+                              {TOPICS.map(t => (
+                                <option key={t} value={t}>{t}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Description</label>
+                          <input
+                            value={step.description ?? ''}
+                            onChange={e => updateStep(i, { description: e.target.value })}
+                            placeholder="What this step does..."
+                            className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">Prompt Template</label>
+                          <textarea
+                            value={step.promptTemplate ?? ''}
+                            onChange={e => updateStep(i, { promptTemplate: e.target.value })}
+                            placeholder="Use {{description}} and {{previousOutput}} as variables..."
+                            rows={3}
+                            className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white font-mono resize-none"
+                          />
+                        </div>
+
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={step.requiresApproval ?? false}
+                            onChange={e => updateStep(i, { requiresApproval: e.target.checked })}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700 dark:text-gray-300">Require approval before running</span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!name.trim()}
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          >
+            {template ? 'Save Changes' : 'Create Template'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,101 @@
+#!/usr/bin/env bun
+import React, { useState } from 'react';
+import { render, Box, Text, useApp, useInput } from 'ink';
+import { api } from './lib/api.js';
+
+// Views
+import { DashboardView } from './views/dashboard.js';
+import { AgentsView } from './views/agents.js';
+import { ChatView } from './views/chat.js';
+import { LogsView } from './views/logs.js';
+import { ModelsView } from './views/models.js';
+import { PipelinesView } from './views/pipelines.js';
+import { SecretsView } from './views/secrets.js';
+import { SettingsView } from './views/settings.js';
+
+type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings';
+
+function App() {
+  const { exit } = useApp();
+  const [currentView, setCurrentView] = useState<ViewType>('dashboard');
+  const [error, setError] = useState<string | null>(null);
+
+  useInput((input, key) => {
+    if (key.ctrl && input === 'c') {
+      exit();
+    }
+
+    // View shortcuts
+    if (input === '1') setCurrentView('dashboard');
+    if (input === '2') setCurrentView('agents');
+    if (input === '3') setCurrentView('chat');
+    if (input === '4') setCurrentView('logs');
+    if (input === '5') setCurrentView('models');
+    if (input === '6') setCurrentView('pipelines');
+    if (input === '7') setCurrentView('secrets');
+    if (input === '8') setCurrentView('settings');
+    if (input === 'q') exit();
+  });
+
+  const renderView = () => {
+    switch (currentView) {
+      case 'dashboard':
+        return <DashboardView />;
+      case 'agents':
+        return <AgentsView />;
+      case 'chat':
+        return <ChatView />;
+      case 'logs':
+        return <LogsView />;
+      case 'models':
+        return <ModelsView />;
+      case 'pipelines':
+        return <PipelinesView />;
+      case 'secrets':
+        return <SecretsView />;
+      case 'settings':
+        return <SettingsView />;
+      default:
+        return <DashboardView />;
+    }
+  };
+
+  return (
+    <Box flexDirection="column" width="100%">
+      {/* Header */}
+      <Box
+        borderStyle="single"
+        borderColor="cyan"
+        paddingX={1}
+        justifyContent="space-between"
+      >
+        <Text color="cyan" bold>
+          Assistant TUI
+        </Text>
+        <Text color="gray">
+          [1]Dash [2]Agents [3]Chat [4]Logs [5]Models [6]Pipes [7]Secrets [8]Settings [q]Quit
+        </Text>
+      </Box>
+
+      {/* Main Content */}
+      <Box flexDirection="column" flexGrow={1} padding={1}>
+        {error ? (
+          <Box>
+            <Text color="red">Error: {error}</Text>
+          </Box>
+        ) : (
+          renderView()
+        )}
+      </Box>
+
+      {/* Status Bar */}
+      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+        <Text color="green">●</Text>
+        <Text color="gray"> Connected | </Text>
+        <Text color="gray">View: {currentView}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+render(<App />);

@@ -1,0 +1,59 @@
+{
+  "name": "assistant",
+  "version": "0.1.0",
+  "description": "Autonomous development assistant with multi-channel support",
+  "type": "module",
+  "bin": {
+    "assistant": "./bin/assistant"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "start:all": "bin/assistant start",
+    "stop:all": "bin/assistant stop",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run scripts/migrate.ts",
+    "db:studio": "drizzle-kit studio",
+    "setup": "bun run scripts/setup.ts",
+    "backup": "bun run scripts/backup.ts",
+    "tui": "bun run tui/index.ts",
+    "test": "bun test",
+    "test:e2e": "bun run scripts/test-e2e.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "1.4.1",
+    "@elysiajs/swagger": "1.3.1",
+    "@simplewebauthn/server": "^9.0.3",
+    "@slack/bolt": "^3.17.1",
+    "argon2": "^0.31.2",
+    "botbuilder": "^4.22.1",
+    "drizzle-orm": "^0.30.10",
+    "elysia": "^1.0.25",
+    "grammy": "^1.21.1",
+    "ink": "^4.4.1",
+    "ioredis": "^5.3.2",
+    "openai": "^4.47.1",
+    "otplib": "^12.0.1",
+    "pino": "^8.20.0",
+    "pino-pretty": "^11.0.0",
+    "playwright": "^1.44.0",
+    "postgres": "^3.4.4",
+    "react": "^18.3.1",
+    "uuid": "^9.0.1",
+    "ws": "^8.17.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.3",
+    "@types/react": "^18.3.3",
+    "@types/uuid": "^9.0.8",
+    "@types/ws": "^8.5.10",
+    "drizzle-kit": "^0.21.4",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

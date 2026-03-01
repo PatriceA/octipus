@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.bun/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+.next/
+out/
+
+# Database
+*.sqlite
+*.sqlite-journal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Workspace (user files managed by the agent)
+workspace/
+
+# Playwright
+test-results/
+playwright-report/
+
+# Vault encryption keys (generated at runtime)
+vault-key.json
+
+# Bun lockfile binary
+bun.lockb

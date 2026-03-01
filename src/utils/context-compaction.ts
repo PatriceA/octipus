@@ -1,0 +1,272 @@
+import { getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
+import type { AgentMessage } from '@/core/types';
+
+interface CompactionOptions {
+  maxMessages?: number;
+  maxTokens?: number;
+  preserveSystemMessages?: boolean;
+  preserveRecentCount?: number;
+  summaryModel?: string;
+}
+
+const DEFAULT_OPTIONS: CompactionOptions = {
+  maxMessages: 100,
+  maxTokens: 32000,
+  preserveSystemMessages: true,
+  preserveRecentCount: 10,
+};
+
+/**
+ * Estimate token count for a message (rough approximation)
+ * Uses ~4 characters per token as a heuristic
+ */
+export function estimateTokens(content: string): number {
+  return Math.ceil(content.length / 4);
+}
+
+/**
+ * Calculate total token count for messages
+ */
+export function calculateTotalTokens(messages: AgentMessage[]): number {
+  return messages.reduce((total, msg) => {
+    let tokens = estimateTokens(msg.content);
+    if (msg.toolCalls) {
+      tokens += estimateTokens(JSON.stringify(msg.toolCalls));
+    }
+    return total + tokens;
+  }, 0);
+}
+
+/**
+ * Compact message history by removing old messages while preserving context
+ */
+export function compactMessages(
+  messages: AgentMessage[],
+  options: CompactionOptions = {}
+): { messages: AgentMessage[]; removed: number } {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+
+  if (messages.length <= (opts.maxMessages || 100)) {
+    const totalTokens = calculateTotalTokens(messages);
+    if (totalTokens <= (opts.maxTokens || 32000)) {
+      return { messages, removed: 0 };
+    }
+  }
+
+  const systemMessages: AgentMessage[] = [];
+  const otherMessages: AgentMessage[] = [];
+
+  // Separate system messages if preserving them
+  for (const msg of messages) {
+    if (opts.preserveSystemMessages && msg.role === 'system') {
+      systemMessages.push(msg);
+    } else {
+      otherMessages.push(msg);
+    }
+  }
+
+  // Preserve recent messages
+  const recentCount = opts.preserveRecentCount || 10;
+  const recentMessages = otherMessages.slice(-recentCount);
+  const olderMessages = otherMessages.slice(0, -recentCount);
+
+  // Calculate how many older messages we can keep
+  const systemTokens = calculateTotalTokens(systemMessages);
+  const recentTokens = calculateTotalTokens(recentMessages);
+  const remainingTokenBudget = (opts.maxTokens || 32000) - systemTokens - recentTokens;
+
+  // Keep older messages that fit in the budget
+  const keptOlderMessages: AgentMessage[] = [];
+  let usedTokens = 0;
+
+  for (let i = olderMessages.length - 1; i >= 0; i--) {
+    const msg = olderMessages[i];
+    const msgTokens = estimateTokens(msg.content);
+
+    if (usedTokens + msgTokens <= remainingTokenBudget) {
+      keptOlderMessages.unshift(msg);
+      usedTokens += msgTokens;
+    } else {
+      break;
+    }
+  }
+
+  const compactedMessages = [
+    ...systemMessages,
+    ...keptOlderMessages,
+    ...recentMessages,
+  ];
+
+  return {
+    messages: compactedMessages,
+    removed: messages.length - compactedMessages.length,
+  };
+}
+
+/**
+ * Create a summary of removed messages (for context preservation)
+ */
+export function createSummaryMessage(removedMessages: AgentMessage[]): AgentMessage {
+  const userMessages = removedMessages.filter(m => m.role === 'user').length;
+  const assistantMessages = removedMessages.filter(m => m.role === 'assistant').length;
+  const toolMessages = removedMessages.filter(m => m.role === 'tool').length;
+
+  // Extract key topics from messages
+  const topics = new Set<string>();
+  for (const msg of removedMessages) {
+    // Simple keyword extraction
+    const words = msg.content.toLowerCase().split(/\s+/);
+    for (const word of words) {
+      if (word.length > 5 && !['which', 'where', 'there', 'their', 'would', 'could', 'should'].includes(word)) {
+        topics.add(word);
+      }
+    }
+  }
+
+  const topicList = Array.from(topics).slice(0, 10).join(', ');
+
+  return {
+    role: 'system',
+    content: `[Context Summary: ${removedMessages.length} earlier messages were compacted. ` +
+      `They included ${userMessages} user messages, ${assistantMessages} assistant responses, ` +
+      `and ${toolMessages} tool interactions. Key topics: ${topicList}]`,
+    timestamp: new Date(),
+  };
+}
+
+/**
+ * Sliding window compaction strategy
+ */
+export function slidingWindowCompact(
+  messages: AgentMessage[],
+  windowSize: number = 50
+): AgentMessage[] {
+  if (messages.length <= windowSize) {
+    return messages;
+  }
+
+  // Keep system messages and last windowSize messages
+  const systemMessages = messages.filter(m => m.role === 'system');
+  const nonSystemMessages = messages.filter(m => m.role !== 'system');
+  const recentMessages = nonSystemMessages.slice(-windowSize);
+
+  return [...systemMessages, ...recentMessages];
+}
+
+/**
+ * Create an LLM-generated summary of removed messages.
+ * Falls back to createSummaryMessage() on error.
+ */
+export async function createLLMSummary(
+  removedMessages: AgentMessage[],
+  summaryModel: string
+): Promise<AgentMessage> {
+  try {
+    const client = getLiteLLMClient();
+
+    // Build a condensed transcript for summarization
+    const transcript = removedMessages
+      .map((m) => `[${m.role}]: ${m.content.slice(0, 500)}`)
+      .join('\n');
+
+    const result = await client.complete({
+      model: summaryModel,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Summarize the following conversation excerpt in 2-4 sentences. ' +
+            'Focus on key decisions, tool outputs, and user intent. Be concise.',
+          timestamp: new Date(),
+        },
+        {
+          role: 'user',
+          content: transcript.slice(0, 8000),
+          timestamp: new Date(),
+        },
+      ],
+      temperature: 0.3,
+      maxTokens: 300,
+    });
+
+    return {
+      role: 'system',
+      content: `[Context Summary — ${removedMessages.length} earlier messages compacted]: ${result.content}`,
+      timestamp: new Date(),
+    };
+  } catch {
+    // Fall back to keyword-based summary
+    return createSummaryMessage(removedMessages);
+  }
+}
+
+/**
+ * Compact messages and generate an LLM summary for removed messages.
+ */
+export async function compactMessagesWithSummary(
+  messages: AgentMessage[],
+  options: CompactionOptions = {}
+): Promise<{ messages: AgentMessage[]; removed: number }> {
+  const { messages: compactedMessages, removed } = compactMessages(messages, options);
+
+  if (removed === 0) {
+    return { messages: compactedMessages, removed };
+  }
+
+  // Get the removed messages for summarization
+  const removedMessages = messages.slice(0, messages.length - compactedMessages.length);
+  const nonSystemRemoved = removedMessages.filter((m) => m.role !== 'system');
+
+  if (nonSystemRemoved.length === 0) {
+    return { messages: compactedMessages, removed };
+  }
+
+  let model = options.summaryModel;
+  if (!model) {
+    const registry = getModelRegistry();
+    const defaultModel = await registry.getDefaultModel();
+    model = defaultModel?.modelId || 'gpt-oss';
+  }
+  const summary = await createLLMSummary(nonSystemRemoved, model);
+
+  // Insert summary after system messages
+  const systemMessages = compactedMessages.filter((m) => m.role === 'system');
+  const otherMessages = compactedMessages.filter((m) => m.role !== 'system');
+
+  return {
+    messages: [...systemMessages, summary, ...otherMessages],
+    removed,
+  };
+}
+
+/**
+ * Group related messages (e.g., tool call and its result)
+ */
+export function groupRelatedMessages(messages: AgentMessage[]): AgentMessage[][] {
+  const groups: AgentMessage[][] = [];
+  let currentGroup: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+        currentGroup = [];
+      }
+      groups.push([msg]);
+    } else if (msg.role === 'user') {
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+      }
+      currentGroup = [msg];
+    } else {
+      currentGroup.push(msg);
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}

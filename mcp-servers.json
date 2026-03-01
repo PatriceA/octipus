@@ -1,0 +1,16 @@
+{
+  "servers": [
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "description": "Web search via Brave Search API (optional upgrade over SearXNG)",
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/brave-search-mcp"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    }
+  ]
+}
