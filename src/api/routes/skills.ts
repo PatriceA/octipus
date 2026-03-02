@@ -167,6 +167,51 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     }
   )
 
+  // Execute a skill tool directly via API (used by MCP server bridge)
+  .post(
+    '/:skillId/tools/:toolName/execute',
+    async ({ user, params, body }) => {
+      if (!user) {
+        return { error: 'Not authenticated' };
+      }
+
+      const registry = getSkillRegistry();
+      const tool = registry.findTool(`${params.skillId}.${params.toolName}`);
+
+      if (!tool) {
+        return { error: `Tool '${params.skillId}.${params.toolName}' not found` };
+      }
+
+      // Construct a minimal AgentContext for API-driven execution
+      const context: import('@/core/types').AgentContext = {
+        id: `api-${Date.now().toString(36)}`,
+        sessionId: 'api',
+        userId: user.id,
+        topic: 'api',
+        model: 'api',
+        role: 'general',
+        status: 'running',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        metadata: { source: 'mcp-bridge' },
+      };
+
+      try {
+        const result = await tool.execute(body.args || {}, context);
+        return { result };
+      } catch (err) {
+        return { error: `Tool execution failed: ${(err as Error).message}` };
+      }
+    },
+    {
+      params: t.Object({ skillId: t.String(), toolName: t.String() }),
+      body: t.Object({
+        args: t.Optional(t.Record(t.String(), t.Any())),
+      }),
+      detail: { tags: ['skills'] },
+    }
+  )
+
   // Reset a permission to default (delete override)
   .delete(
     '/permissions/:skillId/:action',

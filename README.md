@@ -225,6 +225,65 @@ Use the `bin/assistant.cmd` batch script. Create a shortcut to `assistant.cmd st
 - **Stdio Transport**: Subprocess-based MCP servers
 - **SSE Transport**: HTTP streaming for remote MCP servers
 - **Tool/Resource/Prompt discovery**: Automatic enumeration from connected servers
+- **MCP Server Bridge**: Standalone MCP server (`mcp-server/`) that exposes assistant capabilities as MCP tools for CLI models (Claude Code, Gemini CLI)
+
+### MCP Server (assistant-mcp-server)
+
+Exposes the assistant's capabilities as MCP tools for external CLI models.
+
+| Tool | Description |
+|------|-------------|
+| `assistant_search` | Search the web via SearXNG |
+| `assistant_fetch_page` | Fetch and extract text from a URL (browser-rendered) |
+| `assistant_list_agents` | List running agents with status |
+| `assistant_spawn_agent` | Spawn a new autonomous agent |
+| `assistant_stop_agent` | Stop a running agent |
+| `assistant_send_message` | Send a message to a running agent |
+| `assistant_get_agent_events` | Get agent events (polling with cursor) |
+| `assistant_list_sessions` | List recent chat sessions |
+| `assistant_get_messages` | Get messages from a session |
+| `assistant_list_models` | List available AI models |
+| `assistant_model_health` | Get model health status |
+| `assistant_chat` | Send a message through the orchestrator |
+| `assistant_list_skills` | List available skills and tools |
+| `assistant_execute_skill` | Execute any skill tool (filesystem, shell, git, docker, etc.) |
+
+**Setup:**
+```bash
+cd mcp-server && npm install && npm run build
+```
+
+**Claude Code** (`.mcp.json` at project root):
+```json
+{
+  "mcpServers": {
+    "assistant": {
+      "command": "node",
+      "args": ["mcp-server/dist/index.js"],
+      "env": {
+        "ASSISTANT_URL": "http://localhost:3005",
+        "ASSISTANT_API_KEY": "<your-jwt-or-api-key>"
+      }
+    }
+  }
+}
+```
+
+**Gemini CLI** (`.gemini/settings.json`):
+```json
+{
+  "mcpServers": {
+    "assistant": {
+      "command": "node",
+      "args": ["mcp-server/dist/index.js"],
+      "env": {
+        "ASSISTANT_URL": "http://localhost:3005",
+        "ASSISTANT_API_KEY": "<your-jwt-or-api-key>"
+      }
+    }
+  }
+}
+```
 
 ### Hooks & Automation
 - **Triggers**: message_received, agent_started/completed/failed, tool_executed, permission_requested, schedule (cron), webhook
@@ -510,6 +569,18 @@ Interactive documentation available at `http://localhost:3005/swagger`.
 |--------|----------|-------------|
 | POST | `/api/voice/transcribe` | Transcribe audio (base64) to text |
 
+### Skills
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/skills` | List registered skills |
+| GET | `/api/skills/:id` | Get skill details |
+| GET | `/api/skills/tools/all` | All tools (skills + MCP combined) |
+| GET | `/api/skills/permissions` | User permission overrides |
+| PUT | `/api/skills/permissions` | Set permission level |
+| DELETE | `/api/skills/permissions/:skillId/:action` | Reset permission |
+| POST | `/api/skills/:skillId/tools/:toolName/execute` | Execute a skill tool (MCP bridge) |
+
 ### Chat
 
 | Method | Endpoint | Description |
@@ -724,6 +795,15 @@ assistant/
 │   ├── visual/            # Playwright visual debugger
 │   ├── voice/             # STT, TTS, wake word
 │   └── index.ts           # Entry point
+├── mcp-server/            # MCP server bridge for CLI models
+│   ├── src/
+│   │   ├── index.ts       # Entry point (stdio/HTTP transport)
+│   │   ├── server.ts      # McpServer setup, tool registration
+│   │   ├── client.ts      # HTTP client for assistant API
+│   │   ├── auth.ts        # API key / JWT auth helper
+│   │   └── tools/         # Tool definitions (search, agents, sessions, models, chat, skills)
+│   ├── package.json
+│   └── tsconfig.json
 ├── web/                   # Next.js 14 web UI
 │   ├── app/               # App Router pages
 │   ├── components/        # React components
@@ -732,6 +812,7 @@ assistant/
 │   └── views/             # Dashboard, Agents, Chat, Logs, Models, Pipelines, Secrets, Settings
 ├── scripts/               # Setup wizard, backup, E2E tests
 ├── assistant.desktop      # Linux desktop entry
+├── .mcp.json              # Claude Code MCP server config
 ├── package.json
 ├── tsconfig.json
 └── drizzle.config.ts
@@ -780,6 +861,17 @@ bun run test:e2e
 | Validation | Zod |
 
 ## Changelog
+
+### 2026-03-02
+
+#### MCP Server Bridge
+- **MCP server package**: New `mcp-server/` package — exposes 14 assistant tools as MCP tools for CLI models (Claude Code, Gemini CLI) via stdio or HTTP transport
+- **Tool categories**: Search (SearXNG), agents (spawn/list/stop/message/events), sessions, models, chat (orchestrator), and generic skill execution
+- **Auth support**: API key (Bearer token) or username/password auto-login with JWT caching
+- **Skill execution API**: New `POST /api/skills/:skillId/tools/:toolName/execute` endpoint bridges MCP tool calls to the assistant's skill system
+
+#### E2E Test Suite
+- **Extended to 56 tests** (from ~22): Added comprehensive coverage for skills, skill execution, MCP endpoints, hooks, agent spawning/events/routing, session CRUD/messages/pagination, model health/CLI status/usage, health (database, redis), and chat session continuity
 
 ### 2026-03-01
 

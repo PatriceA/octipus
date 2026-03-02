@@ -23,9 +23,6 @@ let testUserId: string | null = null;
 const testUsername = `e2e_test_${Date.now()}`;
 const testPassword = 'TestP@ssw0rd!2024';
 
-// Cleanup items to delete after tests
-const cleanup: Array<() => Promise<void>> = [];
-
 async function request<T>(
   method: string,
   path: string,
@@ -86,6 +83,18 @@ async function testHealth() {
     assertStatus(status, 200);
     assert(!!data.status, 'Missing status field');
   });
+
+  await test('GET /health/database returns db status', async () => {
+    const { status, data } = await request<{ status: string }>('GET', '/health/database', undefined, '');
+    assertStatus(status, 200);
+    assert(!!data.status, 'Missing status field');
+  });
+
+  await test('GET /health/redis returns redis status', async () => {
+    const { status, data } = await request<{ status: string }>('GET', '/health/redis', undefined, '');
+    assertStatus(status, 200);
+    assert(!!data.status, 'Missing status field');
+  });
 }
 
 // ─── Auth ────────────────────────────────────────────────────────
@@ -125,6 +134,11 @@ async function testAuth() {
     assertStatus(status, 200);
     assert(data.username === testUsername, `Expected username ${testUsername}, got ${data.username}`);
   });
+
+  await test('Unauthenticated request to protected endpoint fails', async () => {
+    const { status, data } = await request<{ error?: string }>('GET', '/sessions', undefined, '');
+    assert(status === 401 || !!(data as any).error, 'Expected 401 or error for unauthenticated request');
+  });
 }
 
 // ─── Models ──────────────────────────────────────────────────────
@@ -132,14 +146,37 @@ async function testModels() {
   console.log('\n\x1b[1mModels\x1b[0m');
 
   await test('GET /models returns model list', async () => {
-    const { status, data } = await request<{ models: unknown[] }>('GET', '/models');
+    const { status, data } = await request<{ models: Array<{ name: string; provider: string }> }>('GET', '/models');
     assertStatus(status, 200);
     assert(Array.isArray(data.models), 'models should be an array');
   });
 
-  await test('GET /models/providers/ollama/models handles missing ollama', async () => {
+  await test('GET /models/health returns health status', async () => {
+    const { status, data } = await request<Record<string, unknown>>('GET', '/models/health');
+    assertStatus(status, 200);
+    assert(typeof data === 'object', 'Expected health object');
+  });
+
+  await test('GET /models/cli/status returns CLI tools status', async () => {
+    const { status, data } = await request<Record<string, unknown>>('GET', '/models/cli/status');
+    assertStatus(status, 200);
+    assert(typeof data === 'object', 'Expected status object');
+  });
+
+  await test('GET /models/usage returns user usage stats', async () => {
+    const { status, data } = await request<Record<string, unknown>>('GET', '/models/usage');
+    assertStatus(status, 200);
+    assert(typeof data === 'object', 'Expected usage object');
+  });
+
+  await test('GET /models/providers/ollama/models lists ollama models', async () => {
     const { status } = await request<unknown>('GET', '/models/providers/ollama/models');
-    // May return 200 with empty list or 500 if ollama not running — both are valid
+    // May return 200 with list or error if ollama not running — both valid
+    assert(status === 200 || status === 500, `Unexpected status ${status}`);
+  });
+
+  await test('GET /models/providers/litellm/models lists litellm models', async () => {
+    const { status } = await request<unknown>('GET', '/models/providers/litellm/models');
     assert(status === 200 || status === 500, `Unexpected status ${status}`);
   });
 }
@@ -177,10 +214,66 @@ async function testVault() {
 async function testSessions() {
   console.log('\n\x1b[1mSessions\x1b[0m');
 
+  let sessionId: string | null = null;
+
   await test('GET /sessions returns session list', async () => {
     const { status, data } = await request<{ sessions: unknown[] }>('GET', '/sessions');
     assertStatus(status, 200);
     assert(Array.isArray(data.sessions), 'sessions should be an array');
+  });
+
+  await test('POST /sessions creates a new session', async () => {
+    const { status, data } = await request<{ id: string; channel?: string }>(
+      'POST', '/sessions', { channel: 'test' },
+    );
+    assertStatus(status, 200);
+    assert(!!data.id, 'No session ID returned');
+    sessionId = data.id;
+  });
+
+  await test('GET /sessions/:id returns session details', async () => {
+    if (!sessionId) throw new Error('No session to get');
+    const { status, data } = await request<{ id: string }>('GET', `/sessions/${sessionId}`);
+    assertStatus(status, 200);
+    assert(data.id === sessionId, 'Session ID mismatch');
+  });
+
+  await test('GET /sessions/:id/messages returns empty messages for new session', async () => {
+    if (!sessionId) throw new Error('No session');
+    const { status, data } = await request<{ messages: unknown[] }>('GET', `/sessions/${sessionId}/messages`);
+    assertStatus(status, 200);
+    assert(Array.isArray(data.messages), 'messages should be an array');
+  });
+
+  await test('GET /sessions/:id/messages supports pagination', async () => {
+    if (!sessionId) throw new Error('No session');
+    const { status, data } = await request<{ messages: unknown[] }>(
+      'GET', `/sessions/${sessionId}/messages?limit=5&offset=0`,
+    );
+    assertStatus(status, 200);
+    assert(Array.isArray(data.messages), 'messages should be an array');
+  });
+
+  await test('PATCH /sessions/:id updates session', async () => {
+    if (!sessionId) throw new Error('No session');
+    const { status } = await request<unknown>(
+      'PATCH', `/sessions/${sessionId}`, { status: 'active' },
+    );
+    assertStatus(status, 200);
+  });
+
+  await test('POST /sessions/:id/complete marks session complete', async () => {
+    if (!sessionId) throw new Error('No session');
+    const { status } = await request<unknown>(
+      'POST', `/sessions/${sessionId}/complete`,
+    );
+    assertStatus(status, 200);
+  });
+
+  await test('DELETE /sessions/:id deletes session', async () => {
+    if (!sessionId) throw new Error('No session');
+    const { status } = await request<unknown>('DELETE', `/sessions/${sessionId}`);
+    assertStatus(status, 200);
   });
 }
 
@@ -188,10 +281,176 @@ async function testSessions() {
 async function testAgents() {
   console.log('\n\x1b[1mAgents\x1b[0m');
 
+  let agentId: string | null = null;
+
   await test('GET /agents returns agent list', async () => {
     const { status, data } = await request<{ agents: unknown[] }>('GET', '/agents');
     assertStatus(status, 200);
     assert(Array.isArray(data.agents), 'agents should be an array');
+  });
+
+  // First create a session for the agent
+  let agentSessionId: string | null = null;
+  await test('POST /sessions creates session for agent', async () => {
+    const { status, data } = await request<{ id: string }>(
+      'POST', '/sessions', { channel: 'test' },
+    );
+    assertStatus(status, 200);
+    agentSessionId = data.id;
+  });
+
+  await test('POST /agents spawns a new agent', async () => {
+    if (!agentSessionId) throw new Error('No session for agent');
+    const { status, data } = await request<{ id?: string; agentId?: string; error?: string }>(
+      'POST', '/agents', { sessionId: agentSessionId, message: 'E2E test: what is 2+2?' },
+    );
+    assertStatus(status, 200);
+    const id = data.id || data.agentId;
+    assert(!!id || !!data.error, 'Expected agent ID or error');
+    if (id) agentId = id;
+  });
+
+  await test('GET /agents/:id returns agent details', async () => {
+    if (!agentId) return;
+    const { status, data } = await request<{ id?: string; status?: string }>('GET', `/agents/${agentId}`);
+    assertStatus(status, 200);
+    assert(!!data.status, 'Expected agent status');
+  });
+
+  await test('GET /agents/:id/events returns agent events', async () => {
+    if (!agentId) return;
+    // Wait for the agent to produce some events
+    await new Promise(r => setTimeout(r, 2000));
+    const { status, data } = await request<{ events: Array<{ seq: number; type: string }> }>(
+      'GET', `/agents/${agentId}/events`,
+    );
+    assertStatus(status, 200);
+    assert(Array.isArray(data.events), 'events should be an array');
+  });
+
+  await test('GET /agents/:id/events supports after= polling', async () => {
+    if (!agentId) return;
+    const { status, data } = await request<{ events: unknown[] }>(
+      'GET', `/agents/${agentId}/events?after=0`,
+    );
+    assertStatus(status, 200);
+    assert(Array.isArray(data.events), 'events should be an array');
+  });
+
+  await test('POST /agents/route returns routing decision', async () => {
+    const { status, data } = await request<{ model?: string; topic?: string; confidence?: number; error?: string }>(
+      'POST', '/agents/route', { message: 'Search for weather in Berlin' },
+    );
+    assertStatus(status, 200);
+    assert(!!data.topic || !!data.error, `Expected topic or error, got: ${JSON.stringify(data)}`);
+  });
+
+  await test('POST /agents/:id/stop stops the agent', async () => {
+    if (!agentId) return;
+    const { status } = await request<unknown>('POST', `/agents/${agentId}/stop`);
+    // 200 if still running, could error if already completed
+    assert(status === 200 || status === 404 || status === 400, `Unexpected status ${status}`);
+  });
+}
+
+// ─── Skills ──────────────────────────────────────────────────────
+async function testSkills() {
+  console.log('\n\x1b[1mSkills\x1b[0m');
+
+  await test('GET /skills returns registered skills', async () => {
+    const { status, data } = await request<{ skills: Array<{ id: string; name: string; tools: unknown[] }> }>('GET', '/skills');
+    assertStatus(status, 200);
+    assert(Array.isArray(data.skills), 'skills should be an array');
+    assert(data.skills.length > 0, 'Expected at least one skill');
+    // Verify expected skills are present
+    const skillIds = data.skills.map(s => s.id);
+    assert(skillIds.includes('filesystem'), `filesystem skill missing, got: ${skillIds.join(', ')}`);
+    assert(skillIds.includes('websearch'), `websearch skill missing, got: ${skillIds.join(', ')}`);
+  });
+
+  await test('GET /skills/:id returns specific skill', async () => {
+    const { status, data } = await request<{ id: string; name: string; tools: Array<{ name: string }> }>('GET', '/skills/filesystem');
+    assertStatus(status, 200);
+    assert(data.id === 'filesystem', `Expected id 'filesystem', got ${data.id}`);
+    assert(Array.isArray(data.tools), 'tools should be an array');
+    assert(data.tools.length > 0, 'Expected at least one tool in filesystem skill');
+  });
+
+  await test('GET /skills/:id returns error for unknown skill', async () => {
+    const { data } = await request<{ error?: string }>('GET', '/skills/nonexistent_skill');
+    assert(!!(data as any).error, 'Expected error for unknown skill');
+  });
+
+  await test('GET /skills/tools/all returns combined skill + MCP tools', async () => {
+    const { status, data } = await request<{ tools: Array<{ name: string; source: string }> }>('GET', '/skills/tools/all');
+    assertStatus(status, 200);
+    assert(Array.isArray(data.tools), 'tools should be an array');
+    assert(data.tools.length > 0, 'Expected at least one tool');
+  });
+
+  await test('GET /skills/permissions returns user permissions', async () => {
+    const { status, data } = await request<{ permissions: unknown[] }>('GET', '/skills/permissions');
+    assertStatus(status, 200);
+    assert(Array.isArray(data.permissions), 'permissions should be an array');
+  });
+}
+
+// ─── Skill Execution ─────────────────────────────────────────────
+async function testSkillExecution() {
+  console.log('\n\x1b[1mSkill Execution (MCP bridge endpoint)\x1b[0m');
+
+  await test('POST /skills/:skillId/tools/:toolName/execute runs filesystem.read_file', async () => {
+    const { status, data } = await request<{ result?: unknown; error?: string }>(
+      'POST', '/skills/filesystem/tools/read_file/execute',
+      { args: { path: '/etc/hostname' } },
+    );
+    assertStatus(status, 200);
+    assert(data.result !== undefined || data.error !== undefined, 'Expected result or error');
+  });
+
+  await test('POST /skills/:skillId/tools/:toolName/execute returns error for unknown tool', async () => {
+    const { status, data } = await request<{ error?: string }>(
+      'POST', '/skills/filesystem/tools/nonexistent_tool/execute',
+      { args: {} },
+    );
+    assertStatus(status, 200);
+    assert(!!(data as any).error, 'Expected error for unknown tool');
+  });
+
+  await test('POST /skills/:skillId/tools/:toolName/execute returns error for unknown skill', async () => {
+    const { status, data } = await request<{ error?: string }>(
+      'POST', '/skills/nonexistent/tools/something/execute',
+      { args: {} },
+    );
+    assertStatus(status, 200);
+    assert(!!(data as any).error, 'Expected error for unknown skill');
+  });
+
+  await test('POST /skills/:skillId/tools/:toolName/execute works without args', async () => {
+    const { status, data } = await request<{ result?: unknown; error?: string }>(
+      'POST', '/skills/filesystem/tools/list_directory/execute',
+      { args: { path: '/tmp' } },
+    );
+    assertStatus(status, 200);
+    assert(data.result !== undefined || data.error !== undefined, 'Expected result or error');
+  });
+}
+
+// ─── MCP ─────────────────────────────────────────────────────────
+async function testMCP() {
+  console.log('\n\x1b[1mMCP\x1b[0m');
+
+  await test('GET /mcp/tools returns available MCP tools', async () => {
+    const { status, data } = await request<{ tools: unknown[] }>('GET', '/mcp/tools');
+    assertStatus(status, 200);
+    assert(Array.isArray(data.tools), 'tools should be an array');
+  });
+
+  await test('GET /mcp/servers returns server list', async () => {
+    const { status, data } = await request<{ servers?: unknown[]; error?: string }>('GET', '/mcp/servers');
+    assertStatus(status, 200);
+    // Non-admin users get an error, that's expected behavior
+    assert(Array.isArray(data.servers) || !!data.error, 'Expected servers array or error');
   });
 }
 
@@ -266,18 +525,75 @@ async function testNotifications() {
   });
 }
 
+// ─── Hooks ───────────────────────────────────────────────────────
+async function testHooks() {
+  console.log('\n\x1b[1mHooks\x1b[0m');
+
+  await test('GET /hooks returns hook list', async () => {
+    const { status, data } = await request<{ hooks: unknown[] }>('GET', '/hooks');
+    assertStatus(status, 200);
+    assert(Array.isArray(data.hooks), 'hooks should be an array');
+  });
+}
+
 // ─── Chat ────────────────────────────────────────────────────────
+let chatSessionId: string | null = null;
+
 async function testChat() {
   console.log('\n\x1b[1mChat\x1b[0m');
 
-  await test('POST /chat sends a message', async () => {
-    const { status, data } = await request<{ response?: string; error?: string }>(
+  await test('POST /chat sends a message and returns response', async () => {
+    const { status, data } = await request<{ response?: string; sessionId?: string; classification?: string; error?: string }>(
       'POST', '/chat', { message: 'Hello, this is an E2E test.' },
     );
     assertStatus(status, 200);
-    // May return an error if no model is configured, which is fine for E2E
     assert(!!data.response || !!data.error, 'Expected response or error');
+    if (data.sessionId) chatSessionId = data.sessionId;
   });
+
+  await test('POST /chat continues existing session', async () => {
+    if (!chatSessionId) return;
+    // Use AbortController to prevent hanging on slow model responses
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await fetch(`${API_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ message: 'Follow-up: say ok.', sessionId: chatSessionId }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const data = await response.json() as { response?: string; sessionId?: string; error?: string };
+      assertStatus(response.status, 200);
+      assert(!!data.response || !!data.error, 'Expected response or error');
+      if (data.sessionId) {
+        assert(data.sessionId === chatSessionId, `Session ID changed: expected ${chatSessionId}, got ${data.sessionId}`);
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if ((err as Error).name === 'AbortError') {
+        // Timeout is acceptable — model might be slow
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // Verify chat created messages in the session
+  if (chatSessionId) {
+    await test('Chat session has messages persisted', async () => {
+      const { status, data } = await request<{ messages: Array<{ role: string }> }>(
+        'GET', `/sessions/${chatSessionId}/messages`,
+      );
+      assertStatus(status, 200);
+      assert(Array.isArray(data.messages), 'messages should be an array');
+      assert(data.messages.length >= 1, `Expected at least 1 message, got ${data.messages.length}`);
+    });
+  }
 }
 
 // ─── Main ────────────────────────────────────────────────────────
@@ -292,8 +608,12 @@ async function run() {
     await testVault();
     await testSessions();
     await testAgents();
+    await testSkills();
+    await testSkillExecution();
+    await testMCP();
     await testPipelines();
     await testNotifications();
+    await testHooks();
     await testChat();
   } catch (err) {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);
