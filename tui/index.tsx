@@ -12,8 +12,9 @@ import { ModelsView } from './views/models.js';
 import { PipelinesView } from './views/pipelines.js';
 import { SecretsView } from './views/secrets.js';
 import { SettingsView } from './views/settings.js';
+import { IntegrationsView } from './views/integrations.js';
 
-type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings';
+type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations';
 
 function App() {
   const { exit } = useApp();
@@ -33,7 +34,8 @@ function App() {
     if (input === '5') setCurrentView('models');
     if (input === '6') setCurrentView('pipelines');
     if (input === '7') setCurrentView('secrets');
-    if (input === '8') setCurrentView('settings');
+    if (input === '8') setCurrentView('integrations');
+    if (input === '9') setCurrentView('settings');
     if (input === 'q') exit();
   });
 
@@ -53,6 +55,8 @@ function App() {
         return <PipelinesView />;
       case 'secrets':
         return <SecretsView />;
+      case 'integrations':
+        return <IntegrationsView />;
       case 'settings':
         return <SettingsView />;
       default:
@@ -73,7 +77,7 @@ function App() {
           Assistant TUI
         </Text>
         <Text color="gray">
-          [1]Dash [2]Agents [3]Chat [4]Logs [5]Models [6]Pipes [7]Secrets [8]Settings [q]Quit
+          [1]Dash [2]Agents [3]Chat [4]Logs [5]Models [6]Pipes [7]Secrets [8]Integrations [9]Settings [q]Quit
         </Text>
       </Box>
 
