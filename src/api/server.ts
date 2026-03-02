@@ -20,6 +20,8 @@ import { mcpRoutes } from './routes/mcp';
 import { skillRoutes } from './routes/skills';
 import { voiceRoutes } from './routes/voice';
 import { notificationRoutes } from './routes/notifications';
+import { workspaceRoutes } from './routes/workspace';
+import { oauthRoutes } from './routes/oauth';
 import { authGuard } from './middleware/auth-guard';
 import { setupWebSocket } from './websocket';
 
@@ -115,6 +117,8 @@ export function createServer() {
         .use(skillRoutes)
         .use(voiceRoutes)
         .use(notificationRoutes)
+        .use(workspaceRoutes)
+        .use(oauthRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group

@@ -65,6 +65,10 @@ export const defaultConfig: Partial<Config> = {
     approvalTimeoutMs: 3600000,
     workerTimeoutMs: 600000,
   },
+  workspace: {
+    rootPath: './workspace',
+    additionalPaths: [],
+  },
 };
 
 export const requiredEnvVars = [
@@ -95,4 +99,12 @@ export const optionalEnvVars = [
   'N8N_URL',
   'N8N_API_KEY',
   'MCP_SERVERS_CONFIG',
+  'WORKSPACE_PATH',
+  'WORKSPACE_ADDITIONAL_PATHS',
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'MICROSOFT_OAUTH_CLIENT_ID',
+  'MICROSOFT_OAUTH_CLIENT_SECRET',
+  'MICROSOFT_OAUTH_TENANT_ID',
+  'PUBLIC_URL',
 ];

@@ -3,8 +3,23 @@ import { join, resolve, dirname, relative, basename } from 'path';
 import { existsSync } from 'fs';
 import { BaseSkill, createParameterSchema } from '../base-skill';
 import type { SkillManifest, AgentContext } from '@/core/types';
+import { getConfig } from '@/config';
 
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || process.cwd();
+function getWorkspacePaths(): { root: string; additional: string[] } {
+  try {
+    const config = getConfig();
+    return {
+      root: resolve(config.workspace.rootPath),
+      additional: config.workspace.additionalPaths.map(p => resolve(p)),
+    };
+  } catch {
+    // Config may not be loaded yet during early initialization
+    return {
+      root: resolve(process.env.WORKSPACE_PATH || process.cwd()),
+      additional: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean).map(p => resolve(p)) || [],
+    };
+  }
+}
 
 export class FilesystemSkill extends BaseSkill {
   readonly id = 'filesystem';
@@ -254,7 +269,7 @@ export class FilesystemSkill extends BaseSkill {
 
             const fullPath = join(dir, entry.name);
             if (pattern.test(entry.name)) {
-              results.push(relative(WORKSPACE_ROOT, fullPath));
+              results.push(relative(getWorkspacePaths().root, fullPath));
             }
             if (entry.isDirectory() && !entry.name.startsWith('.')) {
               await search(fullPath);
@@ -273,16 +288,18 @@ export class FilesystemSkill extends BaseSkill {
     if (path.startsWith('/')) {
       return resolve(path);
     }
-    return resolve(WORKSPACE_ROOT, path);
+    const { root } = getWorkspacePaths();
+    return resolve(root, path);
   }
 
   private validatePath(path: string): void {
     const resolved = resolve(path);
-    const workspaceResolved = resolve(WORKSPACE_ROOT);
+    const { root, additional } = getWorkspacePaths();
+    const allPaths = [root, ...additional];
 
-    // Ensure path is within workspace (or is a system temp path for certain operations)
-    if (!resolved.startsWith(workspaceResolved) && !resolved.startsWith('/tmp')) {
-      throw new Error(`Path must be within workspace: ${path}`);
+    const allowed = allPaths.some(p => resolved.startsWith(p)) || resolved.startsWith('/tmp');
+    if (!allowed) {
+      throw new Error(`Path '${path}' is outside allowed workspace directories`);
     }
   }
 
@@ -298,7 +315,7 @@ export class FilesystemSkill extends BaseSkill {
       if (!includeHidden && entry.name.startsWith('.')) continue;
 
       const fullPath = join(dir, entry.name);
-      const relativePath = relative(WORKSPACE_ROOT, fullPath);
+      const relativePath = relative(getWorkspacePaths().root, fullPath);
 
       if (entry.isDirectory()) {
         results.push({ name: entry.name, path: relativePath, isDirectory: true });

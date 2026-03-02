@@ -109,6 +109,22 @@ function loadFromEnv(): Partial<Config> {
       approvalTimeoutMs: parseInt(process.env.APPROVAL_TIMEOUT_MS || '3600000', 10),
       workerTimeoutMs: parseInt(process.env.WORKER_TIMEOUT_MS || '600000', 10),
     },
+    workspace: {
+      rootPath: process.env.WORKSPACE_PATH || './workspace',
+      additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
+    },
+    oauth: {
+      google: {
+        clientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+      },
+      microsoft: {
+        clientId: process.env.MICROSOFT_OAUTH_CLIENT_ID,
+        clientSecret: process.env.MICROSOFT_OAUTH_CLIENT_SECRET,
+        tenantId: process.env.MICROSOFT_OAUTH_TENANT_ID || 'common',
+      },
+      publicUrl: process.env.PUBLIC_URL,
+    },
   };
 }
 

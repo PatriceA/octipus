@@ -142,6 +142,26 @@ export const orchestratorConfigSchema = z.object({
   workerTimeoutMs: z.number().min(0).default(600000), // 10 minutes
 });
 
+// OAuth configuration schema
+export const oauthConfigSchema = z.object({
+  google: z.object({
+    clientId: z.string().optional(),
+    clientSecret: z.string().optional(),
+  }).default({}),
+  microsoft: z.object({
+    clientId: z.string().optional(),
+    clientSecret: z.string().optional(),
+    tenantId: z.string().default('common'),
+  }).default({}),
+  publicUrl: z.string().optional(),
+}).default({});
+
+// Workspace configuration schema
+export const workspaceConfigSchema = z.object({
+  rootPath: z.string().default('./workspace'),
+  additionalPaths: z.array(z.string()).default([]),
+});
+
 // Full configuration schema
 export const configSchema = z.object({
   database: databaseConfigSchema,
@@ -160,6 +180,8 @@ export const configSchema = z.object({
   agent: agentConfigSchema,
   orchestrator: orchestratorConfigSchema.default({}),
   cliModels: cliModelsConfigSchema.default({}),
+  workspace: workspaceConfigSchema.default({}),
+  oauth: oauthConfigSchema,
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -179,3 +201,5 @@ export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
+export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+export type OAuthConfig = z.infer<typeof oauthConfigSchema>;

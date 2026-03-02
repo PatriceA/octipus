@@ -460,6 +460,7 @@ async function generateEnvFile(config: Config): Promise<void> {
 
 # General
 WORKSPACE_PATH=${config.general.workspacePath}
+WORKSPACE_ADDITIONAL_PATHS=
 DATA_PATH=${config.general.dataPath}
 LOG_LEVEL=${config.general.logLevel}
 

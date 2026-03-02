@@ -8,6 +8,8 @@ const PUBLIC_PATH_PREFIXES = [
 ];
 
 function isPublicPath(path: string): boolean {
+  // OAuth callbacks are public (state-based auth)
+  if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
