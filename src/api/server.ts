@@ -47,10 +47,10 @@ export function createServer() {
         },
       })
     )
-    // CORS
+    // CORS — supports wildcard '*' for LAN access or a list of origins
     .use(
       cors({
-        origin: config.api.corsOrigins,
+        origin: config.api.corsOrigins.includes('*') ? true : config.api.corsOrigins,
         credentials: true,
       })
     )

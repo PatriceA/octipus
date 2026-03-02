@@ -1,4 +1,31 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3005/api';
+const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3005/api';
+
+/**
+ * Get the current API URL. Checks localStorage first (user override),
+ * then falls back to NEXT_PUBLIC_API_URL env var, then localhost default.
+ */
+export function getApiUrl(): string {
+  if (typeof window !== 'undefined') {
+    const override = localStorage.getItem('assistant_api_url');
+    if (override) return override;
+  }
+  return DEFAULT_API_URL;
+}
+
+/**
+ * Set a custom API URL (persisted in localStorage).
+ * Pass null to reset to default.
+ */
+export function setApiUrl(url: string | null): void {
+  if (typeof window === 'undefined') return;
+  if (url) {
+    // Normalize: ensure it ends with /api
+    const normalized = url.replace(/\/+$/, '');
+    localStorage.setItem('assistant_api_url', normalized.endsWith('/api') ? normalized : `${normalized}/api`);
+  } else {
+    localStorage.removeItem('assistant_api_url');
+  }
+}
 
 class ApiClient {
   private token: string | null = null;
@@ -34,7 +61,8 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}${path}`, {
+    const apiUrl = getApiUrl();
+    const response = await fetch(`${apiUrl}${path}`, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -80,6 +108,7 @@ export const api = new ApiClient();
 // WebSocket connection
 export function createWebSocket(path: string = '/ws'): WebSocket {
   const token = api.getToken();
-  const wsUrl = API_URL.replace(/^http/, 'ws').replace('/api', '');
+  const apiUrl = getApiUrl();
+  const wsUrl = apiUrl.replace(/^http/, 'ws').replace('/api', '');
   return new WebSocket(`${wsUrl}${path}?token=${token}`);
 }
