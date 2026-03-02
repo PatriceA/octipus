@@ -739,7 +739,7 @@ function OAuthProviderCard({
         <div className="mt-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
           <p className="text-xs text-amber-800 dark:text-amber-200">
             OAuth credentials not found. Add your Client ID and Client Secret under
-            <span className="font-semibold"> General &gt; {setupLabel}</span> first, then restart the backend.
+            <span className="font-semibold"> General &gt; {setupLabel}</span>, then try connecting again.
           </p>
         </div>
       )}
