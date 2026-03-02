@@ -191,16 +191,50 @@ function GeneralTab() {
   );
 }
 
-const PROVIDER_KEYS = [
-  { provider: 'openai', label: 'OpenAI', vaultName: 'openai_api_key', systemLevel: true, testable: true },
-  { provider: 'anthropic', label: 'Anthropic', vaultName: 'anthropic_api_key', systemLevel: true, testable: true },
-  { provider: 'gemini', label: 'Google Gemini', vaultName: 'gemini_api_key', systemLevel: true, testable: true },
-  { provider: 'deepseek', label: 'DeepSeek', vaultName: 'deepseek_api_key', systemLevel: true, testable: true },
-  { provider: 'google-oauth', label: 'Google OAuth ID', vaultName: 'google_oauth_client_id', systemLevel: true, testable: false },
-  { provider: 'google-oauth', label: 'Google OAuth Secret', vaultName: 'google_oauth_client_secret', systemLevel: true, testable: false },
-  { provider: 'microsoft-oauth', label: 'Microsoft OAuth ID', vaultName: 'microsoft_oauth_client_id', systemLevel: true, testable: false },
-  { provider: 'microsoft-oauth', label: 'Microsoft OAuth Secret', vaultName: 'microsoft_oauth_client_secret', systemLevel: true, testable: false },
+interface VaultKeyEntry {
+  label: string;
+  vaultName: string;
+  testProvider?: string;
+  placeholder?: string;
+}
+
+interface VaultKeyGroup {
+  title: string;
+  description: string;
+  keys: VaultKeyEntry[];
+}
+
+const VAULT_KEY_GROUPS: VaultKeyGroup[] = [
+  {
+    title: 'LLM Provider API Keys',
+    description: 'Store API keys for direct provider access (bypasses LiteLLM).',
+    keys: [
+      { label: 'OpenAI', vaultName: 'openai_api_key', testProvider: 'openai', placeholder: 'sk-...' },
+      { label: 'Anthropic', vaultName: 'anthropic_api_key', testProvider: 'anthropic', placeholder: 'sk-ant-...' },
+      { label: 'Google Gemini', vaultName: 'gemini_api_key', testProvider: 'gemini' },
+      { label: 'DeepSeek', vaultName: 'deepseek_api_key', testProvider: 'deepseek', placeholder: 'sk-...' },
+    ],
+  },
+  {
+    title: 'Google OAuth Credentials',
+    description: 'Required for Google Workspace integration (Gmail, Calendar, Drive). Create at console.cloud.google.com/apis/credentials.',
+    keys: [
+      { label: 'Client ID', vaultName: 'google_oauth_client_id', placeholder: '...apps.googleusercontent.com' },
+      { label: 'Client Secret', vaultName: 'google_oauth_client_secret', placeholder: 'GOCSPX-...' },
+    ],
+  },
+  {
+    title: 'Microsoft OAuth Credentials',
+    description: 'Required for Microsoft 365 integration (Outlook, Calendar, OneDrive). Create at portal.azure.com.',
+    keys: [
+      { label: 'Client ID', vaultName: 'microsoft_oauth_client_id' },
+      { label: 'Client Secret', vaultName: 'microsoft_oauth_client_secret' },
+      { label: 'Tenant ID', vaultName: 'microsoft_oauth_tenant_id', placeholder: 'common (or your tenant ID)' },
+    ],
+  },
 ];
+
+const ALL_VAULT_KEYS = VAULT_KEY_GROUPS.flatMap((g) => g.keys);
 
 function ProviderKeysSection() {
   const [keys, setKeys] = useState<Record<string, string>>({});
@@ -209,12 +243,11 @@ function ProviderKeysSection() {
   const [testing, setTesting] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check which keys exist in the vault
     api.get<{ credentials?: { name: string }[] }>('/vault').then((data) => {
       const creds = data?.credentials ?? [];
       const s: Record<string, boolean> = {};
-      for (const pk of PROVIDER_KEYS) {
-        s[pk.vaultName] = creds.some((c) => c.name === pk.vaultName);
+      for (const k of ALL_VAULT_KEYS) {
+        s[k.vaultName] = creds.some((c) => c.name === k.vaultName);
       }
       setStatuses(s);
     }).catch(() => {});
@@ -223,7 +256,6 @@ function ProviderKeysSection() {
   const handleSave = async (vaultName: string) => {
     const value = keys[vaultName];
     if (!value) return;
-    const pk = PROVIDER_KEYS.find((p) => p.vaultName === vaultName);
     setSaving(vaultName);
     try {
       await api.post('/vault', {
@@ -232,7 +264,7 @@ function ProviderKeysSection() {
         credentialType: 'api_key',
         description: `Credential: ${vaultName}`,
         tags: ['provider'],
-        systemLevel: pk?.systemLevel ?? false,
+        systemLevel: true,
       });
       setStatuses((s) => ({ ...s, [vaultName]: true }));
       setKeys((k) => ({ ...k, [vaultName]: '' }));
@@ -259,44 +291,46 @@ function ProviderKeysSection() {
   };
 
   return (
-    <div>
-      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Provider API Keys</h3>
-      <p className="text-xs text-gray-500 mb-3">
-        Store API keys securely in the vault for direct provider access (bypasses LiteLLM).
-      </p>
-      <div className="space-y-3">
-        {PROVIDER_KEYS.map((pk) => (
-          <div key={pk.vaultName} className="flex items-center gap-2">
-            <div className="w-28 text-sm text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${statuses[pk.vaultName] ? 'bg-green-500' : 'bg-gray-400'}`} />
-              {pk.label}
-            </div>
-            <input
-              type="password"
-              value={keys[pk.vaultName] || ''}
-              onChange={(e) => setKeys((k) => ({ ...k, [pk.vaultName]: e.target.value }))}
-              placeholder={statuses[pk.vaultName] ? 'Key saved (enter to replace)' : 'sk-...'}
-              className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-            />
-            <button
-              onClick={() => handleSave(pk.vaultName)}
-              disabled={!keys[pk.vaultName] || saving === pk.vaultName}
-              className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {saving === pk.vaultName ? '...' : 'Save'}
-            </button>
-            {statuses[pk.vaultName] && pk.testable && (
-              <button
-                onClick={() => handleTest(pk.provider, pk.vaultName)}
-                disabled={testing === pk.vaultName}
-                className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-              >
-                {testing === pk.vaultName ? '...' : 'Test'}
-              </button>
-            )}
+    <div className="space-y-5">
+      {VAULT_KEY_GROUPS.map((group) => (
+        <div key={group.title}>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{group.title}</h3>
+          <p className="text-xs text-gray-500 mb-3">{group.description}</p>
+          <div className="space-y-2">
+            {group.keys.map((k) => (
+              <div key={k.vaultName} className="flex items-center gap-2">
+                <div className="w-28 text-sm text-gray-700 dark:text-gray-300 flex items-center gap-1.5 shrink-0">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${statuses[k.vaultName] ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  {k.label}
+                </div>
+                <input
+                  type="password"
+                  value={keys[k.vaultName] || ''}
+                  onChange={(e) => setKeys((prev) => ({ ...prev, [k.vaultName]: e.target.value }))}
+                  placeholder={statuses[k.vaultName] ? 'Saved (enter new value to replace)' : k.placeholder || 'Enter value...'}
+                  className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                />
+                <button
+                  onClick={() => handleSave(k.vaultName)}
+                  disabled={!keys[k.vaultName] || saving === k.vaultName}
+                  className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving === k.vaultName ? '...' : 'Save'}
+                </button>
+                {statuses[k.vaultName] && k.testProvider && (
+                  <button
+                    onClick={() => handleTest(k.testProvider!, k.vaultName)}
+                    disabled={testing === k.vaultName}
+                    className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                  >
+                    {testing === k.vaultName ? '...' : 'Test'}
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -581,9 +615,9 @@ function OAuthIntegrationsSection() {
   );
 }
 
-const OAUTH_VAULT_NAMES: Record<string, { clientId: string; clientSecret: string }> = {
-  google: { clientId: 'google_oauth_client_id', clientSecret: 'google_oauth_client_secret' },
-  microsoft: { clientId: 'microsoft_oauth_client_id', clientSecret: 'microsoft_oauth_client_secret' },
+const OAUTH_SETUP_LABELS: Record<string, string> = {
+  google: 'Google OAuth Credentials',
+  microsoft: 'Microsoft OAuth Credentials',
 };
 
 function OAuthProviderCard({
@@ -607,8 +641,6 @@ function OAuthProviderCard({
       }
     },
   });
-
-  const vaultNames = OAUTH_VAULT_NAMES[provider.id];
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -652,6 +684,8 @@ function OAuthProviderCard({
     }
     setDisconnecting(false);
   };
+
+  const setupLabel = OAUTH_SETUP_LABELS[provider.id] || provider.name;
 
   return (
     <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
@@ -703,14 +737,10 @@ function OAuthProviderCard({
       )}
       {error && (
         <div className="mt-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-          <p className="text-xs text-amber-800 dark:text-amber-200">{error}</p>
-          {error.includes('not configured') && vaultNames && (
-            <p className="text-xs text-amber-600 dark:text-amber-300 mt-1">
-              Store your credentials in <span className="font-medium">Settings &gt; General &gt; Provider API Keys</span> as:
-              <code className="ml-1 px-1 py-0.5 bg-amber-100 dark:bg-amber-900/40 rounded font-mono">{vaultNames.clientId}</code> and
-              <code className="ml-1 px-1 py-0.5 bg-amber-100 dark:bg-amber-900/40 rounded font-mono">{vaultNames.clientSecret}</code>
-            </p>
-          )}
+          <p className="text-xs text-amber-800 dark:text-amber-200">
+            OAuth credentials not found. Add your Client ID and Client Secret under
+            <span className="font-semibold"> General &gt; {setupLabel}</span> first, then restart the backend.
+          </p>
         </div>
       )}
     </div>

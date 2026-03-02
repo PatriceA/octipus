@@ -139,9 +139,8 @@ export class OAuthManager {
    */
   async generateAuthorizationUrl(userId: string, provider: string): Promise<{ url: string }> {
     const providerConfig = await getProviderConfig(provider);
-    const vaultNames = OAUTH_VAULT_NAMES[provider as keyof typeof OAUTH_VAULT_NAMES];
     if (!providerConfig) {
-      throw new Error(`OAuth credentials not configured for ${provider}. Store your Client ID and Client Secret in the vault as "${vaultNames?.clientId}" and "${vaultNames?.clientSecret}" (Settings > General > Provider API Keys).`);
+      throw new Error(`OAuth credentials not configured for ${provider}. Add your Client ID and Client Secret under Settings > General.`);
     }
 
     // PKCE
