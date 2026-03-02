@@ -192,10 +192,14 @@ function GeneralTab() {
 }
 
 const PROVIDER_KEYS = [
-  { provider: 'openai', label: 'OpenAI', vaultName: 'openai_api_key', envHint: 'OPENAI_API_KEY' },
-  { provider: 'anthropic', label: 'Anthropic', vaultName: 'anthropic_api_key', envHint: 'ANTHROPIC_API_KEY' },
-  { provider: 'gemini', label: 'Google Gemini', vaultName: 'gemini_api_key', envHint: 'GEMINI_API_KEY' },
-  { provider: 'deepseek', label: 'DeepSeek', vaultName: 'deepseek_api_key', envHint: 'DEEPSEEK_API_KEY' },
+  { provider: 'openai', label: 'OpenAI', vaultName: 'openai_api_key', systemLevel: true, testable: true },
+  { provider: 'anthropic', label: 'Anthropic', vaultName: 'anthropic_api_key', systemLevel: true, testable: true },
+  { provider: 'gemini', label: 'Google Gemini', vaultName: 'gemini_api_key', systemLevel: true, testable: true },
+  { provider: 'deepseek', label: 'DeepSeek', vaultName: 'deepseek_api_key', systemLevel: true, testable: true },
+  { provider: 'google-oauth', label: 'Google OAuth ID', vaultName: 'google_oauth_client_id', systemLevel: true, testable: false },
+  { provider: 'google-oauth', label: 'Google OAuth Secret', vaultName: 'google_oauth_client_secret', systemLevel: true, testable: false },
+  { provider: 'microsoft-oauth', label: 'Microsoft OAuth ID', vaultName: 'microsoft_oauth_client_id', systemLevel: true, testable: false },
+  { provider: 'microsoft-oauth', label: 'Microsoft OAuth Secret', vaultName: 'microsoft_oauth_client_secret', systemLevel: true, testable: false },
 ];
 
 function ProviderKeysSection() {
@@ -219,14 +223,16 @@ function ProviderKeysSection() {
   const handleSave = async (vaultName: string) => {
     const value = keys[vaultName];
     if (!value) return;
+    const pk = PROVIDER_KEYS.find((p) => p.vaultName === vaultName);
     setSaving(vaultName);
     try {
       await api.post('/vault', {
         name: vaultName,
         value,
         credentialType: 'api_key',
-        description: `API key for ${vaultName.replace('_api_key', '')}`,
+        description: `Credential: ${vaultName}`,
         tags: ['provider'],
+        systemLevel: pk?.systemLevel ?? false,
       });
       setStatuses((s) => ({ ...s, [vaultName]: true }));
       setKeys((k) => ({ ...k, [vaultName]: '' }));
@@ -279,7 +285,7 @@ function ProviderKeysSection() {
             >
               {saving === pk.vaultName ? '...' : 'Save'}
             </button>
-            {statuses[pk.vaultName] && (
+            {statuses[pk.vaultName] && pk.testable && (
               <button
                 onClick={() => handleTest(pk.provider, pk.vaultName)}
                 disabled={testing === pk.vaultName}
@@ -575,6 +581,11 @@ function OAuthIntegrationsSection() {
   );
 }
 
+const OAUTH_VAULT_NAMES: Record<string, { clientId: string; clientSecret: string }> = {
+  google: { clientId: 'google_oauth_client_id', clientSecret: 'google_oauth_client_secret' },
+  microsoft: { clientId: 'microsoft_oauth_client_id', clientSecret: 'microsoft_oauth_client_secret' },
+};
+
 function OAuthProviderCard({
   provider,
   queryClient,
@@ -584,6 +595,7 @@ function OAuthProviderCard({
 }) {
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState('');
 
   const { data: status, isLoading } = useQuery({
     queryKey: ['oauth-status', provider.id],
@@ -596,8 +608,11 @@ function OAuthProviderCard({
     },
   });
 
+  const vaultNames = OAUTH_VAULT_NAMES[provider.id];
+
   const handleConnect = async () => {
     setConnecting(true);
+    setError('');
     try {
       const { url } = await api.get<{ url: string }>(`/auth/oauth/${provider.id}/authorize`);
       const popup = window.open(url, 'oauth', 'width=600,height=700,left=200,top=100');
@@ -620,17 +635,21 @@ function OAuthProviderCard({
           setConnecting(false);
         }
       }, 1000);
-    } catch {
+    } catch (err) {
+      setError((err as Error).message);
       setConnecting(false);
     }
   };
 
   const handleDisconnect = async () => {
     setDisconnecting(true);
+    setError('');
     try {
       await api.post(`/auth/oauth/${provider.id}/disconnect`);
       queryClient.invalidateQueries({ queryKey: ['oauth-status', provider.id] });
-    } catch { /* ignore */ }
+    } catch (err) {
+      setError((err as Error).message);
+    }
     setDisconnecting(false);
   };
 
@@ -681,6 +700,18 @@ function OAuthProviderCard({
         <p className="text-xs text-gray-400 mt-1">
           Connected as: <span className="text-gray-600 dark:text-gray-300">{status.email}</span>
         </p>
+      )}
+      {error && (
+        <div className="mt-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+          <p className="text-xs text-amber-800 dark:text-amber-200">{error}</p>
+          {error.includes('not configured') && vaultNames && (
+            <p className="text-xs text-amber-600 dark:text-amber-300 mt-1">
+              Store your credentials in <span className="font-medium">Settings &gt; General &gt; Provider API Keys</span> as:
+              <code className="ml-1 px-1 py-0.5 bg-amber-100 dark:bg-amber-900/40 rounded font-mono">{vaultNames.clientId}</code> and
+              <code className="ml-1 px-1 py-0.5 bg-amber-100 dark:bg-amber-900/40 rounded font-mono">{vaultNames.clientSecret}</code>
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

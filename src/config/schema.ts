@@ -144,15 +144,9 @@ export const orchestratorConfigSchema = z.object({
 
 // OAuth configuration schema
 export const oauthConfigSchema = z.object({
-  google: z.object({
-    clientId: z.string().optional(),
-    clientSecret: z.string().optional(),
-  }).default({}),
-  microsoft: z.object({
-    clientId: z.string().optional(),
-    clientSecret: z.string().optional(),
-    tenantId: z.string().default('common'),
-  }).default({}),
+  // OAuth client credentials are stored in the vault (not env vars)
+  // Vault names: google_oauth_client_id, google_oauth_client_secret,
+  //              microsoft_oauth_client_id, microsoft_oauth_client_secret, microsoft_oauth_tenant_id
   publicUrl: z.string().optional(),
 }).default({});
 

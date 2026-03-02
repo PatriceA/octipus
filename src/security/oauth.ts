@@ -52,23 +52,38 @@ function generateCodeChallenge(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url');
 }
 
+// --- Vault credential names for OAuth ---
+
+export const OAUTH_VAULT_NAMES = {
+  google: {
+    clientId: 'google_oauth_client_id',
+    clientSecret: 'google_oauth_client_secret',
+  },
+  microsoft: {
+    clientId: 'microsoft_oauth_client_id',
+    clientSecret: 'microsoft_oauth_client_secret',
+    tenantId: 'microsoft_oauth_tenant_id',
+  },
+} as const;
+
 // --- Provider Configs ---
 
-function getProviderConfig(provider: string): OAuthProviderConfig | null {
+async function getProviderConfig(provider: string): Promise<OAuthProviderConfig | null> {
   const config = getConfig();
   const oauth = (config as any).oauth;
-  if (!oauth) return null;
-
-  const publicUrl = oauth.publicUrl || `http://localhost:${config.api.port}`;
+  const publicUrl = oauth?.publicUrl || `http://localhost:${config.api.port}`;
+  const v = getVault();
 
   switch (provider) {
     case 'google': {
-      if (!oauth.google?.clientId || !oauth.google?.clientSecret) return null;
+      const clientId = await v.getByName('system', OAUTH_VAULT_NAMES.google.clientId);
+      const clientSecret = await v.getByName('system', OAUTH_VAULT_NAMES.google.clientSecret);
+      if (!clientId || !clientSecret) return null;
       return {
         authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
         tokenUrl: 'https://oauth2.googleapis.com/token',
-        clientId: oauth.google.clientId,
-        clientSecret: oauth.google.clientSecret,
+        clientId,
+        clientSecret,
         scopes: [
           'https://www.googleapis.com/auth/gmail.modify',
           'https://www.googleapis.com/auth/calendar',
@@ -86,13 +101,15 @@ function getProviderConfig(provider: string): OAuthProviderConfig | null {
       };
     }
     case 'microsoft': {
-      if (!oauth.microsoft?.clientId || !oauth.microsoft?.clientSecret) return null;
-      const tenantId = oauth.microsoft.tenantId || 'common';
+      const clientId = await v.getByName('system', OAUTH_VAULT_NAMES.microsoft.clientId);
+      const clientSecret = await v.getByName('system', OAUTH_VAULT_NAMES.microsoft.clientSecret);
+      if (!clientId || !clientSecret) return null;
+      const tenantId = await v.getByName('system', OAUTH_VAULT_NAMES.microsoft.tenantId) || 'common';
       return {
         authorizationUrl: `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`,
         tokenUrl: `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
-        clientId: oauth.microsoft.clientId,
-        clientSecret: oauth.microsoft.clientSecret,
+        clientId,
+        clientSecret,
         scopes: [
           'Mail.ReadWrite',
           'Mail.Send',
@@ -121,9 +138,10 @@ export class OAuthManager {
    * Returns { url, state } — the frontend should redirect or open the URL.
    */
   async generateAuthorizationUrl(userId: string, provider: string): Promise<{ url: string }> {
-    const providerConfig = getProviderConfig(provider);
+    const providerConfig = await getProviderConfig(provider);
+    const vaultNames = OAUTH_VAULT_NAMES[provider as keyof typeof OAUTH_VAULT_NAMES];
     if (!providerConfig) {
-      throw new Error(`OAuth provider '${provider}' is not configured. Set ${provider.toUpperCase()}_OAUTH_CLIENT_ID and ${provider.toUpperCase()}_OAUTH_CLIENT_SECRET in .env`);
+      throw new Error(`OAuth credentials not configured for ${provider}. Store your Client ID and Client Secret in the vault as "${vaultNames?.clientId}" and "${vaultNames?.clientSecret}" (Settings > General > Provider API Keys).`);
     }
 
     // PKCE
@@ -179,7 +197,7 @@ export class OAuthManager {
     // Delete state (one-time use)
     await this.redis.del(`oauth:state:${state}`);
 
-    const providerConfig = getProviderConfig(provider);
+    const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
       throw new Error(`OAuth provider '${provider}' is not configured`);
     }
@@ -282,7 +300,7 @@ export class OAuthManager {
     credentialId: string,
     refreshToken: string
   ): Promise<string> {
-    const providerConfig = getProviderConfig(provider);
+    const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
       throw new Error(`OAuth provider '${provider}' is not configured`);
     }

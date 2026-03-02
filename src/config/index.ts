@@ -114,15 +114,6 @@ function loadFromEnv(): Partial<Config> {
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
     },
     oauth: {
-      google: {
-        clientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
-        clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
-      },
-      microsoft: {
-        clientId: process.env.MICROSOFT_OAUTH_CLIENT_ID,
-        clientSecret: process.env.MICROSOFT_OAUTH_CLIENT_SECRET,
-        tenantId: process.env.MICROSOFT_OAUTH_TENANT_ID || 'common',
-      },
       publicUrl: process.env.PUBLIC_URL,
     },
   };

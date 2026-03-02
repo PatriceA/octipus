@@ -15,8 +15,9 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
 
       const vault = getVault();
       const entries = await vault.list(user.id);
-
-      return { credentials: entries };
+      // Admins also see system-level credentials (OAuth client IDs, etc.)
+      const systemEntries = user.isAdmin ? await vault.list('system') : [];
+      return { credentials: [...entries, ...systemEntries] };
     },
     { detail: { tags: ['vault'] } }
   )
@@ -30,7 +31,9 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       }
 
       const vault = getVault();
-      const entry = await vault.store(user.id, body.name, body.value, {
+      // System-level credentials (e.g. OAuth client IDs) are stored under 'system' user
+      const ownerId = body.systemLevel && user.isAdmin ? 'system' : user.id;
+      const entry = await vault.store(ownerId, body.name, body.value, {
         credentialType: body.credentialType,
         description: body.description,
         tags: body.tags,
@@ -61,6 +64,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         allowedSkills: t.Optional(t.Array(t.String())),
         allowedAgents: t.Optional(t.Array(t.String())),
         expiresAt: t.Optional(t.String()),
+        systemLevel: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['vault'] },
     }
