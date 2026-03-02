@@ -1,30 +1,25 @@
-const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3005/api';
+const API_PORT = process.env.NEXT_PUBLIC_API_PORT || '3005';
 
 /**
- * Get the current API URL. Checks localStorage first (user override),
- * then falls back to NEXT_PUBLIC_API_URL env var, then localhost default.
+ * Get the API URL. Resolution order:
+ *   1. NEXT_PUBLIC_API_URL env var (explicit full URL, build-time)
+ *   2. Auto-detect from browser hostname + API_PORT (works across LAN)
+ *
+ * When accessing http://192.168.1.100:3007, the API URL becomes
+ * http://192.168.1.100:3005/api automatically — no config needed.
  */
 export function getApiUrl(): string {
+  // Explicit env override takes priority
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  // In browser: derive from current hostname
   if (typeof window !== 'undefined') {
-    const override = localStorage.getItem('assistant_api_url');
-    if (override) return override;
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:${API_PORT}/api`;
   }
-  return DEFAULT_API_URL;
-}
-
-/**
- * Set a custom API URL (persisted in localStorage).
- * Pass null to reset to default.
- */
-export function setApiUrl(url: string | null): void {
-  if (typeof window === 'undefined') return;
-  if (url) {
-    // Normalize: ensure it ends with /api
-    const normalized = url.replace(/\/+$/, '');
-    localStorage.setItem('assistant_api_url', normalized.endsWith('/api') ? normalized : `${normalized}/api`);
-  } else {
-    localStorage.removeItem('assistant_api_url');
-  }
+  // SSR fallback
+  return `http://localhost:${API_PORT}/api`;
 }
 
 class ApiClient {
