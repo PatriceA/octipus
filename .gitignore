@@ -43,3 +43,11 @@ vault-key.json
 
 # Bun lockfile binary
 bun.lockb
+
+# Ad-hoc debug/utility scripts at project root
+/*.ts
+!drizzle.config.ts
+
+# Claude Code local config & skills
+.claude/settings.local.json
+.claude/skills/
