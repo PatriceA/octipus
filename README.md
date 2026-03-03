@@ -163,6 +163,8 @@ Use the `bin/assistant.cmd` batch script. Create a shortcut to `assistant.cmd st
 - **Scheduler**: Cron-based and priority task scheduling
 - **Gateway**: System initialization, lifecycle management, graceful shutdown
 - **Context Compaction**: Automatic LLM-summarized context window management when conversations exceed token limits
+- **Token Budget**: Per-agent token limit (default: 100k, env `AGENT_MAX_TOKEN_BUDGET`) — stops runaway agents before they exhaust provider quotas
+- **Agent Timeout**: Per-agent wall-clock timeout (default: 5min, env `AGENT_DEFAULT_TIMEOUT`)
 - **Consecutive Failure Protection**: Tools are automatically disabled after 3 consecutive failures, forcing the model to respond with available information instead of looping
 
 ### API Server
@@ -183,23 +185,48 @@ Use the `bin/assistant.cmd` batch script. Create a shortcut to `assistant.cmd st
 ### Orchestrator
 - **Message Classification**: Classifies incoming messages as casual/task/agent with confidence scoring
 - **Automatic Orchestration**: Task messages spawn an orchestrator agent that breaks work into sub-tasks
-- **Worker Agents**: Orchestrator spawns role-specific workers (research, coding, analysis, general)
+- **Worker Agents**: Orchestrator spawns role-specific workers (research, coding, review, qa, communication, general)
 - **Fallback Chain**: CLI models → default model → any local model with tool support
 - **Reasoning Model Detection**: Automatically skips reasoning models (DeepSeek Reasoner, etc.) for orchestration since they're incompatible with the tool-calling agent loop
 - **CLI Sub-Agent Fallback**: When CLI models fail (quota exhausted), retries with the default local model
 - **Safe Fallback**: Only falls back to local (Ollama) models for tool-calling roles — never silently routes to paid API models
 
 ### Skills System
-6 built-in skills with granular permissions:
+8 built-in skills with granular permissions:
 
 | Skill | Tools | Permission Level |
 |-------|-------|-----------------|
-| **Filesystem** | read, write, append, list, info, mkdir, delete, copy, move, search | read: ALLOW, write: ASK, delete: ASK |
-| **Shell** | run, run_background | execute: ASK, elevated: DENY |
+| **Filesystem** | read_file, write_file, append_file, list_directory, file_info, create_directory, delete_file, copy_file, move_file, search_files | read: ALLOW, write: ASK, delete: ASK |
+| **Shell** | run, run_background, which, env | execute: ASK, elevated: DENY |
 | **Git** | status, log, diff, add, commit, branch, checkout, pull, push, stash, reset, clone | read: ALLOW, write: ASK, push: ASK |
-| **Browser** | open, navigate, click, type, screenshot, extract, evaluate, fill_form, select, wait | navigate: ASK, screenshot: ALLOW, execute: ASK |
+| **Browser** | open, navigate, click, type, screenshot, get_text, get_html, evaluate, wait_for, close, select, scroll | navigate: ASK, screenshot: ALLOW, execute: ASK |
 | **Web Search** | search, fetch_page | search: ALLOW, fetch: ALLOW |
-| **Docker** | ps, logs, inspect, start, stop, restart | read: ALLOW, manage: ASK |
+| **Docker** | list_containers, start_container, stop_container, container_logs, build_image, exec_command | read: ALLOW, manage: ASK |
+| **Google Workspace** | gmail_list, gmail_search, gmail_read, gmail_send, gmail_reply, gmail_labels, gmail_label, gmail_delete, calendar_list, calendar_events, calendar_event_get/create/update/delete, drive_list, drive_search, drive_download/upload/delete, sheets_read/write/create/info, docs_read/create/update, contacts_list/search/get/create, tasks_lists/list/get/create/complete | read: ALLOW, send: ASK, delete: ASK |
+| **Microsoft 365** | mail_list, mail_search, mail_read, mail_send, mail_reply, mail_folders, mail_delete, calendar_list, calendar_events, calendar_event_get/create/update/delete, drive_list, drive_search, drive_download/upload/delete, todo_lists/tasks/task_get/task_create/task_complete, contacts_list/search/get/create | read: ALLOW, send: ASK, delete: ASK |
+
+### Orchestrator Roles
+
+When a task message arrives, the orchestrator classifies it and spawns a specialist worker with the appropriate role. Each role has a set of skills (and their tools) attached to it.
+
+| Role | Topic | Skills | Tools |
+|------|-------|--------|-------|
+| **orchestrator** | general | *(meta-tools only)* | `spawn_worker`, `create_pipeline`, `filter_pii`, `request_user_approval`, `send_status_update` |
+| **research** | analysis | browser, websearch | `open`, `navigate`, `click`, `type`, `screenshot`, `get_text`, `get_html`, `evaluate`, `wait_for`, `close`, `select`, `scroll`, `search`, `fetch_page` |
+| **coding** | coding | filesystem, shell, git | `read_file`, `write_file`, `append_file`, `list_directory`, `file_info`, `create_directory`, `delete_file`, `copy_file`, `move_file`, `search_files`, `run`, `run_background`, `which`, `env`, `status`, `log`, `diff`, `add`, `commit`, `branch`, `checkout`, `pull`, `push`, `stash`, `reset`, `clone` |
+| **review** | analysis | filesystem, git | `read_file`, `write_file`, `append_file`, `list_directory`, `file_info`, `create_directory`, `delete_file`, `copy_file`, `move_file`, `search_files`, `status`, `log`, `diff`, `add`, `commit`, `branch`, `checkout`, `pull`, `push`, `stash`, `reset`, `clone` |
+| **qa** | analysis | browser, shell, docker | `open`, `navigate`, `click`, `type`, `screenshot`, `get_text`, `get_html`, `evaluate`, `wait_for`, `close`, `select`, `scroll`, `run`, `run_background`, `which`, `env`, `list_containers`, `start_container`, `stop_container`, `container_logs`, `build_image`, `exec_command` |
+| **communication** | general | google-workspace, microsoft365 | `gmail_list`, `gmail_search`, `gmail_read`, `gmail_send`, `gmail_reply`, `gmail_labels`, `gmail_label`, `gmail_delete`, `calendar_list`, `calendar_events`, `calendar_event_get`, `calendar_event_create`, `calendar_event_update`, `calendar_event_delete`, `drive_list`, `drive_search`, `drive_download`, `drive_upload`, `drive_delete`, `sheets_read`, `sheets_write`, `sheets_create`, `sheets_info`, `docs_read`, `docs_create`, `docs_update`, `contacts_list`, `contacts_search`, `contacts_get`, `contacts_create`, `tasks_lists`, `tasks_list`, `tasks_get`, `tasks_create`, `tasks_complete`, `mail_list`, `mail_search`, `mail_read`, `mail_send`, `mail_reply`, `mail_folders`, `mail_delete`, `todo_lists`, `todo_tasks`, `todo_task_get`, `todo_task_create`, `todo_task_complete` |
+| **general** | general | filesystem, shell | `read_file`, `write_file`, `append_file`, `list_directory`, `file_info`, `create_directory`, `delete_file`, `copy_file`, `move_file`, `search_files`, `run`, `run_background`, `which`, `env` |
+
+**Routing keywords** — the classifier uses these to suggest a role before the orchestrator decides:
+
+| Category | Keywords |
+|----------|----------|
+| development | implement, build, create, develop, code, write, add, refactor, fix, debug, deploy, setup, configure, install, migrate, upgrade, integrate, api, endpoint, database, frontend, backend, component, feature, function, class, module, service, test, dockerfile, docker, ci/cd, pipeline, typescript, javascript, python, rust, go, java, sql, css, html, react, next.js, vue, angular, node, bun, npm, package |
+| research | research, investigate, find out, look up, search for, compare, evaluate, analyze, what is, how does, why does, explain, summarize, review, assess, benchmark, survey, learn about, study, explore, alternatives, best practices, architecture, design pattern, pros and cons |
+| communication | email, gmail, inbox, mail, send email, read email, calendar, schedule, meeting, appointment, event, contacts, address book, drive, docs, sheets, slides, google docs, outlook, office 365, microsoft 365, teams, compose, reply, forward, draft |
+| general | run, execute, check, monitor, update, clean, organize, automate, schedule, notify, track, manage, generate, convert, transform, parse, process, extract, scrape |
 
 ### Security
 - **Authentication**: JWT sessions, WebAuthn/Passkeys, TOTP 2FA
@@ -434,6 +461,10 @@ TEAMS_APP_PASSWORD=
 WEBCHAT_PORT=3006
 
 # ─── Skills ───────────────────────────────────────────────────
+AGENT_MAX_TOKEN_BUDGET=100000         # Per-agent token limit (0 = unlimited)
+AGENT_DEFAULT_TIMEOUT=300000          # Per-agent timeout in ms (default: 5min)
+AGENT_MAX_ITERATIONS=50               # Max iterations per agent loop
+
 ENABLED_SKILLS=filesystem,shell,git,browser,websearch,docker
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
@@ -861,6 +892,31 @@ bun run test:e2e
 | Validation | Zod |
 
 ## Changelog
+
+### 2026-03-03
+
+#### Agent Lifecycle & Runtime Limits
+- **Agent stop/kill**: Agents can now be fully stopped (not just paused) — new `stopped` status with dedicated UI controls (Stop for running, Remove for finished agents)
+- **Token budget**: Per-agent token limit (default: 100k, env `AGENT_MAX_TOKEN_BUDGET`) prevents runaway agents from exhausting provider quotas
+- **Agent timeout enforcement**: Wall-clock timeout checked before each LLM call in the agent loop
+- **CLI fallback safety**: User-initiated stops no longer trigger fallback to the default model — only genuine failures (quota, crash) do
+
+#### Communication Role & Skill Routing
+- **Communication role**: New `communication` worker role with Google Workspace and Microsoft 365 skills — email, calendar, contacts, drive, docs, sheets, and tasks
+- **Classifier keywords**: Email/gmail/calendar/drive/outlook keywords now route to the `communication` role instead of falling through to `research` (web search)
+- **Orchestrator prompt**: Updated to include `communication` in the role picker hints
+
+#### MCP Authentication
+- **MASTER_KEY auth**: Backend now accepts the `MASTER_KEY` as a Bearer token for API access, enabling MCP server and external integrations without session-based auth
+- **MCP config**: `.mcp.json` configured with MASTER_KEY for out-of-the-box MCP tool access
+
+#### Web UI Modernization
+- **Card design**: Standardized all cards to `ring-1 ring-gray-200/60 dark:ring-gray-700/60` with `rounded-xl` and `dark:bg-gray-800/90`
+- **Page headers**: All pages now use icon accent block pattern for consistent header design
+- **Color tokens**: Replaced hard-coded `bg-blue-600` with `bg-primary-600` across all pages
+- **Cursor pointer**: Added `cursor-pointer` to all interactive buttons
+- **Settings fixes**: Fixed CLI integration detection (GitHub/GitLab) — matches on skill `id` and `isInitialized` field
+- **Vault dedup**: Managed secrets (OAuth credentials) no longer appear twice in the vault table
 
 ### 2026-03-02
 

@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Settings,
-  Key,
   Bell,
   MessageSquare,
   Loader2,
@@ -18,7 +17,11 @@ import {
   Trash2,
   ExternalLink,
   RefreshCw,
+  ArrowRight,
+  KeyRound,
+  Shield,
 } from 'lucide-react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 
 interface UserProfile {
@@ -57,27 +60,32 @@ export default function SettingsPage() {
     { id: 'general', label: 'General', icon: Settings },
     { id: 'integrations', label: 'Integrations', icon: Plug },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
-    { id: 'security', label: 'Security', icon: Key },
+    { id: 'security', label: 'Security', icon: Shield },
     { id: 'notifications', label: 'Notifications', icon: Bell },
   ];
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
-        <p className="text-gray-600 dark:text-gray-400">Configure your assistant</p>
+    <div className="space-y-6 max-w-5xl">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
+          <Settings className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Configure your assistant</p>
+        </div>
       </div>
 
       <div className="flex gap-6">
-        <div className="w-48 space-y-1">
+        <div className="w-48 space-y-0.5 shrink-0">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                 activeTab === tab.id
-                  ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-400'
-                  : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+                  ? 'bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-400'
+                  : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800/60 hover:text-gray-900 dark:hover:text-gray-200'
               }`}
             >
               <tab.icon className="w-4 h-4" />
@@ -86,7 +94,7 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        <div className="flex-1 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <div className="flex-1 bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-6">
           {activeTab === 'general' && <GeneralTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'channels' && <ChannelsTab />}
@@ -117,7 +125,7 @@ function GeneralTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">General Settings</h2>
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">General Settings</h2>
 
       {/* Service Status */}
       <div>
@@ -156,7 +164,7 @@ function GeneralTab() {
               type="text"
               value={profile?.username || ''}
               readOnly
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl text-sm dark:text-gray-200"
             />
           </div>
           {profile?.email && (
@@ -166,7 +174,7 @@ function GeneralTab() {
                 type="text"
                 value={profile.email}
                 readOnly
-                className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm dark:text-white"
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl text-sm dark:text-gray-200"
               />
             </div>
           )}
@@ -185,155 +193,24 @@ function GeneralTab() {
         </div>
       </div>
 
-      {/* Provider API Keys */}
-      <ProviderKeysSection />
-    </div>
-  );
-}
-
-interface VaultKeyEntry {
-  label: string;
-  vaultName: string;
-  testProvider?: string;
-  placeholder?: string;
-}
-
-interface VaultKeyGroup {
-  title: string;
-  description: string;
-  keys: VaultKeyEntry[];
-}
-
-const VAULT_KEY_GROUPS: VaultKeyGroup[] = [
-  {
-    title: 'LLM Provider API Keys',
-    description: 'Store API keys for direct provider access (bypasses LiteLLM).',
-    keys: [
-      { label: 'OpenAI', vaultName: 'openai_api_key', testProvider: 'openai', placeholder: 'sk-...' },
-      { label: 'Anthropic', vaultName: 'anthropic_api_key', testProvider: 'anthropic', placeholder: 'sk-ant-...' },
-      { label: 'Google Gemini', vaultName: 'gemini_api_key', testProvider: 'gemini' },
-      { label: 'DeepSeek', vaultName: 'deepseek_api_key', testProvider: 'deepseek', placeholder: 'sk-...' },
-    ],
-  },
-  {
-    title: 'Google OAuth Credentials',
-    description: 'Required for Google Workspace integration (Gmail, Calendar, Drive). Create at console.cloud.google.com/apis/credentials.',
-    keys: [
-      { label: 'Client ID', vaultName: 'google_oauth_client_id', placeholder: '...apps.googleusercontent.com' },
-      { label: 'Client Secret', vaultName: 'google_oauth_client_secret', placeholder: 'GOCSPX-...' },
-    ],
-  },
-  {
-    title: 'Microsoft OAuth Credentials',
-    description: 'Required for Microsoft 365 integration (Outlook, Calendar, OneDrive). Create at portal.azure.com.',
-    keys: [
-      { label: 'Client ID', vaultName: 'microsoft_oauth_client_id' },
-      { label: 'Client Secret', vaultName: 'microsoft_oauth_client_secret' },
-      { label: 'Tenant ID', vaultName: 'microsoft_oauth_tenant_id', placeholder: 'common (or your tenant ID)' },
-    ],
-  },
-];
-
-const ALL_VAULT_KEYS = VAULT_KEY_GROUPS.flatMap((g) => g.keys);
-
-function ProviderKeysSection() {
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  const [statuses, setStatuses] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState<string | null>(null);
-  const [testing, setTesting] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.get<{ credentials?: { name: string }[] }>('/vault').then((data) => {
-      const creds = data?.credentials ?? [];
-      const s: Record<string, boolean> = {};
-      for (const k of ALL_VAULT_KEYS) {
-        s[k.vaultName] = creds.some((c) => c.name === k.vaultName);
-      }
-      setStatuses(s);
-    }).catch(() => {});
-  }, []);
-
-  const handleSave = async (vaultName: string) => {
-    const value = keys[vaultName];
-    if (!value) return;
-    setSaving(vaultName);
-    try {
-      await api.post('/vault', {
-        name: vaultName,
-        value,
-        credentialType: 'api_key',
-        description: `Credential: ${vaultName}`,
-        tags: ['provider'],
-        systemLevel: true,
-      });
-      setStatuses((s) => ({ ...s, [vaultName]: true }));
-      setKeys((k) => ({ ...k, [vaultName]: '' }));
-    } catch { /* ignore */ }
-    setSaving(null);
-  };
-
-  const handleTest = async (provider: string, vaultName: string) => {
-    setTesting(vaultName);
-    try {
-      const known = await api.get<{ models: string[] }>(`/models/providers/${provider}/known`);
-      const modelId = known.models?.[0];
-      if (modelId) {
-        const result = await api.post<{ success: boolean; message?: string; error?: string }>('/models/test', {
-          provider,
-          modelId,
-        });
-        alert(result.success ? `Connected: ${result.message}` : `Failed: ${result.error}`);
-      }
-    } catch (err) {
-      alert(`Test failed: ${(err as Error).message}`);
-    }
-    setTesting(null);
-  };
-
-  return (
-    <div className="space-y-5">
-      {VAULT_KEY_GROUPS.map((group) => (
-        <div key={group.title}>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{group.title}</h3>
-          <p className="text-xs text-gray-500 mb-3">{group.description}</p>
-          <div className="space-y-2">
-            {group.keys.map((k) => (
-              <div key={k.vaultName} className="flex items-center gap-2">
-                <div className="w-28 text-sm text-gray-700 dark:text-gray-300 flex items-center gap-1.5 shrink-0">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${statuses[k.vaultName] ? 'bg-green-500' : 'bg-gray-400'}`} />
-                  {k.label}
-                </div>
-                <input
-                  type="password"
-                  value={keys[k.vaultName] || ''}
-                  onChange={(e) => setKeys((prev) => ({ ...prev, [k.vaultName]: e.target.value }))}
-                  placeholder={statuses[k.vaultName] ? 'Saved (enter new value to replace)' : k.placeholder || 'Enter value...'}
-                  className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                />
-                <button
-                  onClick={() => handleSave(k.vaultName)}
-                  disabled={!keys[k.vaultName] || saving === k.vaultName}
-                  className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {saving === k.vaultName ? '...' : 'Save'}
-                </button>
-                {statuses[k.vaultName] && k.testProvider && (
-                  <button
-                    onClick={() => handleTest(k.testProvider!, k.vaultName)}
-                    disabled={testing === k.vaultName}
-                    className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-                  >
-                    {testing === k.vaultName ? '...' : 'Test'}
-                  </button>
-                )}
-              </div>
-            ))}
+      {/* Secrets redirect */}
+      <Link
+        href="/secrets"
+        className="flex items-center justify-between p-4 bg-primary-50 dark:bg-primary-950/30 rounded-xl ring-1 ring-primary-200/60 dark:ring-primary-800/40 hover:bg-primary-100/80 dark:hover:bg-primary-950/50 transition-colors group"
+      >
+        <div className="flex items-center gap-3">
+          <KeyRound className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          <div>
+            <p className="text-sm font-medium text-primary-900 dark:text-primary-300">Secrets & Credentials</p>
+            <p className="text-xs text-primary-700/70 dark:text-primary-400/60">Manage API keys, OAuth credentials, and other secrets</p>
           </div>
         </div>
-      ))}
+        <ArrowRight className="w-4 h-4 text-primary-400 group-hover:translate-x-0.5 transition-transform" />
+      </Link>
     </div>
   );
 }
+
 
 // --- Integrations Tab ---
 
@@ -353,7 +230,7 @@ interface OAuthStatus {
 function IntegrationsTab() {
   return (
     <div className="space-y-8">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Integrations</h2>
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Integrations</h2>
       <WorkspaceSection />
       <hr className="border-gray-200 dark:border-gray-700" />
       <CLIIntegrationsSection />
@@ -428,7 +305,7 @@ function WorkspaceSection() {
         <label className="block text-xs text-gray-500 mb-1">Root Path</label>
         <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-300 font-mono">
           {wsLoading ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-500" />
           ) : (
             workspace?.rootPath || 'Not configured'
           )}
@@ -440,7 +317,7 @@ function WorkspaceSection() {
         <label className="block text-xs text-gray-500 mb-1">Additional Paths</label>
         <div className="space-y-2">
           {workspace?.additionalPaths.length === 0 && (
-            <p className="text-xs text-gray-400 py-2">No additional paths configured.</p>
+            <p className="text-xs text-gray-500 py-2">No additional paths configured.</p>
           )}
           {workspace?.additionalPaths.map((path, i) => (
             <div key={i} className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
@@ -448,7 +325,7 @@ function WorkspaceSection() {
               <button
                 onClick={() => handleRemovePath(i)}
                 disabled={saving}
-                className="p-1 text-gray-400 hover:text-red-500 disabled:opacity-50"
+                className="p-1 text-gray-500 hover:text-red-500 disabled:opacity-50"
                 title="Remove path"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -466,12 +343,12 @@ function WorkspaceSection() {
           onChange={(e) => setNewPath(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAddPath()}
           placeholder="/path/to/directory"
-          className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm font-mono"
+          className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm font-mono"
         />
         <button
           onClick={handleAddPath}
           disabled={!newPath.trim() || validating || saving}
-          className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+          className="px-3 py-1.5 text-xs bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1"
         >
           {validating || saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
           Add
@@ -493,9 +370,9 @@ function CLIIntegrationsSection() {
     queryKey: ['github-status'],
     queryFn: async () => {
       try {
-        const skills = await api.get<{ skills: { name: string; enabled: boolean }[] }>('/skills');
-        const ghSkill = skills?.skills?.find((s) => s.name === 'github');
-        return { available: !!ghSkill?.enabled, configured: !!ghSkill?.enabled };
+        const skills = await api.get<{ skills: { id: string; isInitialized: boolean }[] }>('/skills');
+        const ghSkill = skills?.skills?.find((s) => s.id === 'github');
+        return { available: !!ghSkill, configured: !!ghSkill?.isInitialized };
       } catch {
         return { available: false, configured: false };
       }
@@ -506,9 +383,9 @@ function CLIIntegrationsSection() {
     queryKey: ['gitlab-status'],
     queryFn: async () => {
       try {
-        const skills = await api.get<{ skills: { name: string; enabled: boolean }[] }>('/skills');
-        const glSkill = skills?.skills?.find((s) => s.name === 'gitlab');
-        return { available: !!glSkill?.enabled, configured: !!glSkill?.enabled };
+        const skills = await api.get<{ skills: { id: string; isInitialized: boolean }[] }>('/skills');
+        const glSkill = skills?.skills?.find((s) => s.id === 'gitlab');
+        return { available: !!glSkill, configured: !!glSkill?.isInitialized };
       } catch {
         return { available: false, configured: false };
       }
@@ -544,33 +421,35 @@ function CLIIntegrationsSection() {
         {cliTools.map((tool) => (
           <div
             key={tool.name}
-            className="flex items-center justify-between p-3 border border-gray-200 dark:border-gray-700 rounded-lg"
+            className="flex items-center justify-between p-3 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl"
           >
             <div className="flex-1">
               <div className="flex items-center gap-2">
-                <h4 className="font-medium text-sm text-gray-900 dark:text-white">{tool.name}</h4>
+                <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">{tool.name}</h4>
                 {tool.loading ? (
-                  <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+                  <Loader2 className="w-3 h-3 animate-spin text-gray-500" />
                 ) : (
                   <span
                     className={`px-2 py-0.5 text-xs rounded-full ${
                       tool.status?.configured
                         ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
-                        : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                        : tool.status?.available
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                          : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
                     }`}
                   >
-                    {tool.status?.configured ? 'Available' : 'Not configured'}
+                    {tool.status?.configured ? 'Available' : tool.status?.available ? 'Detected' : 'Not found'}
                   </span>
                 )}
               </div>
               <p className="text-xs text-gray-500 mt-0.5">{tool.description}</p>
-              {!tool.status?.configured && !tool.loading && (
-                <p className="text-xs text-gray-400 mt-1 font-mono">{tool.setupHint}</p>
+              {!tool.status?.available && !tool.loading && (
+                <p className="text-xs text-gray-500 mt-1 font-mono">{tool.setupHint}</p>
               )}
             </div>
             <button
               onClick={() => tool.refetch()}
-              className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="p-1.5 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               title="Refresh status"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -615,10 +494,6 @@ function OAuthIntegrationsSection() {
   );
 }
 
-const OAUTH_SETUP_LABELS: Record<string, string> = {
-  google: 'Google OAuth Credentials',
-  microsoft: 'Microsoft OAuth Credentials',
-};
 
 function OAuthProviderCard({
   provider,
@@ -685,15 +560,13 @@ function OAuthProviderCard({
     setDisconnecting(false);
   };
 
-  const setupLabel = OAUTH_SETUP_LABELS[provider.id] || provider.name;
-
   return (
-    <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+    <div className="p-4 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <h4 className="font-medium text-sm text-gray-900 dark:text-white">{provider.name}</h4>
+          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">{provider.name}</h4>
           {isLoading ? (
-            <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+            <Loader2 className="w-3 h-3 animate-spin text-gray-500" />
           ) : (
             <span
               className={`px-2 py-0.5 text-xs rounded-full ${
@@ -718,7 +591,7 @@ function OAuthProviderCard({
           <button
             onClick={handleConnect}
             disabled={connecting}
-            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+            className="px-3 py-1.5 text-xs bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1"
           >
             {connecting ? (
               <Loader2 className="w-3 h-3 animate-spin" />
@@ -731,15 +604,16 @@ function OAuthProviderCard({
       </div>
       <p className="text-xs text-gray-500">{provider.description}</p>
       {status?.connected && status.email && (
-        <p className="text-xs text-gray-400 mt-1">
+        <p className="text-xs text-gray-500 mt-1">
           Connected as: <span className="text-gray-600 dark:text-gray-300">{status.email}</span>
         </p>
       )}
       {error && (
         <div className="mt-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
           <p className="text-xs text-amber-800 dark:text-amber-200">
-            OAuth credentials not found. Add your Client ID and Client Secret under
-            <span className="font-semibold"> General &gt; {setupLabel}</span>, then try connecting again.
+            {error.includes('not configured') ? (
+              <>Add your Client ID and Client Secret on the <Link href="/secrets" className="font-semibold underline hover:text-amber-900 dark:hover:text-amber-100">Secrets page</Link>, then try connecting again.</>
+            ) : error}
           </p>
         </div>
       )}
@@ -786,7 +660,7 @@ function ChannelsTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Channel Linking</h2>
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Channel Linking</h2>
 
       {/* Link Code Input */}
       <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
@@ -806,12 +680,12 @@ function ChannelsTab() {
             onChange={(e) => setLinkCode(e.target.value.toUpperCase().slice(0, 6))}
             placeholder="ABC123"
             maxLength={6}
-            className="flex-1 px-3 py-2 bg-white dark:bg-gray-700 border border-blue-200 dark:border-blue-700 rounded-lg text-sm font-mono text-center text-lg tracking-widest focus:ring-2 focus:ring-blue-500 dark:text-white uppercase"
+            className="flex-1 px-3 py-2 bg-white dark:bg-gray-700 border border-blue-200 dark:border-blue-700 rounded-lg text-sm font-mono text-center text-lg tracking-widest focus:ring-2 focus:ring-blue-500 dark:text-gray-100 uppercase"
           />
           <button
             onClick={handleLink}
             disabled={linking || linkCode.length !== 6}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-2"
           >
             {linking ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -848,7 +722,7 @@ function ChannelsTab() {
         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Linked Accounts</h3>
         <div className="space-y-2">
           {bindings.length === 0 ? (
-            <p className="text-sm text-gray-400 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-center">
+            <p className="text-sm text-gray-500 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-center">
               No channels linked yet. Use /link in Telegram or Slack to get started.
             </p>
           ) : (
@@ -868,10 +742,10 @@ function ChannelsTab() {
                       : '🌐'}
                   </span>
                   <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-white capitalize">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100 capitalize">
                       {binding.channelType}
                     </p>
-                    <p className="text-xs text-gray-400">
+                    <p className="text-xs text-gray-500">
                       {binding.channelUserName || binding.channelUserId}
                     </p>
                   </div>
@@ -931,9 +805,9 @@ function ChannelStatusList() {
         return (
           <div
             key={ch.type}
-            className="flex items-center justify-between p-3 border border-gray-200 dark:border-gray-700 rounded-lg"
+            className="flex items-center justify-between p-3 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl"
           >
-            <h4 className="font-medium text-gray-900 dark:text-white">{ch.label}</h4>
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">{ch.label}</h4>
             <span
               className={`px-2 py-0.5 text-xs rounded-full ${
                 connected
@@ -1008,12 +882,12 @@ function SecurityTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Security</h2>
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Security</h2>
 
       <div className="space-y-4">
         <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
           <div>
-            <h3 className="font-medium text-gray-900 dark:text-white">Two-Factor Authentication (TOTP)</h3>
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">Two-Factor Authentication (TOTP)</h3>
             <p className="text-sm text-gray-500">
               {profile?.totpEnabled
                 ? 'Your account is protected with 2FA'
@@ -1034,7 +908,7 @@ function SecurityTab() {
               <button
                 onClick={handleSetup}
                 disabled={loading}
-                className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="px-3 py-1.5 text-xs bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50"
               >
                 {loading ? 'Setting up...' : 'Enable 2FA'}
               </button>
@@ -1045,7 +919,7 @@ function SecurityTab() {
         {/* TOTP Setup Flow */}
         {setupData && (
           <div className="p-4 border border-blue-200 dark:border-blue-800 rounded-lg space-y-4">
-            <h4 className="font-medium text-gray-900 dark:text-white">Scan this QR code with your authenticator app</h4>
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">Scan this QR code with your authenticator app</h4>
             {setupData.qrCode && (
               <div className="flex justify-center p-4 bg-white rounded-lg">
                 <img src={setupData.qrCode} alt="TOTP QR Code" className="w-48 h-48" />
@@ -1053,7 +927,7 @@ function SecurityTab() {
             )}
             <div>
               <p className="text-xs text-gray-500 mb-1">Or enter this secret manually:</p>
-              <code className="block px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded text-sm font-mono break-all dark:text-white">
+              <code className="block px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded text-sm font-mono break-all dark:text-gray-100">
                 {setupData.secret}
               </code>
             </div>
@@ -1062,7 +936,7 @@ function SecurityTab() {
                 <p className="text-xs text-gray-500 mb-1">Save these backup codes somewhere safe:</p>
                 <div className="grid grid-cols-2 gap-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded font-mono text-sm">
                   {setupData.backupCodes.map((code, i) => (
-                    <span key={i} className="dark:text-white">{code}</span>
+                    <span key={i} className="dark:text-gray-100">{code}</span>
                   ))}
                 </div>
               </div>
@@ -1077,7 +951,7 @@ function SecurityTab() {
                   value={verifyCode}
                   onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   placeholder="000000"
-                  className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-center font-mono text-lg tracking-widest"
+                  className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-center font-mono text-lg tracking-widest"
                 />
                 <button
                   onClick={handleVerify}
@@ -1099,15 +973,15 @@ function SecurityTab() {
 
         {/* Disable 2FA */}
         {profile?.totpEnabled && (
-          <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
-            <h4 className="font-medium text-gray-900 dark:text-white mb-2">Disable 2FA</h4>
+          <div className="p-4 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl">
+            <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Disable 2FA</h4>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={disableCode}
                 onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="Enter TOTP code"
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono"
+                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono"
               />
               <button
                 onClick={handleDisable}
@@ -1139,7 +1013,7 @@ function SecurityTab() {
 function NotificationsTab() {
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Notifications</h2>
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Notifications</h2>
 
       <div className="space-y-4">
         <label className="flex items-center gap-3">

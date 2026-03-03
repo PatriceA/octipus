@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, User, LogOut, Settings, Key, ChevronDown } from 'lucide-react';
+import { Bell, Search, User, LogOut, Settings, KeyRound, ChevronDown } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api, createWebSocket } from '@/lib/api';
 
@@ -35,7 +35,6 @@ export function Header() {
     }
   }, []);
 
-  // Fetch notifications
   const fetchNotifications = useCallback(async () => {
     try {
       const data = await api.get<{ notifications: Notification[] }>('/notifications');
@@ -54,12 +53,10 @@ export function Header() {
     return () => clearInterval(interval);
   }, [fetchNotifications]);
 
-  // Listen for real-time notifications via WebSocket
   useEffect(() => {
     const token = api.getToken();
     if (!token) return;
 
-    // Notification service pushes via the existing WebSocket — listen for notification events
     const handler = (event: CustomEvent) => {
       const notif = event.detail as Notification;
       setNotifications(prev => [notif, ...prev].slice(0, 50));
@@ -115,7 +112,7 @@ export function Header() {
   };
 
   return (
-    <header className="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6">
+    <header className="h-14 bg-white dark:bg-gray-900 border-b border-gray-200/80 dark:border-gray-800 px-6 shrink-0">
       <div className="h-full flex items-center justify-between">
         {/* Search */}
         <div className="flex-1 max-w-md">
@@ -124,35 +121,35 @@ export function Header() {
             <input
               type="text"
               placeholder="Search..."
-              className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full pl-10 pr-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200 placeholder-gray-500 dark:placeholder-gray-500"
             />
           </div>
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
           {/* Notification bell */}
           <div className="relative" ref={notifRef}>
             <button
               onClick={() => { setIsNotifOpen(!isNotifOpen); if (!isNotifOpen) fetchNotifications(); }}
-              className="p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 relative"
+              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 relative cursor-pointer"
             >
               <Bell className="w-5 h-5" />
               {unreadCount > 0 && (
-                <span className="absolute top-0.5 right-0.5 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
+                <span className="absolute top-1 right-1 min-w-[16px] h-4 bg-primary-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </span>
               )}
             </button>
 
             {isNotifOpen && (
-              <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50 max-h-96 flex flex-col">
-                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700">
-                  <span className="text-sm font-semibold text-gray-900 dark:text-white">Notifications</span>
+              <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60 z-50 max-h-96 flex flex-col overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700/60">
+                  <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Notifications</span>
                   {unreadCount > 0 && (
                     <button
                       onClick={markAllRead}
-                      className="text-xs text-blue-600 hover:text-blue-700"
+                      className="text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 font-medium cursor-pointer"
                     >
                       Mark all read
                     </button>
@@ -160,7 +157,7 @@ export function Header() {
                 </div>
                 <div className="overflow-y-auto flex-1">
                   {notifications.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                    <div className="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
                       No notifications
                     </div>
                   ) : (
@@ -168,16 +165,16 @@ export function Header() {
                       <button
                         key={notif.id}
                         onClick={() => { if (!notif.read) markRead(notif.id); }}
-                        className={`w-full text-left px-4 py-3 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${
-                          !notif.read ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''
+                        className={`w-full text-left px-4 py-3 border-b border-gray-50 dark:border-gray-700/40 hover:bg-gray-100 dark:hover:bg-gray-700/30 cursor-pointer ${
+                          !notif.read ? 'bg-primary-50/50 dark:bg-primary-950/20' : ''
                         }`}
                       >
-                        <div className="flex items-start gap-2">
+                        <div className="flex items-start gap-2.5">
                           {!notif.read && (
-                            <span className="w-2 h-2 bg-blue-500 rounded-full mt-1.5 flex-shrink-0" />
+                            <span className="w-2 h-2 bg-primary-500 rounded-full mt-1.5 shrink-0" />
                           )}
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                            <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                               {notif.title}
                             </p>
                             {notif.body && (
@@ -202,41 +199,43 @@ export function Header() {
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setIsProfileOpen(!isProfileOpen)}
-              className="flex items-center gap-2 p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+              className="flex items-center gap-2 p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer"
             >
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-sm">
                 <User className="w-4 h-4 text-white" />
               </div>
-              <span className="text-sm font-medium">{user?.username || 'Guest'}</span>
-              <ChevronDown className={`w-4 h-4 transition-transform ${isProfileOpen ? 'rotate-180' : ''}`} />
+              <span className="text-sm font-medium hidden sm:block">{user?.username || 'Guest'}</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isProfileOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {isProfileOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
+              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-xl shadow-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60 py-1 z-50">
                 {user ? (
                   <>
-                    <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
-                      <p className="text-sm font-medium text-gray-900 dark:text-white">{user.username}</p>
-                      <p className="text-xs text-gray-500">{user.isAdmin ? 'Administrator' : 'User'}</p>
+                    <div className="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/60">
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{user.username}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{user.isAdmin ? 'Administrator' : 'User'}</p>
                     </div>
-                    <button
-                      onClick={() => { router.push('/settings'); setIsProfileOpen(false); }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                    >
-                      <Settings className="w-4 h-4" />
-                      Settings
-                    </button>
-                    <button
-                      onClick={() => { router.push('/settings'); setIsProfileOpen(false); }}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                    >
-                      <Key className="w-4 h-4" />
-                      API Keys
-                    </button>
-                    <div className="border-t border-gray-200 dark:border-gray-700 mt-1 pt-1">
+                    <div className="py-1">
+                      <button
+                        onClick={() => { router.push('/secrets'); setIsProfileOpen(false); }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer"
+                      >
+                        <KeyRound className="w-4 h-4" />
+                        Secrets & Keys
+                      </button>
+                      <button
+                        onClick={() => { router.push('/settings'); setIsProfileOpen(false); }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer"
+                      >
+                        <Settings className="w-4 h-4" />
+                        Settings
+                      </button>
+                    </div>
+                    <div className="border-t border-gray-100 dark:border-gray-700/60 py-1">
                       <button
                         onClick={handleLogout}
-                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer"
                       >
                         <LogOut className="w-4 h-4" />
                         Sign Out
@@ -245,12 +244,12 @@ export function Header() {
                   </>
                 ) : (
                   <>
-                    <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
-                      <p className="text-sm text-gray-500">Not signed in</p>
+                    <div className="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/60">
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Not signed in</p>
                     </div>
                     <button
                       onClick={handleLogin}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20"
                     >
                       <User className="w-4 h-4" />
                       Sign In

@@ -28,6 +28,14 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'learn about', 'study', 'explore', 'alternatives', 'best practices',
     'architecture', 'design pattern', 'pros and cons',
   ],
+  communication: [
+    'email', 'gmail', 'inbox', 'mail', 'send email', 'read email',
+    'calendar', 'schedule', 'meeting', 'appointment', 'event',
+    'contacts', 'address book',
+    'drive', 'docs', 'sheets', 'slides', 'google docs',
+    'outlook', 'office 365', 'microsoft 365', 'teams',
+    'compose', 'reply', 'forward', 'draft',
+  ],
   general: [
     'run', 'execute', 'check', 'monitor', 'update', 'clean', 'organize',
     'automate', 'schedule', 'notify', 'track', 'manage', 'generate',

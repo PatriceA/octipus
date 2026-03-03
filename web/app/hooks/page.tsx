@@ -103,8 +103,8 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Create Hook</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Create Hook</h2>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-600 cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -117,7 +117,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
               placeholder="e.g., GitHub PR Review"
             />
           </div>
@@ -127,7 +127,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               type="text"
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
               placeholder="What this hook does"
             />
           </div>
@@ -138,13 +138,13 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <select
               value={trigger}
               onChange={e => setTrigger(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
             >
               {TRIGGER_OPTIONS.map(t => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
-            <p className="mt-1 text-xs text-gray-400">
+            <p className="mt-1 text-xs text-gray-500">
               {TRIGGER_OPTIONS.find(t => t.value === trigger)?.desc}
             </p>
           </div>
@@ -156,12 +156,12 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 Webhook Path
               </label>
               <div className="flex items-center gap-1">
-                <span className="text-sm text-gray-400">/api/webhooks/</span>
+                <span className="text-sm text-gray-500">/api/webhooks/</span>
                 <input
                   type="text"
                   value={webhookPath}
                   onChange={e => setWebhookPath(e.target.value)}
-                  className="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
                   placeholder="github"
                 />
               </div>
@@ -177,7 +177,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 type="text"
                 value={cronExpression}
                 onChange={e => setCronExpression(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white font-mono"
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200 font-mono"
                 placeholder="0 9 * * MON-FRI"
               />
             </div>
@@ -189,13 +189,13 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <select
               value={action}
               onChange={e => setAction(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
             >
               {ACTION_OPTIONS.map(a => (
                 <option key={a.value} value={a.value}>{a.label}</option>
               ))}
             </select>
-            <p className="mt-1 text-xs text-gray-400">
+            <p className="mt-1 text-xs text-gray-500">
               {ACTION_OPTIONS.find(a => a.value === action)?.desc}
             </p>
           </div>
@@ -211,10 +211,10 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   value={agentPrompt}
                   onChange={e => setAgentPrompt(e.target.value)}
                   rows={3}
-                  className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
                   placeholder="Review the changes in this PR against our code guidelines..."
                 />
-                <p className="mt-1 text-xs text-gray-400">
+                <p className="mt-1 text-xs text-gray-500">
                   Use {'{{webhook.body.field}}'} for template variables
                 </p>
               </div>
@@ -237,14 +237,14 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white"
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
             >
               Cancel
             </button>
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
             >
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -298,20 +298,25 @@ export default function HooksPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Hooks</h1>
-          <p className="text-gray-600 dark:text-gray-400">Automate actions with event-driven hooks</p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
+            <Webhook className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Hooks</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Automate actions with event-driven hooks</p>
+          </div>
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+          className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 flex items-center gap-2 cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           Create Hook
         </button>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+      <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -336,7 +341,7 @@ export default function HooksPage() {
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                     <div className="flex flex-col items-center gap-2">
-                      <Webhook className="w-8 h-8 text-gray-400" />
+                      <Webhook className="w-8 h-8 text-gray-500" />
                       <p>No hooks configured</p>
                       <p className="text-sm">Create a hook to automate actions based on events</p>
                     </div>
@@ -347,7 +352,7 @@ export default function HooksPage() {
                   <tr key={hook.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                     <td className="px-4 py-3">
                       <div>
-                        <p className="font-medium text-gray-900 dark:text-white">{hook.name}</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{hook.name}</p>
                         {hook.description && (
                           <p className="text-sm text-gray-500">{hook.description}</p>
                         )}
@@ -368,7 +373,7 @@ export default function HooksPage() {
                     <td className="px-4 py-3">
                       <button
                         onClick={() => handleToggle(hook.id, hook.isEnabled)}
-                        className="text-gray-400 hover:text-gray-600"
+                        className="text-gray-500 hover:text-gray-600 cursor-pointer"
                       >
                         {hook.isEnabled ? (
                           <ToggleRight className="w-6 h-6 text-green-500" />
@@ -381,7 +386,7 @@ export default function HooksPage() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleDelete(hook.id)}
-                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded cursor-pointer"
                           title="Delete"
                         >
                           <Trash2 className="w-4 h-4" />

@@ -96,8 +96,8 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Add MCP Server</h2>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Add MCP Server</h2>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-600 cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -109,7 +109,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
               placeholder="e.g., Brave Search"
             />
           </div>
@@ -119,7 +119,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
             <select
               value={transport}
               onChange={(e) => setTransport(e.target.value as 'stdio' | 'sse')}
-              className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
             >
               <option value="stdio">stdio (local process)</option>
               <option value="sse">SSE (remote server)</option>
@@ -134,7 +134,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
                   placeholder="npx"
                 />
               </div>
@@ -144,10 +144,10 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={args}
                   onChange={(e) => setArgs(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
                   placeholder="-y @anthropic/brave-search-mcp"
                 />
-                <p className="mt-1 text-xs text-gray-400">Space-separated arguments</p>
+                <p className="mt-1 text-xs text-gray-500">Space-separated arguments</p>
               </div>
             </>
           ) : (
@@ -158,7 +158,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={sseUrl}
                   onChange={(e) => setSseUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
                   placeholder="http://localhost:8080/sse"
                 />
               </div>
@@ -168,7 +168,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={postUrl}
                   onChange={(e) => setPostUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
                   placeholder="http://localhost:8080/message"
                 />
               </div>
@@ -180,14 +180,14 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white"
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
             >
               Cancel
             </button>
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Add Server
@@ -207,7 +207,7 @@ function ServerToolList({ serverId }: { serverId: string }) {
 
   if (isLoading) {
     return (
-      <div className="py-2 px-4 text-sm text-gray-400">
+      <div className="py-2 px-4 text-sm text-gray-500">
         <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
         Loading tools...
       </div>
@@ -217,17 +217,17 @@ function ServerToolList({ serverId }: { serverId: string }) {
   const tools = data?.tools || [];
 
   if (tools.length === 0) {
-    return <p className="py-2 px-4 text-sm text-gray-400">No tools available</p>;
+    return <p className="py-2 px-4 text-sm text-gray-500">No tools available</p>;
   }
 
   return (
     <div className="space-y-1 px-4 pb-3">
       {tools.map((tool) => (
         <div key={tool.name} className="flex items-start gap-2 py-1">
-          <Wrench className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0" />
+          <Wrench className="w-3.5 h-3.5 text-gray-500 mt-0.5 shrink-0" />
           <div>
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{tool.name}</p>
-            <p className="text-xs text-gray-400">{tool.description}</p>
+            <p className="text-xs text-gray-500">{tool.description}</p>
           </div>
         </div>
       ))}
@@ -300,15 +300,18 @@ export default function MCPPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">MCP Servers</h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            Manage Model Context Protocol servers and their tools
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
+            <Cable className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">MCP Servers</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Manage Model Context Protocol servers and their tools</p>
+          </div>
         </div>
         <button
           onClick={() => setShowAdd(true)}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+          className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
           Add Server
@@ -317,15 +320,15 @@ export default function MCPPage() {
 
       <div className="space-y-3">
         {isLoading ? (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center text-gray-500">
+          <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center text-gray-500">
             <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
             Loading...
           </div>
         ) : servers.length === 0 ? (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center">
-            <Cable className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+          <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center">
+            <Cable className="w-8 h-8 text-gray-500 mx-auto mb-2" />
             <p className="text-gray-500">No MCP servers configured</p>
-            <p className="text-sm text-gray-400 mt-1">
+            <p className="text-sm text-gray-500 mt-1">
               Add an MCP server to extend your assistant with external tools
             </p>
           </div>
@@ -333,14 +336,14 @@ export default function MCPPage() {
           servers.map((server) => (
             <div
               key={server.id}
-              className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
+              className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60"
             >
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => toggleExpand(server.id)}
-                      className="text-gray-400 hover:text-gray-600"
+                      className="text-gray-500 hover:text-gray-600"
                     >
                       {expanded.has(server.id) ? (
                         <ChevronDown className="w-5 h-5" />
@@ -349,8 +352,8 @@ export default function MCPPage() {
                       )}
                     </button>
                     <div>
-                      <h3 className="font-medium text-gray-900 dark:text-white">{server.name}</h3>
-                      <p className="text-xs text-gray-400 font-mono">
+                      <h3 className="font-medium text-gray-900 dark:text-gray-100">{server.name}</h3>
+                      <p className="text-xs text-gray-500 font-mono">
                         {server.transport === 'sse'
                           ? server.sseUrl
                           : `${server.command} ${(server.args || []).join(' ')}`}
@@ -370,7 +373,7 @@ export default function MCPPage() {
                     {server.status === 'disconnected' && server.isEnabled && (
                       <button
                         onClick={() => handleConnect(server.id)}
-                        className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
+                        className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded cursor-pointer"
                         title="Connect"
                       >
                         <RefreshCw className="w-4 h-4" />
@@ -379,10 +382,10 @@ export default function MCPPage() {
                     <button
                       onClick={() => handleToggle(server.id, server.isEnabled)}
                       className={cn(
-                        'p-1.5 rounded',
+                        'p-1.5 rounded cursor-pointer',
                         server.isEnabled
                           ? 'text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20'
-                          : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                          : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'
                       )}
                       title={server.isEnabled ? 'Disable' : 'Enable'}
                     >
@@ -390,7 +393,7 @@ export default function MCPPage() {
                     </button>
                     <button
                       onClick={() => handleDelete(server.id)}
-                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded cursor-pointer"
                       title="Delete"
                     >
                       <Trash2 className="w-4 h-4" />

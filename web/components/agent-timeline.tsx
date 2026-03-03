@@ -49,7 +49,7 @@ function TimelineCard({ event }: TimelineCardProps) {
           <span className={cn('text-xs font-semibold uppercase', config.color)}>
             {config.label}
           </span>
-          <span className="text-xs text-gray-400" suppressHydrationWarning>
+          <span className="text-xs text-gray-500" suppressHydrationWarning>
             {event.timestamp.toLocaleTimeString()}
           </span>
         </div>
@@ -87,7 +87,7 @@ export function AgentTimeline({ events, className }: AgentTimelineProps) {
 
   if (events.length === 0) {
     return (
-      <div className={cn('flex items-center justify-center p-8 text-gray-400 text-sm', className)}>
+      <div className={cn('flex items-center justify-center p-8 text-gray-500 text-sm', className)}>
         No events yet. Waiting for agent activity...
       </div>
     );

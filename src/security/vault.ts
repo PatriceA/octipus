@@ -2,7 +2,8 @@ import { eq, and } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { vault, type VaultEntry, type NewVaultEntry, SECRET_PLACEHOLDER_PATTERN } from '@/db/schema/vault';
 import { auditRepository } from '@/db/repositories/audit-repository';
-import { encrypt, decrypt, deriveKey } from '@/utils/crypto';
+import { encrypt, decrypt } from '@/utils/crypto';
+import { createHash } from 'crypto';
 import { getConfig } from '@/config';
 import { securityLogger } from '@/utils/logger';
 
@@ -18,9 +19,9 @@ export async function initializeVault(): Promise<void> {
     throw new Error('Master key not configured');
   }
 
-  // Derive key from master key
-  const { key } = await deriveKey(config.security.masterKey);
-  masterKey = key;
+  // Derive a deterministic 256-bit key from the master key via SHA-256.
+  // Unlike deriveKey() which uses a random salt, this is stable across restarts.
+  masterKey = createHash('sha256').update(config.security.masterKey).digest();
 
   securityLogger.info('Vault initialized');
 }

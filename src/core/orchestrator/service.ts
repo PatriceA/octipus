@@ -449,6 +449,23 @@ export class OrchestratorService {
     } catch (error) {
       coreLogger.error({ error, workerId, role }, 'Worker agent failed');
 
+      // Don't fallback on user-initiated stops — only on genuine failures
+      const errorMsg = (error as Error).message || '';
+      const wasUserStopped = errorMsg.includes('aborted') || errorMsg.includes('stopped')
+        || worker.getStatus() === 'stopped';
+      if (wasUserStopped) {
+        coreLogger.info({ workerId, role }, 'Worker stopped by user, not retrying');
+        return {
+          workerId,
+          role: agentRole,
+          result: 'Agent was stopped by user.',
+          model: routing.model,
+          iterations: worker.getIteration(),
+          durationMs: Date.now() - startTime,
+          error: 'stopped_by_user',
+        };
+      }
+
       // If a CLI sub-agent failed (e.g. quota exhausted), try falling back to
       // the default model with standard tool calling
       const failedModel = await registry.getModelByModelId(routing.model);

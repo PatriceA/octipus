@@ -51,7 +51,7 @@ function HealthBadge({ health }: { health?: Model['health'] }) {
   const config = {
     healthy: { color: 'text-green-500', icon: CheckCircle, label: 'Healthy' },
     unhealthy: { color: 'text-red-500', icon: XCircle, label: 'Unhealthy' },
-    unknown: { color: 'text-gray-400', icon: AlertCircle, label: 'Unknown' },
+    unknown: { color: 'text-gray-500', icon: AlertCircle, label: 'Unknown' },
   };
   const { color, icon: Icon, label } = config[health || 'unknown'];
 
@@ -292,17 +292,17 @@ function AddModelModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center gap-2">
             {backStep && (
-              <button onClick={() => setStep(backStep)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-500">
+              <button onClick={() => setStep(backStep)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-500 cursor-pointer">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
               </button>
             )}
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{stepTitle}</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{stepTitle}</h2>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
@@ -324,7 +324,7 @@ function AddModelModal({
                   <Cpu className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-white">LiteLLM Proxy</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-100">LiteLLM Proxy</div>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     Select from models configured in your LiteLLM proxy. Includes Ollama, OpenAI, Anthropic, and other providers.
                   </div>
@@ -342,7 +342,7 @@ function AddModelModal({
                   <Pencil className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-white">Manual / Direct</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-100">Manual / Direct</div>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     Enter model details manually. For models not in LiteLLM, custom endpoints, or CLI subscription tools.
                   </div>
@@ -357,7 +357,7 @@ function AddModelModal({
           <div className="p-4">
             {loadingModels ? (
               <div className="flex items-center justify-center py-8">
-                <RefreshCw className="w-5 h-5 animate-spin text-gray-400" />
+                <RefreshCw className="w-5 h-5 animate-spin text-gray-500" />
                 <span className="ml-2 text-sm text-gray-500">Loading models from LiteLLM...</span>
               </div>
             ) : litellmError ? (
@@ -373,7 +373,7 @@ function AddModelModal({
               <div className="text-center py-8 text-gray-500">
                 <Cpu className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                 <p className="text-sm">No models found in LiteLLM</p>
-                <p className="text-xs text-gray-400 mt-1">Add models to your LiteLLM config.yaml and restart the proxy.</p>
+                <p className="text-xs text-gray-500 mt-1">Add models to your LiteLLM config.yaml and restart the proxy.</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -390,8 +390,8 @@ function AddModelModal({
                           onClick={() => handleSelectModel(m)}
                           className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between group/item transition-colors"
                         >
-                          <span className="font-mono text-sm text-gray-900 dark:text-white">{m.id}</span>
-                          <Plus className="w-4 h-4 text-gray-400 opacity-0 group-hover/item:opacity-100 transition-opacity" />
+                          <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{m.id}</span>
+                          <Plus className="w-4 h-4 text-gray-500 opacity-0 group-hover/item:opacity-100 transition-opacity" />
                         </button>
                       ))}
                     </div>
@@ -423,7 +423,7 @@ function AddModelModal({
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g., GPT-4 Turbo"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
 
@@ -433,7 +433,7 @@ function AddModelModal({
                 <select
                   value={formData.provider}
                   onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 >
                   {Object.entries(PROVIDER_LABELS).map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
@@ -447,7 +447,7 @@ function AddModelModal({
                   value={formData.modelId}
                   onChange={(e) => setFormData({ ...formData, modelId: e.target.value })}
                   placeholder={isCli ? 'cli/claude-code' : 'e.g., gpt-4o'}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
                 />
               </div>
             </div>
@@ -460,7 +460,7 @@ function AddModelModal({
                   value={formData.endpoint}
                   onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
                   placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://localhost:11434'}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
                 />
               </div>
             )}
@@ -472,7 +472,7 @@ function AddModelModal({
                   type="number"
                   value={formData.contextWindow}
                   onChange={(e) => setFormData({ ...formData, contextWindow: parseInt(e.target.value) || 4096 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
               </div>
               <div>
@@ -481,7 +481,7 @@ function AddModelModal({
                   type="number"
                   value={formData.maxTokens}
                   onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
               </div>
             </div>
@@ -493,7 +493,7 @@ function AddModelModal({
                   type="number"
                   value={formData.priority}
                   onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
               </div>
               <div>
@@ -503,7 +503,7 @@ function AddModelModal({
                   value={formData.topics}
                   onChange={(e) => setFormData({ ...formData, topics: e.target.value })}
                   placeholder="coding, analysis, chat"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
                 />
               </div>
             </div>
@@ -517,7 +517,7 @@ function AddModelModal({
                     step="0.01"
                     value={formData.costPerInputToken}
                     onChange={(e) => setFormData({ ...formData, costPerInputToken: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   />
                 </div>
                 <div>
@@ -527,7 +527,7 @@ function AddModelModal({
                     step="0.01"
                     value={formData.costPerOutputToken}
                     onChange={(e) => setFormData({ ...formData, costPerOutputToken: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   />
                 </div>
               </div>
@@ -593,7 +593,7 @@ function AddModelModal({
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 <Plus className="w-4 h-4" />
                 {loading ? 'Adding...' : 'Add Model'}
@@ -688,13 +688,13 @@ function EditModelModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Edit Model</h2>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Edit Model</h2>
             <p className="text-sm text-gray-500">{model.name} <span className="font-mono text-xs">({model.provider}/{model.modelId})</span></p>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
@@ -708,7 +708,7 @@ function EditModelModal({
                 value={formData.endpoint}
                 onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
                 placeholder="Leave empty for default"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
               />
             </div>
           )}
@@ -720,7 +720,7 @@ function EditModelModal({
                 type="number"
                 value={formData.contextWindow}
                 onChange={(e) => setFormData({ ...formData, contextWindow: parseInt(e.target.value) || 0 })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
             <div>
@@ -729,7 +729,7 @@ function EditModelModal({
                 type="number"
                 value={formData.maxTokens}
                 onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 0 })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
           </div>
@@ -741,7 +741,7 @@ function EditModelModal({
                 type="number"
                 value={formData.priority}
                 onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
             <div>
@@ -751,7 +751,7 @@ function EditModelModal({
                 value={formData.topics}
                 onChange={(e) => setFormData({ ...formData, topics: e.target.value })}
                 placeholder="coding, analysis, chat"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
               />
             </div>
           </div>
@@ -765,7 +765,7 @@ function EditModelModal({
                   step="0.01"
                   value={formData.costPerInputToken}
                   onChange={(e) => setFormData({ ...formData, costPerInputToken: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
               </div>
               <div>
@@ -775,7 +775,7 @@ function EditModelModal({
                   step="0.01"
                   value={formData.costPerOutputToken}
                   onChange={(e) => setFormData({ ...formData, costPerOutputToken: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
               </div>
             </div>
@@ -827,7 +827,7 @@ function EditModelModal({
                 <select
                   value={formData.cliPermissionMode}
                   onChange={(e) => setFormData({ ...formData, cliPermissionMode: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
                 >
                   <option value="">Default</option>
                   <option value="bypassPermissions">Bypass Permissions (Claude)</option>
@@ -849,7 +849,7 @@ function EditModelModal({
                   value={formData.cliMaxBudgetUsd}
                   onChange={(e) => setFormData({ ...formData, cliMaxBudgetUsd: e.target.value })}
                   placeholder="No limit"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
                 />
                 <p className="text-xs text-gray-500 mt-1">Claude Code only. Leave empty for no limit.</p>
               </div>
@@ -861,7 +861,7 @@ function EditModelModal({
                   value={formData.cliMcpConfigPath}
                   onChange={(e) => setFormData({ ...formData, cliMcpConfigPath: e.target.value })}
                   placeholder="/path/to/mcp-config.json"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
                 />
               </div>
 
@@ -872,7 +872,7 @@ function EditModelModal({
                   value={formData.cliAllowedTools}
                   onChange={(e) => setFormData({ ...formData, cliAllowedTools: e.target.value })}
                   placeholder="Bash, Read, Edit, WebSearch"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
                 />
                 <p className="text-xs text-gray-500 mt-1">Claude Code only. Comma-separated. Empty = all tools.</p>
               </div>
@@ -884,7 +884,7 @@ function EditModelModal({
                   value={formData.cliExtraArgs}
                   onChange={(e) => setFormData({ ...formData, cliExtraArgs: e.target.value })}
                   placeholder="--no-session-persistence --max-turns 10"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
                 />
               </div>
             </div>
@@ -905,7 +905,7 @@ function EditModelModal({
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              className="flex-1 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading ? 'Saving...' : 'Save Changes'}
             </button>
@@ -951,10 +951,10 @@ function CLIStatusPanel({ tools, registeredModels, onAdd }: {
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+    <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-4">
       <div className="flex items-center gap-2 mb-1">
         <Terminal className="w-5 h-5 text-violet-600" />
-        <h2 className="font-semibold text-gray-900 dark:text-white">Detected CLI Tools</h2>
+        <h2 className="font-semibold text-gray-900 dark:text-gray-100">Detected CLI Tools</h2>
       </div>
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
         These CLI subscription tools were detected on your system. Add them to use as models.
@@ -968,7 +968,7 @@ function CLIStatusPanel({ tools, registeredModels, onAdd }: {
                 <span className={`w-2 h-2 rounded-full ${
                   !tool.available ? 'bg-gray-400' : registered ? 'bg-green-500' : 'bg-yellow-500'
                 }`} />
-                <span className="text-gray-900 dark:text-white">{tool.name}</span>
+                <span className="text-gray-900 dark:text-gray-100">{tool.name}</span>
                 {!tool.available && (
                   <span className="text-xs text-gray-500">(not installed)</span>
                 )}
@@ -1103,7 +1103,7 @@ export default function ModelsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 animate-spin text-gray-400" />
+        <RefreshCw className="w-6 h-6 animate-spin text-gray-500" />
       </div>
     );
   }
@@ -1111,21 +1111,26 @@ export default function ModelsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Models</h1>
-          <p className="text-gray-600 dark:text-gray-400">Configure LLM models, providers, and CLI tools</p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
+            <Cpu className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Models</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Configure LLM models, providers, and CLI tools</p>
+          </div>
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => { fetchModels(); fetchCLIStatus(); }}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
           <button
             onClick={() => setIsModalOpen(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+            className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add Model
@@ -1134,7 +1139,7 @@ export default function ModelsPage() {
       </div>
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>
@@ -1153,17 +1158,17 @@ export default function ModelsPage() {
           models.map((model) => (
             <div
               key={model.id}
-              className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border ${
+              className={`bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ${
                 model.isEnabled
-                  ? 'border-gray-200 dark:border-gray-700'
-                  : 'border-gray-200 dark:border-gray-700 opacity-60'
+                  ? 'ring-gray-200/60 dark:ring-gray-700/60'
+                  : 'ring-gray-200/60 dark:ring-gray-700/60 opacity-60'
               } p-4 relative group`}
             >
               <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 {!model.isDefault && (
                   <button
                     onClick={() => handleSetDefault(model.name)}
-                    className="p-1.5 text-gray-400 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded"
+                    className="p-1.5 text-gray-500 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded cursor-pointer"
                     title="Set as default"
                   >
                     <Star className="w-4 h-4" />
@@ -1171,14 +1176,14 @@ export default function ModelsPage() {
                 )}
                 <button
                   onClick={() => setEditingModel(model)}
-                  className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded"
+                  className="p-1.5 text-gray-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded cursor-pointer"
                   title="Edit model"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => handleToggleEnabled(model)}
-                  className="p-1.5 text-gray-400 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 rounded"
+                  className="p-1.5 text-gray-500 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 rounded cursor-pointer"
                   title={model.isEnabled ? 'Disable' : 'Enable'}
                 >
                   {model.isEnabled ? (
@@ -1189,7 +1194,7 @@ export default function ModelsPage() {
                 </button>
                 <button
                   onClick={() => handleDeleteModel(model.name)}
-                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                  className="p-1.5 text-gray-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded cursor-pointer"
                   title="Delete model"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -1203,7 +1208,7 @@ export default function ModelsPage() {
                   ) : (
                     <Cpu className="w-5 h-5 text-blue-600" />
                   )}
-                  <h3 className="font-semibold text-gray-900 dark:text-white">{model.name}</h3>
+                  <h3 className="font-semibold text-gray-900 dark:text-gray-100">{model.name}</h3>
                   {model.isDefault && (
                     <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full flex items-center gap-1 shrink-0">
                       <Star className="w-3 h-3" /> Default
@@ -1219,16 +1224,16 @@ export default function ModelsPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Model ID</span>
-                  <span className="text-gray-900 dark:text-white font-mono text-xs">{model.modelId}</span>
+                  <span className="text-gray-900 dark:text-gray-100 font-mono text-xs">{model.modelId}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Context</span>
-                  <span className="text-gray-900 dark:text-white">{(model.contextWindow / 1000).toFixed(0)}k</span>
+                  <span className="text-gray-900 dark:text-gray-100">{(model.contextWindow / 1000).toFixed(0)}k</span>
                 </div>
                 {model.costPerInputToken > 0 && (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Cost (in/out)</span>
-                    <span className="text-gray-900 dark:text-white text-xs">
+                    <span className="text-gray-900 dark:text-gray-100 text-xs">
                       ${model.costPerInputToken}/${model.costPerOutputToken} /1M
                     </span>
                   </div>
@@ -1241,7 +1246,7 @@ export default function ModelsPage() {
                 )}
                 <div className="flex justify-between">
                   <span className="text-gray-500">Priority</span>
-                  <span className="text-gray-900 dark:text-white">{model.priority}</span>
+                  <span className="text-gray-900 dark:text-gray-100">{model.priority}</span>
                 </div>
               </div>
 

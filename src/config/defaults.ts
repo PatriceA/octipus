@@ -57,6 +57,7 @@ export const defaultConfig: Partial<Config> = {
     defaultTimeout: 300000,
     maxIterations: 50,
     contextWindowSize: 32000,
+    maxTokenBudget: 100000,
   },
   orchestrator: {
     enabled: true,

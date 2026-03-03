@@ -1,5 +1,4 @@
 import { pgTable, text, timestamp, uuid, jsonb, boolean, index, pgEnum } from 'drizzle-orm/pg-core';
-import { users } from './users';
 
 export const credentialTypeEnum = pgEnum('credential_type', [
   'api_key',
@@ -12,7 +11,7 @@ export const credentialTypeEnum = pgEnum('credential_type', [
 
 export const vault = pgTable('vault', {
   id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
+  userId: text('user_id').notNull(), // UUID for user credentials, 'system' for app-level credentials
   name: text('name').notNull(),
   credentialType: credentialTypeEnum('credential_type').notNull(),
   // Encrypted with AES-256-GCM

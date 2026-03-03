@@ -474,7 +474,7 @@ export default function ChatPage() {
       {/* Header */}
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Chat</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Chat</h1>
           <div className="flex items-center gap-3 text-sm">
             {connectionStatus === 'connected' ? (
               <span className="text-green-600 flex items-center gap-1">
@@ -492,18 +492,18 @@ export default function ChatPage() {
                 Disconnected
               </span>
             )}
-            <span className="text-gray-400">|</span>
+            <span className="text-gray-500">|</span>
             {/* Model selector */}
             <div className="relative">
               <button
                 onClick={() => setShowModelSelect(!showModelSelect)}
-                className="flex items-center gap-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                className="flex items-center gap-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
               >
                 <Settings2 className="w-4 h-4" />
                 <span className="font-mono text-xs">{selectedModel || 'auto'}</span>
               </button>
               {showModelSelect && models.length > 0 && (
-                <div className="absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50 min-w-[200px]">
+                <div className="absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-gray-200/60 dark:ring-gray-700/60 py-1 z-50 min-w-[200px]">
                   <button
                     onClick={() => { setSelectedModel(''); setShowModelSelect(false); }}
                     className={cn(
@@ -522,7 +522,7 @@ export default function ChatPage() {
                         m.name === selectedModel ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'text-gray-700 dark:text-gray-300'
                       )}
                     >
-                      {m.name} {m.isDefault && <span className="text-xs text-gray-400">(default)</span>}
+                      {m.name} {m.isDefault && <span className="text-xs text-gray-500">(default)</span>}
                     </button>
                   ))}
                 </div>
@@ -534,7 +534,7 @@ export default function ChatPage() {
           {agentActivity.length > 0 && (
             <button
               onClick={() => setShowActivity(!showActivity)}
-              className="flex items-center gap-1 p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+              className="flex items-center gap-1 p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
               title="Agent activity"
             >
               <Activity className="w-5 h-5" />
@@ -544,14 +544,14 @@ export default function ChatPage() {
           )}
           <button
             onClick={checkConnection}
-            className="p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+            className="p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
             title="Refresh connection"
           >
             <RefreshCw className="w-5 h-5" />
           </button>
           <button
             onClick={clearChat}
-            className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+            className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
           >
             Clear Chat
           </button>
@@ -565,7 +565,7 @@ export default function ChatPage() {
           <div className="space-y-1">
             {agentActivity.map((activity, i) => (
               <div key={i} className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
-                <span className="text-gray-400" suppressHydrationWarning>
+                <span className="text-gray-500" suppressHydrationWarning>
                   {activity.timestamp.toLocaleTimeString()}
                 </span>
                 <span className={cn(
@@ -591,7 +591,7 @@ export default function ChatPage() {
       )}
 
       {/* Chat area */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+      <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((message) => (
@@ -611,10 +611,10 @@ export default function ChatPage() {
                 className={cn(
                   'max-w-[70%] px-4 py-2 rounded-lg',
                   message.role === 'user'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-primary-600 text-white'
                     : message.role === 'system'
                     ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 italic'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
                 )}
               >
                 <p className="whitespace-pre-wrap">{message.content}</p>
@@ -630,7 +630,7 @@ export default function ChatPage() {
                 </div>
               </div>
               {message.role === 'user' && (
-                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center flex-shrink-0">
                   <User className="w-5 h-5 text-white" />
                 </div>
               )}
@@ -701,7 +701,7 @@ export default function ChatPage() {
                 <p className="text-sm text-gray-700 dark:text-gray-300 mb-1">
                   {pendingApproval.summary}
                 </p>
-                <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">
                   {pendingApproval.question}
                 </p>
                 {pendingApproval.options && pendingApproval.options.length > 0 ? (
@@ -757,7 +757,7 @@ export default function ChatPage() {
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
               placeholder={isListening ? 'Listening...' : 'Send a message...'}
               className={cn(
-                'flex-1 px-4 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white',
+                'flex-1 px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200',
                 isListening && 'ring-2 ring-red-400'
               )}
               disabled={isLoading}
@@ -780,7 +780,7 @@ export default function ChatPage() {
             <button
               onClick={sendMessage}
               disabled={isLoading || !input.trim()}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Send className="w-5 h-5" />
             </button>

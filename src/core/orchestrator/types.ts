@@ -1,4 +1,4 @@
-export type AgentRole = 'orchestrator' | 'research' | 'coding' | 'review' | 'qa' | 'general';
+export type AgentRole = 'orchestrator' | 'research' | 'coding' | 'review' | 'qa' | 'communication' | 'general';
 
 export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_approval' | 'completed' | 'failed';
 

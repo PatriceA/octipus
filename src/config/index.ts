@@ -100,6 +100,7 @@ function loadFromEnv(): Partial<Config> {
       defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '300000', 10),
       maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '50', 10),
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
+      maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
     },
     orchestrator: {
       enabled: process.env.ORCHESTRATOR_ENABLED !== 'false',

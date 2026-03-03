@@ -111,7 +111,7 @@ function LevelSelector({
             key={level}
             onClick={() => onChange(level)}
             className={cn(
-              'px-2 py-1 rounded text-xs font-medium flex items-center gap-1 transition-colors',
+              'px-2 py-1 rounded text-xs font-medium cursor-pointer flex items-center gap-1 transition-colors',
               active
                 ? level === 'ALLOW'
                   ? 'bg-green-600 text-white'
@@ -129,7 +129,7 @@ function LevelSelector({
       {isOverride && (
         <button
           onClick={onReset}
-          className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          className="p-1 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
           title={`Reset to default (${defaultLevel})`}
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -164,19 +164,19 @@ function SkillCard({
   const overrideCount = skill.permissions.filter((p) => hasOverride(p)).length;
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+    <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full p-4 flex items-center justify-between text-left"
+        className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
       >
         <div className="flex items-center gap-3">
-          <div className="text-gray-400">
+          <div className="text-gray-500">
             {expanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
           </div>
           <Puzzle className="w-5 h-5 text-blue-500" />
           <div>
-            <h3 className="font-medium text-gray-900 dark:text-white">{skill.name}</h3>
-            <p className="text-xs text-gray-400">{skill.description}</p>
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">{skill.name}</h3>
+            <p className="text-xs text-gray-500">{skill.description}</p>
           </div>
         </div>
 
@@ -190,7 +190,7 @@ function SkillCard({
               {overrideCount} custom
             </span>
           )}
-          <span className="text-xs text-gray-400">v{skill.version}</span>
+          <span className="text-xs text-gray-500">v{skill.version}</span>
           <span
             className={cn(
               'px-2 py-0.5 text-xs rounded-full',
@@ -244,7 +244,7 @@ function SkillCard({
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-gray-400 mt-0.5">{perm.description}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{perm.description}</p>
                       </div>
                       <LevelSelector
                         currentLevel={effectiveLevel}
@@ -290,12 +290,12 @@ function ToolCard({ tool }: { tool: SkillTool }) {
       <div className="flex items-center justify-between">
         <div>
           <span className="text-sm font-mono text-gray-800 dark:text-gray-200">{tool.name}</span>
-          <p className="text-xs text-gray-400 mt-0.5">{tool.description}</p>
+          <p className="text-xs text-gray-500 mt-0.5">{tool.description}</p>
         </div>
         {properties && Object.keys(properties).length > 0 && (
           <button
             onClick={() => setShowParams(!showParams)}
-            className="text-xs text-blue-500 hover:text-blue-700"
+            className="text-xs text-blue-500 hover:text-blue-700 cursor-pointer"
           >
             {showParams ? 'hide params' : `${Object.keys(properties).length} params`}
           </button>
@@ -307,8 +307,8 @@ function ToolCard({ tool }: { tool: SkillTool }) {
           {Object.entries(properties).map(([name, schema]) => (
             <div key={name} className="flex items-baseline gap-2 text-xs">
               <span className="font-mono text-gray-700 dark:text-gray-300">{name}</span>
-              <span className="text-gray-400">{schema.type || 'any'}</span>
-              {schema.description && <span className="text-gray-400">— {schema.description}</span>}
+              <span className="text-gray-500">{schema.type || 'any'}</span>
+              {schema.description && <span className="text-gray-500">— {schema.description}</span>}
             </div>
           ))}
         </div>
@@ -404,10 +404,13 @@ export default function SkillsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
+          <Puzzle className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+        </div>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Skills & Tools</h1>
-          <p className="text-gray-600 dark:text-gray-400">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Skills & Tools</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
             {skills.length} skills, {totalTools} tools available
             {totalOverrides > 0 && ` \u00b7 ${totalOverrides} custom permissions`}
           </p>
@@ -441,25 +444,25 @@ export default function SkillsPage() {
 
       {/* Search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search skills, tools, or permissions..."
-          className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white"
+          className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-gray-100"
         />
       </div>
 
       {/* Native Skills */}
       {skillsLoading ? (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center text-gray-500">
+        <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center text-gray-500">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filteredSkills.length === 0 ? (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center">
-          <Puzzle className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+        <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center">
+          <Puzzle className="w-8 h-8 text-gray-500 mx-auto mb-2" />
           <p className="text-gray-500">No skills found</p>
         </div>
       ) : (
@@ -483,7 +486,7 @@ export default function SkillsPage() {
             <Cable className="w-4 h-4" />
             MCP Tools
           </h2>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-2">
+          <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-4 space-y-2">
             {filteredMcpTools.map((tool) => (
               <div
                 key={`${tool.serverId}-${tool.name}`}
@@ -495,7 +498,7 @@ export default function SkillsPage() {
                     <span className="text-sm font-mono text-gray-800 dark:text-gray-200">{tool.name}</span>
                     <span className="text-xs text-purple-400">{tool.serverId}</span>
                   </div>
-                  <p className="text-xs text-gray-400">{tool.description}</p>
+                  <p className="text-xs text-gray-500">{tool.description}</p>
                 </div>
               </div>
             ))}

@@ -35,9 +35,9 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         properties: {
           role: {
             type: 'string',
-            enum: ['research', 'coding', 'review', 'qa', 'general'],
+            enum: ['research', 'coding', 'review', 'qa', 'communication', 'general'],
             description:
-              'The specialist role. research=web browsing/search, coding=filesystem/shell/git, review=code analysis, qa=browser testing, general=basic tasks',
+              'The specialist role. research=web browsing/search, coding=filesystem/shell/git, review=code analysis, qa=browser testing, communication=email/gmail/calendar/contacts/drive/docs, general=basic tasks',
           },
           task: {
             type: 'string',

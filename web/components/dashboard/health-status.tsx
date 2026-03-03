@@ -27,7 +27,7 @@ const SERVICE_CONFIG = [
 export function HealthStatus({ health, isFetching }: HealthStatusProps) {
   const getStatusIcon = (status?: string) => {
     if (!health) {
-      return <RefreshCw className="w-5 h-5 text-gray-400 animate-spin" />;
+      return <RefreshCw className="w-5 h-5 text-gray-500 animate-spin" />;
     }
     switch (status) {
       case 'healthy':
@@ -69,7 +69,7 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
         <div className="flex items-center justify-between">
           <CardTitle>System Health</CardTitle>
           {isFetching && health && (
-            <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />
+            <RefreshCw className="w-4 h-4 text-gray-500 animate-spin" />
           )}
         </div>
       </CardHeader>
@@ -87,8 +87,8 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <Icon className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                    <span className="font-medium text-gray-900 dark:text-white text-sm">
+                    <Icon className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                    <span className="font-medium text-gray-900 dark:text-gray-100 text-sm">
                       {label}
                     </span>
                   </div>
@@ -97,7 +97,7 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
                       {getStatusLabel(service?.status)}
                     </span>
                     {service?.latency != null && service.latency > 0 && (
-                      <span className="text-xs text-gray-400 dark:text-gray-500">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
                         {service.latency}ms
                       </span>
                     )}

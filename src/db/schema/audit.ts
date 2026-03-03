@@ -1,5 +1,4 @@
 import { pgTable, text, timestamp, uuid, jsonb, inet, index, pgEnum } from 'drizzle-orm/pg-core';
-import { users } from './users';
 
 export const auditActionEnum = pgEnum('audit_action', [
   'login',
@@ -30,7 +29,7 @@ export const auditActionEnum = pgEnum('audit_action', [
 
 export const auditLog = pgTable('audit_log', {
   id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').references(() => users.id),
+  userId: text('user_id'), // UUID for users, 'system' for system operations
   action: auditActionEnum('action').notNull(),
   resourceType: text('resource_type'), // session, message, credential, agent, etc.
   resourceId: text('resource_id'),

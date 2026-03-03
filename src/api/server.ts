@@ -87,6 +87,14 @@ export function createServer() {
       const session = await sessionManager.validate(token);
 
       if (!session) {
+        // Fallback: validate against MASTER_KEY for API/MCP access
+        const masterKey = process.env.MASTER_KEY;
+        if (masterKey && token === masterKey) {
+          return {
+            user: { id: 'system', username: 'system', isAdmin: true },
+            session: null,
+          };
+        }
         return { user: null, session: null };
       }
 

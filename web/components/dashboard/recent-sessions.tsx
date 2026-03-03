@@ -56,8 +56,8 @@ export function RecentSessions() {
                   <tr key={session.id} className="text-sm">
                     <td className="py-3">
                       <div className="flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-gray-400" />
-                        <span className="font-medium text-gray-900 dark:text-white">
+                        <MessageSquare className="w-4 h-4 text-gray-500" />
+                        <span className="font-medium text-gray-900 dark:text-gray-100">
                           {session.title || 'Untitled'}
                         </span>
                       </div>

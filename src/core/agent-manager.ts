@@ -24,6 +24,7 @@ export interface SpawnOptions {
   tools?: ToolHandler[];
   timeout?: number;
   maxIterations?: number;
+  maxTokenBudget?: number;
 }
 
 export interface AgentInfo {
@@ -114,6 +115,7 @@ export class AgentManager {
       maxIterations: options.maxIterations || config.agent.maxIterations,
       contextWindowSize: config.agent.contextWindowSize,
       timeout: options.timeout || config.agent.defaultTimeout,
+      maxTokenBudget: options.maxTokenBudget || config.agent.maxTokenBudget,
     };
 
     // Determine if this is a CLI model (autonomous sub-agent)
@@ -339,7 +341,7 @@ export class AgentManager {
       const status = worker.getStatus();
 
       if (
-        (status === 'completed' || status === 'failed') &&
+        (status === 'completed' || status === 'failed' || status === 'stopped') &&
         now - context.updatedAt.getTime() > maxAgeMs
       ) {
         this.agents.delete(id);

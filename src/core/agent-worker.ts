@@ -16,6 +16,7 @@ export interface AgentWorkerConfig {
   maxIterations: number;
   contextWindowSize: number;
   timeout: number;
+  maxTokenBudget: number;
 }
 
 export interface ToolHandler {
@@ -50,6 +51,8 @@ export class AgentWorker {
   private eventHandlers: Set<AgentEventHandler> = new Set();
   private abortController: AbortController;
   private iteration: number = 0;
+  private totalTokensUsed: number = 0;
+  private startTime: number = 0;
   private consecutiveToolErrors: number = 0;
   private toolsDisabled: boolean = false;
   private static MAX_CONSECUTIVE_TOOL_ERRORS = 3;
@@ -178,6 +181,7 @@ export class AgentWorker {
     }
 
     this.context.status = 'running';
+    this.startTime = Date.now();
     this.emit('status_change', { status: 'running' });
 
     try {
@@ -222,6 +226,20 @@ export class AgentWorker {
       this.iteration++;
       agentLogger.debug({ agentId: this.context.id, iteration: this.iteration }, 'Agent iteration');
 
+      // Check token budget
+      if (this.config.maxTokenBudget > 0 && this.totalTokensUsed >= this.config.maxTokenBudget) {
+        throw new Error(
+          `Token budget exceeded (${this.totalTokensUsed}/${this.config.maxTokenBudget})`
+        );
+      }
+
+      // Check timeout
+      if (this.config.timeout > 0 && Date.now() - this.startTime > this.config.timeout) {
+        throw new Error(
+          `Agent timeout exceeded (${Math.round((Date.now() - this.startTime) / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`
+        );
+      }
+
       // Compact messages if needed (with LLM summary for removed context)
       const { messages: compactedMessages, removed } = await compactMessagesWithSummary(this.messages, {
         maxTokens: this.config.contextWindowSize,
@@ -237,6 +255,9 @@ export class AgentWorker {
 
       // Get completion from LLM
       const completion = await this.getCompletion();
+
+      // Accumulate token usage
+      this.totalTokensUsed += completion.usage.totalTokens;
 
       // Handle tool calls if present
       if (completion.toolCalls?.length) {
@@ -537,8 +558,8 @@ export class AgentWorker {
    */
   stop(): void {
     this.abortController.abort();
-    this.context.status = 'paused';
-    this.emit('status_change', { status: 'paused' });
+    this.context.status = 'stopped';
+    this.emit('status_change', { status: 'stopped' });
     agentLogger.info({ agentId: this.context.id }, 'Agent stopped');
   }
 

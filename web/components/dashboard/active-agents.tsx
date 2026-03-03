@@ -37,7 +37,7 @@ export function ActiveAgents() {
       case 'completed':
         return <CheckCircle className="w-4 h-4 text-blue-500" />;
       default:
-        return <Bot className="w-4 h-4 text-gray-400" />;
+        return <Bot className="w-4 h-4 text-gray-500" />;
     }
   };
 
@@ -61,7 +61,7 @@ export function ActiveAgents() {
                 <div className="flex items-center gap-3">
                   {getStatusIcon(agent.status)}
                   <div>
-                    <p className="font-medium text-gray-900 dark:text-white text-sm">
+                    <p className="font-medium text-gray-900 dark:text-gray-100 text-sm">
                       {agent.topic || 'General'}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">

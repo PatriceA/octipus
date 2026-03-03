@@ -85,8 +85,8 @@ export class CLIAgentWorker {
         }
       }, 5000);
     }
-    this.context.status = 'paused';
-    this.emit('status_change', { status: 'paused' });
+    this.context.status = 'stopped';
+    this.emit('status_change', { status: 'stopped' });
     agentLogger.info({ agentId: this.context.id }, 'CLI agent stopped');
   }
 

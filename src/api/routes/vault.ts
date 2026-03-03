@@ -32,7 +32,27 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
 
       const vault = getVault();
       // System-level credentials (e.g. OAuth client IDs) are stored under 'system' user
-      const ownerId = body.systemLevel && user.isAdmin ? 'system' : user.id;
+      const ownerId = body.systemLevel ? 'system' : user.id;
+
+      // Check if credential already exists — update instead of creating duplicate
+      const existing = await vault.getByName(ownerId, body.name);
+      if (existing !== null) {
+        // Find the entry to get its ID for update
+        const entries = await vault.list(ownerId);
+        const existingEntry = entries.find((e) => e.name === body.name);
+        if (existingEntry) {
+          const updated = await vault.update(ownerId, existingEntry.id, {
+            value: body.value,
+            description: body.description,
+            tags: body.tags,
+          });
+          if (updated) {
+            const { encryptedValue, encryptionIv, encryptionAuthTag, ...safe } = updated;
+            return safe;
+          }
+        }
+      }
+
       const entry = await vault.store(ownerId, body.name, body.value, {
         credentialType: body.credentialType,
         description: body.description,

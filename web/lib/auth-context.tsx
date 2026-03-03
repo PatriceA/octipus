@@ -71,9 +71,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api.setToken(existingToken);
     setToken(existingToken);
 
-    api.get<{ user: User }>('/auth/me')
+    api.get<User>('/auth/me')
       .then((data) => {
-        setUser(data.user);
+        setUser({ id: data.id, username: data.username, isAdmin: data.isAdmin });
       })
       .catch(() => {
         // Token invalid/expired

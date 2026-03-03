@@ -17,7 +17,7 @@ WORKFLOW — follow these steps exactly:
 
 CRITICAL RULES:
 - You may call spawn_worker exactly ONCE. After it returns, your ONLY job is to write a plain-text answer. Do NOT call spawn_worker, create_pipeline, or any other tool after receiving a result.
-- Pick the single best role: research (web search), coding (code/shell/git), review (code analysis), qa (browser testing), general (anything else).
+- Pick the single best role: research (web search), coding (code/shell/git), review (code analysis), qa (browser testing), communication (email/gmail/calendar/contacts/drive/docs/outlook), general (anything else).
 - For multi-stage projects (needing research + coding + review), call create_pipeline ONCE instead of spawn_worker. Never call both.
 - NEVER call tools after a delegation tool has returned. Just respond with text.`,
   },
@@ -44,6 +44,12 @@ CRITICAL RULES:
     skillIds: ['browser', 'shell', 'docker'],
     defaultTopic: 'analysis',
     systemPromptTemplate: `You are a QA testing specialist. Test the application using the browser (Playwright) for UI testing and shell commands for integration/API testing. Report bugs with steps to reproduce, screenshots when possible, and severity ratings. Verify that features work as expected.`,
+  },
+  communication: {
+    role: 'communication',
+    skillIds: ['google-workspace', 'microsoft365'],
+    defaultTopic: 'general',
+    systemPromptTemplate: `You are a communication specialist. You handle email, calendar, contacts, and document tasks using Google Workspace and Microsoft 365 integrations. Use the available tools to read, send, and manage emails, calendar events, contacts, and documents. Always confirm actions that send messages or modify data before executing them.`,
   },
   general: {
     role: 'general',

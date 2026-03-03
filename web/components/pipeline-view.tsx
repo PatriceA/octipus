@@ -24,13 +24,13 @@ const STATUS_CONFIG: Record<string, {
   bgColor: string;
   ringColor: string;
 }> = {
-  pending: { icon: Clock, color: 'text-gray-400', bgColor: 'bg-gray-100 dark:bg-gray-700', ringColor: 'ring-gray-300' },
+  pending: { icon: Clock, color: 'text-gray-500', bgColor: 'bg-gray-100 dark:bg-gray-700', ringColor: 'ring-gray-300' },
   running: { icon: Loader2, color: 'text-blue-500', bgColor: 'bg-blue-100 dark:bg-blue-900/30', ringColor: 'ring-blue-400' },
   awaiting_approval: { icon: Shield, color: 'text-orange-500', bgColor: 'bg-orange-100 dark:bg-orange-900/30', ringColor: 'ring-orange-400' },
   approved: { icon: CheckCircle, color: 'text-green-500', bgColor: 'bg-green-100 dark:bg-green-900/30', ringColor: 'ring-green-400' },
   completed: { icon: CheckCircle, color: 'text-green-600', bgColor: 'bg-green-100 dark:bg-green-900/30', ringColor: 'ring-green-500' },
   failed: { icon: XCircle, color: 'text-red-500', bgColor: 'bg-red-100 dark:bg-red-900/30', ringColor: 'ring-red-400' },
-  skipped: { icon: SkipForward, color: 'text-gray-400', bgColor: 'bg-gray-50 dark:bg-gray-800', ringColor: 'ring-gray-300' },
+  skipped: { icon: SkipForward, color: 'text-gray-500', bgColor: 'bg-gray-50 dark:bg-gray-800', ringColor: 'ring-gray-300' },
 };
 
 export function PipelineView({ stages, currentStageIndex, onApprove, className }: PipelineViewProps) {
@@ -61,7 +61,7 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
               )}>
                 {stage.name}
               </span>
-              <span className="text-[10px] text-gray-400">{stage.role}</span>
+              <span className="text-[10px] text-gray-500">{stage.role}</span>
               {stage.status === 'awaiting_approval' && onApprove && (
                 <button
                   onClick={() => onApprove(stage.id)}

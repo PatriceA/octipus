@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ArrowLeft, Bot, Clock, Cpu, Hash, Square, Loader2,
+  ArrowLeft, Bot, Clock, Cpu, Hash, Square, Loader2, Trash2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAgentEvents } from '@/hooks/useAgentEvents';
@@ -90,10 +90,19 @@ export default function AgentDetailPage() {
     }
   };
 
+  const handleRemove = async () => {
+    try {
+      await api.delete(`/agents/${agentId}`);
+      router.push('/agents');
+    } catch (error) {
+      console.error('Failed to remove agent:', error);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+        <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
       </div>
     );
   }
@@ -103,7 +112,7 @@ export default function AgentDetailPage() {
       <div className="space-y-4">
         <button
           onClick={() => router.push('/agents')}
-          className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Agents
@@ -122,12 +131,12 @@ export default function AgentDetailPage() {
         <div>
           <button
             onClick={() => router.push('/agents')}
-            className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-2"
+            className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mb-2"
           >
             <ArrowLeft className="w-4 h-4" />
             Back to Agents
           </button>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-3">
             <Bot className="w-6 h-6" />
             Agent {agentId.slice(0, 8)}
           </h1>
@@ -154,29 +163,37 @@ export default function AgentDetailPage() {
               {agent.status}
             </span>
             {events.length > 0 && (
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-gray-500">
                 {events.length} events
               </span>
             )}
           </div>
         </div>
-        {isRunning && (
+        {isRunning ? (
           <button
             onClick={handleStop}
-            className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
+            className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm cursor-pointer"
           >
             <Square className="w-4 h-4" />
             Stop
+          </button>
+        ) : (
+          <button
+            onClick={handleRemove}
+            className="flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm cursor-pointer"
+          >
+            <Trash2 className="w-4 h-4" />
+            Remove
           </button>
         )}
       </div>
 
       {/* Pipeline stepper (if applicable) */}
       {pipelineData?.pipeline && pipelineData.stages && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+        <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-4">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
             Pipeline: {pipelineData.pipeline.title}
-            <span className="ml-2 text-xs text-gray-400">({pipelineData.pipeline.type})</span>
+            <span className="ml-2 text-xs text-gray-500">({pipelineData.pipeline.type})</span>
           </h2>
           <PipelineView
             stages={pipelineData.stages.map(s => ({
@@ -192,11 +209,11 @@ export default function AgentDetailPage() {
       )}
 
       {/* Event Timeline */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+      <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
         <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
             Event Timeline
-            <span className="ml-2 text-xs text-gray-400 font-normal">
+            <span className="ml-2 text-xs text-gray-500 font-normal">
               {events.length} events
             </span>
           </h2>

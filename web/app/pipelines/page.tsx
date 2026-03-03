@@ -115,15 +115,18 @@ export default function PipelinesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Pipelines</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Create multi-step pipeline templates for complex workflows
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
+            <GitBranch className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Pipelines</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400">Create multi-step pipeline templates for complex workflows</p>
+          </div>
         </div>
         <button
           onClick={handleCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 text-sm font-medium"
         >
           <Plus className="w-4 h-4" />
           New Template
@@ -132,15 +135,15 @@ export default function PipelinesPage() {
 
       {/* Template list */}
       {templates.length === 0 ? (
-        <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-          <GitBranch className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No pipeline templates</h3>
+        <div className="text-center py-16 bg-white dark:bg-gray-800/90 rounded-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60">
+          <GitBranch className="w-12 h-12 mx-auto text-gray-500 mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No pipeline templates</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             Create a template to define reusable multi-step workflows.
           </p>
           <button
             onClick={handleCreate}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 text-sm"
           >
             <Plus className="w-4 h-4" />
             Create Template
@@ -183,12 +186,12 @@ function TemplateCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+    <div className="bg-white dark:bg-gray-800/90 rounded-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-4">
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <GitBranch className="w-5 h-5 text-blue-500" />
-            <h3 className="font-medium text-gray-900 dark:text-white">{template.name}</h3>
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">{template.name}</h3>
             <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 px-2 py-0.5 rounded">
               {template.steps.length} step{template.steps.length !== 1 ? 's' : ''}
             </span>
@@ -200,19 +203,19 @@ function TemplateCard({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded"
+            className="p-1.5 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 rounded cursor-pointer"
           >
             {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
           <button
             onClick={onEdit}
-            className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded"
+            className="p-1.5 text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 rounded cursor-pointer"
           >
             <Pencil className="w-4 h-4" />
           </button>
           <button
             onClick={onDelete}
-            className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded"
+            className="p-1.5 text-gray-500 hover:text-red-600 dark:hover:text-red-400 rounded cursor-pointer"
           >
             <Trash2 className="w-4 h-4" />
           </button>
@@ -297,10 +300,10 @@ function TemplateEditor({
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
             {template ? 'Edit Template' : 'New Template'}
           </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -313,7 +316,7 @@ function TemplateEditor({
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Code Review Pipeline"
-              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:text-gray-100"
             />
           </div>
 
@@ -323,7 +326,7 @@ function TemplateEditor({
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder="What does this pipeline do?"
-              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:text-white"
+              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:text-gray-100"
             />
           </div>
 
@@ -362,14 +365,14 @@ function TemplateEditor({
                       className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50"
                       onClick={() => setExpandedStep(expandedStep === i ? null : i)}
                     >
-                      <GripVertical className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <GripVertical className="w-4 h-4 text-gray-500 flex-shrink-0" />
                       <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center justify-center text-xs font-medium flex-shrink-0">
                         {i + 1}
                       </span>
                       <span className="text-sm font-medium text-gray-800 dark:text-gray-200 flex-1 truncate">
                         {step.name || 'Untitled step'}
                       </span>
-                      <span className="text-xs text-gray-400 font-mono">{step.topic}</span>
+                      <span className="text-xs text-gray-500 font-mono">{step.topic}</span>
                       {step.requiresApproval && (
                         <Shield className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />
                       )}
@@ -377,20 +380,20 @@ function TemplateEditor({
                         <button
                           onClick={e => { e.stopPropagation(); moveStep(i, 'up'); }}
                           disabled={i === 0}
-                          className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+                          className="p-0.5 text-gray-500 hover:text-gray-600 disabled:opacity-30"
                         >
                           <ChevronUp className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={e => { e.stopPropagation(); moveStep(i, 'down'); }}
                           disabled={i === steps.length - 1}
-                          className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+                          className="p-0.5 text-gray-500 hover:text-gray-600 disabled:opacity-30"
                         >
                           <ChevronDown className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={e => { e.stopPropagation(); removeStep(i); }}
-                          className="p-0.5 text-gray-400 hover:text-red-600"
+                          className="p-0.5 text-gray-500 hover:text-red-600 cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -407,7 +410,7 @@ function TemplateEditor({
                               value={step.name}
                               onChange={e => updateStep(i, { name: e.target.value })}
                               placeholder="e.g. Analyze Code"
-                              className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white"
+                              className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-gray-100"
                             />
                           </div>
                           <div>
@@ -415,7 +418,7 @@ function TemplateEditor({
                             <select
                               value={step.topic}
                               onChange={e => updateStep(i, { topic: e.target.value })}
-                              className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white"
+                              className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-gray-100"
                             >
                               {TOPICS.map(t => (
                                 <option key={t} value={t}>{t}</option>
@@ -430,7 +433,7 @@ function TemplateEditor({
                             value={step.description ?? ''}
                             onChange={e => updateStep(i, { description: e.target.value })}
                             placeholder="What this step does..."
-                            className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white"
+                            className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-gray-100"
                           />
                         </div>
 
@@ -441,7 +444,7 @@ function TemplateEditor({
                             onChange={e => updateStep(i, { promptTemplate: e.target.value })}
                             placeholder="Use {{description}} and {{previousOutput}} as variables..."
                             rows={3}
-                            className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-white font-mono resize-none"
+                            className="w-full px-2.5 py-1.5 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-gray-100 font-mono resize-none"
                           />
                         </div>
 
@@ -474,7 +477,7 @@ function TemplateEditor({
           <button
             onClick={handleSubmit}
             disabled={!name.trim()}
-            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50"
           >
             {template ? 'Save Changes' : 'Create Template'}
           </button>
