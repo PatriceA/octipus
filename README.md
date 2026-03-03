@@ -368,11 +368,24 @@ cd mcp-server && npm install && npm run build
 **Chat Persistence**: Chat sessions are persisted across page reloads. The session ID is stored in localStorage and messages are restored from the backend on page load. All messages (including casual conversations) are persisted to the database.
 
 ### Terminal UI (Ink)
-- 8 views: Dashboard, Agents, Chat, Logs, Models, Pipelines, Secrets, Settings
-- Keyboard navigation: `[1]`-`[8]` for views, arrows, Tab, `[q]` quit
-- Log filtering by level (all/info/warn/error)
-- Model management (set default, toggle enable/disable)
-- Pipeline template browsing with step detail
+
+Start with `bun run tui`. Requires the backend to be running (`bun run dev` or `assistant start`).
+
+**Views & Keyboard Shortcuts:**
+
+| Key | View | Description |
+|-----|------|-------------|
+| `1` | Dashboard | System health, agent overview, service status |
+| `2` | Agents | List running/completed agents, stop/remove |
+| `3` | Chat | Interactive chat with the orchestrator |
+| `4` | Logs | Live backend log tail, filter by level (all/info/warn/error) |
+| `5` | Models | Model list, set default, toggle enable/disable |
+| `6` | Pipelines | Browse pipeline templates with step detail |
+| `7` | Secrets | Vault credential management |
+| `8` | Integrations | OAuth provider status, CLI tool detection |
+| `9` | Settings | User preferences, notification config |
+| `q` | — | Quit |
+| `Ctrl+C` | — | Force quit |
 
 ## Commands
 
