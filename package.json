@@ -17,7 +17,7 @@
     "db:studio": "drizzle-kit studio",
     "setup": "bun run scripts/setup.ts",
     "backup": "bun run scripts/backup.ts",
-    "tui": "bun run tui/index.ts",
+    "tui": "bun run tui/index.tsx",
     "test": "bun test",
     "test:e2e": "bun run scripts/test-e2e.ts",
     "typecheck": "tsc --noEmit"
