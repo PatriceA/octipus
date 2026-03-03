@@ -76,8 +76,17 @@ function App() {
         <Text color="cyan" bold>
           Assistant TUI
         </Text>
-        <Text color="gray">
-          [1]Dash [2]Agents [3]Chat [4]Logs [5]Models [6]Pipes [7]Secrets [8]Integrations [9]Settings [q]Quit
+        <Text>
+          <Text color="yellow">[1]</Text><Text color="white">Dash </Text>
+          <Text color="yellow">[2]</Text><Text color="white">Agents </Text>
+          <Text color="yellow">[3]</Text><Text color="white">Chat </Text>
+          <Text color="yellow">[4]</Text><Text color="white">Logs </Text>
+          <Text color="yellow">[5]</Text><Text color="white">Models </Text>
+          <Text color="yellow">[6]</Text><Text color="white">Pipes </Text>
+          <Text color="yellow">[7]</Text><Text color="white">Secrets </Text>
+          <Text color="yellow">[8]</Text><Text color="white">Integ </Text>
+          <Text color="yellow">[9]</Text><Text color="white">Settings </Text>
+          <Text color="red">[q]</Text><Text color="white">Quit</Text>
         </Text>
       </Box>
 

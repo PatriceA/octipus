@@ -1,7 +1,7 @@
-const API_URL = process.env.API_URL || 'http://localhost:3000/api';
+const API_URL = process.env.API_URL || 'http://localhost:3005/api';
 
 class ApiClient {
-  private token: string | null = null;
+  private token: string | null = process.env.MASTER_KEY || null;
 
   setToken(token: string | null) {
     this.token = token;
@@ -27,11 +27,24 @@ class ApiClient {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Request failed' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
+      const text = await response.text();
+      let errorMsg = `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(text);
+        errorMsg = parsed.error || errorMsg;
+      } catch {
+        // Not JSON (e.g. HTML error page)
+      }
+      throw new Error(errorMsg);
     }
 
-    return response.json();
+    const text = await response.text();
+    if (!text) return {} as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error('Failed to parse response as JSON');
+    }
   }
 
   get<T>(path: string): Promise<T> {
