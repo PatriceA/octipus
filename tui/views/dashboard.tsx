@@ -111,7 +111,7 @@ export function DashboardView() {
           <Text color={statusColor(health?.health?.database?.status)}>
             {health?.health?.database?.status || 'unknown'}
           </Text>
-          {health?.health?.database?.latency && (
+          {health?.health?.database?.latency != null && (
             <Text color="gray"> ({health.health.database.latency}ms)</Text>
           )}
         </Box>
@@ -120,7 +120,7 @@ export function DashboardView() {
           <Text color={statusColor(health?.health?.redis?.status)}>
             {health?.health?.redis?.status || 'unknown'}
           </Text>
-          {health?.health?.redis?.latency && (
+          {health?.health?.redis?.latency != null && (
             <Text color="gray"> ({health.health.redis.latency}ms)</Text>
           )}
         </Box>
