@@ -4,6 +4,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { Cpu, CheckCircle, XCircle, AlertCircle, X, Plus, Trash2, Star, Terminal, RefreshCw, Pencil } from 'lucide-react';
 import { api } from '@/lib/api';
 
+/** Topics used by the orchestrator for role-based model routing */
+const AVAILABLE_TOPICS = [
+  { value: 'general', label: 'General', description: 'General-purpose tasks' },
+  { value: 'coding', label: 'Coding', description: 'Code generation, shell, git' },
+  { value: 'analysis', label: 'Analysis', description: 'Research, review, QA, code analysis' },
+  { value: 'communication', label: 'Communication', description: 'Email, calendar, contacts (Google/Microsoft)' },
+  { value: 'chat', label: 'Chat', description: 'Casual conversations' },
+  { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
+] as const;
+
 interface Model {
   id: string;
   name: string;
@@ -150,7 +160,7 @@ function AddModelModal({
     supportsVision: false,
     supportsTools: true,
     supportsStreaming: true,
-    topics: '',
+    topics: [] as string[],
     priority: 50,
     costPerInputToken: 0,
     costPerOutputToken: 0,
@@ -206,7 +216,7 @@ function AddModelModal({
       name: '', provider: 'ollama', modelId: '', endpoint: '',
       contextWindow: 4096, maxTokens: 4096, supportsVision: false,
       supportsTools: true, supportsStreaming: true,
-      topics: '', priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
+      topics: [], priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
     });
     setError('');
     setTestResult(null);
@@ -226,7 +236,7 @@ function AddModelModal({
       supportsVision: defaults.supportsVision || false,
       supportsTools: defaults.supportsTools ?? true,
       supportsStreaming: true,
-      topics: '',
+      topics: [],
       priority: 50,
       costPerInputToken: 0,
       costPerOutputToken: 0,
@@ -275,7 +285,7 @@ function AddModelModal({
         supportsVision: formData.supportsVision,
         supportsTools: formData.supportsTools,
         supportsStreaming: formData.supportsStreaming,
-        topics: formData.topics ? formData.topics.split(',').map(t => t.trim()).filter(Boolean) : undefined,
+        topics: formData.topics.length > 0 ? formData.topics : undefined,
         priority: formData.priority,
         costPerInputToken: formData.costPerInputToken,
         costPerOutputToken: formData.costPerOutputToken,
@@ -486,25 +496,33 @@ function AddModelModal({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>
-                <input
-                  type="number"
-                  value={formData.priority}
-                  onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Topics</label>
-                <input
-                  type="text"
-                  value={formData.topics}
-                  onChange={(e) => setFormData({ ...formData, topics: e.target.value })}
-                  placeholder="coding, analysis, chat"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
-                />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Topics</label>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Select which orchestrator roles can use this model</p>
+              <div className="flex flex-wrap gap-2">
+                {AVAILABLE_TOPICS.map((topic) => {
+                  const selected = formData.topics.includes(topic.value);
+                  return (
+                    <button
+                      key={topic.value}
+                      type="button"
+                      onClick={() => setFormData({
+                        ...formData,
+                        topics: selected
+                          ? formData.topics.filter(t => t !== topic.value)
+                          : [...formData.topics, topic.value],
+                      })}
+                      className={`px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ${
+                        selected
+                          ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 ring-1 ring-primary-300 dark:ring-primary-700'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      }`}
+                      title={topic.description}
+                    >
+                      {topic.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -622,7 +640,7 @@ function EditModelModal({
     endpoint: model.endpoint || '',
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
-    topics: (model.topics || []).join(', '),
+    topics: (model.topics || []).filter(t => AVAILABLE_TOPICS.some(at => at.value === t)),
     priority: model.priority,
     supportsVision: model.supportsVision,
     supportsTools: model.supportsTools,
@@ -649,7 +667,7 @@ function EditModelModal({
         endpoint: formData.endpoint || undefined,
         contextWindow: formData.contextWindow,
         maxTokens: formData.maxTokens,
-        topics: formData.topics ? formData.topics.split(',').map(t => t.trim()).filter(Boolean) : [],
+        topics: formData.topics,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
         supportsTools: formData.supportsTools,
@@ -736,23 +754,33 @@ function EditModelModal({
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>
-              <input
-                type="number"
-                value={formData.priority}
-                onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-              />
-            </div>
-            <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Topics</label>
-              <input
-                type="text"
-                value={formData.topics}
-                onChange={(e) => setFormData({ ...formData, topics: e.target.value })}
-                placeholder="coding, analysis, chat"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm"
-              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Select which orchestrator roles can use this model</p>
+              <div className="flex flex-wrap gap-2">
+                {AVAILABLE_TOPICS.map((topic) => {
+                  const selected = formData.topics.includes(topic.value);
+                  return (
+                    <button
+                      key={topic.value}
+                      type="button"
+                      onClick={() => setFormData({
+                        ...formData,
+                        topics: selected
+                          ? formData.topics.filter(t => t !== topic.value)
+                          : [...formData.topics, topic.value],
+                      })}
+                      className={`px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ${
+                        selected
+                          ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 ring-1 ring-primary-300 dark:ring-primary-700'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      }`}
+                      title={topic.description}
+                    >
+                      {topic.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 

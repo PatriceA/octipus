@@ -48,7 +48,7 @@ CRITICAL RULES:
   communication: {
     role: 'communication',
     skillIds: ['google-workspace', 'microsoft365'],
-    defaultTopic: 'general',
+    defaultTopic: 'communication',
     systemPromptTemplate: `You are a communication specialist. You handle email, calendar, contacts, and document tasks using Google Workspace and Microsoft 365 integrations. Use the available tools to read, send, and manage emails, calendar events, contacts, and documents. Always confirm actions that send messages or modify data before executing them.`,
   },
   general: {
