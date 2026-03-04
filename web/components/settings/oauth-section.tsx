@@ -1,0 +1,178 @@
+'use client';
+
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Loader2,
+  ExternalLink,
+} from 'lucide-react';
+import Link from 'next/link';
+import { api } from '@/lib/api';
+
+interface OAuthStatus {
+  connected: boolean;
+  provider: string;
+  email?: string;
+  scopes?: string[];
+  expiresAt?: string;
+}
+
+export function OAuthIntegrationsSection() {
+  const queryClient = useQueryClient();
+
+  const providers = [
+    {
+      id: 'google',
+      name: 'Google Workspace',
+      description: 'Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks',
+      scopes: 'email, calendar, drive, contacts, tasks',
+    },
+    {
+      id: 'microsoft',
+      name: 'Microsoft 365',
+      description: 'Outlook Mail, Calendar, OneDrive, To Do, Contacts',
+      scopes: 'mail, calendar, files, tasks, contacts',
+    },
+  ];
+
+  return (
+    <div>
+      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">OAuth Integrations</h3>
+      <p className="text-xs text-gray-500 mb-3">
+        Connect your accounts to let the agent access your email, calendar, and files.
+      </p>
+      <div className="space-y-3">
+        {providers.map((provider) => (
+          <OAuthProviderCard key={provider.id} provider={provider} queryClient={queryClient} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+function OAuthProviderCard({
+  provider,
+  queryClient,
+}: {
+  provider: { id: string; name: string; description: string; scopes: string };
+  queryClient: ReturnType<typeof useQueryClient>;
+}) {
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState('');
+
+  const { data: status, isLoading } = useQuery({
+    queryKey: ['oauth-status', provider.id],
+    queryFn: async () => {
+      try {
+        return await api.get<OAuthStatus>(`/auth/oauth/${provider.id}/status`);
+      } catch {
+        return { connected: false, provider: provider.id } as OAuthStatus;
+      }
+    },
+  });
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    setError('');
+    try {
+      const { url } = await api.get<{ url: string }>(`/auth/oauth/${provider.id}/authorize`);
+      const popup = window.open(url, 'oauth', 'width=600,height=700,left=200,top=100');
+
+      const handler = (event: MessageEvent) => {
+        if (event.data?.type === 'oauth_callback') {
+          window.removeEventListener('message', handler);
+          queryClient.invalidateQueries({ queryKey: ['oauth-status', provider.id] });
+          setConnecting(false);
+        }
+      };
+      window.addEventListener('message', handler);
+
+      // Fallback: if popup is closed without postMessage
+      const check = setInterval(() => {
+        if (popup?.closed) {
+          clearInterval(check);
+          window.removeEventListener('message', handler);
+          queryClient.invalidateQueries({ queryKey: ['oauth-status', provider.id] });
+          setConnecting(false);
+        }
+      }, 1000);
+    } catch (err) {
+      setError((err as Error).message);
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    setError('');
+    try {
+      await api.post(`/auth/oauth/${provider.id}/disconnect`);
+      queryClient.invalidateQueries({ queryKey: ['oauth-status', provider.id] });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+    setDisconnecting(false);
+  };
+
+  return (
+    <div className="p-4 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">{provider.name}</h4>
+          {isLoading ? (
+            <Loader2 className="w-3 h-3 animate-spin text-gray-500" />
+          ) : (
+            <span
+              className={`px-2 py-0.5 text-xs rounded-full ${
+                status?.connected
+                  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                  : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+              }`}
+            >
+              {status?.connected ? 'Connected' : 'Not connected'}
+            </span>
+          )}
+        </div>
+        {status?.connected ? (
+          <button
+            onClick={handleDisconnect}
+            disabled={disconnecting}
+            className="px-3 py-1.5 text-xs border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+          >
+            {disconnecting ? 'Disconnecting...' : 'Disconnect'}
+          </button>
+        ) : (
+          <button
+            onClick={handleConnect}
+            disabled={connecting}
+            className="px-3 py-1.5 text-xs bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1"
+          >
+            {connecting ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <ExternalLink className="w-3 h-3" />
+            )}
+            Connect
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-500">{provider.description}</p>
+      {status?.connected && status.email && (
+        <p className="text-xs text-gray-500 mt-1">
+          Connected as: <span className="text-gray-600 dark:text-gray-300">{status.email}</span>
+        </p>
+      )}
+      {error && (
+        <div className="mt-2 p-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+          <p className="text-xs text-amber-800 dark:text-amber-200">
+            {error.includes('not configured') ? (
+              <>Add your Client ID and Client Secret on the <Link href="/secrets" className="font-semibold underline hover:text-amber-900 dark:hover:text-amber-100">Secrets page</Link>, then try connecting again.</>
+            ) : error}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}

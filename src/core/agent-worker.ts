@@ -5,122 +5,46 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { agentLogger } from '@/utils/logger';
-import { generateId } from '@/utils/crypto';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
-import { getPermissionManager } from '@/security/permissions';
-import { sanitizeToolOutput } from '@/utils/sanitize';
-import type { AgentContext, AgentMessage, ToolCall, ToolResult, AgentStatus } from './types';
+import type { AgentMessage, ToolCall } from './types';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
+import { BaseAgentWorker } from './agent-base';
+import { ToolExecutor } from './tool-executor';
 
-export interface AgentWorkerConfig {
-  maxIterations: number;
-  contextWindowSize: number;
-  timeout: number;
-  maxTokenBudget: number;
-}
+// Re-export types for backward compatibility
+export type { AgentWorkerConfig, ToolHandler, AgentEventHandler, AgentEvent } from './agent-base';
 
-export interface ToolHandler {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  skillId?: string;
-  /**
-   * If true, after this tool executes successfully, all tools are stripped
-   * from subsequent LLM calls — forcing the model to produce a text response.
-   * Use this for "delegation" tools where the result should be summarized
-   * and no further tool calls are needed.
-   */
-  final?: boolean;
-  execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
-}
-
-export type AgentEventHandler = (event: AgentEvent) => void;
-
-export interface AgentEvent {
-  type: 'thought' | 'action' | 'observation' | 'error' | 'complete' | 'status_change' | 'permission_request';
-  agentId: string;
-  data: unknown;
-  timestamp: Date;
-}
-
-export class AgentWorker {
-  private context: AgentContext;
-  private config: AgentWorkerConfig;
-  private messages: AgentMessage[] = [];
-  private tools: Map<string, ToolHandler> = new Map();
-  private eventHandlers: Set<AgentEventHandler> = new Set();
+export class AgentWorker extends BaseAgentWorker {
+  private toolExecutor: ToolExecutor;
   private abortController: AbortController;
-  private iteration: number = 0;
   private totalTokensUsed: number = 0;
   private startTime: number = 0;
-  private consecutiveToolErrors: number = 0;
-  private toolsDisabled: boolean = false;
-  private static MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
   /** Milliseconds since agent start */
   private elapsed(): number {
     return Date.now() - this.startTime;
   }
 
-  constructor(context: AgentContext, config: AgentWorkerConfig) {
-    this.context = context;
-    this.config = config;
+  constructor(context: import('./types').AgentContext, config: import('./agent-base').AgentWorkerConfig) {
+    super(context, config);
     this.abortController = new AbortController();
+    this.toolExecutor = new ToolExecutor(
+      context,
+      (type, data) => this.emit(type, data),
+    );
   }
 
-  /**
-   * Register a tool for the agent to use
-   */
-  registerTool(tool: ToolHandler): void {
-    this.tools.set(tool.name, tool);
-    agentLogger.debug({ agentId: this.context.id, tool: tool.name }, 'Tool registered');
+  registerTool(tool: import('./agent-base').ToolHandler): void {
+    this.toolExecutor.registerTool(tool);
   }
 
-  /**
-   * Register multiple tools
-   */
-  registerTools(tools: ToolHandler[]): void {
-    for (const tool of tools) {
-      this.registerTool(tool);
-    }
+  registerTools(tools: import('./agent-base').ToolHandler[]): void {
+    this.toolExecutor.registerTools(tools);
   }
 
-  /**
-   * Subscribe to agent events
-   */
-  onEvent(handler: AgentEventHandler): () => void {
-    this.eventHandlers.add(handler);
-    return () => this.eventHandlers.delete(handler);
-  }
-
-  /**
-   * Emit an event to all handlers
-   */
-  private emit(type: AgentEvent['type'], data: unknown): void {
-    const event: AgentEvent = {
-      type,
-      agentId: this.context.id,
-      data,
-      timestamp: new Date(),
-    };
-
-    for (const handler of this.eventHandlers) {
-      try {
-        handler(event);
-      } catch (error) {
-        agentLogger.error({ error, agentId: this.context.id }, 'Event handler error');
-      }
-    }
-  }
-
-  /**
-   * Load conversation history from database
-   */
   async loadHistory(): Promise<void> {
     // Orchestrators and task-specific workers are ephemeral — they receive their
-    // task via run() and don't need session history. Loading history from
-    // persistent sessions (e.g. Telegram) causes workers to see old messages
-    // and act on stale tasks instead of the current one.
+    // task via run() and don't need session history.
     if (this.context.role !== 'general') {
       agentLogger.debug({ agentId: this.context.id, role: this.context.role }, 'Skipping history for non-general agent');
       return;
@@ -129,8 +53,6 @@ export class AgentWorker {
     const dbMessages = await messageRepository.findBySession(this.context.sessionId);
 
     // Only load user and assistant text messages — tool messages are internal
-    // to a specific agent run and cause errors with strict models (e.g. DeepSeek)
-    // that require tool messages to follow matching tool_calls.
     this.messages = dbMessages
       .filter((msg) => msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system')
       .filter((msg) => !msg.toolCalls && !msg.toolCallId)
@@ -143,31 +65,15 @@ export class AgentWorker {
     agentLogger.debug({ agentId: this.context.id, messageCount: this.messages.length }, 'History loaded');
   }
 
-  /**
-   * Add a system message
-   */
   addSystemMessage(content: string): void {
-    this.messages.push({
-      role: 'system',
-      content,
-      timestamp: new Date(),
-    });
+    this.messages.push({ role: 'system', content, timestamp: new Date() });
   }
 
-  /**
-   * Add a user message
-   */
   async addUserMessage(content: string): Promise<void> {
-    const message: AgentMessage = {
-      role: 'user',
-      content,
-      timestamp: new Date(),
-    };
-
+    const message: AgentMessage = { role: 'user', content, timestamp: new Date() };
     this.messages.push(message);
 
-    // Only persist for orchestrator (root agent). Worker sub-agents are internal —
-    // their task messages would appear as fake "user" messages in the chat.
+    // Only persist for orchestrator (root agent)
     if (this.context.role === 'orchestrator') {
       await messageRepository.create({
         sessionId: this.context.sessionId,
@@ -179,9 +85,6 @@ export class AgentWorker {
     }
   }
 
-  /**
-   * Run the agent loop
-   */
   async run(userMessage?: string): Promise<string> {
     if (userMessage) {
       await this.addUserMessage(userMessage);
@@ -205,16 +108,8 @@ export class AgentWorker {
       }, 'Agent completed');
 
       await auditRepository.logAgentCompleted(
-        this.context.userId,
-        this.context.sessionId,
-        this.context.id,
-        {
-          durationMs,
-          iterations: this.iteration,
-          totalTokensUsed: this.totalTokensUsed,
-          model: this.context.model,
-          role: this.context.role,
-        },
+        this.context.userId, this.context.sessionId, this.context.id,
+        { durationMs, iterations: this.iteration, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
 
       return result;
@@ -233,17 +128,8 @@ export class AgentWorker {
       }, 'Agent failed');
 
       await auditRepository.logAgentFailed(
-        this.context.userId,
-        this.context.sessionId,
-        this.context.id,
-        {
-          error: (error as Error).message,
-          iteration: this.iteration,
-          elapsedMs: failDurationMs,
-          totalTokensUsed: this.totalTokensUsed,
-          model: this.context.model,
-          role: this.context.role,
-        },
+        this.context.userId, this.context.sessionId, this.context.id,
+        { error: (error as Error).message, iteration: this.iteration, elapsedMs: failDurationMs, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
 
       throw error;
@@ -251,10 +137,7 @@ export class AgentWorker {
   }
 
   /**
-   * Main agent loop: Thought -> Action -> Observation
-   */
-  /**
-   * Race a promise against the agent timeout. Throws if the timeout fires first.
+   * Race a promise against the agent timeout.
    */
   private raceTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
     if (this.config.timeout <= 0) return promise;
@@ -299,19 +182,15 @@ export class AgentWorker {
 
       // Check token budget
       if (this.config.maxTokenBudget > 0 && this.totalTokensUsed >= this.config.maxTokenBudget) {
-        throw new Error(
-          `Token budget exceeded (${this.totalTokensUsed}/${this.config.maxTokenBudget})`
-        );
+        throw new Error(`Token budget exceeded (${this.totalTokensUsed}/${this.config.maxTokenBudget})`);
       }
 
       // Check timeout
       if (this.config.timeout > 0 && this.elapsed() > this.config.timeout) {
-        throw new Error(
-          `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`
-        );
+        throw new Error(`Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`);
       }
 
-      // Compact messages if needed (with LLM summary for removed context)
+      // Compact messages if needed
       const { messages: compactedMessages, removed } = await compactMessagesWithSummary(this.messages, {
         maxTokens: this.config.contextWindowSize,
         preserveSystemMessages: true,
@@ -328,18 +207,9 @@ export class AgentWorker {
         }, 'Messages compacted');
       }
 
-      // Get completion from LLM (with timeout guard)
-      agentLogger.info({
-        agentId: this.context.id, sessionId: this.context.sessionId,
-        iteration: this.iteration, elapsedMs: this.elapsed(),
-        phase: 'getCompletion', model: this.context.model,
-        messageCount: this.messages.length, toolsDisabled: this.toolsDisabled,
-      }, 'LLM call starting');
-
+      // Get completion from LLM
       const llmStart = Date.now();
       const completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
-
-      // Accumulate token usage
       this.totalTokensUsed += completion.usage.totalTokens;
 
       agentLogger.info({
@@ -351,9 +221,8 @@ export class AgentWorker {
         hasToolCalls: !!(completion.toolCalls?.length), finishReason: completion.finishReason,
       }, 'LLM call completed');
 
-      // Handle tool calls if present — but ignore them when tools are disabled
-      // (some models hallucinate tool calls even when none are provided)
-      if (completion.toolCalls?.length && !this.toolsDisabled) {
+      // Handle tool calls if present
+      if (completion.toolCalls?.length && !this.toolExecutor.toolsDisabled) {
         const toolNames = completion.toolCalls.map(tc => tc.name);
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
@@ -362,7 +231,11 @@ export class AgentWorker {
         }, 'Tool execution starting');
 
         const toolStart = Date.now();
-        await this.raceTimeout(this.handleToolCalls(completion.toolCalls), 'handleToolCalls');
+        const toolMessages = await this.raceTimeout(
+          this.toolExecutor.handleToolCalls(completion.toolCalls),
+          'handleToolCalls',
+        );
+        this.messages.push(...toolMessages);
 
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
@@ -372,16 +245,10 @@ export class AgentWorker {
         continue;
       }
 
-      // No tool calls — treat as final response (even if empty)
+      // No tool calls — treat as final response
       const response = completion.content || 'I was unable to generate a response.';
 
-      agentLogger.info({
-        agentId: this.context.id, sessionId: this.context.sessionId,
-        iteration: this.iteration, elapsedMs: this.elapsed(),
-        responseLength: response.length, totalTokensUsed: this.totalTokensUsed,
-      }, 'Agent returning response');
-
-      // Only persist messages for orchestrator agents (workers are internal)
+      // Only persist messages for orchestrator agents
       if (this.context.role === 'orchestrator') {
         await messageRepository.create({
           sessionId: this.context.sessionId,
@@ -389,11 +256,7 @@ export class AgentWorker {
           content: response,
           agentId: this.context.id,
         });
-
-        await sessionRepository.incrementMessageCount(
-          this.context.sessionId,
-          completion.usage.totalTokens
-        );
+        await sessionRepository.incrementMessageCount(this.context.sessionId, completion.usage.totalTokens);
       }
 
       return response;
@@ -402,27 +265,20 @@ export class AgentWorker {
     throw new Error(`Max iterations (${this.config.maxIterations}) reached`);
   }
 
-  /**
-   * Get completion from LLM
-   */
   private async getCompletion(): Promise<CompletionResult> {
     const client = getLiteLLMClient();
     const registry = getModelRegistry();
     const costTracker = getCostTracker();
 
-    // Look up model by name or modelId
     const model = await registry.getModel(this.context.model) || await registry.getModelByModelId(this.context.model);
     if (!model) {
       throw new Error(`Model not found: ${this.context.model}`);
     }
 
-    // Use modelId for LiteLLM calls (name is the display name, modelId is what LiteLLM expects)
     const litellmModel = model.modelId;
-
-    // Convert tools to OpenAI format (omit if a final tool has already run)
-    const tools: ChatCompletionTool[] = this.toolsDisabled
+    const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled
       ? []
-      : Array.from(this.tools.values()).map((tool) => ({
+      : Array.from(this.toolExecutor.getTools().values()).map((tool) => ({
           type: 'function' as const,
           function: {
             name: tool.name,
@@ -433,7 +289,6 @@ export class AgentWorker {
 
     this.emit('thought', { model: litellmModel, messageCount: this.messages.length });
 
-    // Pass extra body params from model metadata (e.g. { think: false } for Qwen3)
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
     const result = await client.complete({
@@ -445,21 +300,14 @@ export class AgentWorker {
       extraBody: metadata?.extraBody,
     });
 
-    // Track cost
     await costTracker.logUsageWithCost(
       this.context.userId,
       this.context.model,
       result.usage.inputTokens,
       result.usage.outputTokens,
-      {
-        sessionId: this.context.sessionId,
-        agentId: this.context.id,
-        requestType: 'chat',
-        metadata: { iteration: this.iteration },
-      }
+      { sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'chat', metadata: { iteration: this.iteration } },
     );
 
-    // Add assistant message to history
     const assistantMessage: AgentMessage = {
       role: 'assistant',
       content: result.content,
@@ -471,251 +319,10 @@ export class AgentWorker {
     return result;
   }
 
-  /**
-   * Handle tool calls from the LLM with permission gating
-   */
-  private async handleToolCalls(toolCalls: ToolCall[]): Promise<void> {
-    this.emit('action', { toolCalls });
-
-    const permissionManager = getPermissionManager();
-    const results: ToolResult[] = [];
-
-    for (const toolCall of toolCalls) {
-      const tool = this.tools.get(toolCall.name);
-
-      if (!tool) {
-        results.push({
-          toolCallId: toolCall.id,
-          result: null,
-          error: `Unknown tool: ${toolCall.name}`,
-        });
-        continue;
-      }
-
-      const skillId = tool.skillId || 'agent';
-
-      // Internal orchestrator meta-tools are always allowed (no permission gate)
-      if (skillId === 'agent') {
-        try {
-          const toolExecStart = Date.now();
-          const result = await tool.execute(toolCall.arguments, this.context);
-          const toolExecMs = Date.now() - toolExecStart;
-
-          agentLogger.info({
-            agentId: this.context.id, sessionId: this.context.sessionId,
-            tool: toolCall.name, skillId, durationMs: toolExecMs,
-          }, 'Tool executed');
-
-          results.push({ toolCallId: toolCall.id, result });
-
-          if (tool.final) {
-            this.toolsDisabled = true;
-            agentLogger.info(
-              { agentId: this.context.id, tool: toolCall.name },
-              'Final tool executed — disabling tools for remaining iterations',
-            );
-          }
-        } catch (error) {
-          results.push({ toolCallId: toolCall.id, result: null, error: (error as Error).message });
-        }
-        continue;
-      }
-
-      // Permission check
-      const permResult = await permissionManager.check(
-        this.context.userId,
-        skillId,
-        toolCall.name,
-        toolCall.arguments
-      );
-
-      if (permResult.level === 'DENY') {
-        agentLogger.info(
-          { agentId: this.context.id, tool: toolCall.name, reason: permResult.reason },
-          'Tool call denied by permission policy'
-        );
-
-        results.push({
-          toolCallId: toolCall.id,
-          result: null,
-          error: `Permission denied: ${permResult.reason || 'action is not allowed'}`,
-        });
-
-        await auditRepository.logToolDenied(
-          this.context.userId,
-          this.context.sessionId,
-          toolCall.name,
-          skillId,
-          { args: toolCall.arguments, reason: permResult.reason }
-        );
-        continue;
-      }
-
-      if (permResult.level === 'ASK') {
-        // Request approval
-        const requestId = await permissionManager.requestApproval(
-          this.context.userId,
-          this.context.id,
-          skillId,
-          toolCall.name,
-          toolCall.arguments,
-          this.context.sessionId
-        );
-
-        this.emit('permission_request', {
-          requestId,
-          toolName: toolCall.name,
-          args: toolCall.arguments,
-          skillId,
-        });
-
-        const approved = await permissionManager.waitForApproval(requestId);
-
-        if (!approved) {
-          agentLogger.info(
-            { agentId: this.context.id, tool: toolCall.name, requestId },
-            'Tool call denied by user'
-          );
-
-          results.push({
-            toolCallId: toolCall.id,
-            result: null,
-            error: 'Permission denied: user rejected the request',
-          });
-
-          await auditRepository.logToolDenied(
-            this.context.userId,
-            this.context.sessionId,
-            toolCall.name,
-            skillId,
-            { args: toolCall.arguments, reason: 'user_denied', requestId }
-          );
-          continue;
-        }
-      }
-
-      // ALLOW path (or approved ASK) — execute tool
-      try {
-        const toolExecStart = Date.now();
-        const result = await tool.execute(toolCall.arguments, this.context);
-        const toolExecMs = Date.now() - toolExecStart;
-
-        agentLogger.info({
-          agentId: this.context.id, sessionId: this.context.sessionId,
-          tool: toolCall.name, skillId, durationMs: toolExecMs,
-        }, 'Tool executed');
-
-        results.push({
-          toolCallId: toolCall.id,
-          result,
-        });
-
-        // If this tool is marked as final, disable all tools for subsequent
-        // LLM calls so the model is forced to produce a text response.
-        if (tool.final) {
-          this.toolsDisabled = true;
-          agentLogger.info(
-            { agentId: this.context.id, tool: toolCall.name },
-            'Final tool executed — disabling tools for remaining iterations',
-          );
-        }
-
-        const resultStr = sanitizeToolOutput(result);
-        await auditRepository.logToolExecuted(
-          this.context.userId,
-          this.context.sessionId,
-          toolCall.name,
-          skillId,
-          { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs }
-        );
-      } catch (error) {
-        agentLogger.error(
-          { error, agentId: this.context.id, tool: toolCall.name },
-          'Tool execution failed'
-        );
-
-        results.push({
-          toolCallId: toolCall.id,
-          result: null,
-          error: (error as Error).message,
-        });
-      }
-    }
-
-    this.emit('observation', { results });
-
-    // Track consecutive tool failures — disable tools if they keep failing
-    const allFailed = results.length > 0 && results.every(r => r.error);
-    if (allFailed) {
-      this.consecutiveToolErrors++;
-      if (this.consecutiveToolErrors >= AgentWorker.MAX_CONSECUTIVE_TOOL_ERRORS) {
-        agentLogger.warn(
-          { agentId: this.context.id, consecutiveErrors: this.consecutiveToolErrors },
-          'Too many consecutive tool failures — disabling tools'
-        );
-        // Disable tools so the model is forced to produce a text response
-        this.toolsDisabled = true;
-        this.messages.push({
-          role: 'system',
-          content: 'The tools have failed multiple times in a row and are now unavailable. Provide the best response you can with the information you already have. Explain to the user which tools failed and why.',
-          timestamp: new Date(),
-        });
-      }
-    } else {
-      this.consecutiveToolErrors = 0;
-    }
-
-    // Add tool results to messages
-    for (const result of results) {
-      const toolMessage: AgentMessage = {
-        role: 'tool',
-        content: result.error || sanitizeToolOutput(result.result),
-        toolCallId: result.toolCallId,
-        timestamp: new Date(),
-      };
-      this.messages.push(toolMessage);
-
-      // Persist tool result (skip for orchestrator — its tool results are internal routing)
-      if (this.context.role !== 'orchestrator') {
-        await messageRepository.create({
-          sessionId: this.context.sessionId,
-          role: 'tool',
-          content: toolMessage.content,
-          toolCallId: result.toolCallId,
-          agentId: this.context.id,
-        });
-      }
-    }
-  }
-
-  /**
-   * Stop the agent
-   */
   stop(): void {
     this.abortController.abort();
     this.context.status = 'stopped';
     this.emit('status_change', { status: 'stopped' });
     agentLogger.info({ agentId: this.context.id }, 'Agent stopped');
-  }
-
-  /**
-   * Get current status
-   */
-  getStatus(): AgentStatus {
-    return this.context.status;
-  }
-
-  /**
-   * Get context
-   */
-  getContext(): AgentContext {
-    return this.context;
-  }
-
-  /**
-   * Get current iteration count
-   */
-  getIteration(): number {
-    return this.iteration;
   }
 }
