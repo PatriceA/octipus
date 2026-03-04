@@ -781,82 +781,118 @@ bunx playwright install chromium
 
 ```
 assistant/
-├── bin/                  # CLI scripts (assistant start/stop)
+├── bin/                    # CLI scripts (assistant start/stop)
 ├── src/
-│   ├── api/              # REST API & WebSocket
-│   │   ├── routes/       # Endpoint handlers
-│   │   ├── middleware/    # Auth guard
+│   ├── api/                # REST API & WebSocket
+│   │   ├── routes/         # Endpoint handlers
+│   │   ├── middleware/     # Auth guard
 │   │   ├── context.ts     # Elysia context plugin
 │   │   ├── server.ts      # Server setup
 │   │   └── websocket.ts   # WebSocket handler
-│   ├── channels/          # Messaging channels
-│   │   ├── telegram/      # grammY bot
-│   │   ├── slack/         # Bolt.js integration
-│   │   ├── teams/         # Bot Framework
-│   │   ├── webchat/       # WebSocket chat
+│   ├── channels/           # Messaging channels
+│   │   ├── telegram/       # grammY bot
+│   │   ├── slack/          # Bolt.js integration
+│   │   ├── teams/          # Bot Framework
+│   │   ├── webchat/        # WebSocket chat
 │   │   └── linking.ts     # Cross-channel user linking
-│   ├── config/            # Zod-validated configuration
-│   ├── core/              # Agent runtime
+│   ├── config/             # Zod-validated configuration
+│   │   ├── index.ts        # Cache, getConfig(), re-exports
+│   │   ├── schema.ts       # Zod schema & Config type
+│   │   ├── defaults.ts     # Default values
+│   │   ├── bootstrap-loader.ts  # Env-only config (pre-DB)
+│   │   ├── legacy-loader.ts     # Full env config (migration)
+│   │   ├── runtime-loader.ts    # DB-backed config loader
+│   │   ├── settings-service.ts  # Three-tier cache + pub/sub
+│   │   ├── settings-registry.ts # Setting definitions manifest
+│   │   ├── hot-reload.ts   # Live config updates
+│   │   └── utils.ts        # deepMerge helper
+│   ├── core/               # Agent runtime
+│   │   ├── agent-base.ts   # BaseAgentWorker abstract class
+│   │   ├── agent-worker.ts # LLM agent (extends base, uses ToolExecutor)
+│   │   ├── cli-agent-worker.ts  # CLI agent (extends base, uses adapters)
+│   │   ├── tool-executor.ts     # Tool execution, permissions, error tracking
+│   │   ├── cli-adapters.ts      # CLI argument builder & output parser
 │   │   ├── agent-manager.ts
-│   │   ├── agent-worker.ts
 │   │   ├── gateway.ts
 │   │   ├── router.ts
 │   │   ├── scheduler.ts
 │   │   ├── notification-service.ts  # Persistent notifications
-│   │   ├── orchestrator/   # Orchestrator, pipeline manager, roles
+│   │   ├── orchestrator/   # Multi-agent orchestration
+│   │   │   ├── service.ts           # Message routing, worker spawning
+│   │   │   ├── approval-manager.ts  # User approval lifecycle
+│   │   │   ├── model-selector.ts    # Model selection & fallback
+│   │   │   ├── meta-tools.ts        # Orchestrator tool definitions
+│   │   │   ├── pipeline-manager.ts  # Multi-stage pipelines
+│   │   │   ├── classifier.ts        # Message classification
+│   │   │   ├── roles.ts    # Role configs & tool sets
+│   │   │   └── types.ts
 │   │   └── types.ts
-│   ├── db/                # Database layer
-│   │   ├── schema/        # Drizzle table definitions
-│   │   ├── repositories/  # Data access layer
-│   │   ├── migrations/    # SQL migrations
-│   │   ├── postgres.ts    # Connection management
-│   │   └── redis.ts       # Redis cache wrapper
-│   ├── hooks/             # Event-driven automation
-│   ├── mcp/               # Model Context Protocol
-│   │   ├── bridge.ts      # Server connection manager
-│   │   ├── protocol.ts    # MCP message handling
-│   │   └── transports/    # Stdio & SSE transports
-│   ├── models/            # LLM management
-│   │   ├── providers/     # Direct (Ollama, OpenAI, Anthropic, Gemini), CLI, LiteLLM
+│   ├── db/                 # Database layer
+│   │   ├── schema/         # Drizzle table definitions
+│   │   ├── repositories/   # Data access layer
+│   │   ├── migrations/     # SQL migrations
+│   │   ├── postgres.ts     # Connection management
+│   │   └── redis.ts        # Redis cache wrapper
+│   ├── hooks/              # Event-driven automation
+│   ├── mcp/                # Model Context Protocol
+│   │   ├── bridge.ts       # Server connection manager
+│   │   ├── protocol.ts     # MCP message handling
+│   │   └── transports/     # Stdio & SSE transports
+│   ├── models/             # LLM management
+│   │   ├── providers/      # Direct (Ollama, OpenAI, Anthropic, Gemini), CLI, LiteLLM
 │   │   ├── litellm-client.ts
-│   │   ├── model-registry.ts  # Topic roles (primary/backup), default model
+│   │   ├── model-registry.ts   # Topic roles (primary/backup), default model
 │   │   ├── cost-tracker.ts
 │   │   ├── quota-tracker.ts
 │   │   └── health-checker.ts
-│   ├── security/          # Auth & encryption
-│   │   ├── auth/          # Session, passkey, TOTP
-│   │   ├── vault.ts       # AES-256-GCM encrypted storage
-│   │   ├── permissions.ts # Three-tier permission system
+│   ├── security/           # Auth & encryption
+│   │   ├── auth/           # Session, passkey, TOTP
+│   │   ├── vault.ts        # AES-256-GCM encrypted storage
+│   │   ├── permissions.ts  # Three-tier permission system
 │   │   └── secret-injector.ts
-│   ├── skills/            # Built-in tool implementations
+│   ├── skills/             # Built-in tool implementations
 │   │   ├── filesystem/
 │   │   ├── shell/
 │   │   ├── git/
 │   │   ├── browser/
-│   │   ├── websearch/     # SearXNG + Playwright fallback (Google, DuckDuckGo)
+│   │   ├── websearch/      # SearXNG + Playwright fallback (Google, DuckDuckGo)
 │   │   └── docker/
-│   ├── utils/             # Crypto, logger, sanitize, context compaction
-│   ├── visual/            # Playwright visual debugger
-│   ├── voice/             # STT, TTS, wake word
-│   └── index.ts           # Entry point
-├── mcp-server/            # MCP server bridge for CLI models
+│   ├── utils/              # Crypto, logger, sanitize, context compaction
+│   ├── visual/             # Playwright visual debugger
+│   ├── voice/              # STT, TTS, wake word
+│   └── index.ts            # Entry point
+├── mcp-server/             # MCP server bridge for CLI models
 │   ├── src/
-│   │   ├── index.ts       # Entry point (stdio/HTTP transport)
-│   │   ├── server.ts      # McpServer setup, tool registration
-│   │   ├── client.ts      # HTTP client for assistant API
-│   │   ├── auth.ts        # API key / JWT auth helper
-│   │   └── tools/         # Tool definitions (search, agents, sessions, models, chat, skills)
+│   │   ├── index.ts        # Entry point (stdio/HTTP transport)
+│   │   ├── server.ts       # McpServer setup, tool registration
+│   │   ├── client.ts       # HTTP client for assistant API
+│   │   ├── auth.ts         # API key / JWT auth helper
+│   │   └── tools/          # Tool definitions (search, agents, sessions, models, chat, skills)
 │   ├── package.json
 │   └── tsconfig.json
-├── web/                   # Next.js 14 web UI
-│   ├── app/               # App Router pages
-│   ├── components/        # React components
-│   └── lib/               # API client, stores
-├── tui/                   # Ink terminal UI
-│   └── views/             # Dashboard, Agents, Chat, Logs, Models, Pipelines, Secrets, Settings
-├── scripts/               # Setup wizard, backup, E2E tests
-├── assistant.desktop      # Linux desktop entry
-├── .mcp.json              # Claude Code MCP server config
+├── web/                    # Next.js 14 web UI
+│   ├── app/                # App Router pages
+│   ├── components/         # Extracted React components
+│   │   ├── settings/       # Settings page tabs (general, security, channels, etc.)
+│   │   ├── models/         # Model CRUD modals, cards, CLI status
+│   │   └── setup/          # Setup wizard steps (LLM, channels, workspace, account)
+│   └── lib/
+│       ├── api.ts          # API client
+│       └── types/          # Shared TypeScript interfaces (settings, models)
+├── tui/                    # Ink terminal UI
+│   └── views/              # Dashboard, Agents, Chat, Logs, Models, Pipelines, Secrets, Settings
+├── scripts/
+│   ├── db/                 # Database utility scripts (list, inspect, search)
+│   ├── e2e/                # E2E test suite
+│   │   ├── runner.ts       # TestRunner, assert helpers
+│   │   ├── client.ts       # APIClient wrapper
+│   │   ├── fixtures.ts     # Shared test state
+│   │   ├── index.ts        # Test orchestrator
+│   │   └── tests/          # 14 test modules (health, auth, models, vault, etc.)
+│   ├── test-e2e.ts         # E2E entry point
+│   └── setup.ts            # Bootstrap setup wizard
+├── assistant.desktop       # Linux desktop entry
+├── .mcp.json               # Claude Code MCP server config
 ├── package.json
 ├── tsconfig.json
 └── drizzle.config.ts
