@@ -340,6 +340,49 @@ export class Vault {
 
     return false;
   }
+
+  /**
+   * Convenience method: get a system-level secret by name.
+   * System secrets are stored with userId='system'.
+   */
+  async getSystemSecret(name: string): Promise<string | null> {
+    try {
+      return await this.getByName('system', name);
+    } catch (error) {
+      securityLogger.warn({ error, name }, 'Failed to retrieve system secret');
+      return null;
+    }
+  }
+
+  /**
+   * Convenience method: store or update a system-level secret.
+   */
+  async setSystemSecret(name: string, value: string, options?: {
+    description?: string;
+    tags?: string[];
+  }): Promise<VaultEntry> {
+    // Check if it already exists
+    const existing = await this.db
+      .select()
+      .from(vault)
+      .where(and(eq(vault.name, name), eq(vault.userId, 'system'), eq(vault.isActive, true)))
+      .limit(1);
+
+    if (existing[0]) {
+      const updated = await this.update('system', existing[0].id, {
+        value,
+        description: options?.description,
+        tags: options?.tags,
+      });
+      return updated!;
+    }
+
+    return this.store('system', name, value, {
+      credentialType: 'api_key',
+      description: options?.description || `System secret: ${name}`,
+      tags: options?.tags || ['system', 'auto-configured'],
+    });
+  }
 }
 
 // Singleton instance

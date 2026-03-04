@@ -7,17 +7,21 @@ import { getHookManager } from '@/hooks/manager';
 import { initializeVault } from '@/security/vault';
 import { runMigrations } from '@/db/migrate';
 import { seedPresetTemplates } from '@/db/seed-presets';
+import { getSettingsService } from '@/config/settings-service';
+import { migrateEnvToDb } from '@/config/migrate-env-to-db';
+import { loadRuntimeConfig } from '@/config';
+import { initializeHotReload } from '@/config/hot-reload';
 import { logger } from '@/utils/logger';
 
 async function main() {
   logger.info('Starting Assistant...');
 
   try {
-    // Initialize gateway (database, redis, etc.)
+    // Initialize gateway (database, redis, etc.) — uses bootstrap config from .env
     const gateway = getGateway();
     await gateway.start();
 
-    // Run database migrations
+    // Run database migrations (includes new settings table)
     await runMigrations();
     logger.info('Migrations complete');
 
@@ -25,9 +29,24 @@ async function main() {
     await seedPresetTemplates();
     logger.info('Presets seeded');
 
-    // Initialize vault
+    // Initialize vault (needs master key from .env)
     await initializeVault();
     logger.info('Vault initialized');
+
+    // One-time migration: move .env values into DB settings + vault
+    await migrateEnvToDb();
+
+    // Initialize settings service: warm cache from DB
+    const settingsService = getSettingsService();
+    await settingsService.initialize();
+    logger.info('Settings service initialized');
+
+    // Load runtime config from DB settings (replaces env-based config)
+    await loadRuntimeConfig();
+    logger.info('Runtime configuration loaded');
+
+    // Subscribe to settings changes for hot-reload
+    initializeHotReload();
 
     // Register built-in skills
     await registerBuiltinSkills();
@@ -43,7 +62,7 @@ async function main() {
     await hookManager.loadHooks();
     logger.info('Hooks loaded');
 
-    // Initialize messaging channels
+    // Initialize messaging channels (reads config from DB now)
     await initializeChannels();
     logger.info('Channels initialized');
 

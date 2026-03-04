@@ -83,33 +83,41 @@ export class TelegramChannel extends BaseChannel {
       }
     }
 
-    // Send text message
-    const options: Record<string, unknown> = {
-      parse_mode: 'Markdown',
-    };
+    // Send text message — split into chunks if over Telegram's 4096 char limit
+    const MAX_LEN = 4096;
+    const chunks = this.splitMessage(response.content, MAX_LEN);
+    let lastMessageId = '';
 
-    if (response.replyTo) {
-      options.reply_to_message_id = parseInt(response.replyTo, 10);
-    }
+    for (let i = 0; i < chunks.length; i++) {
+      const options: Record<string, unknown> = {
+        parse_mode: 'Markdown',
+      };
 
-    try {
-      const result = await this.bot.api.sendMessage(chatId, response.content, options);
-      return String(result.message_id);
-    } catch (err: any) {
-      if (err?.error_code === 400) {
-        // Retry without reply-to if the referenced message was deleted/not found
-        if (options.reply_to_message_id) {
-          delete options.reply_to_message_id;
-        }
-        // Retry without Markdown if parse failed (e.g. unmatched entities)
-        if (err?.description?.includes("can't parse entities")) {
-          delete options.parse_mode;
-        }
-        const result = await this.bot.api.sendMessage(chatId, response.content, options);
-        return String(result.message_id);
+      // Only set reply-to on the first chunk
+      if (i === 0 && response.replyTo) {
+        options.reply_to_message_id = parseInt(response.replyTo, 10);
       }
-      throw err;
+
+      try {
+        const result = await this.bot.api.sendMessage(chatId, chunks[i], options);
+        lastMessageId = String(result.message_id);
+      } catch (err: any) {
+        if (err?.error_code === 400) {
+          if (options.reply_to_message_id) {
+            delete options.reply_to_message_id;
+          }
+          if (err?.description?.includes("can't parse entities")) {
+            delete options.parse_mode;
+          }
+          const result = await this.bot.api.sendMessage(chatId, chunks[i], options);
+          lastMessageId = String(result.message_id);
+        } else {
+          throw err;
+        }
+      }
     }
+
+    return lastMessageId;
   }
 
   private async handleMessage(ctx: Context, attachmentType?: string): Promise<void> {
@@ -251,6 +259,46 @@ export class TelegramChannel extends BaseChannel {
       default:
         await ctx.reply(`Unknown command: ${cmd}`);
     }
+  }
+
+  private splitMessage(text: string, maxLen: number): string[] {
+    if (text.length <= maxLen) return [text];
+
+    const chunks: string[] = [];
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLen) {
+        chunks.push(remaining);
+        break;
+      }
+
+      let splitAt = -1;
+
+      // Try splitting at paragraph boundary (double newline)
+      const paragraphEnd = remaining.lastIndexOf('\n\n', maxLen);
+      if (paragraphEnd > maxLen * 0.3) {
+        splitAt = paragraphEnd + 2; // include the double newline
+      }
+
+      // Try splitting at single newline
+      if (splitAt === -1) {
+        const lineEnd = remaining.lastIndexOf('\n', maxLen);
+        if (lineEnd > maxLen * 0.3) {
+          splitAt = lineEnd + 1;
+        }
+      }
+
+      // Last resort: split at maxLen
+      if (splitAt === -1) {
+        splitAt = maxLen;
+      }
+
+      chunks.push(remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt);
+    }
+
+    return chunks;
   }
 
   private async sendAttachment(chatId: number, attachment: Attachment, replyTo?: string): Promise<void> {

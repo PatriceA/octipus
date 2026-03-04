@@ -179,8 +179,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
 
       const limit = query.limit ? parseInt(query.limit, 10) : 100;
       const offset = query.offset ? parseInt(query.offset, 10) : 0;
+      const roles = query.roles ? query.roles.split(',') : undefined;
 
-      const messages = await messageRepository.findBySession(params.id, limit, offset);
+      const messages = await messageRepository.findBySession(params.id, limit, offset, roles);
 
       return { messages, total: session.messageCount };
     },
@@ -191,6 +192,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       query: t.Object({
         limit: t.Optional(t.String()),
         offset: t.Optional(t.String()),
+        roles: t.Optional(t.String()),
       }),
       detail: { tags: ['sessions'] },
     }

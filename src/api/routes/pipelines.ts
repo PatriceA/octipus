@@ -17,6 +17,12 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Not authenticated' };
       }
 
+      // System user (MASTER_KEY) is not in DB — return all pipelines for admins
+      if (user.id === 'system') {
+        const pipelineManager = getPipelineManager();
+        return { pipelines: await pipelineManager.listAll() };
+      }
+
       const pipelineManager = getPipelineManager();
       const list = await pipelineManager.listByUser(user.id);
 
@@ -118,16 +124,19 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     async ({ user }) => {
       if (!user) return { error: 'Not authenticated' };
       const db = getDb();
-      const templates = await db
-        .select()
-        .from(pipelineTemplates)
-        .where(
-          or(
+
+      // System user (MASTER_KEY) — show all templates
+      const whereClause = user.id === 'system'
+        ? undefined
+        : or(
             eq(pipelineTemplates.userId, user.id),
             eq(pipelineTemplates.isPreset, true),
-          )
-        )
-        .orderBy(desc(pipelineTemplates.isPreset), desc(pipelineTemplates.createdAt));
+          );
+
+      const query = db.select().from(pipelineTemplates);
+      const templates = whereClause
+        ? await query.where(whereClause).orderBy(desc(pipelineTemplates.isPreset), desc(pipelineTemplates.createdAt))
+        : await query.orderBy(desc(pipelineTemplates.isPreset), desc(pipelineTemplates.createdAt));
       return { templates };
     },
     { detail: { tags: ['pipelines'] } }

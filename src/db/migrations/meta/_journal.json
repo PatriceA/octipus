@@ -22,6 +22,13 @@
       "when": 1709100000000,
       "tag": "0002_vault_system_user",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1709200000000,
+      "tag": "0003_settings",
+      "breakpoints": true
     }
   ]
 }

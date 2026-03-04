@@ -46,7 +46,7 @@ export function AgentsView() {
   if (loading) {
     return (
       <Box>
-        <Text color="yellow">⠋ Loading agents...</Text>
+        <Text color="yellow">Loading agents...</Text>
       </Box>
     );
   }
@@ -61,12 +61,14 @@ export function AgentsView() {
         return 'green';
       case 'paused':
         return 'yellow';
+      case 'stopped':
+        return 'red';
       case 'completed':
         return 'blue';
       case 'failed':
         return 'red';
       default:
-        return 'gray';
+        return 'white';
     }
   };
 
@@ -78,26 +80,26 @@ export function AgentsView() {
 
       {agents.length === 0 ? (
         <Box marginTop={1}>
-          <Text color="gray">No active agents</Text>
+          <Text color="white">No active agents</Text>
         </Box>
       ) : (
         <Box marginTop={1} flexDirection="column">
           {/* Header */}
           <Box>
             <Box width={10}>
-              <Text bold color="gray">STATUS</Text>
+              <Text bold color="cyan">STATUS</Text>
             </Box>
             <Box width={20}>
-              <Text bold color="gray">TOPIC</Text>
+              <Text bold color="cyan">TOPIC</Text>
             </Box>
             <Box width={25}>
-              <Text bold color="gray">MODEL</Text>
+              <Text bold color="cyan">MODEL</Text>
             </Box>
             <Box width={10}>
-              <Text bold color="gray">ITER</Text>
+              <Text bold color="cyan">ITER</Text>
             </Box>
             <Box>
-              <Text bold color="gray">ID</Text>
+              <Text bold color="cyan">ID</Text>
             </Box>
           </Box>
 
@@ -112,16 +114,16 @@ export function AgentsView() {
                 <Text color={statusColor(agent.status)}>{agent.status}</Text>
               </Box>
               <Box width={20}>
-                <Text>{agent.topic || 'general'}</Text>
+                <Text color="white">{agent.topic || 'general'}</Text>
               </Box>
               <Box width={25}>
-                <Text>{agent.model}</Text>
+                <Text color="white">{agent.model}</Text>
               </Box>
               <Box width={10}>
-                <Text>{agent.iteration}</Text>
+                <Text color="white">{agent.iteration}</Text>
               </Box>
               <Box>
-                <Text color="gray">{agent.id.slice(0, 8)}...</Text>
+                <Text color="white">{agent.id.slice(0, 8)}...</Text>
               </Box>
             </Box>
           ))}
@@ -129,7 +131,7 @@ export function AgentsView() {
       )}
 
       <Box marginTop={1}>
-        <Text color="gray">↑/↓ Navigate | Enter: View details | s: Stop agent</Text>
+        <Text color="yellow">Up/Down Navigate | Enter: View details | s: Stop agent</Text>
       </Box>
     </Box>
   );

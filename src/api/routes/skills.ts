@@ -176,10 +176,10 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       }
 
       const registry = getSkillRegistry();
-      const tool = registry.findTool(`${params.skillId}.${params.toolName}`);
+      const tool = registry.findTool(`${params.skillId}__${params.toolName}`);
 
       if (!tool) {
-        return { error: `Tool '${params.skillId}.${params.toolName}' not found` };
+        return { error: `Tool '${params.skillId}__${params.toolName}' not found` };
       }
 
       // Construct a minimal AgentContext for API-driven execution

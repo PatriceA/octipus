@@ -9,3 +9,4 @@ export * from './models';
 export * from './hooks';
 export * from './permissions';
 export * from './pipelines';
+export * from './settings';

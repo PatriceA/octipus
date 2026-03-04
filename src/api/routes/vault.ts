@@ -15,8 +15,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
 
       const vault = getVault();
       const entries = await vault.list(user.id);
-      // Admins also see system-level credentials (OAuth client IDs, etc.)
-      const systemEntries = user.isAdmin ? await vault.list('system') : [];
+      // Admins also see system-level credentials, but avoid duplicates if user IS system
+      const systemEntries = (user.isAdmin && user.id !== 'system') ? await vault.list('system') : [];
       return { credentials: [...entries, ...systemEntries] };
     },
     { detail: { tags: ['vault'] } }

@@ -22,6 +22,7 @@ import { voiceRoutes } from './routes/voice';
 import { notificationRoutes } from './routes/notifications';
 import { workspaceRoutes } from './routes/workspace';
 import { oauthRoutes } from './routes/oauth';
+import { settingsRoutes } from './routes/settings';
 import { authGuard } from './middleware/auth-guard';
 import { setupWebSocket } from './websocket';
 
@@ -127,6 +128,7 @@ export function createServer() {
         .use(notificationRoutes)
         .use(workspaceRoutes)
         .use(oauthRoutes)
+        .use(settingsRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group

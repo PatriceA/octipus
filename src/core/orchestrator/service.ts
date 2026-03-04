@@ -1,5 +1,6 @@
 import { getAgentManager } from '@/core/agent-manager';
 import type { AgentContext } from '@/core/types';
+import { getConfig } from '@/config';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { generateId } from '@/utils/crypto';
@@ -277,6 +278,11 @@ export class OrchestratorService {
       systemPrompt += `\n\nThe user's message could not be confidently classified. Analyze it yourself and decide the best course of action.`;
     }
 
+    // Orchestrator needs a longer timeout than its workers (default 300s)
+    // because it awaits worker.run() inside its spawn_worker tool call.
+    const config = getConfig();
+    const workerTimeout = config.agent.defaultTimeout;
+
     const worker = await agentManager.spawn({
       sessionId,
       userId,
@@ -286,6 +292,7 @@ export class OrchestratorService {
       systemPrompt,
       tools: metaTools,
       maxIterations: 10,
+      timeout: workerTimeout * 2 + 60_000, // 2x worker timeout + 60s buffer for LLM calls
     });
 
     const agentId = worker.getContext().id;
@@ -445,7 +452,9 @@ export class OrchestratorService {
         { workerId, role: agentRole, durationMs },
       ).catch(() => {});
 
-      return workerResult;
+      // Return only the text result for the orchestrator LLM to summarize.
+      // The full WorkerResult is already emitted as an event for WebSocket/UI.
+      return result;
     } catch (error) {
       coreLogger.error({ error, workerId, role }, 'Worker agent failed');
 
@@ -455,15 +464,7 @@ export class OrchestratorService {
         || worker.getStatus() === 'stopped';
       if (wasUserStopped) {
         coreLogger.info({ workerId, role }, 'Worker stopped by user, not retrying');
-        return {
-          workerId,
-          role: agentRole,
-          result: 'Agent was stopped by user.',
-          model: routing.model,
-          iterations: worker.getIteration(),
-          durationMs: Date.now() - startTime,
-          error: 'stopped_by_user',
-        };
+        return 'Agent was stopped by user.';
       }
 
       // If a CLI sub-agent failed (e.g. quota exhausted), try falling back to
@@ -490,23 +491,23 @@ export class OrchestratorService {
               ? `${task}\n\n--- Context from previous steps ---\n${input}`
               : task;
             const fallbackResult = await fallbackWorker.run(workerMessage);
-            const durationMs = Date.now() - startTime;
-            const result: WorkerResult = {
+            const fbDurationMs = Date.now() - startTime;
+            const fallbackWorkerResult: WorkerResult = {
               workerId: fallbackWorker.getContext().id,
               role: agentRole,
               result: fallbackResult,
               model: defaultModel.modelId,
               iterations: fallbackWorker.getIteration(),
-              durationMs,
+              durationMs: fbDurationMs,
             };
             this.emit({
               type: 'worker_completed',
               sessionId: context.sessionId,
               userId: context.userId,
-              data: result,
+              data: fallbackWorkerResult,
               timestamp: new Date(),
             });
-            return result;
+            return fallbackResult;
           } catch (fallbackError) {
             coreLogger.error({ error: fallbackError, role }, 'Fallback worker also failed');
           }
@@ -522,15 +523,7 @@ export class OrchestratorService {
         { workerId, role: agentRole },
       ).catch(() => {});
 
-      return {
-        workerId,
-        role: agentRole,
-        result: `Worker failed: ${(error as Error).message}`,
-        model: routing.model,
-        iterations: worker.getIteration(),
-        durationMs: Date.now() - startTime,
-        error: (error as Error).message,
-      };
+      return `Worker failed: ${(error as Error).message}`;
     }
   }
 

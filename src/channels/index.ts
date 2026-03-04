@@ -1,4 +1,5 @@
 export { BaseChannel, UnifiedMessageInterface, getUMI, type ChannelConfig, type ChannelEvents } from './interface';
+import { BaseChannel } from './interface';
 export { TelegramChannel, telegramChannel } from './telegram';
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
@@ -60,6 +61,65 @@ async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise
   }
 
   return true;
+}
+
+/**
+ * Reinitialize a single channel at runtime (hot-reload).
+ * Disconnects, unregisters, then re-registers and reconnects if configured.
+ */
+export async function reinitializeChannel(channelType: ChannelType): Promise<void> {
+  const umi = getUMI();
+  const config = getConfig();
+
+  // Disconnect and unregister existing
+  const existing = umi.getChannel(channelType);
+  if (existing) {
+    try {
+      await existing.disconnect();
+    } catch (error) {
+      channelLogger.warn({ error, channelType }, 'Error disconnecting channel during reinit');
+    }
+    umi.unregister(channelType);
+  }
+
+  // Create fresh instance and register if configured
+  let newChannel: BaseChannel | null = null;
+  switch (channelType) {
+    case 'telegram':
+      if (config.telegram?.botToken) {
+        // Create new instance to avoid stale state
+        const { TelegramChannel } = await import('./telegram');
+        newChannel = new TelegramChannel();
+      }
+      break;
+    case 'slack':
+      if (config.slack?.botToken) {
+        const { SlackChannel } = await import('./slack');
+        newChannel = new SlackChannel();
+      }
+      break;
+    case 'teams':
+      if (config.teams?.appId) {
+        const { TeamsChannel } = await import('./teams');
+        newChannel = new TeamsChannel();
+      }
+      break;
+    default:
+      channelLogger.warn({ channelType }, 'Cannot reinitialize channel type');
+      return;
+  }
+
+  if (newChannel) {
+    umi.register(newChannel);
+    try {
+      await newChannel.connect();
+      channelLogger.info({ channelType }, 'Channel reinitialized successfully');
+    } catch (error) {
+      channelLogger.error({ error, channelType }, 'Failed to reconnect channel during reinit');
+    }
+  } else {
+    channelLogger.info({ channelType }, 'Channel removed (no longer configured)');
+  }
 }
 
 /**

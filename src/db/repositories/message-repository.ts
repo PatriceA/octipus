@@ -1,4 +1,4 @@
-import { eq, desc, asc, sql, and, gte, lte } from 'drizzle-orm';
+import { eq, desc, asc, sql, and, gte, lte, inArray } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { messages, type Message, type NewMessage } from '../schema/messages';
 import { dbLogger } from '@/utils/logger';
@@ -11,11 +11,15 @@ export class MessageRepository {
     return result[0] ?? null;
   }
 
-  async findBySession(sessionId: string, limit: number = 100, offset: number = 0): Promise<Message[]> {
+  async findBySession(sessionId: string, limit: number = 100, offset: number = 0, roles?: string[]): Promise<Message[]> {
+    const conditions = roles?.length
+      ? and(eq(messages.sessionId, sessionId), inArray(messages.role, roles as ('system' | 'user' | 'assistant' | 'tool')[]))
+      : eq(messages.sessionId, sessionId);
+
     return this.db
       .select()
       .from(messages)
-      .where(eq(messages.sessionId, sessionId))
+      .where(conditions)
       .orderBy(asc(messages.createdAt))
       .limit(limit)
       .offset(offset);

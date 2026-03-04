@@ -54,7 +54,12 @@ export class CLIAgentWorker {
         this.context.userId,
         this.context.sessionId,
         this.context.id,
-        Date.now() - this.context.createdAt.getTime(),
+        {
+          durationMs: Date.now() - this.context.createdAt.getTime(),
+          iterations: this.iteration,
+          model: this.context.model,
+          role: this.context.role,
+        },
       );
 
       return result;
@@ -67,7 +72,12 @@ export class CLIAgentWorker {
         this.context.userId,
         this.context.sessionId,
         this.context.id,
-        (error as Error).message,
+        {
+          error: (error as Error).message,
+          iteration: this.iteration,
+          model: this.context.model,
+          role: this.context.role,
+        },
       );
 
       throw error;

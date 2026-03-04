@@ -99,6 +99,20 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         return { error: 'Not authenticated' };
       }
 
+      // MASTER_KEY system user — not in DB
+      if (user.id === 'system') {
+        return {
+          id: 'system',
+          username: 'system',
+          email: null,
+          isAdmin: true,
+          totpEnabled: false,
+          preferences: {},
+          channelBindings: [],
+          createdAt: new Date().toISOString(),
+        };
+      }
+
       const fullUser = await userRepository.findById(user.id);
       if (!fullUser) {
         return { error: 'User not found' };

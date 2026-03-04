@@ -21,7 +21,7 @@ export function LogsView() {
       { timestamp: new Date().toISOString(), level: 'info', message: 'Gateway started', component: 'core' },
       { timestamp: new Date().toISOString(), level: 'info', message: 'Database connected', component: 'db' },
       { timestamp: new Date().toISOString(), level: 'info', message: 'Redis connected', component: 'db' },
-      { timestamp: new Date().toISOString(), level: 'info', message: 'API server listening on port 3000', component: 'api' },
+      { timestamp: new Date().toISOString(), level: 'info', message: 'API server listening on port 3005', component: 'api' },
     ];
 
     setLogs(sampleLogs);
@@ -43,7 +43,7 @@ export function LogsView() {
       case 'warn':
         return 'yellow';
       case 'debug':
-        return 'gray';
+        return 'white';
       default:
         return 'green';
     }
@@ -58,19 +58,19 @@ export function LogsView() {
           Logs
         </Text>
         <Box>
-          <Text color="gray">
-            Filter: {filter} | {paused ? 'PAUSED' : 'LIVE'}
+          <Text color="white">
+            Filter: {filter} | {paused ? <Text color="yellow">PAUSED</Text> : <Text color="green">LIVE</Text>}
           </Text>
         </Box>
       </Box>
 
       <Box marginTop={1} flexDirection="column" flexGrow={1}>
         {filteredLogs.length === 0 ? (
-          <Text color="gray">No logs to display</Text>
+          <Text color="white">No logs to display</Text>
         ) : (
           filteredLogs.slice(-20).map((log, index) => (
             <Box key={index}>
-              <Text color="gray">{new Date(log.timestamp).toLocaleTimeString()} </Text>
+              <Text color="white">{new Date(log.timestamp).toLocaleTimeString()} </Text>
               <Text color={levelColor(log.level)}>[{log.level.toUpperCase().padEnd(5)}] </Text>
               {log.component && <Text color="cyan">[{log.component}] </Text>}
               <Text>{log.message}</Text>
@@ -80,7 +80,7 @@ export function LogsView() {
       </Box>
 
       <Box marginTop={1}>
-        <Text color="gray">
+        <Text color="yellow">
           [p] Pause/Resume | [a] All | [i] Info | [w] Warn | [e] Error | [c] Clear
         </Text>
       </Box>

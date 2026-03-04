@@ -57,6 +57,11 @@ export class AgentWorker {
   private toolsDisabled: boolean = false;
   private static MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
+  /** Milliseconds since agent start */
+  private elapsed(): number {
+    return Date.now() - this.startTime;
+  }
+
   constructor(context: AgentContext, config: AgentWorkerConfig) {
     this.context = context;
     this.config = config;
@@ -161,15 +166,17 @@ export class AgentWorker {
 
     this.messages.push(message);
 
-    // Persist to database
-    await messageRepository.create({
-      sessionId: this.context.sessionId,
-      role: 'user',
-      content,
-      agentId: this.context.id,
-    });
-
-    await sessionRepository.incrementMessageCount(this.context.sessionId);
+    // Only persist for orchestrator (root agent). Worker sub-agents are internal —
+    // their task messages would appear as fake "user" messages in the chat.
+    if (this.context.role === 'orchestrator') {
+      await messageRepository.create({
+        sessionId: this.context.sessionId,
+        role: 'user',
+        content,
+        agentId: this.context.id,
+      });
+      await sessionRepository.incrementMessageCount(this.context.sessionId);
+    }
   }
 
   /**
@@ -190,11 +197,24 @@ export class AgentWorker {
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result });
 
+      const durationMs = Date.now() - this.startTime;
+      agentLogger.info({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iterations: this.iteration, totalTokensUsed: this.totalTokensUsed,
+        model: this.context.model, role: this.context.role, durationMs,
+      }, 'Agent completed');
+
       await auditRepository.logAgentCompleted(
         this.context.userId,
         this.context.sessionId,
         this.context.id,
-        Date.now() - this.context.createdAt.getTime()
+        {
+          durationMs,
+          iterations: this.iteration,
+          totalTokensUsed: this.totalTokensUsed,
+          model: this.context.model,
+          role: this.context.role,
+        },
       );
 
       return result;
@@ -203,11 +223,27 @@ export class AgentWorker {
       this.emit('status_change', { status: 'failed' });
       this.emit('error', { error: (error as Error).message });
 
+      const failDurationMs = Date.now() - this.startTime;
+      agentLogger.error({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iteration: this.iteration, elapsedMs: failDurationMs,
+        totalTokensUsed: this.totalTokensUsed,
+        model: this.context.model, role: this.context.role,
+        error: (error as Error).message,
+      }, 'Agent failed');
+
       await auditRepository.logAgentFailed(
         this.context.userId,
         this.context.sessionId,
         this.context.id,
-        (error as Error).message
+        {
+          error: (error as Error).message,
+          iteration: this.iteration,
+          elapsedMs: failDurationMs,
+          totalTokensUsed: this.totalTokensUsed,
+          model: this.context.model,
+          role: this.context.role,
+        },
       );
 
       throw error;
@@ -217,6 +253,37 @@ export class AgentWorker {
   /**
    * Main agent loop: Thought -> Action -> Observation
    */
+  /**
+   * Race a promise against the agent timeout. Throws if the timeout fires first.
+   */
+  private raceTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+    if (this.config.timeout <= 0) return promise;
+    const remaining = this.config.timeout - this.elapsed();
+    if (remaining <= 0) {
+      const msg = `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s) during ${label}`;
+      agentLogger.error({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iteration: this.iteration, elapsedMs: this.elapsed(),
+        phase: label, timeoutMs: this.config.timeout,
+      }, msg);
+      throw new Error(msg);
+    }
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          const msg = `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s) during ${label}`;
+          agentLogger.error({
+            agentId: this.context.id, sessionId: this.context.sessionId,
+            iteration: this.iteration, elapsedMs: this.elapsed(),
+            phase: label, timeoutMs: this.config.timeout,
+          }, msg);
+          reject(new Error(msg));
+        }, remaining),
+      ),
+    ]);
+  }
+
   private async loop(): Promise<string> {
     while (this.iteration < this.config.maxIterations) {
       if (this.abortController.signal.aborted) {
@@ -224,7 +291,11 @@ export class AgentWorker {
       }
 
       this.iteration++;
-      agentLogger.debug({ agentId: this.context.id, iteration: this.iteration }, 'Agent iteration');
+      agentLogger.info({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iteration: this.iteration, elapsedMs: this.elapsed(),
+        role: this.context.role, model: this.context.model,
+      }, 'Agent loop iteration');
 
       // Check token budget
       if (this.config.maxTokenBudget > 0 && this.totalTokensUsed >= this.config.maxTokenBudget) {
@@ -234,9 +305,9 @@ export class AgentWorker {
       }
 
       // Check timeout
-      if (this.config.timeout > 0 && Date.now() - this.startTime > this.config.timeout) {
+      if (this.config.timeout > 0 && this.elapsed() > this.config.timeout) {
         throw new Error(
-          `Agent timeout exceeded (${Math.round((Date.now() - this.startTime) / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`
+          `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`
         );
       }
 
@@ -250,36 +321,80 @@ export class AgentWorker {
 
       if (removed > 0) {
         this.messages = compactedMessages;
-        agentLogger.debug({ agentId: this.context.id, removed }, 'Messages compacted');
+        agentLogger.info({
+          agentId: this.context.id, sessionId: this.context.sessionId,
+          iteration: this.iteration, elapsedMs: this.elapsed(),
+          messagesRemoved: removed, messagesRemaining: compactedMessages.length,
+        }, 'Messages compacted');
       }
 
-      // Get completion from LLM
-      const completion = await this.getCompletion();
+      // Get completion from LLM (with timeout guard)
+      agentLogger.info({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iteration: this.iteration, elapsedMs: this.elapsed(),
+        phase: 'getCompletion', model: this.context.model,
+        messageCount: this.messages.length, toolsDisabled: this.toolsDisabled,
+      }, 'LLM call starting');
+
+      const llmStart = Date.now();
+      const completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
 
       // Accumulate token usage
       this.totalTokensUsed += completion.usage.totalTokens;
 
-      // Handle tool calls if present
-      if (completion.toolCalls?.length) {
-        await this.handleToolCalls(completion.toolCalls);
+      agentLogger.info({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iteration: this.iteration, elapsedMs: this.elapsed(),
+        phase: 'getCompletion', llmLatencyMs: Date.now() - llmStart,
+        inputTokens: completion.usage.inputTokens, outputTokens: completion.usage.outputTokens,
+        totalTokensUsed: this.totalTokensUsed,
+        hasToolCalls: !!(completion.toolCalls?.length), finishReason: completion.finishReason,
+      }, 'LLM call completed');
+
+      // Handle tool calls if present — but ignore them when tools are disabled
+      // (some models hallucinate tool calls even when none are provided)
+      if (completion.toolCalls?.length && !this.toolsDisabled) {
+        const toolNames = completion.toolCalls.map(tc => tc.name);
+        agentLogger.info({
+          agentId: this.context.id, sessionId: this.context.sessionId,
+          iteration: this.iteration, elapsedMs: this.elapsed(),
+          phase: 'handleToolCalls', toolCount: completion.toolCalls.length, tools: toolNames,
+        }, 'Tool execution starting');
+
+        const toolStart = Date.now();
+        await this.raceTimeout(this.handleToolCalls(completion.toolCalls), 'handleToolCalls');
+
+        agentLogger.info({
+          agentId: this.context.id, sessionId: this.context.sessionId,
+          iteration: this.iteration, elapsedMs: this.elapsed(),
+          phase: 'handleToolCalls', toolDurationMs: Date.now() - toolStart, tools: toolNames,
+        }, 'Tool execution completed');
         continue;
       }
 
       // No tool calls — treat as final response (even if empty)
       const response = completion.content || 'I was unable to generate a response.';
 
-      // Save assistant message
-      await messageRepository.create({
-        sessionId: this.context.sessionId,
-        role: 'assistant',
-        content: response,
-        agentId: this.context.id,
-      });
+      agentLogger.info({
+        agentId: this.context.id, sessionId: this.context.sessionId,
+        iteration: this.iteration, elapsedMs: this.elapsed(),
+        responseLength: response.length, totalTokensUsed: this.totalTokensUsed,
+      }, 'Agent returning response');
 
-      await sessionRepository.incrementMessageCount(
-        this.context.sessionId,
-        completion.usage.totalTokens
-      );
+      // Only persist messages for orchestrator agents (workers are internal)
+      if (this.context.role === 'orchestrator') {
+        await messageRepository.create({
+          sessionId: this.context.sessionId,
+          role: 'assistant',
+          content: response,
+          agentId: this.context.id,
+        });
+
+        await sessionRepository.incrementMessageCount(
+          this.context.sessionId,
+          completion.usage.totalTokens
+        );
+      }
 
       return response;
     }
@@ -382,8 +497,24 @@ export class AgentWorker {
       // Internal orchestrator meta-tools are always allowed (no permission gate)
       if (skillId === 'agent') {
         try {
+          const toolExecStart = Date.now();
           const result = await tool.execute(toolCall.arguments, this.context);
+          const toolExecMs = Date.now() - toolExecStart;
+
+          agentLogger.info({
+            agentId: this.context.id, sessionId: this.context.sessionId,
+            tool: toolCall.name, skillId, durationMs: toolExecMs,
+          }, 'Tool executed');
+
           results.push({ toolCallId: toolCall.id, result });
+
+          if (tool.final) {
+            this.toolsDisabled = true;
+            agentLogger.info(
+              { agentId: this.context.id, tool: toolCall.name },
+              'Final tool executed — disabling tools for remaining iterations',
+            );
+          }
         } catch (error) {
           results.push({ toolCallId: toolCall.id, result: null, error: (error as Error).message });
         }
@@ -465,12 +596,14 @@ export class AgentWorker {
 
       // ALLOW path (or approved ASK) — execute tool
       try {
-        agentLogger.debug(
-          { agentId: this.context.id, tool: toolCall.name, args: toolCall.arguments },
-          'Executing tool'
-        );
-
+        const toolExecStart = Date.now();
         const result = await tool.execute(toolCall.arguments, this.context);
+        const toolExecMs = Date.now() - toolExecStart;
+
+        agentLogger.info({
+          agentId: this.context.id, sessionId: this.context.sessionId,
+          tool: toolCall.name, skillId, durationMs: toolExecMs,
+        }, 'Tool executed');
 
         results.push({
           toolCallId: toolCall.id,
@@ -493,7 +626,7 @@ export class AgentWorker {
           this.context.sessionId,
           toolCall.name,
           skillId,
-          { args: toolCall.arguments, result: resultStr.slice(0, 10_000) }
+          { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs }
         );
       } catch (error) {
         agentLogger.error(
@@ -542,14 +675,16 @@ export class AgentWorker {
       };
       this.messages.push(toolMessage);
 
-      // Persist tool result
-      await messageRepository.create({
-        sessionId: this.context.sessionId,
-        role: 'tool',
-        content: toolMessage.content,
-        toolCallId: result.toolCallId,
-        agentId: this.context.id,
-      });
+      // Persist tool result (skip for orchestrator — its tool results are internal routing)
+      if (this.context.role !== 'orchestrator') {
+        await messageRepository.create({
+          sessionId: this.context.sessionId,
+          role: 'tool',
+          content: toolMessage.content,
+          toolCallId: result.toolCallId,
+          agentId: this.context.id,
+        });
+      }
     }
   }
 

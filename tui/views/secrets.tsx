@@ -5,6 +5,7 @@ import { api } from '../lib/api.js';
 interface Credential {
   id: string;
   name: string;
+  credentialType?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,24 +58,36 @@ export function SecretsView() {
     return <Text color="red">Error: {error}</Text>;
   }
 
+  const typeColor = (type?: string) => {
+    switch (type) {
+      case 'oauth_token': return 'green';
+      case 'api_key': return 'cyan';
+      case 'password': return 'yellow';
+      default: return 'white';
+    }
+  };
+
   return (
     <Box flexDirection="column">
       <Text bold underline>Secrets Vault</Text>
-      <Text color="gray">↑↓ navigate | x = delete | r = refresh</Text>
-      <Text color="gray">Use the web UI to add new secrets.</Text>
+      <Text color="yellow">Up/Down navigate | x = delete | r = refresh</Text>
+      <Text color="white">Use the web UI to add new secrets.</Text>
       {message && <Text color="cyan">{message}</Text>}
 
       <Box marginTop={1} flexDirection="column">
         {credentials.length === 0 ? (
-          <Text color="gray">No secrets stored.</Text>
+          <Text color="white">No secrets stored.</Text>
         ) : (
           credentials.map((cred, i) => (
             <Box key={cred.id}>
               <Text color={i === selected ? 'cyan' : undefined}>
-                {i === selected ? '▸ ' : '  '}
+                {i === selected ? '> ' : '  '}
               </Text>
-              <Text bold={i === selected}>{cred.name}</Text>
-              <Text color="gray"> (added {new Date(cred.createdAt).toLocaleDateString()})</Text>
+              <Text bold={i === selected} color="white">{cred.name}</Text>
+              {cred.credentialType && (
+                <Text color={typeColor(cred.credentialType)}> [{cred.credentialType}]</Text>
+              )}
+              <Text color="white"> (added {new Date(cred.createdAt).toLocaleDateString()})</Text>
             </Box>
           ))
         )}

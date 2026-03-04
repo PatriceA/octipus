@@ -376,6 +376,16 @@ export class PipelineManager {
   }
 
   /**
+   * List all pipelines (admin).
+   */
+  async listAll(): Promise<Pipeline[]> {
+    return this.db
+      .select()
+      .from(pipelines)
+      .orderBy(desc(pipelines.createdAt));
+  }
+
+  /**
    * Stop a running pipeline.
    */
   async stop(pipelineId: string): Promise<boolean> {

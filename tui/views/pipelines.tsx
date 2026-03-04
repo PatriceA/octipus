@@ -56,6 +56,7 @@ export function PipelinesView() {
     if (key.tab || input === '\t') setTab(t => t === 'templates' ? 'runs' : 'templates');
     if (input === 'r') {
       setLoading(true);
+      setError(null);
       setTab(tab); // re-trigger effect
     }
   });
@@ -74,7 +75,7 @@ export function PipelinesView() {
       case 'running': return 'cyan';
       case 'awaiting_approval': return 'yellow';
       case 'failed': return 'red';
-      default: return 'gray';
+      default: return 'white';
     }
   };
 
@@ -82,38 +83,38 @@ export function PipelinesView() {
     <Box flexDirection="column">
       <Text bold underline>Pipelines</Text>
       <Box>
-        <Text color={tab === 'templates' ? 'cyan' : 'gray'} bold={tab === 'templates'}>
+        <Text color={tab === 'templates' ? 'cyan' : 'white'} bold={tab === 'templates'}>
           [Templates]
         </Text>
         <Text> </Text>
-        <Text color={tab === 'runs' ? 'cyan' : 'gray'} bold={tab === 'runs'}>
+        <Text color={tab === 'runs' ? 'cyan' : 'white'} bold={tab === 'runs'}>
           [Runs]
         </Text>
-        <Text color="gray"> | Tab = switch | ↑↓ navigate | r = refresh</Text>
+        <Text color="yellow"> | Tab = switch | Up/Down navigate | r = refresh</Text>
       </Box>
 
       <Box marginTop={1} flexDirection="column">
         {tab === 'templates' ? (
           templates.length === 0 ? (
-            <Text color="gray">No templates. Create one in the web UI.</Text>
+            <Text color="white">No templates. Create one in the web UI.</Text>
           ) : (
             templates.map((t, i) => (
               <Box key={t.id} flexDirection="column">
                 <Box>
                   <Text color={i === selected ? 'cyan' : undefined}>
-                    {i === selected ? '▸ ' : '  '}
+                    {i === selected ? '> ' : '  '}
                   </Text>
                   <Text bold={i === selected}>{t.name}</Text>
-                  <Text color="gray"> ({t.steps.length} steps)</Text>
+                  <Text color="white"> ({t.steps.length} steps)</Text>
                 </Box>
                 {i === selected && t.steps.length > 0 && (
                   <Box marginLeft={4} flexDirection="column">
                     {t.steps.map((step, si) => (
                       <Box key={si}>
-                        <Text color="gray">{si + 1}. </Text>
+                        <Text color="white">{si + 1}. </Text>
                         <Text>{step.name}</Text>
-                        <Text color="gray"> [{step.topic}]</Text>
-                        {step.requiresApproval && <Text color="yellow"> ⚑</Text>}
+                        <Text color="cyan"> [{step.topic}]</Text>
+                        {step.requiresApproval && <Text color="yellow"> !</Text>}
                       </Box>
                     ))}
                   </Box>
@@ -123,16 +124,16 @@ export function PipelinesView() {
           )
         ) : (
           runs.length === 0 ? (
-            <Text color="gray">No pipeline runs yet.</Text>
+            <Text color="white">No pipeline runs yet.</Text>
           ) : (
             runs.map((run, i) => (
               <Box key={run.id}>
                 <Text color={i === selected ? 'cyan' : undefined}>
-                  {i === selected ? '▸ ' : '  '}
+                  {i === selected ? '> ' : '  '}
                 </Text>
                 <Text bold={i === selected}>{run.title}</Text>
                 <Text color={statusColor(run.status)}> [{run.status}]</Text>
-                <Text color="gray"> stage {run.currentStageIndex + 1}</Text>
+                <Text color="white"> stage {run.currentStageIndex + 1}</Text>
               </Box>
             ))
           )

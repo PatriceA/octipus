@@ -3,32 +3,30 @@ import { Box, Text } from 'ink';
 import { api } from '../lib/api.js';
 
 interface UserInfo {
-  user: {
-    id: string;
-    username: string;
-    isAdmin: boolean;
-    totpEnabled?: boolean;
-    createdAt: string;
-  };
+  id: string;
+  username: string;
+  isAdmin: boolean;
+  totpEnabled?: boolean;
+  createdAt: string;
 }
 
 export function SettingsView() {
-  const [user, setUser] = useState<UserInfo['user'] | null>(null);
+  const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchUser = async () => {
       try {
         const data = await api.get<UserInfo>('/auth/me');
-        setUser(data?.user || null);
+        setUser(data || null);
         setLoading(false);
       } catch (err) {
         setError((err as Error).message);
         setLoading(false);
       }
     };
-    fetch();
+    fetchUser();
   }, []);
 
   if (loading) {
@@ -61,11 +59,11 @@ export function SettingsView() {
         </Box>
         <Box>
           <Text>User ID: </Text>
-          <Text color="gray">{user.id}</Text>
+          <Text color="white">{user.id}</Text>
         </Box>
         <Box>
           <Text>Created: </Text>
-          <Text color="gray">{new Date(user.createdAt).toLocaleDateString()}</Text>
+          <Text color="white">{new Date(user.createdAt).toLocaleDateString()}</Text>
         </Box>
       </Box>
 
@@ -73,14 +71,14 @@ export function SettingsView() {
         <Text bold>Security</Text>
         <Box>
           <Text>2FA (TOTP): </Text>
-          <Text color={user.totpEnabled ? 'green' : 'gray'}>
+          <Text color={user.totpEnabled ? 'green' : 'yellow'}>
             {user.totpEnabled ? 'Enabled' : 'Disabled'}
           </Text>
         </Box>
       </Box>
 
       <Box marginTop={1}>
-        <Text color="gray">Use the web UI for full settings management.</Text>
+        <Text color="yellow">Use the web UI for full settings management.</Text>
       </Box>
     </Box>
   );

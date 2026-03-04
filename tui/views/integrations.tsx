@@ -163,11 +163,11 @@ export function IntegrationsView() {
       {/* Section tabs */}
       <Box marginTop={1} gap={2}>
         {sections.map((s) => (
-          <Text key={s} color={section === s ? 'cyan' : 'gray'} bold={section === s}>
+          <Text key={s} color={section === s ? 'cyan' : 'white'} bold={section === s}>
             [{section === s ? '*' : ' '}] {s === 'workspace' ? 'Workspace' : s === 'cli' ? 'CLI Tools' : 'OAuth'}
           </Text>
         ))}
-        <Text color="gray"> [Tab/n] switch</Text>
+        <Text color="yellow"> [Tab/n] switch</Text>
       </Box>
 
       {/* Workspace section */}
@@ -175,14 +175,14 @@ export function IntegrationsView() {
         <Box marginTop={1} flexDirection="column">
           <Text bold>Workspace Paths</Text>
           <Box marginTop={1}>
-            <Text color="gray">Root: </Text>
+            <Text color="white">Root: </Text>
             <Text color="cyan">{workspace?.rootPath || 'Not set'}</Text>
           </Box>
 
           <Box marginTop={1} flexDirection="column">
             <Text bold>Additional Paths:</Text>
             {workspace?.additionalPaths.length === 0 ? (
-              <Text color="gray">  (none)</Text>
+              <Text color="white">  (none)</Text>
             ) : (
               workspace?.additionalPaths.map((p, i) => (
                 <Box key={i}>
@@ -199,11 +199,11 @@ export function IntegrationsView() {
             <Box marginTop={1}>
               <Text color="yellow">Path: </Text>
               <Text>{inputBuffer}</Text>
-              <Text color="gray">_</Text>
+              <Text color="yellow">_</Text>
             </Box>
           ) : (
             <Box marginTop={1}>
-              <Text color="gray">[a] Add path  [x] Remove selected  [r] Refresh</Text>
+              <Text color="yellow">[a] Add path  [x] Remove selected  [r] Refresh</Text>
             </Box>
           )}
 
@@ -221,34 +221,34 @@ export function IntegrationsView() {
       {section === 'cli' && (
         <Box marginTop={1} flexDirection="column">
           <Text bold>CLI Integrations</Text>
-          <Text color="gray">These use locally installed CLI tools.</Text>
+          <Text color="white">These use locally installed CLI tools.</Text>
 
           <Box marginTop={1} flexDirection="column">
             <Box>
               <Text>GitHub (gh):  </Text>
-              <Text color={ghSkill?.enabled ? 'green' : 'gray'}>
+              <Text color={ghSkill?.enabled ? 'green' : 'yellow'}>
                 {ghSkill?.enabled ? 'Available' : 'Not configured'}
               </Text>
             </Box>
             {!ghSkill?.enabled && (
-              <Text color="gray">  Install gh CLI and run: gh auth login</Text>
+              <Text color="white">  Install gh CLI and run: gh auth login</Text>
             )}
           </Box>
 
           <Box marginTop={1} flexDirection="column">
             <Box>
               <Text>GitLab (glab): </Text>
-              <Text color={glSkill?.enabled ? 'green' : 'gray'}>
+              <Text color={glSkill?.enabled ? 'green' : 'yellow'}>
                 {glSkill?.enabled ? 'Available' : 'Not configured'}
               </Text>
             </Box>
             {!glSkill?.enabled && (
-              <Text color="gray">  Install glab CLI and run: glab auth login</Text>
+              <Text color="white">  Install glab CLI and run: glab auth login</Text>
             )}
           </Box>
 
           <Box marginTop={1}>
-            <Text color="gray">[r] Refresh</Text>
+            <Text color="yellow">[r] Refresh</Text>
           </Box>
         </Box>
       )}
@@ -257,32 +257,32 @@ export function IntegrationsView() {
       {section === 'oauth' && (
         <Box marginTop={1} flexDirection="column">
           <Text bold>OAuth Integrations</Text>
-          <Text color="gray">Connect via the Web UI to authorize access.</Text>
+          <Text color="white">Connect via the Web UI to authorize access.</Text>
 
           <Box marginTop={1} flexDirection="column">
             <Box>
               <Text>Google Workspace: </Text>
-              <Text color={googleStatus?.connected ? 'green' : 'gray'}>
+              <Text color={googleStatus?.connected ? 'green' : 'yellow'}>
                 {googleStatus?.connected ? 'Connected' : 'Not connected'}
               </Text>
             </Box>
             {googleStatus?.connected && googleStatus.email && (
-              <Text color="gray">  Account: {googleStatus.email}</Text>
+              <Text color="white">  Account: {googleStatus.email}</Text>
             )}
-            <Text color="gray">  Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks</Text>
+            <Text color="white">  Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks</Text>
           </Box>
 
           <Box marginTop={1} flexDirection="column">
             <Box>
               <Text>Microsoft 365:   </Text>
-              <Text color={microsoftStatus?.connected ? 'green' : 'gray'}>
+              <Text color={microsoftStatus?.connected ? 'green' : 'yellow'}>
                 {microsoftStatus?.connected ? 'Connected' : 'Not connected'}
               </Text>
             </Box>
             {microsoftStatus?.connected && microsoftStatus.email && (
-              <Text color="gray">  Account: {microsoftStatus.email}</Text>
+              <Text color="white">  Account: {microsoftStatus.email}</Text>
             )}
-            <Text color="gray">  Outlook, Calendar, OneDrive, To Do, Contacts</Text>
+            <Text color="white">  Outlook, Calendar, OneDrive, To Do, Contacts</Text>
           </Box>
 
           <Box marginTop={1}>
@@ -290,7 +290,7 @@ export function IntegrationsView() {
           </Box>
 
           <Box marginTop={1}>
-            <Text color="gray">[r] Refresh</Text>
+            <Text color="yellow">[r] Refresh</Text>
           </Box>
         </Box>
       )}

@@ -20,6 +20,11 @@ import {
   ArrowRight,
   KeyRound,
   Shield,
+  Sliders,
+  Save,
+  RotateCcw,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -58,6 +63,7 @@ export default function SettingsPage() {
 
   const tabs = [
     { id: 'general', label: 'General', icon: Settings },
+    { id: 'configuration', label: 'Configuration', icon: Sliders },
     { id: 'integrations', label: 'Integrations', icon: Plug },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'security', label: 'Security', icon: Shield },
@@ -96,6 +102,7 @@ export default function SettingsPage() {
 
         <div className="flex-1 bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-6">
           {activeTab === 'general' && <GeneralTab />}
+          {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'channels' && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}
@@ -1005,6 +1012,296 @@ function SecurityTab() {
             Security keys and session tokens are managed server-side. Contact an admin for password resets.
           </p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Configuration Tab (runtime settings from DB) ───
+
+interface SettingItem {
+  key: string;
+  value: unknown;
+  valueType: string;
+  description: string;
+  defaultValue: unknown;
+  isSecret: boolean;
+  category: string;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  litellm: 'LiteLLM / LLM Proxy',
+  ollama: 'Ollama',
+  channels: 'Channels',
+  agent: 'Agent',
+  orchestrator: 'Orchestrator',
+  workspace: 'Workspace',
+  logging: 'Logging',
+  integrations: 'Integrations',
+  voice: 'Voice',
+  api: 'API',
+  security: 'Security',
+};
+
+function ConfigurationTab() {
+  const queryClient = useQueryClient();
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState('');
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<{ settings: Record<string, SettingItem[]>; categories: string[] }>('/settings'),
+  });
+
+  const handleSave = async (key: string, value: unknown) => {
+    setSaving(key);
+    setError('');
+    try {
+      await api.put(`/settings/${encodeURIComponent(key)}`, { value });
+      setSaved(key);
+      setTimeout(() => setSaved(null), 2000);
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    } catch (err) {
+      setError(`Failed to save ${key}: ${(err as Error).message}`);
+    }
+    setSaving(null);
+  };
+
+  const handleReset = async (key: string) => {
+    setSaving(key);
+    setError('');
+    try {
+      await api.post(`/settings/${encodeURIComponent(key)}/reset`);
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    } catch (err) {
+      setError(`Failed to reset ${key}: ${(err as Error).message}`);
+    }
+    setSaving(null);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  const categories = data?.categories || [];
+  const settings = data?.settings || {};
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">System Configuration</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Runtime settings. Changes take effect immediately without restart.
+        </p>
+      </div>
+
+      {error && (
+        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
+      {categories.map((category) => (
+        <SettingsCategorySection
+          key={category}
+          category={category}
+          label={CATEGORY_LABELS[category] || category}
+          settings={settings[category] || []}
+          onSave={handleSave}
+          onReset={handleReset}
+          saving={saving}
+          saved={saved}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SettingsCategorySection({
+  category,
+  label,
+  settings,
+  onSave,
+  onReset,
+  saving,
+  saved,
+}: {
+  category: string;
+  label: string;
+  settings: SettingItem[];
+  onSave: (key: string, value: unknown) => void;
+  onReset: (key: string) => void;
+  saving: string | null;
+  saved: string | null;
+}) {
+  const [localValues, setLocalValues] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    const initial: Record<string, unknown> = {};
+    for (const s of settings) {
+      initial[s.key] = s.value;
+    }
+    setLocalValues(initial);
+  }, [settings]);
+
+  const getLocalValue = (key: string) => {
+    return localValues[key] ?? '';
+  };
+
+  const setLocalValue = (key: string, value: unknown) => {
+    setLocalValues(prev => ({ ...prev, [key]: value }));
+  };
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+        {label}
+      </h3>
+      <div className="space-y-2">
+        {settings.map((setting) => (
+          <SettingField
+            key={setting.key}
+            setting={setting}
+            value={getLocalValue(setting.key)}
+            onChange={(val) => setLocalValue(setting.key, val)}
+            onSave={() => onSave(setting.key, localValues[setting.key])}
+            onReset={() => onReset(setting.key)}
+            isSaving={saving === setting.key}
+            isSaved={saved === setting.key}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingField({
+  setting,
+  value,
+  onChange,
+  onSave,
+  onReset,
+  isSaving,
+  isSaved,
+}: {
+  setting: SettingItem;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  onSave: () => void;
+  onReset: () => void;
+  isSaving: boolean;
+  isSaved: boolean;
+}) {
+  const [showSecret, setShowSecret] = useState(false);
+  const shortKey = setting.key.split('.').pop() || setting.key;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') onSave();
+  };
+
+  const inputClasses = 'w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
+
+  return (
+    <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{shortKey}</label>
+          {setting.isSecret && (
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              secret
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-500 mb-2">{setting.description}</p>
+
+        {setting.valueType === 'boolean' ? (
+          <button
+            onClick={() => { onChange(!(value as boolean)); setTimeout(onSave, 0); }}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              value ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'
+            }`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              value ? 'translate-x-6' : 'translate-x-1'
+            }`} />
+          </button>
+        ) : setting.isSecret ? (
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type={showSecret ? 'text' : 'password'}
+                value={String(value || '')}
+                onChange={(e) => onChange(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={`Enter ${shortKey}...`}
+                className={inputClasses}
+              />
+              <button
+                onClick={() => setShowSecret(!showSecret)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+        ) : setting.valueType === 'number' ? (
+          <input
+            type="number"
+            value={String(value ?? '')}
+            onChange={(e) => onChange(Number(e.target.value))}
+            onKeyDown={handleKeyDown}
+            className={inputClasses}
+          />
+        ) : setting.valueType === 'string_array' ? (
+          <input
+            type="text"
+            value={Array.isArray(value) ? (value as string[]).join(', ') : String(value || '')}
+            onChange={(e) => onChange(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+            onKeyDown={handleKeyDown}
+            placeholder="value1, value2, ..."
+            className={inputClasses}
+          />
+        ) : (
+          <input
+            type="text"
+            value={String(value || '')}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className={inputClasses}
+          />
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 pt-7 shrink-0">
+        {setting.valueType !== 'boolean' && (
+          <button
+            onClick={onSave}
+            disabled={isSaving}
+            className="p-1.5 text-gray-400 hover:text-primary-600 disabled:opacity-50"
+            title="Save"
+          >
+            {isSaving ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : isSaved ? (
+              <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+            ) : (
+              <Save className="w-3.5 h-3.5" />
+            )}
+          </button>
+        )}
+        <button
+          onClick={onReset}
+          disabled={isSaving}
+          className="p-1.5 text-gray-400 hover:text-amber-600 disabled:opacity-50"
+          title="Reset to default"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   );

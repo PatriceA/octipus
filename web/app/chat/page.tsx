@@ -68,7 +68,7 @@ export default function ChatPage() {
         setSessionId(savedSessionId);
         // Restore message history from backend
         api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
-          `/sessions/${savedSessionId}/messages`
+          `/sessions/${savedSessionId}/messages?roles=user,assistant,system`
         ).then((data) => {
           if (data?.messages?.length) {
             setMessages(data.messages.map((m) => ({

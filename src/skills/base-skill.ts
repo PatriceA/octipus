@@ -52,7 +52,7 @@ export abstract class BaseSkill {
     options?: ToolExecutionOptions
   ): void {
     const handler: ToolHandler = {
-      name: `${this.id}.${name}`,
+      name: `${this.id}__${name}`,
       description,
       parameters,
       execute: async (args, context) => {

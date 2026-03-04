@@ -47,6 +47,16 @@ export abstract class BaseChannel extends EventEmitter {
   }
 
   /**
+   * Reconnect the channel (disconnect + connect).
+   * Used for hot-reload when config changes at runtime.
+   */
+  async reconnect(): Promise<void> {
+    channelLogger.info({ channel: this.type }, 'Reconnecting channel');
+    await this.disconnect();
+    await this.connect();
+  }
+
+  /**
    * Create a unified message from channel-specific data
    */
   protected createUnifiedMessage(
@@ -137,6 +147,18 @@ export class UnifiedMessageInterface extends EventEmitter {
     });
 
     channelLogger.info({ channel: channel.type }, 'Channel registered');
+  }
+
+  /**
+   * Unregister a channel (removes it and all its event listeners)
+   */
+  unregister(type: ChannelType): void {
+    const channel = this.channels.get(type);
+    if (channel) {
+      channel.removeAllListeners();
+      this.channels.delete(type);
+      channelLogger.info({ channel: type }, 'Channel unregistered');
+    }
   }
 
   /**

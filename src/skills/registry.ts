@@ -109,10 +109,10 @@ export class SkillRegistry {
   }
 
   /**
-   * Find a tool handler by full name (skillId.toolName)
+   * Find a tool handler by full name (skillId__toolName)
    */
   findTool(fullName: string): ToolHandler | undefined {
-    const [skillId, toolName] = fullName.split('.');
+    const [skillId, toolName] = fullName.split('__');
     const skill = this.skills.get(skillId);
 
     if (!skill || !this.initialized.has(skillId)) {

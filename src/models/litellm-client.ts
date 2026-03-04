@@ -127,7 +127,7 @@ export class LiteLLMClient {
       Object.assign(params, options.extraBody);
     }
 
-    modelLogger.debug({ model: params.model, messageCount: options.messages.length }, 'Sending completion request');
+    modelLogger.info({ model: params.model, messageCount: options.messages.length }, 'LLM request');
 
     try {
       const response = await this.client.chat.completions.create(params);
@@ -154,15 +154,17 @@ export class LiteLLMClient {
         }));
       }
 
-      modelLogger.debug(
+      modelLogger.info(
         {
           model: response.model,
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
+          totalTokens: result.usage.totalTokens,
           latencyMs,
           hasToolCalls: !!result.toolCalls?.length,
+          finishReason: result.finishReason,
         },
-        'Completion successful'
+        'LLM completion'
       );
 
       return result;
@@ -276,4 +278,13 @@ export function getLiteLLMClient(): LiteLLMClient {
     clientInstance = new LiteLLMClient();
   }
   return clientInstance;
+}
+
+/**
+ * Reset the LiteLLM client singleton (for hot-reload).
+ * Next call to getLiteLLMClient() will create a fresh client with updated config.
+ */
+export function resetLiteLLMClient(): void {
+  clientInstance = null;
+  modelLogger.info('LiteLLM client reset for config reload');
 }

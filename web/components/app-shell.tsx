@@ -7,7 +7,7 @@ import { Header } from './header';
 import { useAuth } from '@/lib/auth-context';
 import { Loader2 } from 'lucide-react';
 
-const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password'];
+const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/setup'];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

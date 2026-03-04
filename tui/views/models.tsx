@@ -8,8 +8,7 @@ interface Model {
   provider: string;
   modelId: string;
   isDefault: boolean;
-  enabled: boolean;
-  health: string;
+  isEnabled: boolean;
   topics: string[];
 }
 
@@ -51,8 +50,8 @@ export function ModelsView() {
     if (input === 't' && models[selected]) {
       // Toggle enable/disable
       const model = models[selected];
-      api.put(`/models/${model.id}`, { enabled: !model.enabled }).then(() => {
-        setMessage(`${model.enabled ? 'Disabled' : 'Enabled'} "${model.name}"`);
+      api.put(`/models/${model.id}`, { isEnabled: !model.isEnabled }).then(() => {
+        setMessage(`${model.isEnabled ? 'Disabled' : 'Enabled'} "${model.name}"`);
         fetchModels();
         setTimeout(() => setMessage(null), 3000);
       }).catch(() => setMessage('Failed to toggle'));
@@ -72,38 +71,30 @@ export function ModelsView() {
     return <Text color="red">Error: {error}</Text>;
   }
 
-  const healthColor = (health: string) => {
-    switch (health) {
-      case 'healthy': return 'green';
-      case 'degraded': return 'yellow';
-      default: return 'red';
-    }
-  };
-
   return (
     <Box flexDirection="column">
       <Text bold underline>Models</Text>
-      <Text color="gray">↑↓ navigate | d = set default | t = toggle | r = refresh</Text>
+      <Text color="yellow">↑↓ navigate | d = set default | t = toggle | r = refresh</Text>
       {message && <Text color="cyan">{message}</Text>}
 
       <Box marginTop={1} flexDirection="column">
         {models.length === 0 ? (
-          <Text color="gray">No models configured</Text>
+          <Text color="white">No models configured</Text>
         ) : (
           models.map((model, i) => (
             <Box key={model.id}>
               <Text color={i === selected ? 'cyan' : undefined}>
                 {i === selected ? '▸ ' : '  '}
               </Text>
-              <Text color={model.enabled ? 'white' : 'gray'} bold={i === selected}>
+              <Text color={model.isEnabled ? 'white' : 'red'} bold={i === selected} dimColor={!model.isEnabled}>
                 {model.name}
               </Text>
-              <Text color="gray"> ({model.provider}/{model.modelId}) </Text>
-              <Text color={healthColor(model.health)}>●</Text>
+              <Text color="white"> ({model.provider}/{model.modelId}) </Text>
+              <Text color={model.isEnabled ? 'green' : 'red'}>●</Text>
               {model.isDefault && <Text color="yellow"> ★</Text>}
-              {!model.enabled && <Text color="red"> [disabled]</Text>}
+              {!model.isEnabled && <Text color="red"> [disabled]</Text>}
               {model.topics.length > 0 && (
-                <Text color="gray"> [{model.topics.join(', ')}]</Text>
+                <Text color="cyan"> [{model.topics.join(', ')}]</Text>
               )}
             </Box>
           ))

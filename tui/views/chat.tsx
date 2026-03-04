@@ -1,31 +1,54 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { api } from '../lib/api.js';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
 }
 
+interface ChatResponse {
+  response: string;
+  sessionId: string;
+  agentId?: string;
+  classification?: string;
+}
+
 export function ChatView() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
+  const sendMessage = async () => {
+    if (!input.trim() || isTyping) return;
 
-    setMessages((prev) => [...prev, { role: 'user', content: input }]);
+    const userMessage = input.trim();
+    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
     setInput('');
     setIsTyping(true);
+    setError(null);
 
-    // Simulate response (in real implementation, this comes from WebSocket)
-    setTimeout(() => {
+    try {
+      const body: Record<string, string> = { message: userMessage };
+      if (sessionId) body.sessionId = sessionId;
+
+      const data = await api.post<ChatResponse>('/chat', body);
+      if (data.sessionId) setSessionId(data.sessionId);
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: 'This is a simulated response. Connect to the API for real responses.' },
+        { role: 'assistant', content: data.response || '(empty response)' },
       ]);
+    } catch (err) {
+      setError((err as Error).message);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `Error: ${(err as Error).message}` },
+      ]);
+    } finally {
       setIsTyping(false);
-    }, 1000);
+    }
   };
 
   useInput((char, key) => {
@@ -43,11 +66,12 @@ export function ChatView() {
       <Text bold underline>
         Chat
       </Text>
+      {sessionId && <Text color="cyan">Session: {sessionId.slice(0, 8)}...</Text>}
 
       {/* Messages */}
       <Box flexDirection="column" flexGrow={1} marginTop={1}>
         {messages.length === 0 ? (
-          <Text color="gray">Start typing to begin a conversation...</Text>
+          <Text color="white">Start typing to begin a conversation...</Text>
         ) : (
           messages.slice(-10).map((msg, index) => (
             <Box key={index} marginBottom={1}>
@@ -61,16 +85,16 @@ export function ChatView() {
 
         {isTyping && (
           <Box>
-            <Text color="gray">AI is typing...</Text>
+            <Text color="yellow">AI is thinking...</Text>
           </Box>
         )}
       </Box>
 
       {/* Input */}
-      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+      <Box borderStyle="single" borderColor="cyan" paddingX={1}>
         <Text color="cyan">{'> '}</Text>
         <Text>{input}</Text>
-        <Text color="gray">|</Text>
+        <Text color="yellow">_</Text>
       </Box>
     </Box>
   );

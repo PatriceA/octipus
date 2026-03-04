@@ -170,25 +170,35 @@ export class AuditRepository {
     });
   }
 
-  async logAgentCompleted(userId: string, sessionId: string, agentId: string, duration?: number): Promise<void> {
+  async logAgentCompleted(
+    userId: string,
+    sessionId: string,
+    agentId: string,
+    details: { durationMs: number; iterations?: number; totalTokensUsed?: number; model?: string; role?: string },
+  ): Promise<void> {
     await this.log({
       userId,
       action: 'agent_completed',
       resourceType: 'agent',
       resourceId: agentId,
       sessionId,
-      details: { duration } as AuditDetails,
+      details: { ...details, duration: details.durationMs } as AuditDetails,
     });
   }
 
-  async logAgentFailed(userId: string, sessionId: string, agentId: string, error: string): Promise<void> {
+  async logAgentFailed(
+    userId: string,
+    sessionId: string,
+    agentId: string,
+    details: { error: string; iteration?: number; elapsedMs?: number; totalTokensUsed?: number; model?: string; role?: string },
+  ): Promise<void> {
     await this.log({
       userId,
       action: 'agent_failed',
       resourceType: 'agent',
       resourceId: agentId,
       sessionId,
-      details: { error } as AuditDetails,
+      details: details as AuditDetails,
     });
   }
 }
