@@ -33,7 +33,7 @@ export const pipelineStages = pgTable('pipeline_stages', {
   name: text('name').notNull(),
   role: text('role').notNull(), // AgentRole
   model: text('model'),
-  toolIds: jsonb('tool_ids').$type<string[]>().default([]),
+  toolIds: jsonb('skill_ids').$type<string[]>().default([]),
   systemPrompt: text('system_prompt').notNull(),
   input: text('input').default('').notNull(),
   output: text('output'),

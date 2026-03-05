@@ -1,62 +1,105 @@
 # Assistant
 
-A multi-channel autonomous agent with tools, domain knowledge skills, expert personas, encrypted vault, and a web UI. Built with Bun, Elysia, Drizzle ORM, and Next.js.
+Your own autonomous AI workforce. An orchestration platform that deploys specialized expert agents — each with their own tools, domain knowledge, and execution capabilities — to tackle complex tasks across coding, research, design, security, DevOps, and beyond.
 
-## Features
+Built for developers who want full control. Runs locally. No vendor lock-in. Every model provider, every channel, every skill — yours to configure.
 
-- **Multi-agent orchestration** — classifies messages, spawns specialist workers (coding, research, design, devops, security, etc.), supports teams and pipelines
-- **16 agent roles** with 15 pre-configured expert personas and 20 domain knowledge skills
-- **10 built-in tools** — filesystem, shell, git, browser, websearch, docker, google workspace, microsoft 365, knowledge base, messaging
-- **Multi-channel** — Telegram, Slack, Microsoft Teams, WebChat
-- **Model routing** — Ollama, OpenAI, Anthropic, Gemini, LiteLLM, CLI models (Claude Code, Gemini CLI, Codex)
-- **Security** — JWT sessions, WebAuthn/passkeys, TOTP 2FA, AES-256 encrypted vault, three-tier permissions
-- **MCP server** — exposes assistant as MCP tools for CLI models
-- **RAG pipeline** — vector search knowledge base with pgvector
-- **Hooks & automation** — event triggers, cron scheduling, N8N workflows
-- **Voice** — STT (Whisper), TTS (Piper, Edge TTS), wake word detection
-- **Web UI** (Next.js) and **Terminal UI** (Ink)
+## What It Does
 
-## Dependencies
+**You send a message. The system figures out the rest.**
 
-| Dependency | Version | Purpose |
-|------------|---------|---------|
-| [Bun](https://bun.sh) | >= 1.1.0 | Runtime |
-| [Node.js](https://nodejs.org) | >= 18 | Next.js web UI |
-| [Docker](https://docs.docker.com/get-docker/) | any | PostgreSQL, Redis, Ollama |
-| PostgreSQL | 15 | Database (`pgvector/pgvector:pg15`) |
-| Redis | any | Cache, sessions, pub/sub |
+The orchestrator analyzes your request, classifies it, and deploys the right specialist agents with the right tools and knowledge. A coding question spawns a Coder agent with filesystem, shell, and git access plus software architecture expertise. A security audit spawns a Security Analyst with OWASP knowledge and penetration testing tools. Complex tasks get broken into sub-tasks and distributed across parallel agent teams.
 
-Optional: Ollama, LiteLLM, SearXNG, Telegram/Slack/Teams tokens, Playwright (`bunx playwright install`).
+### Intelligent Agent Orchestration
+- **16 specialist roles** — coding, research, review, QA, design, DevOps, security, data engineering, AI/ML, finance, automation, project management, technical writing, communication, and more
+- **15 pre-built expert personas** — Coder, Reviewer, UI/UX Designer, DevOps Engineer, Security Analyst, Data Engineer, AI Engineer, Financial Analyst, and others — each pre-loaded with relevant domain knowledge
+- **20 domain knowledge skills** — software architecture, test automation, security practices, cloud platforms, database design, API design, machine learning, and more — injected into agent system prompts for grounded, expert-level responses
+- **Dynamic teams and pipelines** — orchestrator spawns parallel agent teams or sequential multi-stage pipelines with approval gates
+
+### Every Model Provider, One Interface
+- **Local models** via Ollama — complete privacy, zero cost
+- **Cloud providers** — OpenAI, Anthropic, Google Gemini with automatic failover
+- **CLI model access** — Claude Code, Gemini CLI, Codex CLI (free tier supported)
+- **LiteLLM proxy** — unified gateway to 100+ model providers
+- **Smart routing** — topic-based model selection, quota tracking, cost monitoring, health checks
+
+### Tools That Actually Do Things
+- **Filesystem** — read, write, search, organize files and directories
+- **Shell** — execute commands, run scripts, manage processes
+- **Git** — full version control: commit, branch, push, pull, diff
+- **Browser** — navigate, click, type, screenshot, extract content via Playwright
+- **Web Search** — SearXNG meta-search with Playwright fallback
+- **Docker** — manage containers, images, exec commands
+- **Google Workspace** — Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks
+- **Microsoft 365** — Outlook, Calendar, OneDrive, To Do, Contacts
+- **Knowledge Base** — RAG pipeline with pgvector for semantic search
+- **Cross-Channel Messaging** — send messages across any connected channel
+
+### Reach Users Everywhere
+- **Telegram** — full bot with slash commands and inline responses
+- **Slack** — Socket Mode with slash commands and threading
+- **Microsoft Teams** — bot mention-based interaction
+- **WebChat** — real-time WebSocket interface via the web UI
+
+### Enterprise-Grade Security
+- **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor
+- **Three-tier permissions** — ALLOW / ASK / DENY per tool action with path patterns, rate limits, and time windows
+- **Encrypted vault** — AES-256-GCM credential storage with per-tool access control
+- **Audit logging** — every action tracked with user, resource, and context
+
+### Full Web UI and Terminal UI
+- **Web dashboard** (Next.js) — chat, agent monitoring, model management, pipeline builder, vault, hooks, settings
+- **Terminal UI** (Ink) — full-featured TUI with dashboard, agents, chat, logs, models, pipelines, secrets
+- **MCP server** — expose all capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients
+
+### Automation and Extensibility
+- **Event hooks** — trigger actions on messages, agent events, tool calls, schedules, webhooks
+- **Recurring tasks** — cron-based scheduling with full CRUD management
+- **N8N integration** — connect to workflow automation
+- **Custom skills and experts** — create your own domain knowledge and expert personas via API
+- **Voice interface** — STT (Whisper), TTS (Piper, Edge TTS), wake word detection
+
+## Requirements
+
+| | |
+|---|---|
+| **[Bun](https://bun.sh)** >= 1.1 | Runtime for backend and scripts |
+| **[Node.js](https://nodejs.org)** >= 18 | Required by Next.js web UI |
+| **[Docker](https://docs.docker.com/get-docker/)** | PostgreSQL, Redis, and optional services |
+
+**Optional:** Ollama, LiteLLM, SearXNG, Telegram/Slack/Teams tokens, Playwright (`bunx playwright install`)
 
 ## Quick Start
 
 ```bash
-# 1. Install and configure
-cd assistant
-bun install
+# Install
+cd assistant && bun install
 cd web && bun install && cd ..
-cp .env.example .env    # or: bun run setup
 
-# 2. Create the database
+# Configure
+cp .env.example .env    # or: bun run setup (interactive wizard)
+
+# Create database
 docker exec <db-container> psql -U <superuser> -c "CREATE DATABASE assistant;"
-docker exec <db-container> psql -U <superuser> -d assistant -c "CREATE EXTENSION IF NOT EXISTS vector;"
-docker exec <db-container> psql -U <superuser> -d assistant -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+docker exec <db-container> psql -U <superuser> -d assistant \
+  -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 
-# 3. Start
+# Launch
 bin/assistant start
 ```
 
-### CLI
+The CLI handles everything — checks that PostgreSQL and Redis are reachable, starts the backend, waits for health, starts the web UI, and opens your browser. If anything goes wrong, it tells you exactly what and how to fix it.
 
 ```bash
-assistant start          # Start backend + web UI
-assistant start --dev    # Dev mode (hot reload)
+assistant start          # Start backend + web UI, open browser
+assistant start --dev    # Development mode with hot reload
+assistant restart        # Kill everything, start fresh
 assistant stop           # Stop all processes
-assistant status         # Show running state
+assistant status         # Full service health dashboard
 assistant logs           # Tail backend logs
 ```
 
-Make globally available with `bun link`.
+Make globally available: `bun link`
 
 ## Architecture
 
@@ -71,7 +114,7 @@ Make globally available with `bun link`.
 │  Orchestrator  ·  Agent Manager  ·  Router  ·  Scheduler    │
 ├──────────┬──────────┬──────────┬──────────┬─────────────────┤
 │ Channels │  Tools   │ Security │  Models  │  Integrations   │
-│ Telegram │Filesystem│ Sessions │ Ollama   │ MCP Bridge      │
+│ Telegram │Filesystem│ Sessions │ Ollama   │ MCP Server      │
 │ Slack    │ Shell    │ Passkeys │ OpenAI   │ Hooks           │
 │ Teams    │ Git      │ TOTP 2FA │Anthropic │ Voice           │
 │ WebChat  │ Browser  │ Vault    │ Gemini   │ Pipelines       │
@@ -81,19 +124,19 @@ Make globally available with `bun link`.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Concepts:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers). See [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md).
+**Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers) → Teams & Pipelines (parallel/sequential execution)
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [Agent Architecture](docs/AGENT-ARCHITECTURE.md) | Tools, skills, experts, agents, orchestration flow |
-| [API Reference](docs/API.md) | All REST endpoints |
-| [Configuration](docs/CONFIGURATION.md) | Environment variables, ports, Docker services |
-| [MCP Server](docs/MCP-SERVER.md) | MCP tools, CLI model setup |
-| [Development](docs/DEVELOPMENT.md) | Project structure, commands, tech stack |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |
-| [Changelog](docs/CHANGELOG.md) | Release history |
+| | |
+|---|---|
+| **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | How tools, skills, experts, and agents work together |
+| **[API Reference](docs/API.md)** | Complete REST API with all endpoints |
+| **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
+| **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
+| **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |
+| **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
+| **[Changelog](docs/CHANGELOG.md)** | Release history |
 
 ## License
 

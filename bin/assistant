@@ -36,6 +36,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -66,6 +67,10 @@ log_error() {
 
 log_step() {
   echo -e "  ${BLUE}→${NC} $1"
+}
+
+log_hint() {
+  echo -e "    ${DIM}$1${NC}"
 }
 
 is_running() {
@@ -122,14 +127,153 @@ check_dependency() {
 }
 
 check_service() {
-  local name="$1"
-  local host="$2"
-  local port="$3"
+  local host="$1"
+  local port="$2"
 
   if (echo >/dev/tcp/"$host"/"$port") 2>/dev/null; then
     return 0
   else
     return 1
+  fi
+}
+
+# Kill any process using a given port
+kill_port_users() {
+  local port="$1"
+  local pids
+  pids=$(lsof -ti :"$port" 2>/dev/null || true)
+  if [[ -n "$pids" ]]; then
+    for pid in $pids; do
+      kill "$pid" 2>/dev/null || true
+    done
+    sleep 0.5
+    # Force kill stragglers
+    for pid in $pids; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  fi
+}
+
+# Kill a tracked process and its children
+kill_tracked() {
+  local pid_file="$1"
+  local label="$2"
+
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null; then
+      log_step "Stopping $label (PID $pid)..."
+      # Kill process group to catch child processes
+      kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      # Wait for graceful shutdown
+      local i
+      for i in $(seq 1 10); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+          break
+        fi
+        sleep 0.5
+      done
+      # Force kill if still alive
+      kill -9 "$pid" 2>/dev/null || true
+      log_info "$label stopped"
+    fi
+    rm -f "$pid_file"
+  fi
+}
+
+# Kill all assistant-related processes (orphans included)
+kill_all_assistant() {
+  # Kill tracked processes
+  kill_tracked "$PID_FILE_BACKEND" "backend"
+  kill_tracked "$PID_FILE_WEB" "web UI"
+
+  # Kill orphaned bun/next processes for this project
+  pkill -f "bun.*src/index.ts" 2>/dev/null || true
+  pkill -f "next.*${WEB_PORT}" 2>/dev/null || true
+  pkill -f "bun run dev.*${PROJECT_DIR}" 2>/dev/null || true
+  pkill -f "bun run start.*${PROJECT_DIR}" 2>/dev/null || true
+
+  # Free up ports
+  kill_port_users "$API_PORT"
+  kill_port_users "$WEB_PORT"
+
+  # Clean stale PID files
+  rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB"
+}
+
+# Diagnose why the backend failed to start
+diagnose_backend_failure() {
+  echo ""
+  log_error "Backend failed to start. Running diagnostics..."
+  echo ""
+
+  local issues=0
+
+  # Check if port is in use
+  if check_service "localhost" "$API_PORT"; then
+    log_error "Port $API_PORT is already in use by another process"
+    log_hint "Run: lsof -i :$API_PORT"
+    issues=$((issues + 1))
+  fi
+
+  # Check PostgreSQL
+  if ! check_service "localhost" "5432"; then
+    log_error "PostgreSQL is not reachable on port 5432"
+    log_hint "Run: cd ~/docker-services && docker compose up -d db"
+    issues=$((issues + 1))
+  else
+    log_info "PostgreSQL is reachable"
+  fi
+
+  # Check Redis
+  if ! check_service "localhost" "6379"; then
+    log_error "Redis is not reachable on port 6379"
+    log_hint "Run: cd ~/docker-services && docker compose up -d redis"
+    issues=$((issues + 1))
+  else
+    log_info "Redis is reachable"
+  fi
+
+  # Check .env
+  if [[ ! -f "$PROJECT_DIR/.env" ]]; then
+    log_error ".env file not found"
+    log_hint "Run: cp .env.example .env  (or: bun run setup)"
+    issues=$((issues + 1))
+  else
+    log_info ".env file exists"
+    # Check required vars
+    if ! grep -q "DATABASE_URL=" "$PROJECT_DIR/.env" 2>/dev/null; then
+      log_error "DATABASE_URL not set in .env"
+      issues=$((issues + 1))
+    fi
+    if ! grep -q "MASTER_KEY=" "$PROJECT_DIR/.env" 2>/dev/null; then
+      log_error "MASTER_KEY not set in .env"
+      issues=$((issues + 1))
+    fi
+  fi
+
+  # Check node_modules
+  if [[ ! -d "$PROJECT_DIR/node_modules" ]]; then
+    log_error "Dependencies not installed"
+    log_hint "Run: bun install"
+    issues=$((issues + 1))
+  fi
+
+  # Show last few log lines
+  if [[ -f "$LOG_FILE" ]]; then
+    echo ""
+    log_step "Last log entries:"
+    echo -e "  ${DIM}"
+    tail -5 "$LOG_FILE" 2>/dev/null | sed 's/^/    /'
+    echo -e "  ${NC}"
+  fi
+
+  if [[ $issues -eq 0 ]]; then
+    log_warn "No obvious issues found. Check full logs with: assistant logs"
+  else
+    echo ""
+    log_error "Found $issues issue(s). Fix them and try again."
   fi
 }
 
@@ -146,32 +290,47 @@ cmd_start() {
   init_state_dir
   print_banner
 
-  # Check if already running
-  if is_running "$PID_FILE_BACKEND"; then
-    log_warn "Backend already running (PID $(get_pid "$PID_FILE_BACKEND"))"
-    log_warn "Run 'assistant stop' first or use 'assistant restart'"
-    return 1
+  # Kill any existing processes first (clean slate)
+  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
+    log_step "Stopping existing processes..."
+    kill_all_assistant
+    sleep 1
+  fi
+
+  # Also free ports if something else grabbed them
+  if check_service "localhost" "$API_PORT"; then
+    log_warn "Port $API_PORT in use, killing occupant..."
+    kill_port_users "$API_PORT"
+    sleep 0.5
   fi
 
   # Check dependencies
   log_step "Checking dependencies..."
   check_dependency "bun" "Install from https://bun.sh" || return 1
 
-  # Check services
+  # Check required services
   log_step "Checking services..."
-  if check_service "PostgreSQL" "localhost" "5432"; then
+  local services_ok=true
+
+  if check_service "localhost" "5432"; then
     log_info "PostgreSQL is reachable"
   else
     log_error "PostgreSQL not reachable on port 5432"
-    log_error "Start it with: cd ~/docker-services && docker compose up -d db"
-    return 1
+    log_hint "Start it: cd ~/docker-services && docker compose up -d db"
+    services_ok=false
   fi
 
-  if check_service "Redis" "localhost" "6379"; then
+  if check_service "localhost" "6379"; then
     log_info "Redis is reachable"
   else
     log_error "Redis not reachable on port 6379"
-    log_error "Start it with: cd ~/docker-services && docker compose up -d redis"
+    log_hint "Start it: cd ~/docker-services && docker compose up -d redis"
+    services_ok=false
+  fi
+
+  if [[ "$services_ok" == false ]]; then
+    echo ""
+    log_error "Required services are not running. Cannot start."
     return 1
   fi
 
@@ -187,15 +346,25 @@ cmd_start() {
   fi
   echo $! > "$PID_FILE_BACKEND"
 
-  # Start web UI
+  # Wait for backend to be healthy BEFORE starting web UI
+  log_step "Waiting for backend to be ready..."
+  if wait_for_health "http://localhost:$API_PORT/api/health" 30; then
+    log_info "Backend is ready on port $API_PORT"
+  else
+    # Backend didn't come up — diagnose and bail
+    kill_tracked "$PID_FILE_BACKEND" "backend"
+    diagnose_backend_failure
+    return 1
+  fi
+
+  # Start web UI only after backend is confirmed healthy
   cd "$PROJECT_DIR/web"
   if [[ "$dev_mode" == true ]]; then
     log_step "Starting web UI (dev mode)..."
     nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
   else
-    # Production mode requires a build
     if [[ ! -f ".next/BUILD_ID" ]]; then
-      log_step "Building web UI (this may take a moment)..."
+      log_step "Building web UI (first time)..."
       if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
         log_warn "Production build failed, using dev mode instead"
         nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
@@ -209,14 +378,6 @@ cmd_start() {
     fi
   fi
   echo $! > "$PID_FILE_WEB"
-
-  # Wait for backend health
-  log_step "Waiting for backend to be ready..."
-  if wait_for_health "http://localhost:$API_PORT/api/health" 30; then
-    log_info "Backend is ready on port $API_PORT"
-  else
-    log_warn "Backend health check timed out (may still be starting)"
-  fi
 
   # Wait briefly for web UI
   sleep 2
@@ -244,60 +405,126 @@ cmd_stop() {
   init_state_dir
   print_banner
 
-  local stopped=false
+  local had_processes=false
 
-  if is_running "$PID_FILE_BACKEND"; then
-    local pid
-    pid=$(get_pid "$PID_FILE_BACKEND")
-    log_step "Stopping backend (PID $pid)..."
-    kill "$pid" 2>/dev/null || true
-    # Wait for graceful shutdown
-    for i in $(seq 1 10); do
-      if ! kill -0 "$pid" 2>/dev/null; then
-        break
-      fi
-      sleep 0.5
-    done
-    # Force kill if still running
-    kill -9 "$pid" 2>/dev/null || true
-    rm -f "$PID_FILE_BACKEND"
-    log_info "Backend stopped"
-    stopped=true
+  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
+    had_processes=true
   fi
 
-  if is_running "$PID_FILE_WEB"; then
-    local pid
-    pid=$(get_pid "$PID_FILE_WEB")
-    log_step "Stopping web UI (PID $pid)..."
-    kill "$pid" 2>/dev/null || true
-    for i in $(seq 1 10); do
-      if ! kill -0 "$pid" 2>/dev/null; then
-        break
-      fi
-      sleep 0.5
-    done
-    kill -9 "$pid" 2>/dev/null || true
-    rm -f "$PID_FILE_WEB"
-    log_info "Web UI stopped"
-    stopped=true
-  fi
+  kill_all_assistant
 
-  # Also kill any orphaned bun/next processes for this project
-  pkill -f "bun run.*src/index.ts" 2>/dev/null || true
-  pkill -f "next.*${WEB_PORT}" 2>/dev/null || true
-
-  if [[ "$stopped" == false ]]; then
-    log_info "No assistant processes were running"
-  else
+  if [[ "$had_processes" == true ]]; then
     echo ""
     log_info "Assistant stopped"
+  else
+    log_info "No assistant processes were running"
+    # Still clean up orphans silently
   fi
 }
 
 cmd_restart() {
-  cmd_stop
+  init_state_dir
+  print_banner
+
+  log_step "Stopping all processes..."
+  kill_all_assistant
+  sleep 1
+
   echo ""
-  cmd_start "$@"
+  # Start without printing banner again
+  local dev_mode=false
+  for arg in "$@"; do
+    case "$arg" in
+      --dev|-d) dev_mode=true ;;
+    esac
+  done
+
+  # Check dependencies
+  log_step "Checking dependencies..."
+  check_dependency "bun" "Install from https://bun.sh" || return 1
+
+  # Check required services
+  log_step "Checking services..."
+  local services_ok=true
+
+  if check_service "localhost" "5432"; then
+    log_info "PostgreSQL is reachable"
+  else
+    log_error "PostgreSQL not reachable on port 5432"
+    log_hint "Start it: cd ~/docker-services && docker compose up -d db"
+    services_ok=false
+  fi
+
+  if check_service "localhost" "6379"; then
+    log_info "Redis is reachable"
+  else
+    log_error "Redis not reachable on port 6379"
+    log_hint "Start it: cd ~/docker-services && docker compose up -d redis"
+    services_ok=false
+  fi
+
+  if [[ "$services_ok" == false ]]; then
+    echo ""
+    log_error "Required services are not running. Cannot start."
+    return 1
+  fi
+
+  # Start backend
+  if [[ "$dev_mode" == true ]]; then
+    log_step "Starting backend (dev mode with hot reload)..."
+    cd "$PROJECT_DIR"
+    nohup bun run dev > "$LOG_FILE" 2>&1 &
+  else
+    log_step "Starting backend..."
+    cd "$PROJECT_DIR"
+    nohup bun run start > "$LOG_FILE" 2>&1 &
+  fi
+  echo $! > "$PID_FILE_BACKEND"
+
+  log_step "Waiting for backend to be ready..."
+  if wait_for_health "http://localhost:$API_PORT/api/health" 30; then
+    log_info "Backend is ready on port $API_PORT"
+  else
+    kill_tracked "$PID_FILE_BACKEND" "backend"
+    diagnose_backend_failure
+    return 1
+  fi
+
+  # Start web UI
+  cd "$PROJECT_DIR/web"
+  if [[ "$dev_mode" == true ]]; then
+    log_step "Starting web UI (dev mode)..."
+    nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+  else
+    if [[ ! -f ".next/BUILD_ID" ]]; then
+      log_step "Building web UI (first time)..."
+      if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
+        log_warn "Production build failed, using dev mode instead"
+        nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+      else
+        log_step "Starting web UI..."
+        nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+      fi
+    else
+      log_step "Starting web UI..."
+      nohup bun run start > "$WEB_LOG_FILE" 2>&1 &
+    fi
+  fi
+  echo $! > "$PID_FILE_WEB"
+
+  sleep 2
+  log_info "Web UI starting on port $WEB_PORT"
+
+  log_step "Opening browser..."
+  open_browser "http://localhost:$WEB_PORT"
+
+  echo ""
+  echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+  echo ""
+  echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
+  echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+  echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+  echo ""
 }
 
 cmd_status() {
@@ -327,25 +554,27 @@ cmd_status() {
   echo -e "  ${BOLD}Service Status${NC}"
   echo ""
 
-  if check_service "PostgreSQL" "localhost" "5432"; then
+  if check_service "localhost" "5432"; then
     log_info "PostgreSQL: reachable (port 5432)"
   else
     log_error "PostgreSQL: not reachable"
+    log_hint "cd ~/docker-services && docker compose up -d db"
   fi
 
-  if check_service "Redis" "localhost" "6379"; then
+  if check_service "localhost" "6379"; then
     log_info "Redis:      reachable (port 6379)"
   else
     log_error "Redis:      not reachable"
+    log_hint "cd ~/docker-services && docker compose up -d redis"
   fi
 
-  if check_service "Ollama" "localhost" "11434"; then
+  if check_service "localhost" "11434"; then
     log_info "Ollama:     reachable (port 11434)"
   else
     log_warn "Ollama:     not reachable (optional)"
   fi
 
-  if check_service "LiteLLM" "localhost" "4000"; then
+  if check_service "localhost" "4000"; then
     log_info "LiteLLM:    reachable (port 4000)"
   else
     log_warn "LiteLLM:    not reachable (optional)"

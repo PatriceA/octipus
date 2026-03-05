@@ -6,7 +6,7 @@ export const permissionLevelEnum = pgEnum('permission_level', ['ALLOW', 'ASK', '
 export const toolPermissions = pgTable('skill_permissions', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id).notNull(),
-  toolId: text('tool_id').notNull(),
+  toolId: text('skill_id').notNull(),
   action: text('action').notNull(), // read, write, execute, etc.
   level: permissionLevelEnum('level').notNull(),
   // Optional conditions
@@ -46,7 +46,7 @@ export const permissionRequests = pgTable('permission_requests', {
   userId: uuid('user_id').references(() => users.id).notNull(),
   agentId: text('agent_id').notNull(),
   sessionId: uuid('session_id'),
-  toolId: text('tool_id').notNull(),
+  toolId: text('skill_id').notNull(),
   action: text('action').notNull(),
   context: jsonb('context').$type<PermissionRequestContext>().notNull(),
   status: text('status').notNull().default('pending'), // pending, approved, denied, expired

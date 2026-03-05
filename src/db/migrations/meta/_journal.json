@@ -50,6 +50,20 @@
       "when": 1709500000000,
       "tag": "0006_recurring_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1709600000000,
+      "tag": "0007_experts_skill_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1709700000000,
+      "tag": "0008_skills",
+      "breakpoints": true
     }
   ]
 }
