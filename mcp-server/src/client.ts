@@ -261,6 +261,57 @@ export class AssistantClient {
     return res.result;
   }
 
+  // ─── Recurring Tasks ───
+
+  async listRecurringTasks(): Promise<Array<{
+    id: string; name: string; cronExpression: string; isEnabled: boolean;
+    runCount: number; nextRunAt: string | null; status: string;
+  }>> {
+    const res = await this.request<{ tasks: any[] }>('/api/recurring-tasks');
+    return res.tasks || [];
+  }
+
+  async createRecurringTask(params: {
+    name: string; cronExpression: string; actionType: string;
+    actionConfig: Record<string, unknown>; description?: string; timezone?: string;
+  }): Promise<{ id: string; name: string; cronExpression: string; nextRunAt: string }> {
+    const res = await this.request<{ task: any }>('/api/recurring-tasks', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res.task;
+  }
+
+  async updateRecurringTask(id: string, params: {
+    name?: string; cronExpression?: string; isEnabled?: boolean;
+  }): Promise<{ id: string; name: string; cronExpression: string; isEnabled: boolean }> {
+    const res = await this.request<{ task: any }>(`/api/recurring-tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res.task;
+  }
+
+  async deleteRecurringTask(id: string): Promise<void> {
+    await this.request(`/api/recurring-tasks/${id}`, { method: 'DELETE' });
+  }
+
+  // ─── Knowledge / RAG ───
+
+  async searchKnowledge(query: string, limit?: number): Promise<{ results: any[] }> {
+    return this.request('/api/skills/knowledge/tools/search_knowledge/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: { query, limit: limit || 5 } }),
+    });
+  }
+
+  async indexFile(path: string, type?: string): Promise<{ indexed: boolean; chunks: number; path: string }> {
+    return this.request('/api/skills/knowledge/tools/index_file/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: { path, type: type || 'document' } }),
+    });
+  }
+
   // ─── Health ───
 
   async getHealth(): Promise<Record<string, unknown>> {

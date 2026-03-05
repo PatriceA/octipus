@@ -40,6 +40,23 @@ export class NotificationService {
           coreLogger.error({ err }, 'Notification handler error');
         }
       }
+
+      // Cross-channel delivery if configured
+      const deliverTo = metadata?.deliverTo as string[] | undefined;
+      if (deliverTo?.length) {
+        try {
+          const { getUMI } = await import('@/channels/interface');
+          const umi = getUMI();
+          for (const target of deliverTo) {
+            const [channelType, channelId] = target.split(':');
+            if (channelType && channelId && umi.isChannelAvailable(channelType as any)) {
+              umi.send(channelType as any, channelId, {
+                content: `${title}${body ? `\n${body}` : ''}`,
+              }).catch(err => coreLogger.error({ err, target }, 'Channel delivery failed'));
+            }
+          }
+        } catch {}
+      }
     } catch (error) {
       coreLogger.error({ error, userId, type }, 'Failed to create notification');
     }

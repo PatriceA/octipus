@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Edit, X, Loader2, Info } from 'lucide-react';
+import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Edit, X, Loader2, Info, Lightbulb } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -276,6 +276,26 @@ export default function HooksPage() {
     },
   });
 
+  const { data: suggestions = [] } = useQuery({
+    queryKey: ['hook-suggestions'],
+    queryFn: async () => {
+      try {
+        const res = await api.get<{ suggestions: Array<{ id: string; name: string; description: string; integration: string }> }>('/hooks/suggestions');
+        return res?.suggestions || [];
+      } catch {
+        return [];
+      }
+    },
+  });
+
+  const applySuggestion = async (suggestionId: string) => {
+    try {
+      await api.post(`/hooks/suggestions/${suggestionId}/apply`);
+      queryClient.invalidateQueries({ queryKey: ['hooks'] });
+      queryClient.invalidateQueries({ queryKey: ['hook-suggestions'] });
+    } catch {}
+  };
+
   const handleToggle = async (hookId: string, currentEnabled: boolean) => {
     try {
       await api.patch(`/hooks/${hookId}`, { isEnabled: !currentEnabled });
@@ -315,6 +335,36 @@ export default function HooksPage() {
           Create Hook
         </button>
       </div>
+
+      {/* Suggested hooks */}
+      {suggestions.length > 0 && (
+        <div className="bg-blue-50 dark:bg-blue-900/10 rounded-xl ring-1 ring-blue-200/60 dark:ring-blue-800/40 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Lightbulb className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span className="text-sm font-medium text-blue-800 dark:text-blue-300">Suggested Hooks</span>
+            <span className="text-xs text-blue-600/60 dark:text-blue-400/60">Based on your configured integrations</span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {suggestions.map((s) => (
+              <div key={s.id} className="bg-white dark:bg-gray-800 rounded-lg p-3 ring-1 ring-gray-200/60 dark:ring-gray-700/60">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{s.name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{s.description}</p>
+                    <span className="inline-block mt-1 text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">{s.integration}</span>
+                  </div>
+                  <button
+                    onClick={() => applySuggestion(s.id)}
+                    className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex-shrink-0"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
         <div className="overflow-x-auto">

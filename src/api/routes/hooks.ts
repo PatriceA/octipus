@@ -1,6 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getHookManager } from '@/hooks/manager';
+import { getHookSuggestions } from '@/hooks/suggestions';
 
 export const hookRoutes = new Elysia({ prefix: '/hooks' })
   .use(apiContext)
@@ -199,6 +200,55 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       }),
       detail: { tags: ['hooks'] },
     }
+  )
+
+  // Get hook suggestions based on configured integrations
+  .get(
+    '/suggestions',
+    async ({ user }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const suggestions = await getHookSuggestions(user.id);
+
+      // Filter out suggestions that match existing hooks
+      const hookManager = getHookManager();
+      const existingHooks = await hookManager.getUserHooks(user.id);
+      const existingNames = new Set(existingHooks.map(h => h.name));
+      const filtered = suggestions.filter(s => !existingNames.has(s.name));
+
+      return { suggestions: filtered };
+    },
+    { detail: { tags: ['hooks'] } },
+  )
+
+  // Apply a hook suggestion (create hook from template)
+  .post(
+    '/suggestions/:suggestionId/apply',
+    async ({ user, params }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const suggestions = await getHookSuggestions(user.id);
+      const suggestion = suggestions.find(s => s.id === params.suggestionId);
+      if (!suggestion) return { error: 'Suggestion not found' };
+
+      const hookManager = getHookManager();
+      const hook = await hookManager.createHook({
+        userId: user.id,
+        name: suggestion.name,
+        description: suggestion.description,
+        trigger: suggestion.trigger as any,
+        triggerConfig: suggestion.triggerConfig,
+        action: suggestion.action as any,
+        actionConfig: suggestion.actionConfig,
+        isEnabled: false, // Create disabled, user enables manually
+      });
+
+      return hook;
+    },
+    {
+      params: t.Object({ suggestionId: t.String() }),
+      detail: { tags: ['hooks'] },
+    },
   )
 
   // Test hook (trigger manually)

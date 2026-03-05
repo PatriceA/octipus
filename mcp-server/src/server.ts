@@ -11,6 +11,8 @@ import { registerModelTools } from './tools/models.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerSkillTools } from './tools/skills.js';
 import { registerPresetTools } from './tools/presets.js';
+import { registerRecurringTaskTools } from './tools/recurring-tasks.js';
+import { registerKnowledgeTools } from './tools/knowledge.js';
 
 export function createServer(assistantUrl: string): McpServer {
   const server = new McpServer({
@@ -28,6 +30,8 @@ export function createServer(assistantUrl: string): McpServer {
   registerChatTools(server, client);
   registerSkillTools(server, client);
   registerPresetTools(server, client);
+  registerRecurringTaskTools(server, client);
+  registerKnowledgeTools(server, client);
 
   return server;
 }

@@ -12,6 +12,7 @@ import { getSettingsService } from '@/config/settings-service';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { loadRuntimeConfig } from '@/config';
 import { initializeHotReload } from '@/config/hot-reload';
+import { startCronLoop, stopCronLoop } from '@/core/cron-runner';
 import { logger } from '@/utils/logger';
 
 async function main() {
@@ -72,12 +73,17 @@ async function main() {
     await startServer();
     logger.info('API server started');
 
+    // Start recurring task scheduler
+    startCronLoop();
+    logger.info('Cron scheduler started');
+
     logger.info('Assistant started successfully');
 
     // Handle graceful shutdown
     const shutdown = async () => {
       logger.info('Shutting down...');
 
+      stopCronLoop();
       hookManager.cleanup();
       await mcpBridge.disconnectAll();
       await gateway.stop();

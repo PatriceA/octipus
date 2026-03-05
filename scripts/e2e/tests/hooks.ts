@@ -10,4 +10,10 @@ export async function testHooks(runner: TestRunner, client: APIClient) {
     assertStatus(status, 200);
     assert(Array.isArray(data.hooks), 'hooks should be an array');
   });
+
+  await runner.test('GET /hooks/suggestions returns suggestions array', async () => {
+    const { status, data } = await client.request<{ suggestions: unknown[] }>('GET', '/hooks/suggestions');
+    assertStatus(status, 200);
+    assert(Array.isArray(data.suggestions), 'suggestions should be an array');
+  });
 }

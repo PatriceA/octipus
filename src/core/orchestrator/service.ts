@@ -14,8 +14,10 @@ import { getNotificationService } from '@/core/notification-service';
 import { ApprovalManager } from './approval-manager';
 import { ModelSelector } from './model-selector';
 import { getResponseCache } from '@/core/response-cache';
+import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import type { ApprovalRequest } from './approval-manager';
 import type { AgentRole, WorkerResult, MessageClassification, ResponseMetadata } from './types';
+import type { SessionContext } from '@/db/schema/sessions';
 
 interface OrchestratorEventHandler {
   (event: OrchestratorEvent): void;
@@ -107,6 +109,11 @@ export class OrchestratorService {
 
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
         const { response, metadata } = await this.directResponse(message, resolvedSessionId, userId, classification.complexity);
+
+        this.maybeCompactSession(resolvedSessionId).catch(err =>
+          coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
+        );
+
         return { response, sessionId: resolvedSessionId, classification, metadata };
       }
 
@@ -119,6 +126,12 @@ export class OrchestratorService {
 
       const startTime = Date.now();
       const { response, agentId } = await this.runOrchestrator(resolvedSessionId, userId, message, classification);
+
+      // Trigger async compaction check after response
+      this.maybeCompactSession(resolvedSessionId).catch(err =>
+        coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
+      );
+
       return {
         response,
         sessionId: resolvedSessionId,
@@ -272,6 +285,13 @@ export class OrchestratorService {
         timestamp: m.createdAt,
       }));
 
+      // Prepend compacted summary if available
+      const session = await sessionRepository.findById(sessionId);
+      const summary = (session?.context as SessionContext)?.compactedSummary;
+      const systemContent = summary
+        ? `You are a friendly development assistant. Keep casual responses brief and helpful.\n\nPrevious conversation summary:\n${summary}`
+        : 'You are a friendly development assistant. Keep casual responses brief and helpful.';
+
       const registry = getModelRegistry();
       const resolvedModel = await registry.getModelByModelId(modelName);
       const modelMeta = resolvedModel?.metadata as import('@/db/schema/models').ModelMetadata | null;
@@ -279,7 +299,7 @@ export class OrchestratorService {
       const result = await client.complete({
         model: modelName,
         messages: [
-          { role: 'system', content: 'You are a friendly development assistant. Keep casual responses brief and helpful.', timestamp: new Date() },
+          { role: 'system', content: systemContent, timestamp: new Date() },
           ...historyMessages,
         ],
         temperature: 0.7,
@@ -336,6 +356,14 @@ export class OrchestratorService {
     const metaTools = createMetaTools(this);
 
     let systemPrompt = orchestratorConfig.systemPromptTemplate;
+
+    // Prepend compacted summary if available
+    const session = await sessionRepository.findById(sessionId);
+    const sessionSummary = (session?.context as SessionContext)?.compactedSummary;
+    if (sessionSummary) {
+      systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
+    }
+
     if (classification.suggestedPipeline) {
       systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.suggestedPipeline}" task (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for deciding how to delegate.`;
     }
@@ -406,13 +434,22 @@ export class OrchestratorService {
 
     const startTime = Date.now();
 
+    // For coding role, prepend project summary if available
+    let systemPrompt = overrides?.systemPrompt || roleConfig.systemPromptTemplate;
+    if (agentRole === 'coding') {
+      const projectSummary = await this.loadProjectSummary();
+      if (projectSummary) {
+        systemPrompt += `\n\n--- Existing Project Summary ---\n${projectSummary}`;
+      }
+    }
+
     const worker = await agentManager.spawn({
       sessionId: context.sessionId,
       userId: context.userId,
       topic: roleConfig.defaultTopic,
       model: finalModel,
       role: agentRole,
-      systemPrompt: overrides?.systemPrompt || roleConfig.systemPromptTemplate,
+      systemPrompt,
       tools: roleTools,
     });
 
@@ -517,6 +554,68 @@ export class OrchestratorService {
     return results.map(r =>
       `### ${r.role} Agent\n**Task:** ${r.task}\n**Result:**\n${r.error ? `ERROR: ${r.error}` : r.result}`
     ).join('\n\n---\n\n');
+  }
+
+  // ── Project summary loading ────────────────────────────────────
+
+  private async loadProjectSummary(): Promise<string | null> {
+    try {
+      const config = getConfig();
+      const { resolve } = await import('path');
+      const summaryPath = resolve(config.workspace?.rootPath || '.', '.assistant/project-summary.md');
+      const file = Bun.file(summaryPath);
+      if (await file.exists()) {
+        const content = await file.text();
+        return content.slice(0, 4000); // Cap at 4k chars to avoid bloating context
+      }
+    } catch {
+      // File doesn't exist or not readable
+    }
+    return null;
+  }
+
+  // ── Session context compaction ─────────────────────────────────
+
+  private async maybeCompactSession(sessionId: string): Promise<void> {
+    const session = await sessionRepository.findById(sessionId);
+    if (!session) return;
+
+    const COMPACTION_MESSAGE_THRESHOLD = 20;
+    const COMPACTION_TOKEN_THRESHOLD = 8000;
+
+    if (session.messageCount >= COMPACTION_MESSAGE_THRESHOLD || session.tokenCount >= COMPACTION_TOKEN_THRESHOLD) {
+      await this.compactSessionContext(sessionId);
+    }
+  }
+
+  private async compactSessionContext(sessionId: string): Promise<void> {
+    const messages = await messageRepository.findBySession(sessionId, 200, 0, ['user', 'assistant']);
+    if (messages.length < 10) return;
+
+    const agentMessages = messages.map(m => ({
+      role: m.role as 'user' | 'assistant' | 'system',
+      content: m.content,
+      timestamp: m.createdAt,
+    }));
+
+    const result = await compactMessagesWithSummary(agentMessages, {
+      maxTokens: 4000,
+      preserveRecentCount: 6,
+    });
+
+    // Find the summary message (first system message in the result)
+    const summaryMsg = result.messages.find(m => m.role === 'system' && m.content.startsWith('Summary'));
+    if (summaryMsg || result.removed > 0) {
+      const session = await sessionRepository.findById(sessionId);
+      const existingContext = (session?.context as SessionContext) || {};
+      await sessionRepository.update(sessionId, {
+        context: {
+          ...existingContext,
+          compactedSummary: summaryMsg?.content || existingContext.compactedSummary,
+        },
+      });
+      coreLogger.info({ sessionId, removed: result.removed }, 'Session context compacted');
+    }
   }
 
   private async handleWorkerFailure(

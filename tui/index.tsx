@@ -13,8 +13,9 @@ import { PipelinesView } from './views/pipelines.js';
 import { SecretsView } from './views/secrets.js';
 import { SettingsView } from './views/settings.js';
 import { IntegrationsView } from './views/integrations.js';
+import { TasksView } from './views/tasks.js';
 
-type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations';
+type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations' | 'tasks';
 
 function App() {
   const { exit } = useApp();
@@ -36,6 +37,7 @@ function App() {
     if (input === '7') setCurrentView('secrets');
     if (input === '8') setCurrentView('integrations');
     if (input === '9') setCurrentView('settings');
+    if (input === '0') setCurrentView('tasks');
     if (input === 'q') exit();
   });
 
@@ -59,6 +61,8 @@ function App() {
         return <IntegrationsView />;
       case 'settings':
         return <SettingsView />;
+      case 'tasks':
+        return <TasksView />;
       default:
         return <DashboardView />;
     }
@@ -86,6 +90,7 @@ function App() {
           <Text color="yellow">[7]</Text><Text color="white">Secrets </Text>
           <Text color="yellow">[8]</Text><Text color="white">Integ </Text>
           <Text color="yellow">[9]</Text><Text color="white">Settings </Text>
+          <Text color="yellow">[0]</Text><Text color="white">Tasks </Text>
           <Text color="red">[q]</Text><Text color="white">Quit</Text>
         </Text>
       </Box>

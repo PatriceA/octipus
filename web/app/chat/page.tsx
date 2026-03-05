@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Bot, RefreshCw, Settings2, CheckCircle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Bot, RefreshCw, Settings2, CheckCircle, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api, createWebSocket } from '@/lib/api';
 import { ChatMessage, type ChatMessageData, type MessageMetadata } from '@/components/chat/chat-message';
@@ -9,6 +9,7 @@ import { AgentActivityCard, TeamCard, type TrackedAgent, type ToolCallInfo } fro
 import { ChatInput } from '@/components/chat/chat-input';
 import { SessionStats } from '@/components/chat/session-stats';
 import { PresetSelector } from '@/components/chat/preset-selector';
+import { SessionTabs, type SessionTab } from '@/components/chat/session-tabs';
 
 interface ApprovalRequest {
   requestId: string;
@@ -37,59 +38,143 @@ type TimelineEntry =
   | { kind: 'agent'; agentId: string; ts: number }
   | { kind: 'team'; teamId: string; ts: number };
 
+// Per-session state
+interface SessionState {
+  messages: ChatMessageData[];
+  trackedAgents: Map<string, TrackedAgent>;
+  teams: Map<string, TeamState>;
+  totalTokens: number;
+}
+
 // Module-level guard to prevent React Strict Mode double WebSocket connections
 let wsInstance: WebSocket | null = null;
 
+const STORAGE_KEY_SESSIONS = 'chat_sessions';
+const STORAGE_KEY_ACTIVE = 'chat_active_session';
+
+function welcomeMessage(): ChatMessageData {
+  return {
+    id: '0',
+    role: 'system',
+    content: 'Welcome! I\'m your AI assistant. I\'ll route your requests to the right specialist. How can I help you today?',
+    timestamp: new Date(),
+  };
+}
+
+function newSessionState(): SessionState {
+  return {
+    messages: [welcomeMessage()],
+    trackedAgents: new Map(),
+    teams: new Map(),
+    totalTokens: 0,
+  };
+}
+
 export default function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [mounted, setMounted] = useState(false);
+  const [sessions, setSessions] = useState<SessionTab[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [trackedAgents, setTrackedAgents] = useState<Map<string, TrackedAgent>>(new Map());
-  const [teams, setTeams] = useState<Map<string, TeamState>>(new Map());
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [sessionTotalTokens, setSessionTotalTokens] = useState(0);
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Initialize — restore session from localStorage if available
+  // Get active session state
+  const activeState = activeSessionId ? sessionStates.get(activeSessionId) : null;
+  const messages = activeState?.messages || [welcomeMessage()];
+  const trackedAgents = activeState?.trackedAgents || new Map();
+  const teams = activeState?.teams || new Map();
+  const sessionTotalTokens = activeState?.totalTokens || 0;
+
+  // Helper to update a session's state
+  const updateSessionState = useCallback((sessionId: string, updater: (prev: SessionState) => SessionState) => {
+    setSessionStates(prev => {
+      const next = new Map(prev);
+      const current = next.get(sessionId) || newSessionState();
+      next.set(sessionId, updater(current));
+      return next;
+    });
+  }, []);
+
+  // Load sessions from backend
+  const loadSessions = useCallback(async () => {
+    try {
+      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }> }>('/sessions');
+      if (data?.sessions?.length) {
+        const tabs: SessionTab[] = data.sessions
+          .filter(s => s.status === 'active')
+          .slice(0, 20)
+          .map(s => ({
+            id: s.id,
+            title: s.title || 'Untitled',
+            updatedAt: s.updatedAt,
+            messageCount: s.messageCount,
+            status: s.status,
+          }));
+        setSessions(tabs);
+        return tabs;
+      }
+    } catch {}
+    return [];
+  }, []);
+
+  // Load messages for a session
+  const loadSessionMessages = useCallback(async (sessionId: string) => {
+    try {
+      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
+        `/sessions/${sessionId}/messages?roles=user,assistant,system`
+      );
+      if (data?.messages?.length) {
+        updateSessionState(sessionId, (prev) => ({
+          ...prev,
+          messages: data.messages.map((m) => ({
+            id: m.id,
+            role: m.role as ChatMessageData['role'],
+            content: m.content,
+            timestamp: new Date(m.createdAt),
+          })),
+        }));
+      }
+    } catch {
+      // Session may have been deleted
+    }
+  }, [updateSessionState]);
+
+  // Initialize — load sessions from backend
   useEffect(() => {
     if (!mounted) {
       setMounted(true);
 
-      const savedSessionId = localStorage.getItem('chat_session_id');
-      if (savedSessionId) {
-        setSessionId(savedSessionId);
-        api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
-          `/sessions/${savedSessionId}/messages?roles=user,assistant,system`
-        ).then((data) => {
-          if (data?.messages?.length) {
-            setMessages(data.messages.map((m) => ({
-              id: m.id,
-              role: m.role as ChatMessageData['role'],
-              content: m.content,
-              timestamp: new Date(m.createdAt),
-            })));
-          } else {
-            setMessages([welcomeMessage()]);
-          }
-        }).catch(() => {
-          localStorage.removeItem('chat_session_id');
-          setSessionId(null);
-          setMessages([welcomeMessage()]);
-        });
-      } else {
-        setMessages([welcomeMessage()]);
-      }
+      const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
+
+      loadSessions().then((tabs) => {
+        if (tabs.length > 0) {
+          // Try to restore last active, or pick the most recent
+          const target = savedActive && tabs.find(t => t.id === savedActive)
+            ? savedActive
+            : tabs[0].id;
+          setActiveSessionId(target);
+          loadSessionMessages(target);
+        }
+      });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
+
+  // Persist active session ID
+  useEffect(() => {
+    if (activeSessionId) {
+      localStorage.setItem(STORAGE_KEY_ACTIVE, activeSessionId);
+    }
+  }, [activeSessionId]);
 
   // Check connection via health endpoint and load models
   const checkConnection = useCallback(async () => {
@@ -157,6 +242,8 @@ export default function ChatPage() {
   }, [mounted]);
 
   const handleWsMessage = (data: any) => {
+    const eventSessionId = data.sessionId;
+
     switch (data.type) {
       case 'connected':
         setConnectionStatus('connected');
@@ -171,25 +258,35 @@ export default function ChatPage() {
           latencyMs: data.metadata.latencyMs,
           cached: data.metadata.cached,
         } : undefined;
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: data.response,
-          timestamp: new Date(),
-          agentId: data.agentId,
-          classification: data.classification?.type,
-          metadata: meta,
-        }]);
-        if (data.sessionId) {
-          setSessionId(data.sessionId);
-          localStorage.setItem('chat_session_id', data.sessionId);
-        }
-        // Update session tokens
-        if (meta?.tokens) {
-          setSessionTotalTokens(prev => prev + meta.tokens!);
-        }
-        if (data.metadata?.sessionTotalTokens != null) {
-          setSessionTotalTokens(data.metadata.sessionTotalTokens);
+
+        const sid = data.sessionId || activeSessionId;
+        if (sid) {
+          updateSessionState(sid, (prev) => ({
+            ...prev,
+            messages: [...prev.messages, {
+              id: Date.now().toString(),
+              role: 'assistant',
+              content: data.response,
+              timestamp: new Date(),
+              agentId: data.agentId,
+              classification: data.classification?.type,
+              metadata: meta,
+            }],
+            totalTokens: data.metadata?.sessionTotalTokens != null
+              ? data.metadata.sessionTotalTokens
+              : prev.totalTokens + (meta?.tokens || 0),
+          }));
+
+          // Add to sessions list if new
+          if (data.sessionId) {
+            setSessions(prev => {
+              if (prev.find(s => s.id === data.sessionId)) return prev;
+              return [{ id: data.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, status: 'active' }, ...prev];
+            });
+            if (!activeSessionId) {
+              setActiveSessionId(data.sessionId);
+            }
+          }
         }
         break;
       }
@@ -197,20 +294,26 @@ export default function ChatPage() {
       case 'chat_error':
         setIsLoading(false);
         setStatusMessage(null);
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: `Error: ${data.error}`,
-          timestamp: new Date(),
-        }]);
+        if (eventSessionId || activeSessionId) {
+          const sid = eventSessionId || activeSessionId!;
+          updateSessionState(sid, (prev) => ({
+            ...prev,
+            messages: [...prev.messages, {
+              id: Date.now().toString(),
+              role: 'assistant',
+              content: `Error: ${data.error}`,
+              timestamp: new Date(),
+            }],
+          }));
+        }
         break;
 
       case 'orchestrator_event':
-        handleOrchestratorEvent(data);
+        handleOrchestratorEvent(data, eventSessionId || activeSessionId);
         break;
 
       case 'agent_event':
-        handleAgentEvent(data);
+        handleAgentEvent(data, eventSessionId || activeSessionId);
         break;
 
       case 'permission_request':
@@ -224,7 +327,9 @@ export default function ChatPage() {
     }
   };
 
-  const handleOrchestratorEvent = (data: any) => {
+  const handleOrchestratorEvent = (data: any, sessionId: string | null) => {
+    if (!sessionId) return;
+
     switch (data.event) {
       case 'status_update':
         setStatusMessage((data.data as any)?.message || null);
@@ -242,8 +347,8 @@ export default function ChatPage() {
       case 'worker_spawned': {
         const d = data.data as any;
         const agentId = d.workerId || d.agentId;
-        setTrackedAgents(prev => {
-          const next = new Map(prev);
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
           next.set(agentId, {
             id: agentId,
             role: d.role,
@@ -253,7 +358,7 @@ export default function ChatPage() {
             startTime: Date.now(),
             parentAgentId: d.parentAgentId,
           });
-          return next;
+          return { ...prev, trackedAgents: next };
         });
         break;
       }
@@ -261,8 +366,8 @@ export default function ChatPage() {
       case 'worker_completed': {
         const d = data.data as any;
         const agentId = d.workerId;
-        setTrackedAgents(prev => {
-          const next = new Map(prev);
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
           const existing = next.get(agentId);
           if (existing) {
             next.set(agentId, {
@@ -273,52 +378,50 @@ export default function ChatPage() {
               iterations: d.iterations,
             });
           }
-          return next;
+          return {
+            ...prev,
+            trackedAgents: next,
+            totalTokens: d.totalTokens ? prev.totalTokens + d.totalTokens : prev.totalTokens,
+          };
         });
-        if (d.totalTokens) {
-          setSessionTotalTokens(prev => prev + d.totalTokens);
-        }
         break;
       }
 
       case 'team_started': {
         const d = data.data as any;
-        setTeams(prev => {
-          const next = new Map(prev);
-          next.set(d.teamId, {
-            id: d.teamId,
-            memberIds: [],
-            status: 'running',
-          });
-          return next;
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.teams);
+          next.set(d.teamId, { id: d.teamId, memberIds: [], status: 'running' });
+          return { ...prev, teams: next };
         });
         break;
       }
 
       case 'team_completed': {
         const d = data.data as any;
-        setTeams(prev => {
-          const next = new Map(prev);
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.teams);
           const existing = next.get(d.teamId);
           if (existing) {
             next.set(d.teamId, { ...existing, status: 'completed', durationMs: d.durationMs });
           }
-          return next;
+          return { ...prev, teams: next };
         });
         break;
       }
     }
   };
 
-  const handleAgentEvent = (data: any) => {
+  const handleAgentEvent = (data: any, sessionId: string | null) => {
+    if (!sessionId) return;
     if (data.event === 'action' && data.agentId) {
       const toolCalls: ToolCallInfo[] = ((data.data as any)?.toolCalls || []).map((tc: any) => ({
         id: tc.id || Date.now().toString(),
         name: tc.name,
         argsSummary: tc.argsSummary,
       }));
-      setTrackedAgents(prev => {
-        const next = new Map(prev);
+      updateSessionState(sessionId, (prev) => {
+        const next = new Map(prev.trackedAgents);
         const existing = next.get(data.agentId);
         if (existing) {
           next.set(data.agentId, {
@@ -326,18 +429,17 @@ export default function ChatPage() {
             toolCalls: [...existing.toolCalls, ...toolCalls],
           });
         }
-        return next;
+        return { ...prev, trackedAgents: next };
       });
     }
   };
 
-  // Build unified timeline
+  // Build unified timeline for active session
   const timeline: TimelineEntry[] = [];
   messages.forEach((msg) => {
     timeline.push({ kind: 'message', data: msg, ts: msg.timestamp.getTime() });
   });
 
-  // Add non-orchestrator agents (orchestrator is invisible to user)
   const agentEntries = Array.from(trackedAgents.values()).filter(a => a.role !== 'orchestrator');
   const teamSet = new Set<string>();
   agentEntries.forEach((agent) => {
@@ -351,7 +453,6 @@ export default function ChatPage() {
     }
   });
 
-  // Also add standalone teams
   teams.forEach((team) => {
     if (!teamSet.has(team.id)) {
       timeline.push({ kind: 'team', teamId: team.id, ts: Date.now() });
@@ -365,8 +466,79 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, trackedAgents]);
 
+  // Session management
+  const createSession = async () => {
+    try {
+      const result = await api.post<{ session: { id: string; title: string; updatedAt: string; messageCount: number; status: string } }>('/sessions', {
+        channelType: 'webchat',
+        channelId: `chat-${Date.now().toString(36)}`,
+        title: 'New Chat',
+      });
+      if (result?.session) {
+        const tab: SessionTab = {
+          id: result.session.id,
+          title: result.session.title || 'New Chat',
+          updatedAt: result.session.updatedAt,
+          messageCount: 0,
+          status: 'active',
+        };
+        setSessions(prev => [tab, ...prev]);
+        setActiveSessionId(tab.id);
+        updateSessionState(tab.id, () => newSessionState());
+        setIsLoading(false);
+        setPendingApproval(null);
+        setPendingPermission(null);
+        setStatusMessage(null);
+      }
+    } catch (error) {
+      console.error('Failed to create session:', error);
+    }
+  };
+
+  const selectSession = (id: string) => {
+    if (id === activeSessionId) return;
+    setActiveSessionId(id);
+    setIsLoading(false);
+    setPendingApproval(null);
+    setPendingPermission(null);
+    setStatusMessage(null);
+
+    // Lazy-load messages if not cached
+    if (!sessionStates.has(id)) {
+      updateSessionState(id, () => newSessionState());
+      loadSessionMessages(id);
+    }
+  };
+
+  const closeSession = (id: string) => {
+    setSessions(prev => prev.filter(s => s.id !== id));
+    setSessionStates(prev => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+
+    if (activeSessionId === id) {
+      const remaining = sessions.filter(s => s.id !== id);
+      if (remaining.length > 0) {
+        selectSession(remaining[0].id);
+      } else {
+        setActiveSessionId(null);
+      }
+    }
+  };
+
+  const renameSession = async (id: string, title: string) => {
+    try {
+      await api.patch(`/sessions/${id}`, { title });
+      setSessions(prev => prev.map(s => s.id === id ? { ...s, title } : s));
+    } catch {}
+  };
+
   // Send message
   const sendMessage = async (userInput: string) => {
+    const sid = activeSessionId;
+
     const userMessage: ChatMessageData = {
       id: Date.now().toString(),
       role: 'user',
@@ -374,16 +546,22 @@ export default function ChatPage() {
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    if (sid) {
+      updateSessionState(sid, (prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMessage],
+        trackedAgents: new Map(),
+        teams: new Map(),
+      }));
+    }
+
     setIsLoading(true);
-    setTrackedAgents(new Map());
-    setTeams(new Map());
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'chat',
         content: userInput,
-        sessionId,
+        sessionId: sid,
         presetId: selectedPresetId || undefined,
       }));
       return;
@@ -397,29 +575,43 @@ export default function ChatPage() {
         agentId?: string;
         classification?: { type: string };
         metadata?: MessageMetadata;
-      }>('/chat', { message: userInput, sessionId });
+      }>('/chat', { message: userInput, sessionId: sid });
 
-      if (result.sessionId) {
-        setSessionId(result.sessionId);
-        localStorage.setItem('chat_session_id', result.sessionId);
+      const responseSid = result.sessionId || sid;
+      if (responseSid) {
+        updateSessionState(responseSid, (prev) => ({
+          ...prev,
+          messages: [...prev.messages, {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: result.response,
+            timestamp: new Date(),
+            agentId: result.agentId,
+            classification: result.classification?.type,
+            metadata: result.metadata,
+          }],
+        }));
+
+        if (result.sessionId && !activeSessionId) {
+          setActiveSessionId(result.sessionId);
+          setSessions(prev => {
+            if (prev.find(s => s.id === result.sessionId)) return prev;
+            return [{ id: result.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, status: 'active' }, ...prev];
+          });
+        }
       }
-
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: result.response,
-        timestamp: new Date(),
-        agentId: result.agentId,
-        classification: result.classification?.type,
-        metadata: result.metadata,
-      }]);
     } catch (error) {
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `Error: ${(error as Error).message}. Make sure the assistant backend is running.`,
-        timestamp: new Date(),
-      }]);
+      if (sid) {
+        updateSessionState(sid, (prev) => ({
+          ...prev,
+          messages: [...prev.messages, {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: `Error: ${(error as Error).message}. Make sure the assistant backend is running.`,
+            timestamp: new Date(),
+          }],
+        }));
+      }
     }
 
     setIsLoading(false);
@@ -458,23 +650,10 @@ export default function ChatPage() {
     setPendingPermission(null);
   };
 
-  const clearChat = () => {
-    setMessages([welcomeMessage()]);
-    setSessionId(null);
-    localStorage.removeItem('chat_session_id');
-    setTrackedAgents(new Map());
-    setTeams(new Map());
-    setPendingApproval(null);
-    setPendingPermission(null);
-    setStatusMessage(null);
-    setSessionTotalTokens(0);
-    setSelectedPresetId(null);
-  };
-
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Chat</h1>
           <div className="flex items-center gap-3 text-sm">
@@ -542,13 +721,19 @@ export default function ChatPage() {
           >
             <RefreshCw className="w-5 h-5" />
           </button>
-          <button
-            onClick={clearChat}
-            className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-          >
-            Clear Chat
-          </button>
         </div>
+      </div>
+
+      {/* Session tabs */}
+      <div className="mb-2">
+        <SessionTabs
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onSelect={selectSession}
+          onCreate={createSession}
+          onClose={closeSession}
+          onRename={renameSession}
+        />
       </div>
 
       {/* Preset selector */}
@@ -560,7 +745,7 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
         {/* Unified timeline: messages + agent activity */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {timeline.map((entry, i) => {
+          {timeline.map((entry) => {
             if (entry.kind === 'message') {
               return <ChatMessage key={entry.data.id} message={entry.data} />;
             }
@@ -670,13 +855,4 @@ export default function ChatPage() {
       </div>
     </div>
   );
-}
-
-function welcomeMessage(): ChatMessageData {
-  return {
-    id: '0',
-    role: 'system',
-    content: 'Welcome! I\'m your AI assistant. I\'ll route your requests to the right specialist. How can I help you today?',
-    timestamp: new Date(),
-  };
 }

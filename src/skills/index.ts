@@ -12,6 +12,8 @@ export { GitHubSkill, githubSkill } from './github';
 export { GitLabSkill, gitlabSkill } from './gitlab';
 export { GoogleWorkspaceSkill, googleWorkspaceSkill } from './google-workspace';
 export { Microsoft365Skill, microsoft365Skill } from './microsoft365';
+export { KnowledgeSkill, knowledgeSkill } from './knowledge';
+export { MessagingSkill, messagingSkill } from './messaging';
 
 import { getSkillRegistry } from './registry';
 import { filesystemSkill } from './filesystem';
@@ -24,6 +26,8 @@ import { githubSkill } from './github';
 import { gitlabSkill } from './gitlab';
 import { googleWorkspaceSkill } from './google-workspace';
 import { microsoft365Skill } from './microsoft365';
+import { knowledgeSkill } from './knowledge';
+import { messagingSkill } from './messaging';
 
 /**
  * Register all built-in skills
@@ -41,4 +45,6 @@ export async function registerBuiltinSkills(): Promise<void> {
   await registry.register(gitlabSkill);
   await registry.register(googleWorkspaceSkill);
   await registry.register(microsoft365Skill);
+  await registry.register(knowledgeSkill);
+  await registry.register(messagingSkill);
 }

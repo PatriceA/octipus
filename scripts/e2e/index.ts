@@ -28,6 +28,7 @@ import { testSettings } from './tests/settings';
 import { testAudit } from './tests/audit';
 import { testChat } from './tests/chat';
 import { testPresets } from './tests/presets';
+import { testRecurringTasks } from './tests/recurring-tasks';
 
 export async function run() {
   const runner = new TestRunner();
@@ -52,6 +53,7 @@ export async function run() {
     await testSettings(runner, client);
     await testAudit(runner, client);
     await testPresets(runner, client);
+    await testRecurringTasks(runner, client);
     await testChat(runner, client);
   } catch (err) {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);

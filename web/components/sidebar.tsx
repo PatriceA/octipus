@@ -15,6 +15,7 @@ import {
   GitBranch,
   PanelLeftClose,
   PanelLeft,
+  Clock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSidebarStore } from '@/lib/sidebar-store';
@@ -52,6 +53,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'MCP', href: '/mcp', icon: Cable },
       { name: 'Hooks', href: '/hooks', icon: Webhook },
+      { name: 'Tasks', href: '/tasks', icon: Clock },
     ],
   },
   {

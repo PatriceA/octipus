@@ -11,3 +11,4 @@ export * from './permissions';
 export * from './pipelines';
 export * from './settings';
 export * from './presets';
+export * from './recurring-tasks';

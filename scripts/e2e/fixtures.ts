@@ -9,6 +9,7 @@ export const fixtures = {
   testPassword: 'TestP@ssw0rd!2024',
   chatSessionId: null as string | null,
   testPresetId: null as string | null,
+  testRecurringTaskId: null as string | null,
 };
 
 export const BASE_URL = process.env.API_URL || 'http://localhost:3005/api';

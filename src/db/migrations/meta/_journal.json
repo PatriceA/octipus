@@ -36,6 +36,20 @@
       "when": 1709300000000,
       "tag": "0004_presets",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1709400000000,
+      "tag": "0005_rag_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1709500000000,
+      "tag": "0006_recurring_tasks",
+      "breakpoints": true
     }
   ]
 }
