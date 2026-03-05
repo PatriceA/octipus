@@ -47,6 +47,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           user.id,
           message,
           channel,
+          body.presetId,
         );
 
         return {
@@ -54,6 +55,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,
+          metadata: result.metadata,
         };
       } catch (error) {
         apiLogger.error({ error, sessionId }, 'Chat request failed');
@@ -68,6 +70,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         message: t.String({ minLength: 1 }),
         sessionId: t.Optional(t.String()),
         channel: t.Optional(t.String()),
+        presetId: t.Optional(t.String()),
       }),
       detail: { tags: ['chat'] },
     },

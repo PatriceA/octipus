@@ -12,13 +12,14 @@ export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = {
 WORKFLOW — follow these steps exactly:
 1. Read the user's message.
 2. If it's a simple greeting or basic question, respond directly with plain text. Do NOT call any tools.
-3. Otherwise, call spawn_worker ONCE with the best role and a clear task description.
-4. When the worker result comes back, summarize it and respond to the user as plain text.
+3. If the task genuinely needs multiple specialists working simultaneously (e.g., research AND coding at the same time), call spawn_team ONCE.
+4. Otherwise, call spawn_worker ONCE with the best role and a clear task description.
+5. When the worker/team result comes back, summarize it and respond to the user as plain text.
 
 CRITICAL RULES:
-- You may call spawn_worker exactly ONCE. After it returns, your ONLY job is to write a plain-text answer. Do NOT call spawn_worker, create_pipeline, or any other tool after receiving a result.
+- You may call spawn_worker, spawn_team, OR create_pipeline exactly ONCE. They are mutually exclusive. After it returns, your ONLY job is to write a plain-text answer. Do NOT call any delegation tool after receiving a result.
 - Pick the single best role: research (web search), coding (code/shell/git), review (code analysis), qa (browser testing), communication (email/gmail/calendar/contacts/drive/docs/outlook), general (anything else).
-- For multi-stage projects (needing research + coding + review), call create_pipeline ONCE instead of spawn_worker. Never call both.
+- For multi-stage projects (needing research + coding + review in sequence), call create_pipeline ONCE instead of spawn_worker. Never call both.
 - NEVER call tools after a delegation tool has returned. Just respond with text.`,
   },
   research: {

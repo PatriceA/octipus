@@ -139,7 +139,11 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       }
 
       const vault = getVault();
-      const deleted = await vault.delete(user.id, params.id);
+      // Try user's own credentials first, then system credentials for admins
+      let deleted = await vault.delete(user.id, params.id);
+      if (!deleted && user.isAdmin) {
+        deleted = await vault.delete('system', params.id);
+      }
 
       if (!deleted) {
         return { error: 'Credential not found' };
@@ -162,7 +166,10 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       }
 
       const vault = getVault();
-      const rotated = await vault.rotate(user.id, params.id, body.value);
+      let rotated = await vault.rotate(user.id, params.id, body.value);
+      if (!rotated && user.isAdmin) {
+        rotated = await vault.rotate('system', params.id, body.value);
+      }
 
       if (!rotated) {
         return { error: 'Credential not found' };

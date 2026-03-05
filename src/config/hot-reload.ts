@@ -1,7 +1,9 @@
 import { getSettingsService } from './settings-service';
+import { getSettingDefinition } from './settings-registry';
 import { refreshConfigKey } from './index';
 import { resetLiteLLMClient } from '@/models/litellm-client';
 import { reinitializeChannel } from '@/channels';
+import { getVault } from '@/security/vault';
 import { logger } from '@/utils/logger';
 import type { ChannelType } from '@/core/types';
 
@@ -13,8 +15,20 @@ export function initializeHotReload(): void {
   const svc = getSettingsService();
 
   svc.onChange(async (key: string, newValue: unknown, _oldValue: unknown) => {
+    // For secrets, resolve the actual value from vault instead of the vault name
+    const def = getSettingDefinition(key);
+    let resolvedValue = newValue;
+    if (def?.isSecret && def.vaultName) {
+      try {
+        const secret = await getVault().getSystemSecret(def.vaultName);
+        if (secret) resolvedValue = secret;
+      } catch {
+        // Fall through with original value
+      }
+    }
+
     // Always update the cached config object
-    refreshConfigKey(key, newValue);
+    refreshConfigKey(key, resolvedValue);
 
     const category = key.split('.')[0];
 

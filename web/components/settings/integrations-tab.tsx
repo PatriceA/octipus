@@ -9,9 +9,17 @@ import {
   Trash2,
   XCircle,
   RefreshCw,
+  Workflow,
+  Cable,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { OAuthIntegrationsSection } from './oauth-section';
+import {
+  type SettingItem,
+  useSettingActions,
+  SettingsGroup,
+  SecretsRedirectBanner,
+} from './setting-field';
 
 interface WorkspaceConfig {
   rootPath: string;
@@ -27,6 +35,8 @@ export function IntegrationsTab() {
       <CLIIntegrationsSection />
       <hr className="border-gray-200 dark:border-gray-700" />
       <OAuthIntegrationsSection />
+      <hr className="border-gray-200 dark:border-gray-700" />
+      <IntegrationSettingsSection />
     </div>
   );
 }
@@ -248,6 +258,107 @@ function CLIIntegrationsSection() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** N8N and MCP settings from the integrations category */
+function IntegrationSettingsSection() {
+  const { saving, saved, error, handleSave, handleReset } = useSettingActions();
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<{ settings: Record<string, SettingItem[]>; categories: string[] }>('/settings'),
+  });
+
+  const integrationSettings = data?.settings?.['integrations'] || [];
+  if (integrationSettings.length === 0 && !isLoading) return null;
+
+  // Split into N8N and MCP groups
+  const n8nSettings = integrationSettings.filter(s => s.key.startsWith('n8n.') && !s.isSecret);
+  const mcpSettings = integrationSettings.filter(s => s.key.startsWith('mcp.') && !s.isSecret);
+  const oauthSettings = integrationSettings.filter(s => s.key.startsWith('oauth.') && !s.isSecret);
+  const hasSecrets = integrationSettings.some(s => s.isSecret);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
+      {hasSecrets && <SecretsRedirectBanner />}
+
+      {/* N8N Settings */}
+      {n8nSettings.length > 0 && (
+        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
+          <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
+            <Workflow className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+            <div>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">N8N Workflow Automation</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Connect to your N8N instance for workflow triggers</p>
+            </div>
+          </div>
+          <div className="px-5 py-3">
+            <SettingsGroup
+              settings={n8nSettings}
+              onSave={handleSave}
+              onReset={handleReset}
+              saving={saving}
+              saved={saved}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* MCP Settings */}
+      {mcpSettings.length > 0 && (
+        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
+          <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
+            <Cable className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+            <div>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">MCP Settings</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Model Context Protocol server configuration</p>
+            </div>
+          </div>
+          <div className="px-5 py-3">
+            <SettingsGroup
+              settings={mcpSettings}
+              onSave={handleSave}
+              onReset={handleReset}
+              saving={saving}
+              saved={saved}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* OAuth Settings (publicUrl) */}
+      {oauthSettings.length > 0 && (
+        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
+            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">OAuth</h4>
+          </div>
+          <div className="px-5 py-3">
+            <SettingsGroup
+              settings={oauthSettings}
+              onSave={handleSave}
+              onReset={handleReset}
+              saving={saving}
+              saved={saved}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

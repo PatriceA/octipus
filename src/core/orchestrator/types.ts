@@ -14,6 +14,7 @@ export interface RoleConfig {
 export interface MessageClassification {
   type: 'casual' | 'task' | 'followup' | 'approval' | 'ambiguous';
   confidence: number;
+  complexity?: 'simple' | 'moderate' | 'complex';
   suggestedPipeline?: 'development' | 'research' | 'general';
   topic?: string;
   reasoning?: string;
@@ -76,4 +77,13 @@ export interface WorkerResult {
   model: string;
   iterations: number;
   durationMs: number;
+  totalTokens?: number;
+}
+
+export interface ResponseMetadata {
+  model?: string;
+  tokens?: number;
+  latencyMs?: number;
+  cached?: boolean;
+  sessionTotalTokens?: number;
 }

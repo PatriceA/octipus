@@ -23,6 +23,7 @@ import { notificationRoutes } from './routes/notifications';
 import { workspaceRoutes } from './routes/workspace';
 import { oauthRoutes } from './routes/oauth';
 import { settingsRoutes } from './routes/settings';
+import { presetRoutes } from './routes/presets';
 import { authGuard } from './middleware/auth-guard';
 import { setupWebSocket } from './websocket';
 
@@ -129,6 +130,7 @@ export function createServer() {
         .use(workspaceRoutes)
         .use(oauthRoutes)
         .use(settingsRoutes)
+        .use(presetRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group

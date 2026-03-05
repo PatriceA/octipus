@@ -10,6 +10,7 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerModelTools } from './tools/models.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerSkillTools } from './tools/skills.js';
+import { registerPresetTools } from './tools/presets.js';
 
 export function createServer(assistantUrl: string): McpServer {
   const server = new McpServer({
@@ -26,6 +27,7 @@ export function createServer(assistantUrl: string): McpServer {
   registerModelTools(server, client);
   registerChatTools(server, client);
   registerSkillTools(server, client);
+  registerPresetTools(server, client);
 
   return server;
 }

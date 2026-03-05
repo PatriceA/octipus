@@ -49,23 +49,47 @@ const APPROVAL_PATTERNS = [
 ];
 
 /**
+ * Score message complexity based on length, structure, and keyword analysis.
+ */
+function scoreComplexity(message: string): 'simple' | 'moderate' | 'complex' {
+  const words = message.split(/\s+/).length;
+  const sentences = message.split(/[.!?]+/).filter(Boolean).length;
+  const hasCodeBlock = /```/.test(message);
+  const hasMultipleParts = /\b(and also|additionally|then|after that|as well as|plus|moreover)\b/i.test(message);
+  const hasComplexVerbs = /\b(analyze|compare|design|architect|implement|refactor|optimize|debug|migrate|integrate)\b/i.test(message);
+
+  let score = 0;
+  if (words > 50) score++;
+  if (words > 150) score++;
+  if (sentences > 3) score++;
+  if (hasCodeBlock) score++;
+  if (hasMultipleParts) score++;
+  if (hasComplexVerbs) score++;
+
+  if (score <= 1) return 'simple';
+  if (score <= 3) return 'moderate';
+  return 'complex';
+}
+
+/**
  * Classify a message using keyword heuristics.
  * Returns 'ambiguous' when confidence is too low for a definitive answer.
  */
 export function classifyMessage(message: string): MessageClassification {
   const normalized = message.trim().toLowerCase();
+  const complexity = scoreComplexity(message);
 
   // Check for approval/denial responses
   for (const pattern of APPROVAL_PATTERNS) {
     if (pattern.test(normalized)) {
-      return { type: 'approval', confidence: 0.9 };
+      return { type: 'approval', confidence: 0.9, complexity: 'simple' };
     }
   }
 
   // Check casual patterns (greetings, thanks, etc.)
   for (const pattern of CASUAL_PATTERNS) {
     if (pattern.test(normalized)) {
-      return { type: 'casual', confidence: 0.9 };
+      return { type: 'casual', confidence: 0.9, complexity: 'simple' };
     }
   }
 
@@ -77,7 +101,7 @@ export function classifyMessage(message: string): MessageClassification {
       .some(kw => normalized.includes(kw));
 
     if (!hasTaskKeyword) {
-      return { type: 'casual', confidence: 0.6 };
+      return { type: 'casual', confidence: 0.6, complexity: 'simple' };
     }
   }
 
@@ -104,6 +128,7 @@ export function classifyMessage(message: string): MessageClassification {
     return {
       type: 'task',
       confidence: Math.min(bestScore / 4, 1),
+      complexity,
       suggestedPipeline,
       topic: bestCategory,
     };
@@ -114,11 +139,12 @@ export function classifyMessage(message: string): MessageClassification {
     return {
       type: 'task',
       confidence: 0.4,
+      complexity,
       suggestedPipeline: bestCategory as MessageClassification['suggestedPipeline'],
       topic: bestCategory,
     };
   }
 
   // Can't determine — let the LLM decide
-  return { type: 'ambiguous', confidence: 0.2 };
+  return { type: 'ambiguous', confidence: 0.2, complexity };
 }

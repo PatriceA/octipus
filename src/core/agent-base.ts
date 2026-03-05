@@ -79,4 +79,8 @@ export abstract class BaseAgentWorker {
   getIteration(): number {
     return this.iteration;
   }
+
+  getTotalTokens(): number {
+    return 0;
+  }
 }

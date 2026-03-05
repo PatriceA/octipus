@@ -65,6 +65,22 @@ export interface ChatResponse {
   sessionId: string;
   agentId?: string;
   classification?: string;
+  metadata?: {
+    model?: string;
+    tokens?: number;
+    latencyMs?: number;
+    cached?: boolean;
+  };
+}
+
+export interface Preset {
+  id: string;
+  name: string;
+  description?: string;
+  icon?: string;
+  role: string;
+  isSystem: boolean;
+  modelPreference?: string;
 }
 
 export interface SkillInfo {
@@ -119,6 +135,29 @@ export class AssistantClient {
         channel: 'mcp',
       }),
     });
+  }
+
+  async chatWithPreset(message: string, presetId: string, sessionId?: string): Promise<ChatResponse> {
+    return this.request<ChatResponse>('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        sessionId,
+        presetId,
+        channel: 'mcp',
+      }),
+    });
+  }
+
+  // ─── Presets ───
+
+  async listPresets(): Promise<Preset[]> {
+    const res = await this.request<{ presets: Preset[] }>('/api/presets');
+    return res.presets || [];
+  }
+
+  async getPreset(id: string): Promise<Preset> {
+    return this.request<Preset>(`/api/presets/${id}`);
   }
 
   // ─── Search ───

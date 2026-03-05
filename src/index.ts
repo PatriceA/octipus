@@ -7,6 +7,7 @@ import { getHookManager } from '@/hooks/manager';
 import { initializeVault } from '@/security/vault';
 import { runMigrations } from '@/db/migrate';
 import { seedPresetTemplates } from '@/db/seed-presets';
+import { seedAgentPresets } from '@/db/seed-agent-presets';
 import { getSettingsService } from '@/config/settings-service';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { loadRuntimeConfig } from '@/config';
@@ -27,6 +28,7 @@ async function main() {
 
     // Seed preset data
     await seedPresetTemplates();
+    await seedAgentPresets();
     logger.info('Presets seeded');
 
     // Initialize vault (needs master key from .env)

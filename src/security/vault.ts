@@ -173,7 +173,7 @@ export class Vault {
         updatedAt: vault.updatedAt,
       })
       .from(vault)
-      .where(eq(vault.userId, userId));
+      .where(and(eq(vault.userId, userId), eq(vault.isActive, true)));
 
     return entries;
   }

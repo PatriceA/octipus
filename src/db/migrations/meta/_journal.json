@@ -29,6 +29,13 @@
       "when": 1709200000000,
       "tag": "0003_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1709300000000,
+      "tag": "0004_presets",
+      "breakpoints": true
     }
   ]
 }

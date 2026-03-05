@@ -12,12 +12,12 @@ import type { OrchestratorService } from './service';
  * are rejected with an error telling the LLM to just answer.
  */
 export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[] {
-  // Unified guard: once ANY delegation tool (spawn_worker / create_pipeline)
+  // Unified guard: once ANY delegation tool (spawn_worker / spawn_team / create_pipeline)
   // has been called, no further delegation is allowed.
   let delegationDone = false;
 
   const ALREADY_DELEGATED_MSG =
-    'A worker/pipeline has already completed for this request. ' +
+    'A worker/team/pipeline has already completed for this request. ' +
     'You MUST now respond to the user with a plain-text summary of the result. ' +
     'Do NOT call any more tools. Just write your final answer.';
 
@@ -57,6 +57,55 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
           args.role as string,
           args.task as string,
           (args.input as string) || '',
+          context,
+        );
+      },
+    },
+    {
+      name: 'spawn_team',
+      final: true,
+      description:
+        'Spawn multiple specialist workers in parallel to handle a task that needs simultaneous expertise. ' +
+        'Each member runs concurrently and results are merged into a structured report. ' +
+        'Use this ONLY when the task genuinely needs multiple specialists working at the same time. ' +
+        'You may only delegate ONCE per request (spawn_worker, spawn_team, OR create_pipeline). ' +
+        'After receiving the result, respond to the user directly with plain text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          members: {
+            type: 'array',
+            description: 'Team members to spawn in parallel',
+            minItems: 2,
+            maxItems: 5,
+            items: {
+              type: 'object',
+              properties: {
+                role: {
+                  type: 'string',
+                  enum: ['research', 'coding', 'review', 'qa', 'communication', 'general'],
+                  description: 'The specialist role for this team member',
+                },
+                task: {
+                  type: 'string',
+                  description: 'Clear description of what this member should accomplish',
+                },
+                input: {
+                  type: 'string',
+                  description: 'Optional context or data to pass to this member',
+                },
+              },
+              required: ['role', 'task'],
+            },
+          },
+        },
+        required: ['members'],
+      },
+      execute: async (args, context) => {
+        if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
+        delegationDone = true;
+        return orchestrator.spawnTeam(
+          args.members as Array<{ role: string; task: string; input?: string }>,
           context,
         );
       },

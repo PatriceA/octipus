@@ -130,4 +130,34 @@ export class ModelSelector {
     );
     return null;
   }
+
+  /**
+   * Select a model based on message complexity.
+   * Simple messages use a cheaper/faster model if available.
+   */
+  async selectByComplexity(complexity: 'simple' | 'moderate' | 'complex' = 'moderate'): Promise<string> {
+    const registry = getModelRegistry();
+    const defaultModel = await registry.getDefaultModel();
+    const defaultModelId = defaultModel?.modelId || 'qwen3:14b';
+
+    if (complexity === 'simple') {
+      // Try to find a smaller/cheaper model
+      const allModels = await registry.getAllModels();
+      const cheapModel = allModels.find(m =>
+        m.isEnabled &&
+        m.provider !== 'cli' &&
+        m.priority < (defaultModel?.priority || 100) &&
+        m.modelId !== defaultModelId
+      );
+      if (cheapModel) {
+        coreLogger.debug(
+          { complexity, model: cheapModel.modelId },
+          'Routing simple message to cheaper model',
+        );
+        return cheapModel.modelId;
+      }
+    }
+
+    return defaultModelId;
+  }
 }

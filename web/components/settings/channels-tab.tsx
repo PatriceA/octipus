@@ -8,9 +8,18 @@ import {
   CheckCircle,
   XCircle,
   Send,
+  Settings2,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { UserProfile } from '@/lib/types/settings';
+import {
+  type SettingItem,
+  useSettingActions,
+  SettingsGroup,
+  SecretsRedirectBanner,
+} from './setting-field';
 
 export function ChannelsTab() {
   const [linkCode, setLinkCode] = useState('');
@@ -51,7 +60,7 @@ export function ChannelsTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Channel Linking</h2>
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Channels</h2>
 
       {/* Link Code Input */}
       <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
@@ -161,6 +170,9 @@ export function ChannelsTab() {
         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Available Channels</h3>
         <ChannelStatusList />
       </div>
+
+      {/* Channel Configuration */}
+      <ChannelConfigSection />
     </div>
   );
 }
@@ -213,6 +225,105 @@ function ChannelStatusList() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** Channel-specific settings from the settings registry */
+const CHANNEL_GROUPS = [
+  {
+    id: 'telegram',
+    label: 'Telegram',
+    prefix: 'telegram.',
+  },
+  {
+    id: 'slack',
+    label: 'Slack',
+    prefix: 'slack.',
+  },
+  {
+    id: 'teams',
+    label: 'Microsoft Teams',
+    prefix: 'teams.',
+  },
+];
+
+function ChannelConfigSection() {
+  const { saving, saved, error, handleSave, handleReset } = useSettingActions();
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<{ settings: Record<string, SettingItem[]>; categories: string[] }>('/settings'),
+  });
+
+  const channelSettings = data?.settings?.['channels'] || [];
+  if (channelSettings.length === 0 && !isLoading) return null;
+
+  const hasSecrets = channelSettings.some(s => s.isSecret);
+
+  const toggle = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+
+  return (
+    <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
+        <Settings2 className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Channel Configuration</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Bot tokens, webhook URLs, and polling settings</p>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+        </div>
+      ) : (
+        <div className="p-5 space-y-3">
+          {error && (
+            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            </div>
+          )}
+
+          {hasSecrets && <SecretsRedirectBanner />}
+
+          {CHANNEL_GROUPS.map((group) => {
+            const items = channelSettings.filter(
+              s => s.key.startsWith(group.prefix) && !s.isSecret
+            );
+            if (items.length === 0) return null;
+            const isOpen = expanded[group.id] ?? false;
+
+            return (
+              <div key={group.id} className="border border-gray-200/60 dark:border-gray-700/50 rounded-lg overflow-hidden">
+                <button
+                  onClick={() => toggle(group.id)}
+                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors"
+                >
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{group.label}</span>
+                  {isOpen ? (
+                    <ChevronDown className="w-4 h-4 text-gray-400" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-gray-400" />
+                  )}
+                </button>
+                {isOpen && (
+                  <div className="border-t border-gray-200/60 dark:border-gray-700/50 px-2 py-2">
+                    <SettingsGroup
+                      settings={items}
+                      onSave={handleSave}
+                      onReset={handleReset}
+                      saving={saving}
+                      saved={saved}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

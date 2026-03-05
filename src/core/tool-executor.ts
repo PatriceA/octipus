@@ -42,7 +42,19 @@ export class ToolExecutor {
    * Returns tool result messages to append to the conversation.
    */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
-    this.emitFn('action', { toolCalls });
+    this.emitFn('action', {
+      toolCalls: toolCalls.map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        argsSummary: Object.entries(tc.arguments)
+          .map(([k, v]) => {
+            const s = typeof v === 'string' ? v : JSON.stringify(v);
+            return `${k}: ${s.length > 60 ? s.slice(0, 57) + '...' : s}`;
+          })
+          .join(', ')
+          .slice(0, 120),
+      })),
+    });
 
     const permissionManager = getPermissionManager();
     const results: ToolResult[] = [];

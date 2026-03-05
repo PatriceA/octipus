@@ -34,6 +34,10 @@ export class AgentWorker extends BaseAgentWorker {
     );
   }
 
+  override getTotalTokens(): number {
+    return this.totalTokensUsed;
+  }
+
   registerTool(tool: import('./agent-base').ToolHandler): void {
     this.toolExecutor.registerTool(tool);
   }

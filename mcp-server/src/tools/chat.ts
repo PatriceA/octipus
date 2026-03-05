@@ -21,6 +21,10 @@ export function registerChatTools(server: McpServer, client: AssistantClient): v
           `Session: ${result.sessionId}`,
           result.agentId ? `Agent: ${result.agentId}` : null,
           result.classification ? `Classification: ${result.classification}` : null,
+          result.metadata?.model ? `Model: ${result.metadata.model}` : null,
+          result.metadata?.tokens != null ? `Tokens: ${result.metadata.tokens}` : null,
+          result.metadata?.latencyMs != null ? `Latency: ${result.metadata.latencyMs}ms` : null,
+          result.metadata?.cached ? `Cached: yes` : null,
         ]
           .filter(Boolean)
           .join(' | ');

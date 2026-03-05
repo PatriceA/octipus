@@ -1,6 +1,14 @@
 import { spawn, type Subprocess } from 'bun';
 import { EventEmitter } from 'events';
+import { resolve, dirname } from 'path';
 import { logger } from '../utils/logger';
+
+/** Resolve the bundled whisper-cpp binary shipped with the project */
+function getBundledWhisperBinary(): string {
+  // models/whisper/whisper-cpp relative to project root
+  const projectRoot = resolve(dirname(decodeURIComponent(new URL(import.meta.url).pathname)), '../..');
+  return resolve(projectRoot, 'models/whisper/whisper-cpp');
+}
 
 export interface STTOptions {
   model?: 'tiny' | 'base' | 'small' | 'medium' | 'large';
@@ -67,13 +75,15 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       audioPath = audio;
     }
 
+    const jsonPath = `${audioPath}.json`;
+
     try {
+      const binary = getBundledWhisperBinary();
       const args = [
         '-m', this.modelPath,
         '-f', audioPath,
         '-l', this.options.language!,
         '--output-json',
-        '-pp', // print progress
       ];
 
       if (this.options.translate) {
@@ -81,39 +91,53 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       }
 
       const proc = spawn({
-        cmd: ['whisper-cpp', ...args],
+        cmd: [binary, ...args],
         stdout: 'pipe',
         stderr: 'pipe',
       });
 
-      const output = await new Response(proc.stdout).text();
-      const exitCode = await proc.exited;
+      await proc.exited;
+      const exitCode = proc.exitCode;
 
       if (exitCode !== 0) {
         const stderr = await new Response(proc.stderr).text();
-        throw new Error(`Whisper failed: ${stderr}`);
+        throw new Error(`Whisper failed (exit ${exitCode}): ${stderr}`);
       }
 
-      // Parse JSON output
-      const result = JSON.parse(output);
+      // whisper-cli writes JSON to <audioPath>.json
+      const jsonFile = Bun.file(jsonPath);
+      if (!(await jsonFile.exists())) {
+        throw new Error('Whisper did not produce JSON output');
+      }
+
+      const raw = JSON.parse(await jsonFile.text());
+
+      // Parse whisper.cpp JSON format:
+      //   { result: { language }, transcription: [{ timestamps: { from, to }, offsets: { from, to }, text }] }
+      const transcription: Array<{ timestamps: { from: string; to: string }; offsets: { from: number; to: number }; text: string }> = raw.transcription || [];
+
+      const fullText = transcription.map(t => t.text).join('').trim();
+      const segments = transcription.map(t => ({
+        start: t.offsets.from / 1000,
+        end: t.offsets.to / 1000,
+        text: t.text?.trim() || '',
+        confidence: 1.0, // whisper.cpp JSON doesn't include per-segment confidence
+      }));
 
       return {
-        text: result.text?.trim() || '',
-        segments: result.segments?.map((s: any) => ({
-          start: s.start,
-          end: s.end,
-          text: s.text?.trim() || '',
-          confidence: s.confidence || 0,
-        })) || [],
-        language: result.language || this.options.language!,
+        text: fullText,
+        segments,
+        language: raw.result?.language || this.options.language!,
         duration: (Date.now() - startTime) / 1000,
       };
     } finally {
-      // Clean up temp file
+      // Clean up temp files
       if (tempFile) {
-        await Bun.file(audioPath).exists() &&
-          await Bun.$`rm ${audioPath}`.quiet();
+        const audioFile = Bun.file(audioPath);
+        if (await audioFile.exists()) await Bun.$`rm ${audioPath}`.quiet();
       }
+      const jsonFile = Bun.file(jsonPath);
+      if (await jsonFile.exists()) await Bun.$`rm ${jsonPath}`.quiet();
     }
   }
 

@@ -13,15 +13,16 @@ import { getRoleConfig, getToolsForRole } from './roles';
 import { getNotificationService } from '@/core/notification-service';
 import { ApprovalManager } from './approval-manager';
 import { ModelSelector } from './model-selector';
+import { getResponseCache } from '@/core/response-cache';
 import type { ApprovalRequest } from './approval-manager';
-import type { AgentRole, WorkerResult, MessageClassification } from './types';
+import type { AgentRole, WorkerResult, MessageClassification, ResponseMetadata } from './types';
 
 interface OrchestratorEventHandler {
   (event: OrchestratorEvent): void;
 }
 
 export interface OrchestratorEvent {
-  type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
+  type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event' | 'team_started' | 'team_completed';
   sessionId: string;
   userId?: string;
   data: unknown;
@@ -55,7 +56,8 @@ export class OrchestratorService {
     userId: string,
     message: string,
     channel?: string,
-  ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification }> {
+    presetId?: string,
+  ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     try {
       const registry = getModelRegistry();
       const defaultModel = await registry.getDefaultModel();
@@ -69,17 +71,43 @@ export class OrchestratorService {
         }
       }
 
+      const resolvedSessionId = await this.resolveSession(sessionId, userId, channel || 'api');
+
+      // Token budget check
+      const session = await sessionRepository.findById(resolvedSessionId);
+      const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || 100_000;
+      const sessionTokens = session?.tokenCount || 0;
+      if (sessionTokens >= tokenBudget) {
+        return {
+          response: `Session token budget (${tokenBudget.toLocaleString()}) exhausted. Start a new session to continue.`,
+          sessionId: resolvedSessionId,
+          classification: { type: 'casual', confidence: 1 },
+        };
+      }
+      if (sessionTokens >= tokenBudget * 0.8) {
+        this.emit({
+          type: 'status_update',
+          sessionId: resolvedSessionId,
+          userId,
+          data: { message: `Token usage at ${Math.round((sessionTokens / tokenBudget) * 100)}% of budget`, stage: 'budget_warning' },
+          timestamp: new Date(),
+        });
+      }
+
+      // Preset bypass: skip classification and orchestrator, spawn worker directly
+      if (presetId) {
+        return this.handlePresetMessage(presetId, message, resolvedSessionId, userId);
+      }
+
       const classification = classifyMessage(message);
       coreLogger.info(
         { sessionId, classification: classification.type, confidence: classification.confidence, channel },
         'Message classified',
       );
 
-      const resolvedSessionId = await this.resolveSession(sessionId, userId, channel || 'api');
-
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
-        const response = await this.directResponse(message, resolvedSessionId, userId);
-        return { response, sessionId: resolvedSessionId, classification };
+        const { response, metadata } = await this.directResponse(message, resolvedSessionId, userId, classification.complexity);
+        return { response, sessionId: resolvedSessionId, classification, metadata };
       }
 
       if (classification.type === 'approval') {
@@ -89,8 +117,15 @@ export class OrchestratorService {
         }
       }
 
+      const startTime = Date.now();
       const { response, agentId } = await this.runOrchestrator(resolvedSessionId, userId, message, classification);
-      return { response, sessionId: resolvedSessionId, agentId, classification };
+      return {
+        response,
+        sessionId: resolvedSessionId,
+        agentId,
+        classification,
+        metadata: { latencyMs: Date.now() - startTime },
+      };
     } catch (error) {
       coreLogger.error({ error, sessionId, channel }, 'handleMessage failed');
       return {
@@ -127,31 +162,119 @@ export class OrchestratorService {
     return session.id;
   }
 
-  // ── Direct LLM response (casual messages) ────────────────────────
+  // ── Preset-based direct worker spawning ─────────────────────────
 
-  private async directResponse(message: string, sessionId: string, userId: string): Promise<string> {
-    const client = getLiteLLMClient();
-    const registry = getModelRegistry();
+  private async handlePresetMessage(
+    presetId: string,
+    message: string,
+    sessionId: string,
+    userId: string,
+  ): Promise<{ response: string; sessionId: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
+    const { getDb } = await import('@/db/postgres');
+    const db = getDb();
+    const { presets } = await import('@/db/schema/presets');
+    const { eq } = await import('drizzle-orm');
 
-    const defaultModel = await registry.getDefaultModel();
-    if (!defaultModel) {
-      return 'No model configured. Please add one in the Models page.';
+    const [preset] = await db.select().from(presets).where(eq(presets.id, presetId)).limit(1);
+    if (!preset) {
+      return {
+        response: `Preset not found: ${presetId}`,
+        sessionId,
+        classification: { type: 'task', confidence: 1, complexity: 'simple' },
+      };
     }
 
-    const modelName = defaultModel.modelId;
+    const startTime = Date.now();
+    const agentRole = preset.role as AgentRole;
+    const context: AgentContext = {
+      id: `preset-${Date.now()}`,
+      sessionId,
+      userId,
+      model: preset.modelPreference || '',
+      topic: preset.name,
+      role: agentRole,
+      status: 'running',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      metadata: { presetId },
+    };
 
     await messageRepository.create({ sessionId, role: 'user', content: message });
     await sessionRepository.incrementMessageCount(sessionId);
 
     try {
-      const recentMessages = await messageRepository.findBySession(sessionId, 20);
+      const result = await this.spawnWorker(agentRole, message, '', context, {
+        systemPrompt: preset.systemPrompt || undefined,
+        model: preset.modelPreference || undefined,
+      });
+
+      const response = String(result);
+      await messageRepository.create({ sessionId, role: 'assistant', content: response });
+      await sessionRepository.incrementMessageCount(sessionId);
+
+      return {
+        response,
+        sessionId,
+        classification: { type: 'task', confidence: 1, complexity: 'moderate', topic: preset.role },
+        metadata: { latencyMs: Date.now() - startTime },
+      };
+    } catch (error) {
+      coreLogger.error({ error, presetId, role: agentRole }, 'Preset worker failed');
+      return {
+        response: `Preset worker failed: ${(error as Error).message}`,
+        sessionId,
+        classification: { type: 'task', confidence: 1 },
+      };
+    }
+  }
+
+  // ── Direct LLM response (casual messages) ────────────────────────
+
+  private async directResponse(
+    message: string,
+    sessionId: string,
+    userId: string,
+    complexity: 'simple' | 'moderate' | 'complex' = 'moderate',
+  ): Promise<{ response: string; metadata: ResponseMetadata }> {
+    const startTime = Date.now();
+    const client = getLiteLLMClient();
+
+    // Select model based on complexity
+    const modelName = await this.modelSelector.selectByComplexity(complexity);
+
+    await messageRepository.create({ sessionId, role: 'user', content: message });
+    await sessionRepository.incrementMessageCount(sessionId);
+
+    // Check response cache for casual messages
+    const cache = getResponseCache();
+    const recentMessages = await messageRepository.findBySession(sessionId, 10, 0, ['user', 'assistant']);
+    const recentContext = recentMessages.slice(0, 2).map(m => m.content).join('|');
+
+    const cached = await cache.get(message, recentContext);
+    if (cached) {
+      await messageRepository.create({ sessionId, role: 'assistant', content: cached.response });
+      await sessionRepository.incrementMessageCount(sessionId);
+      return {
+        response: cached.response,
+        metadata: {
+          model: cached.model,
+          tokens: cached.tokens,
+          latencyMs: Date.now() - startTime,
+          cached: true,
+        },
+      };
+    }
+
+    try {
       const historyMessages = recentMessages.map(m => ({
         role: m.role as 'system' | 'user' | 'assistant',
         content: m.content,
         timestamp: m.createdAt,
       }));
 
-      const metadata = defaultModel.metadata as import('@/db/schema/models').ModelMetadata | null;
+      const registry = getModelRegistry();
+      const resolvedModel = await registry.getModelByModelId(modelName);
+      const modelMeta = resolvedModel?.metadata as import('@/db/schema/models').ModelMetadata | null;
 
       const result = await client.complete({
         model: modelName,
@@ -161,18 +284,40 @@ export class OrchestratorService {
         ],
         temperature: 0.7,
         maxTokens: 512,
-        extraBody: metadata?.extraBody,
+        extraBody: modelMeta?.extraBody,
       });
+
+      const tokens = result.usage?.totalTokens || 0;
 
       await messageRepository.create({ sessionId, role: 'assistant', content: result.content });
       await sessionRepository.incrementMessageCount(sessionId);
-      return result.content;
+
+      // Cache the response
+      await cache.set(message, recentContext, {
+        response: result.content,
+        model: modelName,
+        tokens,
+        cachedAt: Date.now(),
+      });
+
+      return {
+        response: result.content,
+        metadata: {
+          model: modelName,
+          tokens,
+          latencyMs: Date.now() - startTime,
+          cached: false,
+        },
+      };
     } catch (error) {
       coreLogger.error({ error, model: modelName }, 'Direct response failed');
       const errorMsg = `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
       await messageRepository.create({ sessionId, role: 'assistant', content: errorMsg });
       await sessionRepository.incrementMessageCount(sessionId);
-      return errorMsg;
+      return {
+        response: errorMsg,
+        metadata: { model: modelName, latencyMs: Date.now() - startTime },
+      };
     }
   }
 
@@ -242,6 +387,7 @@ export class OrchestratorService {
     task: string,
     input: string,
     context: AgentContext,
+    overrides?: { systemPrompt?: string; model?: string },
   ): Promise<unknown> {
     const agentManager = getAgentManager();
     const agentRole = role as AgentRole;
@@ -253,7 +399,8 @@ export class OrchestratorService {
       roleTools.length > 0,
     );
 
-    if (!routing.model) {
+    const finalModel = overrides?.model || routing.model;
+    if (!finalModel) {
       return { error: 'No model configured. Please add one in the Models page.' };
     }
 
@@ -263,9 +410,9 @@ export class OrchestratorService {
       sessionId: context.sessionId,
       userId: context.userId,
       topic: roleConfig.defaultTopic,
-      model: routing.model,
+      model: finalModel,
       role: agentRole,
-      systemPrompt: roleConfig.systemPromptTemplate,
+      systemPrompt: overrides?.systemPrompt || roleConfig.systemPromptTemplate,
       tools: roleTools,
     });
 
@@ -275,7 +422,7 @@ export class OrchestratorService {
       type: 'worker_spawned',
       sessionId: context.sessionId,
       userId: context.userId,
-      data: { workerId, role: agentRole, model: routing.model, parentAgentId: context.id },
+      data: { workerId, role: agentRole, model: finalModel, parentAgentId: context.id },
       timestamp: new Date(),
     });
 
@@ -291,9 +438,10 @@ export class OrchestratorService {
         workerId,
         role: agentRole,
         result,
-        model: routing.model,
+        model: finalModel,
         iterations: worker.getIteration(),
         durationMs,
+        totalTokens: worker.getTotalTokens(),
       };
 
       this.emit({
@@ -316,6 +464,59 @@ export class OrchestratorService {
     } catch (error) {
       return this.handleWorkerFailure(error as Error, worker, workerId, routing.model, agentRole, roleConfig, roleTools, task, input, context, startTime);
     }
+  }
+
+  // ── Team spawning (called by spawn_team meta-tool) ─────────────
+
+  async spawnTeam(
+    members: Array<{ role: string; task: string; input?: string }>,
+    context: AgentContext,
+  ): Promise<unknown> {
+    const teamId = `team-${Date.now()}`;
+    const startTime = Date.now();
+
+    this.emit({
+      type: 'team_started',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: {
+        teamId,
+        members: members.map(m => ({ role: m.role, task: m.task.slice(0, 100) })),
+      },
+      timestamp: new Date(),
+    });
+
+    // Spawn all workers in parallel
+    const results = await Promise.all(
+      members.map(async (member) => {
+        try {
+          const result = await this.spawnWorker(
+            member.role,
+            member.task,
+            member.input || '',
+            context,
+          );
+          return { role: member.role, task: member.task, result: String(result), error: null };
+        } catch (error) {
+          return { role: member.role, task: member.task, result: null, error: (error as Error).message };
+        }
+      }),
+    );
+
+    const durationMs = Date.now() - startTime;
+
+    this.emit({
+      type: 'team_completed',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: { teamId, results: results.map(r => ({ role: r.role, error: r.error })), durationMs },
+      timestamp: new Date(),
+    });
+
+    // Merge results into a structured report
+    return results.map(r =>
+      `### ${r.role} Agent\n**Task:** ${r.task}\n**Result:**\n${r.error ? `ERROR: ${r.error}` : r.result}`
+    ).join('\n\n---\n\n');
   }
 
   private async handleWorkerFailure(

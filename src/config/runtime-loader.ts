@@ -5,6 +5,16 @@ import { getSettingsService } from './settings-service';
 import { SETTINGS_REGISTRY, settingKeyToConfigPath } from './settings-registry';
 import { loadBootstrapConfig } from './bootstrap-loader';
 import { deepMerge } from './utils';
+// Lazy import to avoid circular dependency during module init
+// (vault → audit-repository → getDb, but DB isn't ready at import time)
+let _getVault: typeof import('@/security/vault').getVault | null = null;
+async function lazyGetVault() {
+  if (!_getVault) {
+    const mod = await import('@/security/vault');
+    _getVault = mod.getVault;
+  }
+  return _getVault();
+}
 
 /**
  * Load runtime configuration from the settings service (DB + vault).
@@ -20,8 +30,36 @@ export async function loadRuntimeConfig(
   // Build config from DB settings + defaults
   const runtimePartial: Record<string, any> = {};
 
+  const vault = await lazyGetVault();
+
   for (const def of SETTINGS_REGISTRY) {
-    const value = svc.getSync(def.key);
+    let value = svc.getSync(def.key);
+
+    // For secrets stored in vault, resolve the actual secret value
+    if (def.isSecret && def.vaultName) {
+      try {
+        const secret = await vault.getSystemSecret(def.vaultName);
+        if (secret) {
+          value = secret;
+        } else {
+          value = undefined; // Not in vault — fall through to env var
+        }
+      } catch {
+        value = undefined; // Vault error — fall through to env var
+      }
+    }
+
+    // If not in DB/vault (or empty default), fall back to env var
+    if ((value === undefined || value === null || (typeof value === 'string' && value === '' && def.defaultValue === '')) && def.envVar) {
+      const envVal = process.env[def.envVar];
+      if (envVal !== undefined && envVal !== '') {
+        value = def.valueType === 'number' ? Number(envVal)
+          : def.valueType === 'boolean' ? envVal !== 'false'
+          : def.valueType === 'string_array' ? envVal.split(',').map(s => s.trim()).filter(Boolean)
+          : envVal;
+      }
+    }
+
     if (value === undefined || value === null) continue;
     if (typeof value === 'string' && value === '' && def.defaultValue === '') continue;
 
