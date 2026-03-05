@@ -1,5 +1,5 @@
 /**
- * Skill proxy tools — list available skills and execute any skill tool generically.
+ * Skills tools — list and inspect domain knowledge skills.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -9,27 +9,14 @@ import type { AssistantClient } from '../client.js';
 export function registerSkillTools(server: McpServer, client: AssistantClient): void {
   server.tool(
     'assistant_list_skills',
-    'List all available skills and their tools. Skills include: filesystem, shell, git, browser, websearch, docker.',
+    'List all domain knowledge skills available to experts. Skills contain principles, best practices, and anti-patterns for domains like architecture, testing, security, etc.',
     {},
     async () => {
       try {
         const skills = await client.listSkills();
-        // Format as a readable summary
-        const summary = skills.map((s) => ({
-          id: s.id,
-          name: s.name,
-          version: s.version,
-          description: s.description,
-          tools: s.tools.map((t) => `${s.id}.${t.name}: ${t.description}`),
-        }));
-
+        const summary = skills.map((s) => `- **${s.name}** (${s.category}): ${s.description}`).join('\n');
         return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify(summary, null, 2),
-            },
-          ],
+          content: [{ type: 'text' as const, text: summary || 'No skills found.' }],
         };
       } catch (error) {
         return {
@@ -41,27 +28,20 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_execute_skill',
-    'Execute a specific skill tool on the assistant server. Use assistant_list_skills to see available tools. Example: skill_id="filesystem", tool_name="read_file", args={"path": "/etc/hostname"}',
+    'assistant_get_skill',
+    'Get full details of a domain knowledge skill including principles, best practices, anti-patterns, and frameworks.',
     {
-      skill_id: z.string().describe('Skill ID (e.g., "filesystem", "shell", "git", "docker", "websearch", "browser")'),
-      tool_name: z.string().describe('Tool name within the skill (e.g., "read_file", "execute", "status")'),
-      args: z.record(z.unknown()).optional().default({}).describe('Arguments for the tool as a JSON object'),
+      skill_id: z.string().describe('Skill ID (e.g., "software-architecture", "security-practices")'),
     },
-    async ({ skill_id, tool_name, args }) => {
+    async ({ skill_id }) => {
       try {
-        const result = await client.executeTool(skill_id, tool_name, args);
+        const skill = await client.getSkill(skill_id);
         return {
-          content: [
-            {
-              type: 'text' as const,
-              text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-            },
-          ],
+          content: [{ type: 'text' as const, text: JSON.stringify(skill, null, 2) }],
         };
       } catch (error) {
         return {
-          content: [{ type: 'text' as const, text: `Skill execution failed: ${(error as Error).message}` }],
+          content: [{ type: 'text' as const, text: `Failed to get skill: ${(error as Error).message}` }],
           isError: true,
         };
       }

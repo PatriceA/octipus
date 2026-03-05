@@ -10,5 +10,6 @@ export * from './hooks';
 export * from './permissions';
 export * from './pipelines';
 export * from './settings';
-export * from './presets';
+export * from './experts';
 export * from './recurring-tasks';
+export * from './skills';

@@ -66,7 +66,7 @@ describe('Permissions (Unit)', () => {
     test('can store user permissions', () => {
       const permissions = new Map<string, Map<string, string>>();
 
-      // Set permission: user -> skill -> level
+      // Set permission: user -> tool -> level
       const userPerms = new Map<string, string>();
       userPerms.set('filesystem', 'ALLOW');
       userPerms.set('shell', 'ASK');
@@ -89,20 +89,20 @@ describe('Permissions (Unit)', () => {
   });
 
   describe('permission inheritance', () => {
-    test('action inherits from skill if not specified', () => {
-      const skillLevel = 'ALLOW';
+    test('action inherits from tool if not specified', () => {
+      const toolLevel = 'ALLOW';
       const actionLevel: string | undefined = undefined;
 
-      const effectiveLevel = actionLevel ?? skillLevel;
+      const effectiveLevel = actionLevel ?? toolLevel;
 
       expect(effectiveLevel).toBe('ALLOW');
     });
 
-    test('action overrides skill level', () => {
-      const skillLevel = 'ALLOW';
+    test('action overrides tool level', () => {
+      const toolLevel = 'ALLOW';
       const actionLevel = 'DENY';
 
-      const effectiveLevel = actionLevel ?? skillLevel;
+      const effectiveLevel = actionLevel ?? toolLevel;
 
       expect(effectiveLevel).toBe('DENY');
     });
@@ -134,7 +134,7 @@ describe('Permissions (Unit)', () => {
       const defaultLevel = 'ASK';
       const userPermissions = new Map<string, string>();
 
-      const level = userPermissions.get('unknownSkill') ?? defaultLevel;
+      const level = userPermissions.get('unknownTool') ?? defaultLevel;
 
       expect(level).toBe('ASK');
     });

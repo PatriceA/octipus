@@ -195,7 +195,7 @@ export function buildStagesFromTemplate(
     return {
       name: stage.name,
       role: stage.role,
-      skillIds: roleConfig.skillIds,
+      toolIds: roleConfig.toolIds,
       systemPrompt: roleConfig.systemPromptTemplate,
       requiresApproval: stage.requiresApproval,
       stageIndex: index,

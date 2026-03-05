@@ -50,7 +50,7 @@ export class Vault {
       credentialType: NewVaultEntry['credentialType'];
       description?: string;
       tags?: string[];
-      allowedSkills?: string[];
+      allowedTools?: string[];
       allowedAgents?: string[];
       expiresAt?: Date;
       metadata?: Record<string, unknown>;
@@ -68,7 +68,7 @@ export class Vault {
       encryptionAuthTag: encrypted.authTag,
       description: options.description,
       tags: options.tags || [],
-      allowedSkills: options.allowedSkills || [],
+      allowedTools: options.allowedTools || [],
       allowedAgents: options.allowedAgents || [],
       expiresAt: options.expiresAt,
       metadata: options.metadata || {},
@@ -163,7 +163,7 @@ export class Vault {
         description: vault.description,
         tags: vault.tags,
         metadata: vault.metadata,
-        allowedSkills: vault.allowedSkills,
+        allowedTools: vault.allowedTools,
         allowedAgents: vault.allowedAgents,
         isActive: vault.isActive,
         expiresAt: vault.expiresAt,
@@ -188,7 +188,7 @@ export class Vault {
       value?: string;
       description?: string;
       tags?: string[];
-      allowedSkills?: string[];
+      allowedTools?: string[];
       allowedAgents?: string[];
       expiresAt?: Date;
       metadata?: Record<string, unknown>;
@@ -206,7 +206,7 @@ export class Vault {
 
     if (updates.description !== undefined) updateData.description = updates.description;
     if (updates.tags) updateData.tags = updates.tags;
-    if (updates.allowedSkills) updateData.allowedSkills = updates.allowedSkills;
+    if (updates.allowedTools) updateData.allowedTools = updates.allowedTools;
     if (updates.allowedAgents) updateData.allowedAgents = updates.allowedAgents;
     if (updates.expiresAt !== undefined) updateData.expiresAt = updates.expiresAt;
     if (updates.metadata) updateData.metadata = updates.metadata;
@@ -257,12 +257,12 @@ export class Vault {
   }
 
   /**
-   * Check if a skill/agent can access a credential
+   * Check if a tool/agent can access a credential
    */
   async canAccess(
     userId: string,
     credentialId: string,
-    options: { skillId?: string; agentId?: string }
+    options: { toolId?: string; agentId?: string }
   ): Promise<boolean> {
     const entry = await this.db
       .select()
@@ -279,9 +279,9 @@ export class Vault {
       return false;
     }
 
-    // Check skill permission
-    const allowedSkills = entry[0].allowedSkills || [];
-    if (allowedSkills.length > 0 && options.skillId && !allowedSkills.includes(options.skillId)) {
+    // Check tool permission
+    const allowedTools = entry[0].allowedTools || [];
+    if (allowedTools.length > 0 && options.toolId && !allowedTools.includes(options.toolId)) {
       return false;
     }
 
@@ -295,12 +295,12 @@ export class Vault {
   }
 
   /**
-   * Check if a skill/agent can access a credential by name
+   * Check if a tool/agent can access a credential by name
    */
   async canAccessByName(
     userId: string,
     name: string,
-    options: { skillId?: string; agentId?: string }
+    options: { toolId?: string; agentId?: string }
   ): Promise<boolean> {
     const entry = await this.db
       .select()

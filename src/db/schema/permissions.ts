@@ -3,10 +3,10 @@ import { users } from './users';
 
 export const permissionLevelEnum = pgEnum('permission_level', ['ALLOW', 'ASK', 'DENY']);
 
-export const skillPermissions = pgTable('skill_permissions', {
+export const toolPermissions = pgTable('skill_permissions', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id).notNull(),
-  skillId: text('skill_id').notNull(),
+  toolId: text('tool_id').notNull(),
   action: text('action').notNull(), // read, write, execute, etc.
   level: permissionLevelEnum('level').notNull(),
   // Optional conditions
@@ -18,9 +18,9 @@ export const skillPermissions = pgTable('skill_permissions', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  userSkillActionUnique: unique('user_skill_action_unique').on(table.userId, table.skillId, table.action),
+  userToolActionUnique: unique('user_skill_action_unique').on(table.userId, table.toolId, table.action),
   userIdIdx: index('skill_permissions_user_id_idx').on(table.userId),
-  skillIdIdx: index('skill_permissions_skill_id_idx').on(table.skillId),
+  toolIdIdx: index('skill_permissions_skill_id_idx').on(table.toolId),
 }));
 
 export interface PermissionCondition {
@@ -46,7 +46,7 @@ export const permissionRequests = pgTable('permission_requests', {
   userId: uuid('user_id').references(() => users.id).notNull(),
   agentId: text('agent_id').notNull(),
   sessionId: uuid('session_id'),
-  skillId: text('skill_id').notNull(),
+  toolId: text('tool_id').notNull(),
   action: text('action').notNull(),
   context: jsonb('context').$type<PermissionRequestContext>().notNull(),
   status: text('status').notNull().default('pending'), // pending, approved, denied, expired
@@ -69,7 +69,7 @@ export interface PermissionRequestContext {
   previewResult?: string;
 }
 
-export type SkillPermission = typeof skillPermissions.$inferSelect;
-export type NewSkillPermission = typeof skillPermissions.$inferInsert;
+export type ToolPermission = typeof toolPermissions.$inferSelect;
+export type NewToolPermission = typeof toolPermissions.$inferInsert;
 export type PermissionRequest = typeof permissionRequests.$inferSelect;
 export type NewPermissionRequest = typeof permissionRequests.$inferInsert;

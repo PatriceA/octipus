@@ -425,7 +425,7 @@ export class MCPBridge extends EventEmitter {
           name: `mcp_${serverId}_${tool.name}`,
           description: `[MCP:${connection.server.name}] ${tool.description}`,
           parameters: tool.inputSchema,
-          skillId: `mcp:${serverId}`,
+          toolId: `mcp:${serverId}`,
           execute: async (args) => {
             return bridge.callTool(serverId, tool.name, args);
           },

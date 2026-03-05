@@ -17,7 +17,7 @@ export const actionTypeEnum = pgEnum('action_type', [
   'spawn_agent',
   'webhook',
   'n8n_workflow',
-  'execute_skill',
+  'execute_tool',
 ]);
 
 export const hooks = pgTable('hooks', {
@@ -59,7 +59,7 @@ export interface TriggerConfig {
   webhookPath?: string;
   webhookSecret?: string;
   // For tool_executed
-  skillIds?: string[];
+  toolIds?: string[];
   toolNames?: string[];
   // Common
   sessionFilter?: {
@@ -84,10 +84,10 @@ export interface ActionConfig {
   // For n8n_workflow
   workflowId?: string;
   workflowData?: Record<string, unknown>;
-  // For execute_skill
-  skillId?: string;
-  skillAction?: string;
-  skillParams?: Record<string, unknown>;
+  // For execute_tool
+  toolId?: string;
+  toolAction?: string;
+  toolParams?: Record<string, unknown>;
 }
 
 export interface HookCondition {

@@ -71,10 +71,10 @@ export class ToolExecutor {
         continue;
       }
 
-      const skillId = tool.skillId || 'agent';
+      const toolId = tool.toolId || 'agent';
 
       // Internal orchestrator meta-tools are always allowed
-      if (skillId === 'agent') {
+      if (toolId === 'agent') {
         try {
           const toolExecStart = Date.now();
           const result = await tool.execute(toolCall.arguments, this.context);
@@ -82,7 +82,7 @@ export class ToolExecutor {
 
           agentLogger.info({
             agentId: this.context.id, sessionId: this.context.sessionId,
-            tool: toolCall.name, skillId, durationMs: toolExecMs,
+            tool: toolCall.name, toolId, durationMs: toolExecMs,
           }, 'Tool executed');
 
           results.push({ toolCallId: toolCall.id, result });
@@ -103,7 +103,7 @@ export class ToolExecutor {
       // Permission check
       const permResult = await permissionManager.check(
         this.context.userId,
-        skillId,
+        toolId,
         toolCall.name,
         toolCall.arguments
       );
@@ -124,7 +124,7 @@ export class ToolExecutor {
           this.context.userId,
           this.context.sessionId,
           toolCall.name,
-          skillId,
+          toolId,
           { args: toolCall.arguments, reason: permResult.reason }
         );
         continue;
@@ -134,7 +134,7 @@ export class ToolExecutor {
         const requestId = await permissionManager.requestApproval(
           this.context.userId,
           this.context.id,
-          skillId,
+          toolId,
           toolCall.name,
           toolCall.arguments,
           this.context.sessionId
@@ -144,7 +144,7 @@ export class ToolExecutor {
           requestId,
           toolName: toolCall.name,
           args: toolCall.arguments,
-          skillId,
+          toolId,
         });
 
         const approved = await permissionManager.waitForApproval(requestId);
@@ -165,7 +165,7 @@ export class ToolExecutor {
             this.context.userId,
             this.context.sessionId,
             toolCall.name,
-            skillId,
+            toolId,
             { args: toolCall.arguments, reason: 'user_denied', requestId }
           );
           continue;
@@ -180,7 +180,7 @@ export class ToolExecutor {
 
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
-          tool: toolCall.name, skillId, durationMs: toolExecMs,
+          tool: toolCall.name, toolId, durationMs: toolExecMs,
         }, 'Tool executed');
 
         results.push({ toolCallId: toolCall.id, result });
@@ -198,7 +198,7 @@ export class ToolExecutor {
           this.context.userId,
           this.context.sessionId,
           toolCall.name,
-          skillId,
+          toolId,
           { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs }
         );
       } catch (error) {

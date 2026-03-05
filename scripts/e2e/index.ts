@@ -19,7 +19,7 @@ import { testModels } from './tests/models';
 import { testVault } from './tests/vault';
 import { testSessions } from './tests/sessions';
 import { testAgents } from './tests/agents';
-import { testSkills, testSkillExecution } from './tests/skills';
+import { testTools, testToolExecution } from './tests/tools';
 import { testMCP } from './tests/mcp';
 import { testPipelines } from './tests/pipelines';
 import { testNotifications } from './tests/notifications';
@@ -27,8 +27,9 @@ import { testHooks } from './tests/hooks';
 import { testSettings } from './tests/settings';
 import { testAudit } from './tests/audit';
 import { testChat } from './tests/chat';
-import { testPresets } from './tests/presets';
+import { testExperts } from './tests/experts';
 import { testRecurringTasks } from './tests/recurring-tasks';
+import { testSkills } from './tests/skills';
 
 export async function run() {
   const runner = new TestRunner();
@@ -44,15 +45,16 @@ export async function run() {
     await testVault(runner, client);
     await testSessions(runner, client);
     await testAgents(runner, client);
-    await testSkills(runner, client);
-    await testSkillExecution(runner, client);
+    await testTools(runner, client);
+    await testToolExecution(runner, client);
     await testMCP(runner, client);
     await testPipelines(runner, client);
     await testNotifications(runner, client);
     await testHooks(runner, client);
     await testSettings(runner, client);
     await testAudit(runner, client);
-    await testPresets(runner, client);
+    await testExperts(runner, client);
+    await testSkills(runner, client);
     await testRecurringTasks(runner, client);
     await testChat(runner, client);
   } catch (err) {

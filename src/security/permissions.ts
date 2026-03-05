@@ -1,10 +1,10 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import {
-  skillPermissions,
+  toolPermissions,
   permissionRequests,
-  type SkillPermission,
-  type NewSkillPermission,
+  type ToolPermission,
+  type NewToolPermission,
   type PermissionRequest,
   type NewPermissionRequest,
   type PermissionCondition,
@@ -48,19 +48,19 @@ export class PermissionManager {
    */
   async check(
     userId: string,
-    skillId: string,
+    toolId: string,
     action: string,
     context?: Record<string, unknown>
   ): Promise<PermissionCheckResult> {
     // Get permission configuration
     const permission = await this.db
       .select()
-      .from(skillPermissions)
+      .from(toolPermissions)
       .where(
         and(
-          eq(skillPermissions.userId, userId),
-          eq(skillPermissions.skillId, skillId),
-          eq(skillPermissions.action, action)
+          eq(toolPermissions.userId, userId),
+          eq(toolPermissions.toolId, toolId),
+          eq(toolPermissions.action, action)
         )
       )
       .limit(1);
@@ -181,7 +181,7 @@ export class PermissionManager {
   async requestApproval(
     userId: string,
     agentId: string,
-    skillId: string,
+    toolId: string,
     action: string,
     context: Record<string, unknown>,
     sessionId?: string
@@ -193,7 +193,7 @@ export class PermissionManager {
       userId,
       agentId,
       sessionId,
-      skillId,
+      toolId,
       action,
       context: {
         toolName: action,
@@ -210,17 +210,17 @@ export class PermissionManager {
       resourceType: 'permission',
       resourceId: requestId,
       sessionId,
-      details: { skillId, action, agentId },
+      details: { toolId, action, agentId },
     });
 
-    securityLogger.info({ requestId, userId, skillId, action }, 'Permission requested');
+    securityLogger.info({ requestId, userId, toolId, action }, 'Permission requested');
 
     // Notify WebSocket listeners
     this.emitRequest({
       requestId,
       userId,
       agentId,
-      skillId,
+      toolId,
       action,
       toolName: action,
       args: context,
@@ -276,7 +276,7 @@ export class PermissionManager {
         resourceType: 'permission',
         resourceId: requestId,
         sessionId: request.sessionId || undefined,
-        details: { skillId: request.skillId, action: request.action, resolvedBy },
+        details: { toolId: request.toolId, action: request.action, resolvedBy },
       });
 
       // Notify waiting code
@@ -317,7 +317,7 @@ export class PermissionManager {
         resourceType: 'permission',
         resourceId: requestId,
         sessionId: request.sessionId || undefined,
-        details: { skillId: request.skillId, action: request.action, resolvedBy, reason: resolution },
+        details: { toolId: request.toolId, action: request.action, resolvedBy, reason: resolution },
       });
 
       // Notify waiting code
@@ -367,7 +367,7 @@ export class PermissionManager {
    */
   async setPermission(
     userId: string,
-    skillId: string,
+    toolId: string,
     action: string,
     level: PermissionLevel,
     options?: {
@@ -376,15 +376,15 @@ export class PermissionManager {
       reason?: string;
       expiresAt?: Date;
     }
-  ): Promise<SkillPermission> {
+  ): Promise<ToolPermission> {
     const existing = await this.db
       .select()
-      .from(skillPermissions)
+      .from(toolPermissions)
       .where(
         and(
-          eq(skillPermissions.userId, userId),
-          eq(skillPermissions.skillId, skillId),
-          eq(skillPermissions.action, action)
+          eq(toolPermissions.userId, userId),
+          eq(toolPermissions.toolId, toolId),
+          eq(toolPermissions.action, action)
         )
       )
       .limit(1);
@@ -392,7 +392,7 @@ export class PermissionManager {
     if (existing[0]) {
       // Update existing
       const result = await this.db
-        .update(skillPermissions)
+        .update(toolPermissions)
         .set({
           level,
           conditions: options?.conditions || [],
@@ -401,19 +401,19 @@ export class PermissionManager {
           expiresAt: options?.expiresAt,
           updatedAt: new Date(),
         })
-        .where(eq(skillPermissions.id, existing[0].id))
+        .where(eq(toolPermissions.id, existing[0].id))
         .returning();
 
-      securityLogger.info({ userId, skillId, action, level }, 'Permission updated');
+      securityLogger.info({ userId, toolId, action, level }, 'Permission updated');
       return result[0];
     }
 
     // Create new
     const result = await this.db
-      .insert(skillPermissions)
+      .insert(toolPermissions)
       .values({
         userId,
-        skillId,
+        toolId,
         action,
         level,
         conditions: options?.conditions || [],
@@ -423,34 +423,34 @@ export class PermissionManager {
       })
       .returning();
 
-    securityLogger.info({ userId, skillId, action, level }, 'Permission created');
+    securityLogger.info({ userId, toolId, action, level }, 'Permission created');
     return result[0];
   }
 
   /**
    * Get all permissions for a user
    */
-  async getUserPermissions(userId: string): Promise<SkillPermission[]> {
-    return this.db.select().from(skillPermissions).where(eq(skillPermissions.userId, userId));
+  async getUserPermissions(userId: string): Promise<ToolPermission[]> {
+    return this.db.select().from(toolPermissions).where(eq(toolPermissions.userId, userId));
   }
 
   /**
    * Delete a permission
    */
-  async deletePermission(userId: string, skillId: string, action: string): Promise<boolean> {
+  async deletePermission(userId: string, toolId: string, action: string): Promise<boolean> {
     const result = await this.db
-      .delete(skillPermissions)
+      .delete(toolPermissions)
       .where(
         and(
-          eq(skillPermissions.userId, userId),
-          eq(skillPermissions.skillId, skillId),
-          eq(skillPermissions.action, action)
+          eq(toolPermissions.userId, userId),
+          eq(toolPermissions.toolId, toolId),
+          eq(toolPermissions.action, action)
         )
       )
       .returning();
 
     if (result.length > 0) {
-      securityLogger.info({ userId, skillId, action }, 'Permission deleted');
+      securityLogger.info({ userId, toolId, action }, 'Permission deleted');
       return true;
     }
 

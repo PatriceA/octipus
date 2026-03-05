@@ -3,7 +3,7 @@
 /**
  * Assistant MCP Server — Entry point
  *
- * Exposes the assistant's capabilities (search, agents, sessions, models, chat, skills)
+ * Exposes the assistant's capabilities (search, agents, sessions, models, chat, tools)
  * as MCP tools that CLI models (Claude Code, Gemini CLI) can use.
  *
  * Usage:

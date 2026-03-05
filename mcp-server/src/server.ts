@@ -9,10 +9,11 @@ import { registerAgentTools } from './tools/agents.js';
 import { registerSessionTools } from './tools/sessions.js';
 import { registerModelTools } from './tools/models.js';
 import { registerChatTools } from './tools/chat.js';
-import { registerSkillTools } from './tools/skills.js';
-import { registerPresetTools } from './tools/presets.js';
+import { registerToolModuleTools } from './tools/tool-modules.js';
+import { registerExpertTools } from './tools/experts.js';
 import { registerRecurringTaskTools } from './tools/recurring-tasks.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
+import { registerSkillTools } from './tools/skills.js';
 
 export function createServer(assistantUrl: string): McpServer {
   const server = new McpServer({
@@ -28,10 +29,11 @@ export function createServer(assistantUrl: string): McpServer {
   registerSessionTools(server, client);
   registerModelTools(server, client);
   registerChatTools(server, client);
-  registerSkillTools(server, client);
-  registerPresetTools(server, client);
+  registerToolModuleTools(server, client);
+  registerExpertTools(server, client);
   registerRecurringTaskTools(server, client);
   registerKnowledgeTools(server, client);
+  registerSkillTools(server, client);
 
   return server;
 }

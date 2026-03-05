@@ -403,7 +403,7 @@ export class OAuthManager {
         credentialType: 'oauth_token',
         description: `OAuth access token for ${provider}`,
         tags: ['oauth', provider],
-        allowedSkills: provider === 'google' ? ['google-workspace'] : ['microsoft365'],
+        allowedTools: provider === 'google' ? ['google-workspace'] : ['microsoft365'],
         metadata,
       });
     }

@@ -33,7 +33,7 @@ export function registerRecurringTaskTools(server: McpServer, client: AssistantC
     {
       name: z.string().describe('Task name'),
       cron_expression: z.string().describe('Cron expression (e.g., "*/30 * * * *" for every 30 min)'),
-      action_type: z.string().describe('Action type: spawn_agent, execute_skill, or webhook'),
+      action_type: z.string().describe('Action type: spawn_agent, execute_tool, or webhook'),
       action_config: z.string().describe('JSON string of action configuration'),
       description: z.string().optional().describe('Task description'),
       timezone: z.string().optional().describe('Timezone (default: UTC)'),

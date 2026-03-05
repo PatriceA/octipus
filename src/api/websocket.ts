@@ -159,7 +159,7 @@ export function setupWebSocket(app: Elysia): void {
                 data.userId,
                 parsed.content,
                 'webchat',
-                parsed.presetId,
+                parsed.expertId,
               );
               // Use the resolved UUID sessionId from orchestrator (not the ephemeral ws- one)
               const resolvedId = result.sessionId || sessionId;

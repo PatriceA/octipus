@@ -23,7 +23,7 @@ export const vault = pgTable('vault', {
   tags: text('tags').array().default([]),
   metadata: jsonb('metadata').$type<VaultMetadata>().default({}),
   // Access control
-  allowedSkills: text('allowed_skills').array().default([]), // Empty = all skills
+  allowedTools: text('allowed_tools').array().default([]), // Empty = all tools
   allowedAgents: text('allowed_agents').array().default([]), // Empty = all agents
   // Lifecycle
   isActive: boolean('is_active').default(true).notNull(),

@@ -17,13 +17,14 @@ import { chatRoutes } from './routes/chat';
 import { pipelineRoutes } from './routes/pipelines';
 import { webhookRoutes } from './routes/webhooks';
 import { mcpRoutes } from './routes/mcp';
-import { skillRoutes } from './routes/skills';
+import { toolRoutes } from './routes/tools';
 import { voiceRoutes } from './routes/voice';
 import { notificationRoutes } from './routes/notifications';
 import { workspaceRoutes } from './routes/workspace';
 import { oauthRoutes } from './routes/oauth';
 import { settingsRoutes } from './routes/settings';
-import { presetRoutes } from './routes/presets';
+import { expertRoutes } from './routes/experts';
+import { skillRoutes } from './routes/skills';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { authGuard } from './middleware/auth-guard';
 import { setupWebSocket } from './websocket';
@@ -125,13 +126,14 @@ export function createServer() {
         .use(chatRoutes)
         .use(pipelineRoutes)
         .use(mcpRoutes)
-        .use(skillRoutes)
+        .use(toolRoutes)
         .use(voiceRoutes)
         .use(notificationRoutes)
         .use(workspaceRoutes)
         .use(oauthRoutes)
         .use(settingsRoutes)
-        .use(presetRoutes)
+        .use(expertRoutes)
+        .use(skillRoutes)
         .use(recurringTaskRoutes)
     );
 

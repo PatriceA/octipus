@@ -22,7 +22,7 @@ export interface ToolHandler {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  skillId?: string;
+  toolId?: string;
   final?: boolean;
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }

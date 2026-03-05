@@ -1,13 +1,14 @@
 import { getGateway } from '@/core/gateway';
 import { startServer } from '@/api/server';
 import { initializeChannels } from '@/channels';
-import { registerBuiltinSkills } from '@/skills';
+import { registerBuiltinTools } from '@/tools';
+import { seedSkills } from '@/db/seed-skills';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getHookManager } from '@/hooks/manager';
 import { initializeVault } from '@/security/vault';
 import { runMigrations } from '@/db/migrate';
 import { seedPresetTemplates } from '@/db/seed-presets';
-import { seedAgentPresets } from '@/db/seed-agent-presets';
+import { seedExperts } from '@/db/seed-experts';
 import { getSettingsService } from '@/config/settings-service';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { loadRuntimeConfig } from '@/config';
@@ -27,10 +28,11 @@ async function main() {
     await runMigrations();
     logger.info('Migrations complete');
 
-    // Seed preset data
+    // Seed system data
     await seedPresetTemplates();
-    await seedAgentPresets();
-    logger.info('Presets seeded');
+    await seedSkills();
+    await seedExperts();
+    logger.info('System data seeded');
 
     // Initialize vault (needs master key from .env)
     await initializeVault();
@@ -51,9 +53,9 @@ async function main() {
     // Subscribe to settings changes for hot-reload
     initializeHotReload();
 
-    // Register built-in skills
-    await registerBuiltinSkills();
-    logger.info('Skills registered');
+    // Register built-in tools
+    await registerBuiltinTools();
+    logger.info('Tools registered');
 
     // Connect to MCP servers
     const mcpBridge = getMCPBridge();

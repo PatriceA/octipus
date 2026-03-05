@@ -143,27 +143,27 @@ describe('AgentWorker (Unit)', () => {
       expect(typeof tool.execute).toBe('function');
     });
 
-    test('tool with skillId preserves it', () => {
+    test('tool with toolId preserves it', () => {
       const tool = {
         name: 'shell_exec',
         description: 'Execute shell command',
         parameters: {},
-        skillId: 'shell',
+        toolId: 'shell',
         execute: async () => 'ok',
       };
 
-      expect(tool.skillId).toBe('shell');
+      expect(tool.toolId).toBe('shell');
     });
 
-    test('tool without skillId defaults to undefined', () => {
-      const tool: { name: string; description: string; parameters: {}; skillId?: string; execute: () => Promise<string> } = {
+    test('tool without toolId defaults to undefined', () => {
+      const tool: { name: string; description: string; parameters: {}; toolId?: string; execute: () => Promise<string> } = {
         name: 'echo',
         description: 'Echo back',
         parameters: {},
         execute: async () => 'ok',
       };
 
-      expect(tool.skillId).toBeUndefined();
+      expect(tool.toolId).toBeUndefined();
     });
   });
 

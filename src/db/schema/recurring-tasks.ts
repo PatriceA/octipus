@@ -8,7 +8,7 @@ export const recurringTasks = pgTable('recurring_tasks', {
   description: text('description'),
   cronExpression: text('cron_expression').notNull(),
   timezone: text('timezone').default('UTC'),
-  actionType: text('action_type').notNull(), // spawn_agent, execute_skill, webhook
+  actionType: text('action_type').notNull(), // spawn_agent, execute_tool, webhook
   actionConfig: jsonb('action_config').$type<RecurringTaskConfig>().notNull(),
   isEnabled: boolean('is_enabled').default(true).notNull(),
   lastRunAt: timestamp('last_run_at'),
@@ -28,8 +28,8 @@ export interface RecurringTaskConfig {
   agentTopic?: string;
   agentPrompt?: string;
   agentRole?: string;
-  // For execute_skill
-  skillId?: string;
+  // For execute_tool
+  toolId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   // For webhook

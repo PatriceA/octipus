@@ -1,4 +1,8 @@
-export type AgentRole = 'orchestrator' | 'research' | 'coding' | 'review' | 'qa' | 'communication' | 'general';
+export type AgentRole =
+  | 'orchestrator' | 'research' | 'coding' | 'review' | 'qa'
+  | 'communication' | 'general'
+  | 'design' | 'devops' | 'security' | 'data' | 'ai'
+  | 'finance' | 'automation' | 'pm' | 'writing';
 
 export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_approval' | 'completed' | 'failed';
 
@@ -6,7 +10,7 @@ export type StageStatus = 'pending' | 'running' | 'awaiting_approval' | 'approve
 
 export interface RoleConfig {
   role: AgentRole;
-  skillIds: string[];
+  toolIds: string[];
   defaultTopic: string;
   systemPromptTemplate: string;
 }
@@ -55,7 +59,7 @@ export interface PipelineStage {
   name: string;
   role: AgentRole;
   model?: string;
-  skillIds: string[];
+  toolIds: string[];
   systemPrompt: string;
   input: string;
   output?: string;

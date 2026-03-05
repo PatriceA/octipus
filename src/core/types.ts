@@ -56,7 +56,7 @@ export interface Task {
 export type PermissionLevel = 'ALLOW' | 'ASK' | 'DENY';
 
 export interface Permission {
-  skillId: string;
+  toolId: string;
   action: string;
   level: PermissionLevel;
   conditions?: PermissionCondition[];
@@ -70,7 +70,7 @@ export interface PermissionCondition {
 export interface PermissionRequest {
   id: string;
   agentId: string;
-  skillId: string;
+  toolId: string;
   action: string;
   context: Record<string, unknown>;
   status: 'pending' | 'approved' | 'denied';
@@ -152,7 +152,7 @@ export type ActionType =
   | 'spawn_agent'
   | 'webhook'
   | 'n8n_workflow'
-  | 'execute_skill';
+  | 'execute_tool';
 
 export interface TriggerConfig {
   // For message_received
@@ -165,7 +165,7 @@ export interface TriggerConfig {
   webhookPath?: string;
   webhookSecret?: string;
   // For tool_executed
-  skillIds?: string[];
+  toolIds?: string[];
   toolNames?: string[];
   // Common
   sessionFilter?: {
@@ -191,10 +191,10 @@ export interface ActionConfig {
   // For n8n_workflow
   workflowId?: string;
   workflowData?: Record<string, unknown>;
-  // For execute_skill
-  skillId?: string;
-  skillAction?: string;
-  skillParams?: Record<string, unknown>;
+  // For execute_tool
+  toolId?: string;
+  toolAction?: string;
+  toolParams?: Record<string, unknown>;
 }
 
 export interface HookCondition {
@@ -224,26 +224,26 @@ export interface Hook {
   updatedAt: Date;
 }
 
-// Skill Types
-export interface SkillManifest {
+// Tool Types
+export interface ToolManifest {
   id: string;
   name: string;
   version: string;
   description: string;
   author?: string;
-  permissions: SkillPermission[];
-  tools: SkillTool[];
+  permissions: ToolPermission[];
+  tools: ToolFunction[];
   dependencies?: string[];
 }
 
-export interface SkillPermission {
+export interface ToolPermission {
   action: string;
   description: string;
   defaultLevel: PermissionLevel;
   dangerous?: boolean;
 }
 
-export interface SkillTool {
+export interface ToolFunction {
   name: string;
   description: string;
   parameters: Record<string, ToolParameter>;

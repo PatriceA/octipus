@@ -47,7 +47,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           user.id,
           message,
           channel,
-          body.presetId,
+          body.expertId,
         );
 
         return {
@@ -70,7 +70,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         message: t.String({ minLength: 1 }),
         sessionId: t.Optional(t.String()),
         channel: t.Optional(t.String()),
-        presetId: t.Optional(t.String()),
+        expertId: t.Optional(t.String()),
       }),
       detail: { tags: ['chat'] },
     },

@@ -22,7 +22,7 @@ const PRESET_TEMPLATES: Array<{
         name: 'Research & Discovery',
         description: 'Research the topic, find relevant docs, libraries, and best practices.',
         topic: 'analysis',
-        skillIds: ['browser', 'websearch'],
+        toolIds: ['browser', 'websearch'],
         requiresApproval: false,
         promptTemplate: `You are a research specialist. Investigate the following development task thoroughly.
 
@@ -42,7 +42,7 @@ Be thorough but concise. Cite sources where possible.`,
         name: 'Requirements & Architecture',
         description: 'Define requirements and design the architecture. Requires user approval before proceeding.',
         topic: 'analysis',
-        skillIds: ['filesystem'],
+        toolIds: ['filesystem'],
         requiresApproval: true,
         promptTemplate: `Based on the research findings, create a detailed requirements document and architecture plan.
 
@@ -75,7 +75,7 @@ Present this clearly so the user can review and approve before coding begins.`,
         name: 'Implementation',
         description: 'Write the code following the approved architecture plan.',
         topic: 'coding',
-        skillIds: ['filesystem', 'shell', 'git'],
+        toolIds: ['filesystem', 'shell', 'git'],
         requiresApproval: false,
         promptTemplate: `Implement the approved plan. Write clean, well-documented code following project conventions.
 
@@ -98,7 +98,7 @@ Report what you implemented and any deviations from the plan.`,
         name: 'Testing',
         description: 'Write and run tests for the implementation.',
         topic: 'coding',
-        skillIds: ['filesystem', 'shell'],
+        toolIds: ['filesystem', 'shell'],
         requiresApproval: false,
         promptTemplate: `Write tests for the implementation and run them.
 
@@ -124,7 +124,7 @@ Report:
         name: 'Code Review',
         description: 'Review the implementation for quality, bugs, and security.',
         topic: 'analysis',
-        skillIds: ['filesystem', 'git'],
+        toolIds: ['filesystem', 'git'],
         requiresApproval: false,
         promptTemplate: `Review the implementation and test results for quality, bugs, and security.
 
@@ -149,7 +149,7 @@ Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
         name: 'QA Validation',
         description: 'Validate the implementation works end-to-end.',
         topic: 'analysis',
-        skillIds: ['browser', 'shell'],
+        toolIds: ['browser', 'shell'],
         requiresApproval: false,
         promptTemplate: `Perform QA validation on the implementation. Test it end-to-end.
 
@@ -176,7 +176,7 @@ Report:
         name: 'Summary & Handoff',
         description: 'Generate a summary of everything that was done.',
         topic: 'general',
-        skillIds: [],
+        toolIds: [],
         requiresApproval: false,
         promptTemplate: `Create a final summary of the completed development work.
 
@@ -206,7 +206,7 @@ Keep it concise and actionable.`,
         name: 'Deep Investigation',
         description: 'Thoroughly research the topic using web search and browsing.',
         topic: 'analysis',
-        skillIds: ['browser', 'websearch'],
+        toolIds: ['browser', 'websearch'],
         requiresApproval: false,
         promptTemplate: `Investigate the following topic thoroughly. Search the web, find documentation, examples, and expert opinions.
 
@@ -223,7 +223,7 @@ Provide detailed findings with:
         name: 'Analysis & Recommendations',
         description: 'Analyze findings and produce actionable recommendations.',
         topic: 'general',
-        skillIds: [],
+        toolIds: [],
         requiresApproval: false,
         promptTemplate: `Analyze the research findings and produce a clear, actionable report.
 
@@ -251,7 +251,7 @@ Produce:
         name: 'Reproduce & Diagnose',
         description: 'Reproduce the bug and identify the root cause.',
         topic: 'coding',
-        skillIds: ['filesystem', 'shell', 'git'],
+        toolIds: ['filesystem', 'shell', 'git'],
         requiresApproval: true,
         promptTemplate: `Investigate and diagnose the following bug.
 
@@ -274,7 +274,7 @@ Report:
         name: 'Implement Fix',
         description: 'Implement the fix based on the diagnosis.',
         topic: 'coding',
-        skillIds: ['filesystem', 'shell', 'git'],
+        toolIds: ['filesystem', 'shell', 'git'],
         requiresApproval: false,
         promptTemplate: `Implement the bug fix based on the diagnosis.
 
@@ -295,7 +295,7 @@ Report what was changed and why.`,
         name: 'Verify Fix',
         description: 'Verify the fix resolves the bug without regressions.',
         topic: 'coding',
-        skillIds: ['filesystem', 'shell'],
+        toolIds: ['filesystem', 'shell'],
         requiresApproval: false,
         promptTemplate: `Verify the bug fix is correct and complete.
 

@@ -8,7 +8,7 @@ export const fixtures = {
   testUsername: `e2e_test_${Date.now()}`,
   testPassword: 'TestP@ssw0rd!2024',
   chatSessionId: null as string | null,
-  testPresetId: null as string | null,
+  testExpertId: null as string | null,
   testRecurringTaskId: null as string | null,
 };
 

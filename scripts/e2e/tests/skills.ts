@@ -5,80 +5,85 @@ import type { APIClient } from '../client';
 export async function testSkills(runner: TestRunner, client: APIClient) {
   console.log('\n\x1b[1mSkills\x1b[0m');
 
-  await runner.test('GET /skills returns registered skills', async () => {
-    const { status, data } = await client.request<{ skills: Array<{ id: string; name: string; tools: unknown[] }> }>('GET', '/skills');
+  let systemSkillId: string | null = null;
+  let customSkillId: string | null = null;
+
+  await runner.test('GET /skills returns system skills', async () => {
+    const { status, data } = await client.request<{
+      skills: Array<{ id: string; name: string; category: string; isSystem: boolean }>;
+    }>('GET', '/skills');
     assertStatus(status, 200);
     assert(Array.isArray(data.skills), 'skills should be an array');
-    assert(data.skills.length > 0, 'Expected at least one skill');
-    // Verify expected skills are present
-    const skillIds = data.skills.map(s => s.id);
-    assert(skillIds.includes('filesystem'), `filesystem skill missing, got: ${skillIds.join(', ')}`);
-    assert(skillIds.includes('websearch'), `websearch skill missing, got: ${skillIds.join(', ')}`);
+    assert(data.skills.length >= 10, `Expected at least 10 system skills, got ${data.skills.length}`);
+
+    const systemSkills = data.skills.filter(s => s.isSystem);
+    assert(systemSkills.length >= 10, `Expected at least 10 system skills, got ${systemSkills.length}`);
+
+    const names = data.skills.map(s => s.name);
+    assert(names.includes('Software Architecture'), 'Expected Software Architecture skill');
+    assert(names.includes('Security Practices'), 'Expected Security Practices skill');
+
+    systemSkillId = systemSkills[0].id;
   });
 
-  await runner.test('GET /skills/:id returns specific skill', async () => {
-    const { status, data } = await client.request<{ id: string; name: string; tools: Array<{ name: string }> }>('GET', '/skills/filesystem');
+  await runner.test('GET /skills/:id returns a specific skill', async () => {
+    if (!systemSkillId) return;
+    const { status, data } = await client.request<{
+      id: string; name: string; category: string; principles: string[];
+    }>('GET', `/skills/${systemSkillId}`);
     assertStatus(status, 200);
-    assert(data.id === 'filesystem', `Expected id 'filesystem', got ${data.id}`);
-    assert(Array.isArray(data.tools), 'tools should be an array');
-    assert(data.tools.length > 0, 'Expected at least one tool in filesystem skill');
+    assert(!!data.id, 'Expected skill id');
+    assert(!!data.name, 'Expected skill name');
+    assert(Array.isArray(data.principles), 'Expected principles array');
   });
 
-  await runner.test('GET /skills/:id returns error for unknown skill', async () => {
-    const { data } = await client.request<{ error?: string }>('GET', '/skills/nonexistent_skill');
-    assert(!!(data as any).error, 'Expected error for unknown skill');
-  });
-
-  await runner.test('GET /skills/tools/all returns combined skill + MCP tools', async () => {
-    const { status, data } = await client.request<{ tools: Array<{ name: string; source: string }> }>('GET', '/skills/tools/all');
+  await runner.test('POST /skills creates a custom skill', async () => {
+    const { status, data } = await client.request<{
+      id: string; name: string; category: string; isSystem: boolean;
+    }>('POST', '/skills', {
+      name: 'E2E Test Skill',
+      description: 'Created by e2e test suite',
+      category: 'testing',
+      principles: ['Test first', 'Verify always'],
+      bestPractices: ['Use assertions'],
+      antiPatterns: ['Skip tests'],
+    });
     assertStatus(status, 200);
-    assert(Array.isArray(data.tools), 'tools should be an array');
-    assert(data.tools.length > 0, 'Expected at least one tool');
+    assert(!!data.id, 'Expected skill id');
+    assert(data.name === 'E2E Test Skill', `Expected name "E2E Test Skill", got "${data.name}"`);
+    assert(data.isSystem === false, 'Custom skill should not be system');
+    customSkillId = data.id;
   });
 
-  await runner.test('GET /skills/permissions returns user permissions', async () => {
-    const { status, data } = await client.request<{ permissions: unknown[] }>('GET', '/skills/permissions');
+  await runner.test('PATCH /skills/:id updates a skill', async () => {
+    if (!customSkillId) return;
+    const { status, data } = await client.request<{
+      id: string; name: string;
+    }>('PATCH', `/skills/${customSkillId}`, {
+      name: 'E2E Updated Skill',
+    });
     assertStatus(status, 200);
-    assert(Array.isArray(data.permissions), 'permissions should be an array');
-  });
-}
-
-export async function testSkillExecution(runner: TestRunner, client: APIClient) {
-  console.log('\n\x1b[1mSkill Execution (MCP bridge endpoint)\x1b[0m');
-
-  await runner.test('POST /skills/:skillId/tools/:toolName/execute runs filesystem.read_file', async () => {
-    const { status, data } = await client.request<{ result?: unknown; error?: string }>(
-      'POST', '/skills/filesystem/tools/read_file/execute',
-      { args: { path: '/etc/hostname' } },
-    );
-    assertStatus(status, 200);
-    assert(data.result !== undefined || data.error !== undefined, 'Expected result or error');
+    assert(data.name === 'E2E Updated Skill', `Expected updated name, got "${data.name}"`);
   });
 
-  await runner.test('POST /skills/:skillId/tools/:toolName/execute returns error for unknown tool', async () => {
+  await runner.test('DELETE /skills/:id rejects deleting system skills', async () => {
+    if (!systemSkillId) return;
     const { status, data } = await client.request<{ error?: string }>(
-      'POST', '/skills/filesystem/tools/nonexistent_tool/execute',
-      { args: {} },
+      'DELETE', `/skills/${systemSkillId}`,
     );
-    assertStatus(status, 200);
-    assert(!!(data as any).error, 'Expected error for unknown tool');
+    assert(status === 200 || status === 403, `Unexpected status ${status}`);
+    if (status === 200) {
+      assert(!!(data as any).error, 'Expected error for system skill deletion');
+    }
   });
 
-  await runner.test('POST /skills/:skillId/tools/:toolName/execute returns error for unknown skill', async () => {
-    const { status, data } = await client.request<{ error?: string }>(
-      'POST', '/skills/nonexistent/tools/something/execute',
-      { args: {} },
+  await runner.test('DELETE /skills/:id deletes a custom skill', async () => {
+    if (!customSkillId) return;
+    const { status, data } = await client.request<{ deleted?: boolean }>(
+      'DELETE', `/skills/${customSkillId}`,
     );
     assertStatus(status, 200);
-    assert(!!(data as any).error, 'Expected error for unknown skill');
-  });
-
-  await runner.test('POST /skills/:skillId/tools/:toolName/execute works without args', async () => {
-    const { status, data } = await client.request<{ result?: unknown; error?: string }>(
-      'POST', '/skills/filesystem/tools/list_directory/execute',
-      { args: { path: '/tmp' } },
-    );
-    assertStatus(status, 200);
-    assert(data.result !== undefined || data.error !== undefined, 'Expected result or error');
+    assert(data.deleted === true, 'Expected deleted: true');
+    customSkillId = null;
   });
 }

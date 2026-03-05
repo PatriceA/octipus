@@ -5,7 +5,7 @@ import { SECRET_PLACEHOLDER_PATTERN } from '@/db/schema/vault';
 
 export interface InjectionContext {
   userId: string;
-  skillId?: string;
+  toolId?: string;
   agentId?: string;
 }
 
@@ -43,13 +43,13 @@ export async function injectSecrets(
     try {
       // Check access permission
       const canAccess = await vault.canAccessByName(context.userId, secretName, {
-        skillId: context.skillId,
+        toolId: context.toolId,
         agentId: context.agentId,
       });
 
       if (!canAccess) {
         securityLogger.warn(
-          { userId: context.userId, secretName, skillId: context.skillId, agentId: context.agentId },
+          { userId: context.userId, secretName, toolId: context.toolId, agentId: context.agentId },
           'Secret access denied'
         );
         errors.push(`Access denied to secret: ${secretName}`);
@@ -60,7 +60,7 @@ export async function injectSecrets(
           action: 'credential_accessed',
           resourceType: 'credential',
           resourceId: secretName,
-          details: { secretName, skillId: context.skillId, agentId: context.agentId, denied: true },
+          details: { secretName, toolId: context.toolId, agentId: context.agentId, denied: true },
         });
         continue;
       }
@@ -78,7 +78,7 @@ export async function injectSecrets(
       injectedSecrets.push(secretName);
 
       securityLogger.debug(
-        { userId: context.userId, secretName, skillId: context.skillId },
+        { userId: context.userId, secretName, toolId: context.toolId },
         'Secret injected'
       );
 
@@ -87,7 +87,7 @@ export async function injectSecrets(
         action: 'credential_accessed',
         resourceType: 'credential',
         resourceId: secretName,
-        details: { secretName, skillId: context.skillId, agentId: context.agentId, injected: true },
+        details: { secretName, toolId: context.toolId, agentId: context.agentId, injected: true },
       });
     } catch (error) {
       errors.push(`Error retrieving secret ${secretName}: ${(error as Error).message}`);

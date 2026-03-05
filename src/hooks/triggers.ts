@@ -11,7 +11,7 @@ export interface TriggerContext {
   agent?: AgentContext;
   tool?: {
     name: string;
-    skillId: string;
+    toolId: string;
     args: Record<string, unknown>;
     result?: unknown;
   };
@@ -124,9 +124,9 @@ function matchesToolTrigger(
 ): boolean {
   if (!tool) return false;
 
-  // Check skill filter
-  if (config.skillIds?.length) {
-    if (!config.skillIds.includes(tool.skillId)) {
+  // Check tool filter
+  if (config.toolIds?.length) {
+    if (!config.toolIds.includes(tool.toolId)) {
       return false;
     }
   }

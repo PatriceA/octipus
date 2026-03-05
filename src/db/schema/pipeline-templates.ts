@@ -5,7 +5,7 @@ export interface PipelineStepConfig {
   name: string;
   description?: string;
   topic: string;
-  skillIds: string[];
+  toolIds: string[];
   requiresApproval: boolean;
   promptTemplate?: string;
 }

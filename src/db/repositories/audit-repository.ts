@@ -119,7 +119,7 @@ export class AuditRepository {
     userId: string,
     sessionId: string,
     toolName: string,
-    skillId: string,
+    toolId: string,
     details?: AuditDetails
   ): Promise<void> {
     await this.log({
@@ -128,7 +128,7 @@ export class AuditRepository {
       resourceType: 'tool',
       resourceId: toolName,
       sessionId,
-      details: { ...details, toolName, skillId },
+      details: { ...details, toolName, toolId },
     });
   }
 
@@ -136,7 +136,7 @@ export class AuditRepository {
     userId: string,
     sessionId: string,
     toolName: string,
-    skillId: string,
+    toolId: string,
     details?: AuditDetails
   ): Promise<void> {
     await this.log({
@@ -145,17 +145,17 @@ export class AuditRepository {
       resourceType: 'tool',
       resourceId: toolName,
       sessionId,
-      details: { ...details, toolName, skillId },
+      details: { ...details, toolName, toolId },
     });
   }
 
-  async logCredentialAccessed(userId: string, credentialId: string, skillId?: string): Promise<void> {
+  async logCredentialAccessed(userId: string, credentialId: string, toolId?: string): Promise<void> {
     await this.log({
       userId,
       action: 'credential_accessed',
       resourceType: 'credential',
       resourceId: credentialId,
-      details: { skillId } as AuditDetails,
+      details: { toolId } as AuditDetails,
     });
   }
 

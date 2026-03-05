@@ -52,7 +52,7 @@ export interface AuditDetails {
   error?: string;
   duration?: number;
   toolName?: string;
-  skillId?: string;
+  toolId?: string;
   model?: string;
   tokenCount?: number;
   cost?: number;

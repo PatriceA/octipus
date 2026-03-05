@@ -1,71 +1,48 @@
 import { Elysia, t } from 'elysia';
+import { eq, or } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
-import { getSkillRegistry } from '@/skills/registry';
-import { getMCPBridge } from '@/mcp/bridge';
-import { getPermissionManager } from '@/security/permissions';
+import { getDb } from '@/db/postgres';
+import { skills } from '@/db/schema/skills';
 
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
 
-  // List all registered skills with their tools
   .get(
     '/',
     async ({ user }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
+      const db = getDb();
+
+      if (user) {
+        if (user.id === 'system') {
+          return { skills: await db.select().from(skills) };
+        }
+        return {
+          skills: await db.select().from(skills).where(
+            or(eq(skills.isSystem, true), eq(skills.userId, user.id))
+          ),
+        };
       }
 
-      const registry = getSkillRegistry();
-      const manifests = registry.getManifests();
-
-      const skills = manifests.map((m) => ({
-        id: m.id,
-        name: m.name,
-        version: m.version,
-        description: m.description,
-        author: m.author,
-        isInitialized: registry.isInitialized(m.id),
-        permissions: m.permissions,
-        tools: m.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-          returns: t.returns,
-        })),
-      }));
-
-      return { skills };
+      return {
+        skills: await db.select().from(skills).where(eq(skills.isSystem, true)),
+      };
     },
     { detail: { tags: ['skills'] } }
   )
 
-  // Get a specific skill's details
   .get(
     '/:id',
     async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
+      const db = getDb();
+      const [skill] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
+
+      if (!skill) return { error: 'Skill not found' };
+
+      if (!skill.isSystem && user && !user.isAdmin && skill.userId !== user.id) {
+        return { error: 'Not authorized' };
       }
 
-      const registry = getSkillRegistry();
-      const skill = registry.get(params.id);
-
-      if (!skill) {
-        return { error: 'Skill not found' };
-      }
-
-      const manifest = skill.getManifest();
-
-      return {
-        id: manifest.id,
-        name: manifest.name,
-        version: manifest.version,
-        description: manifest.description,
-        author: manifest.author,
-        isInitialized: registry.isInitialized(manifest.id),
-        permissions: manifest.permissions,
-        tools: manifest.tools,
-      };
+      return skill;
     },
     {
       params: t.Object({ id: t.String() }),
@@ -73,160 +50,102 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     }
   )
 
-  // Get all available tools (skills + MCP combined)
-  .get(
-    '/tools/all',
-    async ({ user }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
-
-      const registry = getSkillRegistry();
-      const handlers = registry.getAllToolHandlers();
-
-      const skillTools = handlers.map((h) => ({
-        name: h.name,
-        description: h.description,
-        parameters: h.parameters,
-        source: 'skill' as const,
-        skillId: h.skillId,
-      }));
-
-      // MCP tools
-      const bridge = getMCPBridge();
-      const mcpTools = bridge.getAllTools().map((t) => ({
-        name: t.name,
-        description: t.description,
-        parameters: t.inputSchema,
-        source: 'mcp' as const,
-        skillId: `mcp:${t.serverId}`,
-      }));
-
-      return { tools: [...skillTools, ...mcpTools] };
-    },
-    { detail: { tags: ['skills'] } }
-  )
-
-  // Get user's permission overrides
-  .get(
-    '/permissions',
-    async ({ user }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
-
-      const pm = getPermissionManager();
-      const permissions = await pm.getUserPermissions(user.id);
-
-      return {
-        permissions: permissions.map((p) => ({
-          skillId: p.skillId,
-          action: p.action,
-          level: p.level,
-          reason: p.reason,
-          expiresAt: p.expiresAt,
-        })),
-      };
-    },
-    { detail: { tags: ['skills'] } }
-  )
-
-  // Set a permission level for a skill action
-  .put(
-    '/permissions',
-    async ({ user, body }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
-
-      const pm = getPermissionManager();
-      const result = await pm.setPermission(
-        user.id,
-        body.skillId,
-        body.action,
-        body.level as 'ALLOW' | 'ASK' | 'DENY',
-        { grantedBy: user.id, reason: body.reason }
-      );
-
-      return {
-        permission: {
-          skillId: result.skillId,
-          action: result.action,
-          level: result.level,
-        },
-      };
-    },
-    {
-      body: t.Object({
-        skillId: t.String(),
-        action: t.String(),
-        level: t.Union([t.Literal('ALLOW'), t.Literal('ASK'), t.Literal('DENY')]),
-        reason: t.Optional(t.String()),
-      }),
-      detail: { tags: ['skills'] },
-    }
-  )
-
-  // Execute a skill tool directly via API (used by MCP server bridge)
   .post(
-    '/:skillId/tools/:toolName/execute',
-    async ({ user, params, body }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+    '/',
+    async ({ user, body }) => {
+      if (!user) return { error: 'Not authenticated' };
 
-      const registry = getSkillRegistry();
-      const tool = registry.findTool(`${params.skillId}__${params.toolName}`);
+      const db = getDb();
+      const [created] = await db.insert(skills).values({
+        id: body.id ?? crypto.randomUUID(),
+        name: body.name,
+        category: body.category ?? 'engineering',
+        description: body.description,
+        principles: body.principles ?? [],
+        bestPractices: body.bestPractices ?? [],
+        antiPatterns: body.antiPatterns ?? [],
+        frameworks: body.frameworks ?? [],
+        isSystem: false,
+        userId: user.id === 'system' ? null : user.id,
+      }).returning();
 
-      if (!tool) {
-        return { error: `Tool '${params.skillId}__${params.toolName}' not found` };
-      }
-
-      // Construct a minimal AgentContext for API-driven execution
-      const context: import('@/core/types').AgentContext = {
-        id: `api-${Date.now().toString(36)}`,
-        sessionId: 'api',
-        userId: user.id,
-        topic: 'api',
-        model: 'api',
-        role: 'general',
-        status: 'running',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        metadata: { source: 'mcp-bridge' },
-      };
-
-      try {
-        const result = await tool.execute(body.args || {}, context);
-        return { result };
-      } catch (err) {
-        return { error: `Tool execution failed: ${(err as Error).message}` };
-      }
+      return created;
     },
     {
-      params: t.Object({ skillId: t.String(), toolName: t.String() }),
       body: t.Object({
-        args: t.Optional(t.Record(t.String(), t.Any())),
+        id: t.Optional(t.String()),
+        name: t.String(),
+        category: t.Optional(t.String()),
+        description: t.String(),
+        principles: t.Optional(t.Array(t.String())),
+        bestPractices: t.Optional(t.Array(t.String())),
+        antiPatterns: t.Optional(t.Array(t.String())),
+        frameworks: t.Optional(t.Array(t.String())),
       }),
       detail: { tags: ['skills'] },
     }
   )
 
-  // Reset a permission to default (delete override)
-  .delete(
-    '/permissions/:skillId/:action',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
+  .patch(
+    '/:id',
+    async ({ user, params, body }) => {
+      if (!user) return { error: 'Not authenticated' };
 
-      const pm = getPermissionManager();
-      const deleted = await pm.deletePermission(user.id, params.skillId, params.action);
+      const db = getDb();
+      const [existing] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
 
-      return { deleted };
+      if (!existing) return { error: 'Skill not found' };
+      if (!user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
+
+      const updateData: Record<string, unknown> = { updatedAt: new Date() };
+      if (body.name !== undefined) updateData.name = body.name;
+      if (body.category !== undefined) updateData.category = body.category;
+      if (body.description !== undefined) updateData.description = body.description;
+      if (body.principles !== undefined) updateData.principles = body.principles;
+      if (body.bestPractices !== undefined) updateData.bestPractices = body.bestPractices;
+      if (body.antiPatterns !== undefined) updateData.antiPatterns = body.antiPatterns;
+      if (body.frameworks !== undefined) updateData.frameworks = body.frameworks;
+
+      const [updated] = await db
+        .update(skills)
+        .set(updateData)
+        .where(eq(skills.id, params.id))
+        .returning();
+
+      return updated;
     },
     {
-      params: t.Object({ skillId: t.String(), action: t.String() }),
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        name: t.Optional(t.String()),
+        category: t.Optional(t.String()),
+        description: t.Optional(t.String()),
+        principles: t.Optional(t.Array(t.String())),
+        bestPractices: t.Optional(t.Array(t.String())),
+        antiPatterns: t.Optional(t.Array(t.String())),
+        frameworks: t.Optional(t.Array(t.String())),
+      }),
+      detail: { tags: ['skills'] },
+    }
+  )
+
+  .delete(
+    '/:id',
+    async ({ user, params }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const db = getDb();
+      const [existing] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
+
+      if (!existing) return { error: 'Skill not found' };
+      if (existing.isSystem) return { error: 'Cannot delete system skills' };
+      if (!user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
+
+      const result = await db.delete(skills).where(eq(skills.id, params.id)).returning();
+      return { deleted: result.length > 0 };
+    },
+    {
+      params: t.Object({ id: t.String() }),
       detail: { tags: ['skills'] },
     }
   );

@@ -1,196 +1,65 @@
-import { BaseSkill } from './base-skill';
-import type { ToolHandler } from '@/core/agent-worker';
-import type { SkillManifest } from '@/core/types';
-import { skillLogger } from '@/utils/logger';
+import { eq, or, isNull, inArray } from 'drizzle-orm';
+import { getDb } from '@/db/postgres';
+import { skills } from '@/db/schema/skills';
+import type { Skill } from '@/db/schema/skills';
 
-export interface SkillRegistryOptions {
-  autoInitialize?: boolean;
+function buildPromptFragment(skill: Skill): string {
+  const lines = [
+    `## ${skill.name}`,
+    skill.description,
+    '',
+    '**Principles:** ' + (skill.principles as string[]).join(' | '),
+    '',
+    '**Best Practices:** ' + (skill.bestPractices as string[]).join(' | '),
+    '',
+    '**Avoid:** ' + (skill.antiPatterns as string[]).join(' | '),
+  ];
+  const fw = skill.frameworks as string[];
+  if (fw.length > 0) {
+    lines.push('', '**Frameworks:** ' + fw.join(', '));
+  }
+  return lines.join('\n');
 }
 
 export class SkillRegistry {
-  private skills: Map<string, BaseSkill> = new Map();
-  private initialized: Set<string> = new Set();
-
-  /**
-   * Register a skill
-   */
-  async register(skill: BaseSkill, options?: SkillRegistryOptions): Promise<void> {
-    if (this.skills.has(skill.id)) {
-      throw new Error(`Skill already registered: ${skill.id}`);
+  /** Get all skills (system + user-visible) */
+  async getAll(userId?: string): Promise<Skill[]> {
+    const db = getDb();
+    if (userId) {
+      return db.select().from(skills).where(
+        or(eq(skills.isSystem, true), eq(skills.userId, userId))
+      );
     }
-
-    this.skills.set(skill.id, skill);
-
-    if (options?.autoInitialize !== false) {
-      await this.initialize(skill.id);
-    }
-
-    skillLogger.info({ skillId: skill.id, name: skill.name, version: skill.version }, 'Skill registered');
+    return db.select().from(skills);
   }
 
-  /**
-   * Initialize a skill
-   */
-  async initialize(skillId: string): Promise<void> {
-    const skill = this.skills.get(skillId);
-    if (!skill) {
-      throw new Error(`Skill not found: ${skillId}`);
-    }
-
-    if (this.initialized.has(skillId)) {
-      return;
-    }
-
-    await skill.initialize();
-    this.initialized.add(skillId);
+  /** Get a single skill by id */
+  async get(skillId: string): Promise<Skill | undefined> {
+    const db = getDb();
+    const [skill] = await db.select().from(skills).where(eq(skills.id, skillId)).limit(1);
+    return skill;
   }
 
-  /**
-   * Initialize all registered skills
-   */
-  async initializeAll(): Promise<void> {
-    for (const skillId of this.skills.keys()) {
-      if (!this.initialized.has(skillId)) {
-        await this.initialize(skillId);
-      }
-    }
+  /** Get multiple skills by ids */
+  async getByIds(skillIds: string[]): Promise<Skill[]> {
+    if (skillIds.length === 0) return [];
+    const db = getDb();
+    return db.select().from(skills).where(inArray(skills.id, skillIds));
   }
 
-  /**
-   * Get a skill by ID
-   */
-  get(skillId: string): BaseSkill | undefined {
-    return this.skills.get(skillId);
-  }
-
-  /**
-   * Get all registered skills
-   */
-  getAll(): BaseSkill[] {
-    return Array.from(this.skills.values());
-  }
-
-  /**
-   * Get all skill manifests
-   */
-  getManifests(): SkillManifest[] {
-    return this.getAll().map((skill) => skill.getManifest());
-  }
-
-  /**
-   * Get all tool handlers from all skills
-   */
-  getAllToolHandlers(): ToolHandler[] {
-    const handlers: ToolHandler[] = [];
-
-    for (const skill of this.skills.values()) {
-      if (this.initialized.has(skill.id)) {
-        handlers.push(...skill.getToolHandlers());
-      }
-    }
-
-    return handlers;
-  }
-
-  /**
-   * Get tool handlers for specific skills
-   */
-  getToolHandlersForSkills(skillIds: string[]): ToolHandler[] {
-    const handlers: ToolHandler[] = [];
-
-    for (const skillId of skillIds) {
-      const skill = this.skills.get(skillId);
-      if (skill && this.initialized.has(skillId)) {
-        handlers.push(...skill.getToolHandlers());
-      }
-    }
-
-    return handlers;
-  }
-
-  /**
-   * Find a tool handler by full name (skillId__toolName)
-   */
-  findTool(fullName: string): ToolHandler | undefined {
-    const [skillId, toolName] = fullName.split('__');
-    const skill = this.skills.get(skillId);
-
-    if (!skill || !this.initialized.has(skillId)) {
-      return undefined;
-    }
-
-    return skill.getTool(toolName);
-  }
-
-  /**
-   * Unregister a skill
-   */
-  async unregister(skillId: string): Promise<boolean> {
-    const skill = this.skills.get(skillId);
-    if (!skill) {
-      return false;
-    }
-
-    if (this.initialized.has(skillId)) {
-      await skill.shutdown();
-      this.initialized.delete(skillId);
-    }
-
-    this.skills.delete(skillId);
-    skillLogger.info({ skillId }, 'Skill unregistered');
-
-    return true;
-  }
-
-  /**
-   * Shutdown all skills
-   */
-  async shutdownAll(): Promise<void> {
-    for (const [skillId, skill] of this.skills) {
-      if (this.initialized.has(skillId)) {
-        await skill.shutdown();
-        this.initialized.delete(skillId);
-      }
-    }
-
-    skillLogger.info('All skills shut down');
-  }
-
-  /**
-   * Check if a skill is registered
-   */
-  has(skillId: string): boolean {
-    return this.skills.has(skillId);
-  }
-
-  /**
-   * Check if a skill is initialized
-   */
-  isInitialized(skillId: string): boolean {
-    return this.initialized.has(skillId);
-  }
-
-  /**
-   * Get skill count
-   */
-  get count(): number {
-    return this.skills.size;
-  }
-
-  /**
-   * Get initialized skill count
-   */
-  get initializedCount(): number {
-    return this.initialized.size;
+  /** Build combined prompt fragment for a set of skill ids */
+  async buildPromptFragment(skillIds: string[]): Promise<string> {
+    const found = await this.getByIds(skillIds);
+    if (found.length === 0) return '';
+    return found.map(buildPromptFragment).join('\n\n');
   }
 }
 
-// Singleton instance
-let registryInstance: SkillRegistry | null = null;
+let instance: SkillRegistry | null = null;
 
 export function getSkillRegistry(): SkillRegistry {
-  if (!registryInstance) {
-    registryInstance = new SkillRegistry();
+  if (!instance) {
+    instance = new SkillRegistry();
   }
-  return registryInstance;
+  return instance;
 }

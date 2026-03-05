@@ -58,7 +58,7 @@ export class OrchestratorService {
     userId: string,
     message: string,
     channel?: string,
-    presetId?: string,
+    expertId?: string,
   ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     try {
       const registry = getModelRegistry();
@@ -96,9 +96,9 @@ export class OrchestratorService {
         });
       }
 
-      // Preset bypass: skip classification and orchestrator, spawn worker directly
-      if (presetId) {
-        return this.handlePresetMessage(presetId, message, resolvedSessionId, userId);
+      // Expert bypass: skip classification and orchestrator, spawn worker directly
+      if (expertId) {
+        return this.handleExpertMessage(expertId, message, resolvedSessionId, userId);
       }
 
       const classification = classifyMessage(message);
@@ -175,50 +175,62 @@ export class OrchestratorService {
     return session.id;
   }
 
-  // ── Preset-based direct worker spawning ─────────────────────────
+  // ── Expert-based direct worker spawning ─────────────────────────
 
-  private async handlePresetMessage(
-    presetId: string,
+  private async handleExpertMessage(
+    expertId: string,
     message: string,
     sessionId: string,
     userId: string,
   ): Promise<{ response: string; sessionId: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     const { getDb } = await import('@/db/postgres');
     const db = getDb();
-    const { presets } = await import('@/db/schema/presets');
+    const { experts } = await import('@/db/schema/experts');
     const { eq } = await import('drizzle-orm');
 
-    const [preset] = await db.select().from(presets).where(eq(presets.id, presetId)).limit(1);
-    if (!preset) {
+    const [expert] = await db.select().from(experts).where(eq(experts.id, expertId)).limit(1);
+    if (!expert) {
       return {
-        response: `Preset not found: ${presetId}`,
+        response: `Expert not found: ${expertId}`,
         sessionId,
         classification: { type: 'task', confidence: 1, complexity: 'simple' },
       };
     }
 
     const startTime = Date.now();
-    const agentRole = preset.role as AgentRole;
+    const agentRole = expert.role as AgentRole;
     const context: AgentContext = {
-      id: `preset-${Date.now()}`,
+      id: `expert-${Date.now()}`,
       sessionId,
       userId,
-      model: preset.modelPreference || '',
-      topic: preset.name,
+      model: expert.modelPreference || '',
+      topic: expert.name,
       role: agentRole,
       status: 'running',
       createdAt: new Date(),
       updatedAt: new Date(),
-      metadata: { presetId },
+      metadata: { expertId },
     };
 
     await messageRepository.create({ sessionId, role: 'user', content: message });
     await sessionRepository.incrementMessageCount(sessionId);
 
     try {
+      // Inject domain knowledge from assigned skills
+      let expertPrompt = expert.systemPrompt || undefined;
+      const skillIds = (expert.skillIds as string[]) || [];
+      if (skillIds.length > 0) {
+        const { getSkillRegistry } = await import('@/skills/registry');
+        const fragment = await getSkillRegistry().buildPromptFragment(skillIds);
+        if (fragment) {
+          const base = expertPrompt || '';
+          expertPrompt = base + '\n\n# Domain Knowledge\n' + fragment;
+        }
+      }
+
       const result = await this.spawnWorker(agentRole, message, '', context, {
-        systemPrompt: preset.systemPrompt || undefined,
-        model: preset.modelPreference || undefined,
+        systemPrompt: expertPrompt,
+        model: expert.modelPreference || undefined,
       });
 
       const response = String(result);
@@ -228,13 +240,13 @@ export class OrchestratorService {
       return {
         response,
         sessionId,
-        classification: { type: 'task', confidence: 1, complexity: 'moderate', topic: preset.role },
+        classification: { type: 'task', confidence: 1, complexity: 'moderate', topic: expert.role },
         metadata: { latencyMs: Date.now() - startTime },
       };
     } catch (error) {
-      coreLogger.error({ error, presetId, role: agentRole }, 'Preset worker failed');
+      coreLogger.error({ error, expertId: expertId, role: agentRole }, 'Expert worker failed');
       return {
-        response: `Preset worker failed: ${(error as Error).message}`,
+        response: `Expert worker failed: ${(error as Error).message}`,
         sessionId,
         classification: { type: 'task', confidence: 1 },
       };

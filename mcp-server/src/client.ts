@@ -1,6 +1,6 @@
 /**
  * Lightweight HTTP client for the assistant backend REST API.
- * All methods correspond to existing API endpoints or the new skill execution endpoint.
+ * All methods correspond to existing API endpoints or the new tool execution endpoint.
  */
 
 import { getAuthHeaders } from './auth.js';
@@ -73,7 +73,7 @@ export interface ChatResponse {
   };
 }
 
-export interface Preset {
+export interface Expert {
   id: string;
   name: string;
   description?: string;
@@ -83,7 +83,7 @@ export interface Preset {
   modelPreference?: string;
 }
 
-export interface SkillInfo {
+export interface ToolInfo {
   id: string;
   name: string;
   version: string;
@@ -137,40 +137,40 @@ export class AssistantClient {
     });
   }
 
-  async chatWithPreset(message: string, presetId: string, sessionId?: string): Promise<ChatResponse> {
+  async chatWithExpert(message: string, expertId: string, sessionId?: string): Promise<ChatResponse> {
     return this.request<ChatResponse>('/api/chat', {
       method: 'POST',
       body: JSON.stringify({
         message,
         sessionId,
-        presetId,
+        expertId,
         channel: 'mcp',
       }),
     });
   }
 
-  // ─── Presets ───
+  // ─── Experts ───
 
-  async listPresets(): Promise<Preset[]> {
-    const res = await this.request<{ presets: Preset[] }>('/api/presets');
-    return res.presets || [];
+  async listExperts(): Promise<Expert[]> {
+    const res = await this.request<{ experts: Expert[] }>('/api/experts');
+    return res.experts || [];
   }
 
-  async getPreset(id: string): Promise<Preset> {
-    return this.request<Preset>(`/api/presets/${id}`);
+  async getExpert(id: string): Promise<Expert> {
+    return this.request<Expert>(`/api/experts/${id}`);
   }
 
   // ─── Search ───
 
   async search(query: string, maxResults = 10): Promise<{ query: string; resultCount: number; results: SearchResult[] }> {
-    return this.request('/api/skills/websearch/tools/search/execute', {
+    return this.request('/api/tools/websearch/tools/search/execute', {
       method: 'POST',
       body: JSON.stringify({ args: { query, max_results: maxResults } }),
     });
   }
 
   async fetchPage(url: string, maxLength = 10000): Promise<PageContent> {
-    return this.request('/api/skills/websearch/tools/fetch_page/execute', {
+    return this.request('/api/tools/websearch/tools/fetch_page/execute', {
       method: 'POST',
       body: JSON.stringify({ args: { url, max_length: maxLength } }),
     });
@@ -243,22 +243,35 @@ export class AssistantClient {
     return res.credentials || [];
   }
 
-  // ─── Skills ───
+  // ─── Tools ───
 
-  async listSkills(): Promise<SkillInfo[]> {
-    const res = await this.request<{ skills: SkillInfo[] }>('/api/skills');
-    return res.skills || [];
+  async listTools(): Promise<ToolInfo[]> {
+    const res = await this.request<{ tools: ToolInfo[] }>('/api/tools');
+    return res.tools || [];
   }
 
-  async executeTool(skillId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
+  async executeTool(toolId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
     const res = await this.request<{ result: unknown }>(
-      `/api/skills/${skillId}/tools/${toolName}/execute`,
+      `/api/tools/${toolId}/tools/${toolName}/execute`,
       {
         method: 'POST',
         body: JSON.stringify({ args }),
       },
     );
     return res.result;
+  }
+
+  // ─── Skills (domain knowledge) ───
+
+  async listSkills(): Promise<Array<{
+    id: string; name: string; category: string; description: string; isSystem: boolean;
+  }>> {
+    const res = await this.request<{ skills: any[] }>('/api/skills');
+    return res.skills || [];
+  }
+
+  async getSkill(id: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/skills/${id}`);
   }
 
   // ─── Recurring Tasks ───
@@ -299,14 +312,14 @@ export class AssistantClient {
   // ─── Knowledge / RAG ───
 
   async searchKnowledge(query: string, limit?: number): Promise<{ results: any[] }> {
-    return this.request('/api/skills/knowledge/tools/search_knowledge/execute', {
+    return this.request('/api/tools/knowledge/tools/search_knowledge/execute', {
       method: 'POST',
       body: JSON.stringify({ args: { query, limit: limit || 5 } }),
     });
   }
 
   async indexFile(path: string, type?: string): Promise<{ indexed: boolean; chunks: number; path: string }> {
-    return this.request('/api/skills/knowledge/tools/index_file/execute', {
+    return this.request('/api/tools/knowledge/tools/index_file/execute', {
       method: 'POST',
       body: JSON.stringify({ args: { path, type: type || 'document' } }),
     });

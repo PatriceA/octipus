@@ -1,4 +1,4 @@
-import { googleWorkspaceSkill } from '../../src/skills/google-workspace/index';
+import { googleWorkspaceTool } from '../../src/tools/google-workspace/index';
 import { getDb } from '../../src/db/index';
 import { users } from '../../src/db/schema';
 import { eq } from 'drizzle-orm';
@@ -24,7 +24,7 @@ async function getNewestEmail() {
   await pm.setPermission(patrice.id, 'google-workspace', 'email_read', 'ALLOW');
 
   // Initialize the skill (registers tools)
-  await googleWorkspaceSkill.initialize();
+  await googleWorkspaceTool.initialize();
 
   const context = {
     id: 'script-' + Date.now(),
@@ -38,7 +38,7 @@ async function getNewestEmail() {
     updatedAt: new Date(),
   };
 
-  const tool = googleWorkspaceSkill.getTool('gmail_list');
+  const tool = googleWorkspaceTool.getTool('gmail_list');
   if (!tool) {
     console.error('Tool gmail_list not found');
     return;

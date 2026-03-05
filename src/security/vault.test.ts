@@ -214,28 +214,28 @@ describe('Vault Encryption (Crypto)', () => {
   });
 
   describe('access control logic', () => {
-    test('empty allowedSkills means all skills allowed', () => {
-      const allowedSkills: string[] = [];
-      const requestedSkill = 'any-skill';
+    test('empty allowedTools means all tools allowed', () => {
+      const allowedTools: string[] = [];
+      const requestedTool = 'any-tool';
 
       // When empty, all are allowed
-      const allowed = allowedSkills.length === 0 || allowedSkills.includes(requestedSkill);
+      const allowed = allowedTools.length === 0 || allowedTools.includes(requestedTool);
       expect(allowed).toBe(true);
     });
 
-    test('specific allowedSkills restricts access', () => {
-      const allowedSkills = ['shell', 'git'];
-      const requestedSkill = 'browser';
+    test('specific allowedTools restricts access', () => {
+      const allowedTools = ['shell', 'git'];
+      const requestedTool = 'browser';
 
-      const allowed = allowedSkills.length === 0 || allowedSkills.includes(requestedSkill);
+      const allowed = allowedTools.length === 0 || allowedTools.includes(requestedTool);
       expect(allowed).toBe(false);
     });
 
-    test('matching skill is allowed', () => {
-      const allowedSkills = ['shell', 'git'];
-      const requestedSkill = 'shell';
+    test('matching tool is allowed', () => {
+      const allowedTools = ['shell', 'git'];
+      const requestedTool = 'shell';
 
-      const allowed = allowedSkills.length === 0 || allowedSkills.includes(requestedSkill);
+      const allowed = allowedTools.length === 0 || allowedTools.includes(requestedTool);
       expect(allowed).toBe(true);
     });
   });

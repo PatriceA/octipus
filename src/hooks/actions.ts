@@ -33,8 +33,8 @@ export async function executeAction(
       case 'n8n_workflow':
         return await executeN8NWorkflow(config, context);
 
-      case 'execute_skill':
-        return await executeSkill(config, context);
+      case 'execute_tool':
+        return await executeTool(config, context);
 
       default:
         return { success: false, error: `Unknown action type: ${hook.action}` };
@@ -190,34 +190,34 @@ async function executeN8NWorkflow(
   };
 }
 
-async function executeSkill(
+async function executeTool(
   config: Hook['actionConfig'],
   context: TriggerContext
 ): Promise<ActionResult> {
-  const { getSkillRegistry } = await import('@/skills/registry');
-  const registry = getSkillRegistry();
+  const { getToolRegistry } = await import('@/tools/registry');
+  const registry = getToolRegistry();
 
-  const skillId = config.skillId;
-  const action = config.skillAction;
+  const toolId = config.toolId;
+  const action = config.toolAction;
 
-  if (!skillId || !action) {
-    return { success: false, error: 'Skill ID and action required' };
+  if (!toolId || !action) {
+    return { success: false, error: 'Tool ID and action required' };
   }
 
-  const skill = registry.get(skillId);
-  if (!skill) {
-    return { success: false, error: `Skill not found: ${skillId}` };
+  const toolModule = registry.get(toolId);
+  if (!toolModule) {
+    return { success: false, error: `Tool not found: ${toolId}` };
   }
 
-  const tool = skill.getTool(action);
+  const tool = toolModule.getTool(action);
   if (!tool) {
-    return { success: false, error: `Tool not found: ${skillId}.${action}` };
+    return { success: false, error: `Tool not found: ${toolId}.${action}` };
   }
 
   // Interpolate parameters
   const params: Record<string, unknown> = {};
-  if (config.skillParams) {
-    for (const [key, value] of Object.entries(config.skillParams as Record<string, unknown>)) {
+  if (config.toolParams) {
+    for (const [key, value] of Object.entries(config.toolParams as Record<string, unknown>)) {
       if (typeof value === 'string') {
         params[key] = interpolateTemplate(value, context);
       } else {
