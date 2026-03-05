@@ -39,41 +39,8 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
     { detail: { tags: ['tools'] } }
   )
 
-  // Get a specific tool's details
-  .get(
-    '/:id',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
-
-      const registry = getToolRegistry();
-      const tool = registry.get(params.id);
-
-      if (!tool) {
-        return { error: 'Tool not found' };
-      }
-
-      const manifest = tool.getManifest();
-
-      return {
-        id: manifest.id,
-        name: manifest.name,
-        version: manifest.version,
-        description: manifest.description,
-        author: manifest.author,
-        isInitialized: registry.isInitialized(manifest.id),
-        permissions: manifest.permissions,
-        tools: manifest.tools,
-      };
-    },
-    {
-      params: t.Object({ id: t.String() }),
-      detail: { tags: ['tools'] },
-    }
-  )
-
   // Get all available tools (registered + MCP combined)
+  // MUST be before /:id to avoid matching "all" as an id
   .get(
     '/all',
     async ({ user }) => {
@@ -108,6 +75,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   )
 
   // Get user's permission overrides
+  // MUST be before /:id to avoid matching "permissions" as an id
   .get(
     '/permissions',
     async ({ user }) => {
@@ -167,6 +135,59 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
     }
   )
 
+  // Reset a permission to default (delete override)
+  .delete(
+    '/permissions/:toolId/:action',
+    async ({ user, params }) => {
+      if (!user) {
+        return { error: 'Not authenticated' };
+      }
+
+      const pm = getPermissionManager();
+      const deleted = await pm.deletePermission(user.id, params.toolId, params.action);
+
+      return { deleted };
+    },
+    {
+      params: t.Object({ toolId: t.String(), action: t.String() }),
+      detail: { tags: ['tools'] },
+    }
+  )
+
+  // Get a specific tool's details
+  .get(
+    '/:id',
+    async ({ user, params }) => {
+      if (!user) {
+        return { error: 'Not authenticated' };
+      }
+
+      const registry = getToolRegistry();
+      const tool = registry.get(params.id);
+
+      if (!tool) {
+        return { error: 'Tool not found' };
+      }
+
+      const manifest = tool.getManifest();
+
+      return {
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+        description: manifest.description,
+        author: manifest.author,
+        isInitialized: registry.isInitialized(manifest.id),
+        permissions: manifest.permissions,
+        tools: manifest.tools,
+      };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: { tags: ['tools'] },
+    }
+  )
+
   // Execute a tool directly via API (used by MCP server bridge)
   .post(
     '/:toolId/tools/:toolName/execute',
@@ -208,25 +229,6 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       body: t.Object({
         args: t.Optional(t.Record(t.String(), t.Any())),
       }),
-      detail: { tags: ['tools'] },
-    }
-  )
-
-  // Reset a permission to default (delete override)
-  .delete(
-    '/permissions/:toolId/:action',
-    async ({ user, params }) => {
-      if (!user) {
-        return { error: 'Not authenticated' };
-      }
-
-      const pm = getPermissionManager();
-      const deleted = await pm.deletePermission(user.id, params.toolId, params.action);
-
-      return { deleted };
-    },
-    {
-      params: t.Object({ toolId: t.String(), action: t.String() }),
       detail: { tags: ['tools'] },
     }
   );

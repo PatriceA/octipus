@@ -45,7 +45,7 @@ interface Skill {
 }
 
 interface UserPermission {
-  skillId: string;
+  toolId: string;
   action: string;
   level: 'ALLOW' | 'ASK' | 'DENY';
   reason?: string;
@@ -147,18 +147,18 @@ function SkillCard({
 }: {
   skill: Skill;
   userPermissions: UserPermission[];
-  onPermissionChange: (skillId: string, action: string, level: PermissionLevel) => void;
-  onPermissionReset: (skillId: string, action: string) => void;
+  onPermissionChange: (toolId: string, action: string, level: PermissionLevel) => void;
+  onPermissionReset: (toolId: string, action: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
   const getEffectiveLevel = (perm: SkillPermission): PermissionLevel => {
-    const override = userPermissions.find((p) => p.skillId === skill.id && p.action === perm.action);
+    const override = userPermissions.find((p) => p.toolId === skill.id && p.action === perm.action);
     return override?.level || perm.defaultLevel;
   };
 
   const hasOverride = (perm: SkillPermission): boolean => {
-    return userPermissions.some((p) => p.skillId === skill.id && p.action === perm.action);
+    return userPermissions.some((p) => p.toolId === skill.id && p.action === perm.action);
   };
 
   const overrideCount = skill.permissions.filter((p) => hasOverride(p)).length;
@@ -359,9 +359,9 @@ export default function SkillsPage() {
   const mcpTools = mcpData?.tools || [];
 
   const handlePermissionChange = useCallback(
-    async (skillId: string, action: string, level: PermissionLevel) => {
+    async (toolId: string, action: string, level: PermissionLevel) => {
       try {
-        await api.put('/tools/permissions', { skillId, action, level });
+        await api.put('/tools/permissions', { toolId, action, level });
         queryClient.invalidateQueries({ queryKey: ['tool-permissions'] });
       } catch {
         // Ignore
@@ -371,9 +371,9 @@ export default function SkillsPage() {
   );
 
   const handlePermissionReset = useCallback(
-    async (skillId: string, action: string) => {
+    async (toolId: string, action: string) => {
       try {
-        await api.delete(`/tools/permissions/${skillId}/${action}`);
+        await api.delete(`/tools/permissions/${toolId}/${action}`);
         queryClient.invalidateQueries({ queryKey: ['tool-permissions'] });
       } catch {
         // Ignore
