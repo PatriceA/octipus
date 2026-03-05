@@ -171,8 +171,8 @@ function CLIIntegrationsSection() {
     queryKey: ['github-status'],
     queryFn: async () => {
       try {
-        const skills = await api.get<{ skills: { id: string; isInitialized: boolean }[] }>('/skills');
-        const ghSkill = skills?.skills?.find((s) => s.id === 'github');
+        const skills = await api.get<{ tools: { id: string; isInitialized: boolean }[] }>('/tools');
+        const ghSkill = skills?.tools?.find((s) => s.id === 'github');
         return { available: !!ghSkill, configured: !!ghSkill?.isInitialized };
       } catch {
         return { available: false, configured: false };
@@ -184,8 +184,8 @@ function CLIIntegrationsSection() {
     queryKey: ['gitlab-status'],
     queryFn: async () => {
       try {
-        const skills = await api.get<{ skills: { id: string; isInitialized: boolean }[] }>('/skills');
-        const glSkill = skills?.skills?.find((s) => s.id === 'gitlab');
+        const skills = await api.get<{ tools: { id: string; isInitialized: boolean }[] }>('/tools');
+        const glSkill = skills?.tools?.find((s) => s.id === 'gitlab');
         return { available: !!glSkill, configured: !!glSkill?.isInitialized };
       } catch {
         return { available: false, configured: false };

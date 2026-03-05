@@ -39,13 +39,13 @@ export function IntegrationsView() {
     try {
       const [ws, sk, gs, ms] = await Promise.allSettled([
         api.get<WorkspaceConfig>('/workspace'),
-        api.get<{ skills: SkillInfo[] }>('/skills'),
+        api.get<{ tools: SkillInfo[] }>('/tools'),
         api.get<OAuthStatus>('/auth/oauth/google/status'),
         api.get<OAuthStatus>('/auth/oauth/microsoft/status'),
       ]);
 
       if (ws.status === 'fulfilled') setWorkspace(ws.value);
-      if (sk.status === 'fulfilled') setSkills(sk.value?.skills || []);
+      if (sk.status === 'fulfilled') setSkills(sk.value?.tools || []);
       if (gs.status === 'fulfilled') setGoogleStatus(gs.value);
       else setGoogleStatus({ connected: false, provider: 'google' });
       if (ms.status === 'fulfilled') setMicrosoftStatus(ms.value);

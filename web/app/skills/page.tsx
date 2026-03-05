@@ -322,21 +322,21 @@ export default function SkillsPage() {
   const queryClient = useQueryClient();
 
   const { data: skillsData, isLoading: skillsLoading } = useQuery({
-    queryKey: ['skills'],
+    queryKey: ['tools'],
     queryFn: async () => {
       try {
-        return await api.get<{ skills: Skill[] }>('/skills');
+        return await api.get<{ tools: Skill[] }>('/tools');
       } catch {
-        return { skills: [] };
+        return { tools: [] };
       }
     },
   });
 
   const { data: permissionsData } = useQuery({
-    queryKey: ['skill-permissions'],
+    queryKey: ['tool-permissions'],
     queryFn: async () => {
       try {
-        return await api.get<{ permissions: UserPermission[] }>('/skills/permissions');
+        return await api.get<{ permissions: UserPermission[] }>('/tools/permissions');
       } catch {
         return { permissions: [] };
       }
@@ -354,15 +354,15 @@ export default function SkillsPage() {
     },
   });
 
-  const skills = skillsData?.skills || [];
+  const skills = skillsData?.tools || [];
   const userPermissions = permissionsData?.permissions || [];
   const mcpTools = mcpData?.tools || [];
 
   const handlePermissionChange = useCallback(
     async (skillId: string, action: string, level: PermissionLevel) => {
       try {
-        await api.put('/skills/permissions', { skillId, action, level });
-        queryClient.invalidateQueries({ queryKey: ['skill-permissions'] });
+        await api.put('/tools/permissions', { skillId, action, level });
+        queryClient.invalidateQueries({ queryKey: ['tool-permissions'] });
       } catch {
         // Ignore
       }
@@ -373,8 +373,8 @@ export default function SkillsPage() {
   const handlePermissionReset = useCallback(
     async (skillId: string, action: string) => {
       try {
-        await api.delete(`/skills/permissions/${skillId}/${action}`);
-        queryClient.invalidateQueries({ queryKey: ['skill-permissions'] });
+        await api.delete(`/tools/permissions/${skillId}/${action}`);
+        queryClient.invalidateQueries({ queryKey: ['tool-permissions'] });
       } catch {
         // Ignore
       }
