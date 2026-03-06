@@ -28,6 +28,7 @@ import { expertRoutes } from './routes/experts';
 import { skillRoutes } from './routes/skills';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { authGuard } from './middleware/auth-guard';
+import { rateLimitMiddleware } from './middleware/rate-limit';
 import { setupWebSocket } from './websocket';
 
 export function createServer() {
@@ -77,7 +78,7 @@ export function createServer() {
       apiLogger.error({ error, code }, 'Request error');
 
       if (code === 'VALIDATION') {
-        return { error: 'Validation error', details: error.message };
+        return { error: 'Invalid request data' };
       }
 
       if (code === 'NOT_FOUND') {
@@ -91,11 +92,22 @@ export function createServer() {
       const authHeader = request.headers.get('authorization');
       const sessionManager = getSessionManager();
 
-      if (!authHeader?.startsWith('Bearer ')) {
-        return { user: null, session: null };
+      let token: string | undefined;
+
+      if (authHeader?.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      } else {
+        // Fallback: check for session_token cookie
+        const cookieHeader = request.headers.get('cookie') || '';
+        const cookieMatch = cookieHeader.match(/session_token=([^;]+)/);
+        if (cookieMatch) {
+          token = cookieMatch[1];
+        }
       }
 
-      const token = authHeader.substring(7);
+      if (!token) {
+        return { user: null, session: null };
+      }
       const session = await sessionManager.validate(token);
 
       if (!session) {
@@ -119,6 +131,8 @@ export function createServer() {
         session,
       };
     })
+    // Rate limiting on auth endpoints (must be before routes)
+    .use(rateLimitMiddleware)
     // Auth guard — reject unauthenticated requests to protected routes
     .use(authGuard)
     // Routes

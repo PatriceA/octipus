@@ -7,6 +7,7 @@ import { getTOTPAuth } from '@/security/auth/totp';
 import { redeemLinkCode } from '@/channels/linking';
 import { verifyPassword, hashPassword } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
+import { getRateLimiter } from '@/security/rate-limiter';
 
 export const authRoutes = new Elysia({ prefix: '/auth' })
   .use(apiContext)
@@ -15,9 +16,22 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     '/login',
     async ({ body, request, set }) => {
       const { username, password, totpCode } = body;
+      const rateLimiter = getRateLimiter();
+
+      // Check account lockout before anything else
+      const lockoutCheck = await rateLimiter.checkLoginAttempts(username);
+      if (!lockoutCheck.allowed) {
+        set.status = 423;
+        return {
+          error: 'Account temporarily locked due to too many failed login attempts.',
+          retryAfter: lockoutCheck.retryAfter,
+        };
+      }
 
       const user = await userRepository.findByUsername(username);
       if (!user || !user.passwordHash) {
+        // Record failed attempt even for non-existent users to prevent enumeration timing attacks
+        await rateLimiter.recordFailedLogin(username);
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
@@ -29,6 +43,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       const validPassword = await verifyPassword(password, user.passwordHash);
       if (!validPassword) {
+        await rateLimiter.recordFailedLogin(username);
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
@@ -43,10 +58,14 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         const totpAuth = getTOTPAuth();
         const validTOTP = await totpAuth.verify(user.id, totpCode);
         if (!validTOTP) {
+          await rateLimiter.recordFailedLogin(username);
           set.status = 401;
           return { error: 'Invalid TOTP code' };
         }
       }
+
+      // Successful login — clear failed attempts
+      await rateLimiter.clearLoginAttempts(username);
 
       const sessionManager = getSessionManager();
       const ipAddress = request.headers.get('x-forwarded-for') || undefined;
@@ -56,6 +75,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         ipAddress,
         userAgent,
       });
+
+      set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
 
       return {
         token,
@@ -80,15 +101,25 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Logout
   .post(
     '/logout',
-    async ({ request }) => {
+    async ({ request, set }) => {
       const authHeader = request.headers.get('authorization');
       if (!authHeader?.startsWith('Bearer ')) {
+        // Try cookie-based token
+        const cookieHeader = request.headers.get('cookie') || '';
+        const cookieToken = cookieHeader.match(/session_token=([^;]+)/)?.[1];
+        if (cookieToken) {
+          const sessionManager = getSessionManager();
+          await sessionManager.revoke(cookieToken);
+        }
+        set.headers['Set-Cookie'] = 'session_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
         return { success: true };
       }
 
       const token = authHeader.substring(7);
       const sessionManager = getSessionManager();
       await sessionManager.revoke(token);
+
+      set.headers['Set-Cookie'] = 'session_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
 
       return { success: true };
     },
@@ -143,6 +174,13 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     async ({ body, request, set }) => {
       const { username, email, password } = body;
 
+      // Enforce password complexity
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+      if (!passwordRegex.test(password)) {
+        set.status = 400;
+        return { error: 'Password must contain at least one uppercase letter, one lowercase letter, and one digit' };
+      }
+
       // Check if username exists
       const existing = await userRepository.findByUsername(username);
       if (existing) {
@@ -184,6 +222,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         ipAddress,
         userAgent,
       });
+
+      set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
 
       return {
         id: user.id,
@@ -267,7 +307,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Passkey authentication verification
   .post(
     '/passkey/auth/verify',
-    async ({ body, request }) => {
+    async ({ body, request, set }) => {
       const passkeyAuth = getPasskeyAuth();
       const ipAddress = request.headers.get('x-forwarded-for') || undefined;
 
@@ -284,6 +324,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       });
 
       const user = await userRepository.findById(body.userId);
+
+      set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
 
       return {
         token,

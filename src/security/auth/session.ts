@@ -48,6 +48,18 @@ export class SessionManager {
       throw new Error('User not found');
     }
 
+    // Enforce session count limit
+    const MAX_SESSIONS = 20;
+    const activeCount = await this.countForUser(userId);
+    if (activeCount >= MAX_SESSIONS) {
+      // Revoke oldest sessions to make room
+      await this.cleanup(userId);
+      const newCount = await this.countForUser(userId);
+      if (newCount >= MAX_SESSIONS) {
+        await this.revokeAllForUser(userId);
+      }
+    }
+
     const token = generateToken(32);
     const tokenHash = sha256(token);
     const now = new Date();

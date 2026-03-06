@@ -42,12 +42,21 @@ async function main(): Promise<void> {
     // HTTP/SSE transport for remote access
     const { SSEServerTransport } = await import('@modelcontextprotocol/sdk/server/sse.js');
 
+    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3005').split(',').map(o => o.trim());
+    const mcpApiKey = process.env.MCP_API_KEY;
+
     const { createServer: createHttpServer } = await import('http');
     const httpServer = createHttpServer(async (req, res) => {
-      // CORS headers
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      // CORS headers — restrict to configured origins
+      const requestOrigin = req.headers.origin;
+      if (requestOrigin && corsOrigins.includes(requestOrigin)) {
+        res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+      } else if (corsOrigins.length === 1) {
+        res.setHeader('Access-Control-Allow-Origin', corsOrigins[0]);
+      }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Vary', 'Origin');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -56,6 +65,17 @@ async function main(): Promise<void> {
       }
 
       const url = new URL(req.url || '/', `http://localhost:${port}`);
+
+      // API key authentication for /sse and /messages endpoints
+      if (mcpApiKey && (url.pathname === '/sse' || url.pathname === '/messages')) {
+        const authHeader = req.headers.authorization;
+        const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+        if (token !== mcpApiKey) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized — invalid or missing API key' }));
+          return;
+        }
+      }
 
       if (url.pathname === '/sse') {
         const sseTransport = new SSEServerTransport('/messages', res);

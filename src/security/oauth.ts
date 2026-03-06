@@ -218,7 +218,7 @@ export class OAuthManager {
     if (!tokenResponse.ok) {
       const error = await tokenResponse.text();
       securityLogger.error({ provider, error }, 'OAuth token exchange failed');
-      throw new Error(`OAuth token exchange failed: ${error}`);
+      throw new Error('OAuth token exchange failed');
     }
 
     const tokens: OAuthTokenResponse = await tokenResponse.json();

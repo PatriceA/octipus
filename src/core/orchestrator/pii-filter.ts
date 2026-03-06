@@ -52,6 +52,15 @@ const PII_PATTERNS: PIIPattern[] = [
 ];
 
 /**
+ * Mask a PII value: show first 2 and last 2 chars with *** in between.
+ * For values shorter than 6 chars, return '***'.
+ */
+function maskValue(value: string): string {
+  if (value.length < 6) return '***';
+  return value.slice(0, 2) + '***' + value.slice(-2);
+}
+
+/**
  * Filter personally identifiable information from text.
  * Returns the filtered text and a log of redactions made.
  */
@@ -68,7 +77,7 @@ export function filterPII(text: string): PIIFilterResult {
       const offset = typeof args[args.length - 2] === 'number' ? args[args.length - 2] : 0;
       redactions.push({
         type,
-        original: match,
+        original: maskValue(match),
         replacement,
         position: [offset, offset + match.length],
       });

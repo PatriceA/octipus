@@ -89,6 +89,22 @@ function isPrivateIP(ip: string): boolean {
 }
 
 /**
+ * Safely compile a user-supplied regex pattern.
+ * Returns null if the pattern is too complex or invalid.
+ */
+export function safeRegExp(pattern: string, flags?: string): RegExp | null {
+  // Reject patterns that could cause catastrophic backtracking
+  if (pattern.length > 200) return null;
+  if (/(\.\*){3,}/.test(pattern)) return null; // repeated .*
+  if (/(\([^)]*\+[^)]*\))\1*\+/.test(pattern)) return null; // nested quantifiers
+  try {
+    return new RegExp(pattern, flags);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Sanitize tool output for inclusion in LLM messages.
  * Converts to string and truncates if over limit.
  */

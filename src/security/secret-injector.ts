@@ -53,7 +53,7 @@ export async function injectSecrets(
           'Secret access denied'
         );
         errors.push(`Access denied to secret: ${secretName}`);
-        replacements.set(fullMatch, `[ACCESS_DENIED:${secretName}]`);
+        replacements.set(fullMatch, '[ACCESS_DENIED]');
 
         await auditRepository.log({
           userId: context.userId,
@@ -70,7 +70,7 @@ export async function injectSecrets(
 
       if (value === null) {
         errors.push(`Secret not found: ${secretName}`);
-        replacements.set(fullMatch, `[NOT_FOUND:${secretName}]`);
+        replacements.set(fullMatch, '[SECRET_NOT_FOUND]');
         continue;
       }
 
@@ -91,7 +91,7 @@ export async function injectSecrets(
       });
     } catch (error) {
       errors.push(`Error retrieving secret ${secretName}: ${(error as Error).message}`);
-      replacements.set(fullMatch, `[ERROR:${secretName}]`);
+      replacements.set(fullMatch, '[SECRET_ERROR]');
     }
   }
 

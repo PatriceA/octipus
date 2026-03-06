@@ -114,13 +114,7 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
 
       apiLogger.info({ webhookPath, executed, failed }, 'Webhook processed');
 
-      return {
-        received: true,
-        path: webhookPath,
-        hooksTriggered: results.length,
-        executed,
-        failed,
-      };
+      return { received: true };
     },
     {
       params: t.Object({ path: t.String() }),

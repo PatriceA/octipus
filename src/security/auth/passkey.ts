@@ -14,11 +14,12 @@ import type {
 import { getConfig } from '@/config';
 import { userRepository } from '@/db/repositories/user-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { RedisCache } from '@/db/redis';
 import { securityLogger } from '@/utils/logger';
 import type { PasskeyCredential } from '@/db/schema/users';
 
-// In-memory challenge storage (use Redis in production)
-const challenges = new Map<string, { challenge: string; expires: Date }>();
+// Redis-backed challenge storage with 5-minute TTL
+const challengeCache = new RedisCache(300);
 
 export class PasskeyAuth {
   private rpId: string;
@@ -65,10 +66,9 @@ export class PasskeyAuth {
       },
     });
 
-    // Store challenge
-    challenges.set(userId, {
+    // Store challenge in Redis (TTL handles expiration)
+    await challengeCache.set(`passkey-challenge:${userId}`, {
       challenge: options.challenge,
-      expires: new Date(Date.now() + 300000), // 5 minutes
     });
 
     return { options, challenge: options.challenge };
@@ -82,12 +82,12 @@ export class PasskeyAuth {
     response: RegistrationResponseJSON,
     deviceName?: string
   ): Promise<VerifiedRegistrationResponse> {
-    const challengeData = challenges.get(userId);
-    if (!challengeData || challengeData.expires < new Date()) {
+    const challengeData = await challengeCache.get<{ challenge: string }>(`passkey-challenge:${userId}`);
+    if (!challengeData) {
       throw new Error('Challenge expired or not found');
     }
 
-    challenges.delete(userId);
+    await challengeCache.delete(`passkey-challenge:${userId}`);
 
     const verification = await verifyRegistrationResponse({
       response,
@@ -149,11 +149,10 @@ export class PasskeyAuth {
       userVerification: 'preferred',
     });
 
-    // Store challenge
+    // Store challenge in Redis (TTL handles expiration)
     const challengeKey = userId || 'anonymous';
-    challenges.set(challengeKey, {
+    await challengeCache.set(`passkey-challenge:${challengeKey}`, {
       challenge: options.challenge,
-      expires: new Date(Date.now() + 300000),
     });
 
     return { options, challenge: options.challenge };
@@ -167,13 +166,15 @@ export class PasskeyAuth {
     response: AuthenticationResponseJSON,
     ipAddress?: string
   ): Promise<VerifiedAuthenticationResponse> {
-    const challengeData = challenges.get(userId) || challenges.get('anonymous');
-    if (!challengeData || challengeData.expires < new Date()) {
+    const challengeData =
+      (await challengeCache.get<{ challenge: string }>(`passkey-challenge:${userId}`)) ||
+      (await challengeCache.get<{ challenge: string }>(`passkey-challenge:anonymous`));
+    if (!challengeData) {
       throw new Error('Challenge expired or not found');
     }
 
-    challenges.delete(userId);
-    challenges.delete('anonymous');
+    await challengeCache.delete(`passkey-challenge:${userId}`);
+    await challengeCache.delete(`passkey-challenge:anonymous`);
 
     const user = await userRepository.findById(userId);
     if (!user) {

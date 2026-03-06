@@ -16,6 +16,13 @@ const BLOCKED_COMMANDS = [
   'dd if=/dev/random',
   'chmod -R 777 /',
   'chmod 777 /',
+  // Data exfiltration / reverse shell tools
+  'nc ',
+  'nc -',
+  'ncat ',
+  'ncat -',
+  'netcat ',
+  'netcat -',
 ];
 
 // Commands that require elevated permissions
@@ -31,6 +38,13 @@ const ELEVATED_COMMANDS = [
   'yum',
   'dnf',
   'pacman',
+  'docker',
+  'podman',
+  'mount',
+  'umount',
+  'iptables',
+  'ip6tables',
+  'nft',
 ];
 
 export class ShellTool extends BaseTool {
@@ -174,11 +188,37 @@ export class ShellTool extends BaseTool {
       /\$\(.*rm.*\)/i,
       />\s*\/dev\/sd/i,
       />\s*\/dev\/hd/i,
+      // Data exfiltration: piping output to network tools
+      /\|\s*curl\s+/i,
+      /\|\s*wget\s+/i,
+      /\|\s*nc\s+/i,
+      /\|\s*ncat\s+/i,
+      /\|\s*netcat\s+/i,
+      // Suspicious backtick command substitution (nested command execution)
+      /`[^`]*`.*`[^`]*`/i,
+      // Suspicious $(...) expansion piping to network tools
+      /\$\(.*\).*\|\s*(curl|wget|nc|ncat|netcat)\s/i,
     ];
 
     for (const pattern of injectionPatterns) {
       if (pattern.test(command)) {
         throw new Error('Potential command injection detected');
+      }
+    }
+
+    // Check for elevated commands at the start or after pipe/semicolon
+    for (const elevated of ELEVATED_COMMANDS) {
+      const elevatedPatterns = [
+        new RegExp(`^${elevated}\\b`, 'i'),
+        new RegExp(`\\|\\s*${elevated}\\b`, 'i'),
+        new RegExp(`;\\s*${elevated}\\b`, 'i'),
+        new RegExp(`&&\\s*${elevated}\\b`, 'i'),
+      ];
+      for (const pattern of elevatedPatterns) {
+        if (pattern.test(command)) {
+          toolLogger.warn({ command, elevated }, 'Elevated command detected — requires permission');
+          break;
+        }
       }
     }
   }

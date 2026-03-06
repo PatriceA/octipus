@@ -124,6 +124,11 @@ export function setupWebSocket(app: Elysia): void {
       try {
         const parsed = typeof message === 'string' ? JSON.parse(message) : message;
 
+        // Sanitize content: trim and limit length
+        if (parsed.content !== undefined) {
+          parsed.content = String(parsed.content || '').trim().slice(0, 50000);
+        }
+
         switch (parsed.type) {
           case 'message':
             // Handle chat message

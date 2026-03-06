@@ -1,4 +1,5 @@
 import type { TriggerType, Hook, UnifiedMessage, AgentContext } from '@/core/types';
+import { safeRegExp } from '@/utils/sanitize';
 
 export interface TriggerEvent {
   type: TriggerType;
@@ -79,7 +80,8 @@ function matchesMessageTrigger(
   // Check message patterns
   if (config.messagePatterns?.length) {
     const matchesAny = config.messagePatterns.some((pattern: string) => {
-      const regex = new RegExp(pattern, 'i');
+      const regex = safeRegExp(pattern, 'i');
+      if (!regex) return false;
       return regex.test(message.content);
     });
     if (!matchesAny) return false;
@@ -209,7 +211,9 @@ function evaluateCondition(
 
     case 'matches':
       if (typeof value === 'string' && typeof expected === 'string') {
-        return new RegExp(expected).test(value);
+        const regex = safeRegExp(expected);
+        if (!regex) return false;
+        return regex.test(value);
       }
       return false;
 

@@ -4,6 +4,7 @@ import { existsSync, realpathSync } from 'fs';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest, AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
+import { safeRegExp } from '@/utils/sanitize';
 
 function getWorkspacePaths(): { root: string; additional: string[] } {
   try {
@@ -257,7 +258,10 @@ export class FilesystemTool extends BaseTool {
         const dirPath = this.resolvePath((args.path as string) || '.');
         this.validatePath(dirPath);
 
-        const pattern = new RegExp(args.pattern as string);
+        const pattern = safeRegExp(args.pattern as string);
+        if (!pattern) {
+          return { pattern: args.pattern, results: [], error: 'Invalid or too complex regex pattern' };
+        }
         const results: string[] = [];
 
         const search = async (dir: string) => {

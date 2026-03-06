@@ -88,7 +88,8 @@ async function backupConfig(outputPath: string): Promise<void> {
     );
 
     if (configFiles.length > 0) {
-      await Bun.$`tar -czf ${backupFile} ${configFiles.join(' ')}`.quiet();
+      const proc = Bun.spawn(['tar', '-czf', backupFile, ...configFiles], { stdout: 'ignore', stderr: 'pipe' });
+      await proc.exited;
       console.log(`✅ Configuration backed up to ${backupFile}`);
     } else {
       console.log('⚠️  No configuration files found');
@@ -209,7 +210,8 @@ async function main() {
     console.log('Available backups:\n');
 
     try {
-      const files = await Bun.$`ls -la ${outputPath}`.text();
+      const proc = Bun.spawn(['ls', '-la', outputPath], { stdout: 'pipe' });
+      const files = await new Response(proc.stdout).text();
       console.log(files);
     } catch {
       console.log('No backups found');

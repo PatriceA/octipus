@@ -12,6 +12,7 @@ import {
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { securityLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
+import { safeRegExp } from '@/utils/sanitize';
 import type { PermissionLevel } from '@/core/types';
 
 const PERMISSION_REQUEST_TTL = 300000; // 5 minutes
@@ -129,7 +130,10 @@ export class PermissionManager {
         case 'path_pattern': {
           const path = context.path as string;
           if (path && typeof condition.value === 'string') {
-            const pattern = new RegExp(condition.value);
+            const pattern = safeRegExp(condition.value);
+            if (!pattern) {
+              return { passed: false, reason: 'Invalid or too complex path pattern' };
+            }
             if (!pattern.test(path)) {
               return { passed: false, reason: `Path does not match pattern: ${condition.value}` };
             }
@@ -140,7 +144,10 @@ export class PermissionManager {
         case 'command_pattern': {
           const command = context.command as string;
           if (command && typeof condition.value === 'string') {
-            const pattern = new RegExp(condition.value);
+            const pattern = safeRegExp(condition.value);
+            if (!pattern) {
+              return { passed: false, reason: 'Invalid or too complex command pattern' };
+            }
             if (!pattern.test(command)) {
               return { passed: false, reason: `Command does not match pattern: ${condition.value}` };
             }
