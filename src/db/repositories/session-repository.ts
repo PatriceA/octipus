@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql, lt, ne } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { sessions, type Session, type NewSession } from '../schema/sessions';
 import { dbLogger } from '@/utils/logger';
@@ -110,6 +110,30 @@ export class SessionRepository {
 
   async listRecent(limit: number = 20): Promise<Session[]> {
     return this.db.select().from(sessions).orderBy(desc(sessions.updatedAt)).limit(limit);
+  }
+
+  /**
+   * Archive webchat sessions older than `days` days.
+   * Channel sessions (telegram, slack, etc.) are kept since they're long-lived.
+   */
+  async cleanupOldWebchatSessions(days: number = 7): Promise<number> {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const result = await this.db
+      .update(sessions)
+      .set({ status: 'completed', completedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(sessions.status, 'active'),
+          eq(sessions.channelType, 'webchat'),
+          lt(sessions.updatedAt, cutoff),
+        )
+      )
+      .returning();
+
+    if (result.length > 0) {
+      dbLogger.info({ count: result.length, days }, 'Archived old webchat sessions');
+    }
+    return result.length;
   }
 
   async countActive(): Promise<number> {

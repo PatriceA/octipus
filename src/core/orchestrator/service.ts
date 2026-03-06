@@ -75,8 +75,20 @@ export class OrchestratorService {
 
       const resolvedSessionId = await this.resolveSession(sessionId, userId, channel || 'api');
 
-      // Token budget check
+      // Auto-title sessions with generic names
       const session = await sessionRepository.findById(resolvedSessionId);
+      if (session) {
+        const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
+        const currentTitle = (session.title || '').toLowerCase().trim();
+        if (!currentTitle || genericTitles.includes(currentTitle) || currentTitle.endsWith(' conversation')) {
+          const autoTitle = message.slice(0, 80).replace(/\n/g, ' ').trim();
+          if (autoTitle) {
+            sessionRepository.update(resolvedSessionId, { title: autoTitle }).catch(() => {});
+          }
+        }
+      }
+
+      // Token budget check
       const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || 100_000;
       const sessionTokens = session?.tokenCount || 0;
       if (sessionTokens >= tokenBudget) {

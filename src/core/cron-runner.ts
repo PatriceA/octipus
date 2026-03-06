@@ -2,11 +2,14 @@ import { getDb } from '@/db/postgres';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
 import { eq, and, lte, sql } from 'drizzle-orm';
 import { getScheduler } from './scheduler';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
+const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
 
 let cronTimer: Timer | null = null;
+let lastSessionCleanup = 0;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -85,8 +88,24 @@ export function getNextCronDate(cronExpr: string, timezone = 'UTC'): Date {
   return next;
 }
 
+async function maybeCleanupSessions(): Promise<void> {
+  const now = Date.now();
+  if (now - lastSessionCleanup < SESSION_CLEANUP_INTERVAL_MS) return;
+  lastSessionCleanup = now;
+
+  try {
+    const archived = await sessionRepository.cleanupOldWebchatSessions(7);
+    if (archived > 0) {
+      coreLogger.info({ archived }, 'Session cleanup: archived old webchat sessions');
+    }
+  } catch (err) {
+    coreLogger.error({ err }, 'Session cleanup failed');
+  }
+}
+
 async function processCronTick(): Promise<void> {
   try {
+    await maybeCleanupSessions();
     const db = getDb();
     const now = new Date();
 

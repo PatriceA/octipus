@@ -164,9 +164,9 @@ export default function ChatPage() {
         }
       });
 
-      // Load presets
-      api.get<{ presets: Preset[] }>('/presets')
-        .then((data) => { if (data?.presets) setPresets(data.presets); })
+      // Load experts
+      api.get<{ experts: Preset[] }>('/experts')
+        .then((data) => { if (data?.experts) setPresets(data.experts); })
         .catch(() => {});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -433,16 +433,16 @@ export default function ChatPage() {
   // Session management
   const createSession = async () => {
     try {
-      const result = await api.post<{ session: { id: string; title: string; updatedAt: string; messageCount: number; status: string } }>('/sessions', {
+      const result = await api.post<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }>('/sessions', {
         channelType: 'webchat',
         channelId: `chat-${Date.now().toString(36)}`,
         title: 'New Chat',
       });
-      if (result?.session) {
+      if (result?.id) {
         const item: SessionInfo = {
-          id: result.session.id,
-          title: result.session.title || 'New Chat',
-          updatedAt: result.session.updatedAt,
+          id: result.id,
+          title: result.title || 'New Chat',
+          updatedAt: result.updatedAt || new Date().toISOString(),
           messageCount: 0,
           status: 'active',
         };
@@ -522,7 +522,7 @@ export default function ChatPage() {
         type: 'chat',
         content: userInput,
         sessionId: sid,
-        presetId: selectedPresetId || undefined,
+        expertId: selectedPresetId || undefined,
       }));
       return;
     }
@@ -535,7 +535,7 @@ export default function ChatPage() {
         agentId?: string;
         classification?: { type: string };
         metadata?: MessageMetadata;
-      }>('/chat', { message: userInput, sessionId: sid });
+      }>('/chat', { message: userInput, sessionId: sid, expertId: selectedPresetId || undefined });
 
       const responseSid = result.sessionId || sid;
       if (responseSid) {
