@@ -10,10 +10,10 @@
 
 | Severity | Count |
 |----------|-------|
-| CRITICAL | 3     |
-| HIGH     | 4     |
-| MEDIUM   | 8     |
-| LOW      | 7     |
+| CRITICAL | 4     |
+| HIGH     | 6     |
+| MEDIUM   | 9     |
+| LOW      | 8     |
 
 ---
 
@@ -33,6 +33,11 @@
 - **File:** `src/channels/linking.ts:80`
 - **Issue:** `Math.random()` generates 6-character linking codes that bind channel identities (Telegram, Slack, Teams) to user accounts. The small keyspace (~729M) combined with predictable PRNG makes brute-force or prediction feasible.
 - **Fix:** Use `crypto.randomBytes()` for code generation.
+
+### C4: Command Injection in Docker Tool (All Operations)
+- **File:** `src/tools/docker/index.ts:117, 145, 152, 161-165, 176-178, 188`
+- **Issue:** The `runDocker()` method concatenates user input directly into shell commands via `execAsync(`docker ${cmd}`)`. All Docker operations (start, stop, logs, build, exec) pass user-controlled parameters (`container`, `tag`, `dockerfile`, `path`, `command`) unsanitized into shell execution. A container name like `foo; rm -rf /` achieves arbitrary command execution.
+- **Fix:** Replace `execAsync(`docker ${cmd}`)` with `spawn('docker', [...argsArray])` using array-based arguments, matching the safe pattern already used by git/github/gitlab tools.
 
 ---
 
@@ -57,6 +62,16 @@
 - **File:** `src/tools/shell/index.ts:125`
 - **Issue:** The `which` tool passes user input directly into a shell command via string interpolation: `` `which ${args.name}` ``. This bypasses `validateCommand()`. Input like `foo; cat /etc/passwd` executes the injected command. The tool has `requiresPermission: false`, so no approval is requested.
 - **Fix:** Validate `args.name` to alphanumeric/hyphens/underscores only, or use `execFile('which', [args.name])` to avoid shell interpretation.
+
+### H5: Python Code Injection in Wake Word Engine
+- **File:** `src/voice/wake-word.ts:49-99, 237-277`
+- **Issue:** `modelPath` and `accessKey` are interpolated directly into Python script strings executed via `python3 -c`. Malicious values like `"; import os; os.system("cmd")` break out of the string context and achieve arbitrary Python code execution.
+- **Fix:** Write parameters as JSON to a temp file and have the Python script read from it, or use proper escaping.
+
+### H6: Python Code Injection in STT Engine
+- **File:** `src/voice/stt.ts:241-265`
+- **Issue:** `this.model` and `audioPath` are interpolated directly into a Python script string. If either contains Python string-breaking characters, arbitrary code execution is possible.
+- **Fix:** Same as H5 -- pass parameters via JSON file or environment variables instead of string interpolation.
 
 ---
 
@@ -102,6 +117,11 @@
 - **Issue:** Session tokens are returned as JSON rather than HttpOnly/Secure/SameSite cookies. Tokens stored in `localStorage` are vulnerable to XSS-based theft.
 - **Fix:** Set session tokens as HttpOnly, Secure, SameSite=Strict cookies.
 
+### M9: Shell Tool Blocklist Validation is Bypassable
+- **File:** `src/tools/shell/index.ts:10-18, 155-179`
+- **Issue:** `validateCommand()` uses a blocklist that only catches exact strings like `rm -rf /`. It does not protect against `curl`/`wget`/`nc` for data exfiltration, obfuscated commands, or environment variable tricks. The `run` and `run_background` tools pass commands directly to `sh -c`.
+- **Fix:** Replace blocklist with allowlist, or use proper sandboxing (container, seccomp).
+
 ---
 
 ## LOW Findings
@@ -141,6 +161,11 @@
 - **Issue:** `JSON.stringify(vector)` is interpolated into SQL template literals for vector operations. While the input is expected to be a `number[]`, if an attacker can control the vector input, the `JSON.stringify` output could potentially break out of the intended SQL context.
 - **Fix:** Use parameterized queries for vector values.
 
+### L8: Backup Script Shell Injection Risk
+- **File:** `scripts/backup.ts:37, 91`
+- **Issue:** Database URL components (password, host, database name) and config file paths are interpolated into Bun shell commands. While Bun's `$` template provides some escaping, shell metacharacters in the database password or unusual file paths could cause issues.
+- **Fix:** Use array-based spawn or validate/escape values explicitly.
+
 ---
 
 ## Positive Observations
@@ -155,7 +180,9 @@
 - **Passkey implementation** properly updates counters and verifies origin/RP ID
 - **Token generation** uses `crypto.randomBytes()` (except the noted backup code issue)
 - **SQL queries** mostly use Drizzle ORM with parameterized queries
-- **Shell command validation** blocks dangerous commands (rm -rf, etc.) for the main execute tool
+- **Shell command validation** blocks some dangerous commands for the main execute tool (though bypassable -- see M9)
+- **Git/GitHub/GitLab tools** correctly use `spawn()` with array-based arguments, avoiding shell interpretation
+- **No `eval()` usage** found anywhere in the codebase
 - **No `.env` files committed** -- `.gitignore` properly configured
 - **React auto-escaping** -- no `dangerouslySetInnerHTML` found in the web frontend
 
@@ -163,8 +190,9 @@
 
 ## Recommendations (Priority Order)
 
-1. **Immediate:** Fix C1 (timing attack), C2/C3 (insecure RNG) -- these are simple fixes
-2. **Short-term:** Implement rate limiting (H1), account lockout (H2), fix command injection (H4)
-3. **Short-term:** Fix vault KDF (H3), symlink bypass (M1), workspace path validation (M2)
-4. **Medium-term:** Add security headers (L1), CORS hardening (M6), session cookies (M8)
-5. **Medium-term:** Address ReDoS (L3), password policy (L6), env leaks (L5)
+1. **Immediate:** Fix C4 (Docker command injection) and C1 (timing attack) -- highest exploitability
+2. **Immediate:** Fix C2/C3 (insecure RNG) -- simple one-line fixes
+3. **Short-term:** Fix H4-H6 (shell/Python injection), implement rate limiting (H1), account lockout (H2)
+4. **Short-term:** Fix vault KDF (H3), symlink bypass (M1), workspace path validation (M2), shell blocklist (M9)
+5. **Medium-term:** Add security headers (L1), CORS hardening (M6), session cookies (M8)
+6. **Medium-term:** Address ReDoS (L3), password policy (L6), env leaks (L5)
