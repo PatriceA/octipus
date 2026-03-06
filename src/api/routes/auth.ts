@@ -13,32 +13,37 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Login with username/password
   .post(
     '/login',
-    async ({ body, request }) => {
+    async ({ body, request, set }) => {
       const { username, password, totpCode } = body;
 
       const user = await userRepository.findByUsername(username);
       if (!user || !user.passwordHash) {
+        set.status = 401;
         return { error: 'Invalid credentials' };
       }
 
       if (!user.isActive) {
+        set.status = 401;
         return { error: 'Account is disabled' };
       }
 
       const validPassword = await verifyPassword(password, user.passwordHash);
       if (!validPassword) {
+        set.status = 401;
         return { error: 'Invalid credentials' };
       }
 
       // Check TOTP if enabled
       if (user.totpEnabled) {
         if (!totpCode) {
+          set.status = 401;
           return { error: 'TOTP code required', requiresTOTP: true };
         }
 
         const totpAuth = getTOTPAuth();
         const validTOTP = await totpAuth.verify(user.id, totpCode);
         if (!validTOTP) {
+          set.status = 401;
           return { error: 'Invalid TOTP code' };
         }
       }
@@ -135,18 +140,20 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Register new user
   .post(
     '/register',
-    async ({ body, request }) => {
+    async ({ body, request, set }) => {
       const { username, email, password } = body;
 
       // Check if username exists
       const existing = await userRepository.findByUsername(username);
       if (existing) {
+        set.status = 409;
         return { error: 'Username already exists' };
       }
 
       if (email) {
         const existingEmail = await userRepository.findByEmail(email);
         if (existingEmail) {
+          set.status = 409;
           return { error: 'Email already exists' };
         }
       }

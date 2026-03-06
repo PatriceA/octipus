@@ -4,6 +4,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { getConfig } from '@/config';
 import { securityLogger } from '@/utils/logger';
 import { encrypt, decrypt, deriveKey } from '@/utils/crypto';
+import crypto from 'crypto';
 
 // Configure TOTP
 authenticator.options = {
@@ -53,9 +54,13 @@ export class TOTPAuth {
     const qrCodeUrl = authenticator.keyuri(user.username, this.issuer, secret);
 
     // Generate backup codes
+    const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const backupCodes: string[] = [];
     for (let i = 0; i < 10; i++) {
-      const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+      let code = '';
+      for (let j = 0; j < 8; j++) {
+        code += charset[crypto.randomInt(0, charset.length)];
+      }
       backupCodes.push(code);
     }
 
@@ -213,9 +218,13 @@ export class TOTPAuth {
     }
 
     // Generate new backup codes
+    const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const backupCodes: string[] = [];
     for (let i = 0; i < 10; i++) {
-      const newCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+      let newCode = '';
+      for (let j = 0; j < 8; j++) {
+        newCode += charset[crypto.randomInt(0, charset.length)];
+      }
       backupCodes.push(newCode);
     }
 

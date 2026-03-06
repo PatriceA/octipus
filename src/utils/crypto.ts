@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes, createHash, timingSafeEqual } from 'crypto';
 import argon2 from 'argon2';
 
 const ALGORITHM = 'aes-256-gcm';
@@ -141,14 +141,10 @@ export function generateTotpSecret(): string {
  * Constant-time string comparison to prevent timing attacks
  */
 export function secureCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-
-  return result === 0;
+  const maxLen = Math.max(a.length, b.length);
+  const bufA = Buffer.alloc(maxLen, 0);
+  const bufB = Buffer.alloc(maxLen, 0);
+  bufA.write(a);
+  bufB.write(b);
+  return a.length === b.length && timingSafeEqual(bufA, bufB);
 }

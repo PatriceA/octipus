@@ -13,7 +13,10 @@ export async function runMigrations(): Promise<void> {
     return;
   }
 
-  const databaseUrl = process.env.DATABASE_URL || 'postgresql://assistant:assistant@localhost:5432/assistant';
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('DATABASE_URL environment variable is required');
+  }
 
   logger.info({ url: databaseUrl.replace(/:[^:@]*@/, ':***@') }, 'Running migrations');
 

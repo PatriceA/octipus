@@ -122,8 +122,12 @@ export class ShellTool extends BaseTool {
         name: { type: 'string', description: 'Executable name', required: true },
       }),
       async (args) => {
-        const result = await this.executeCommand(`which ${args.name}`, { timeout: 5000 });
-        return { executable: args.name, path: result.stdout.trim() || null };
+        const name = String(args.name);
+        if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+          throw new Error(`Invalid executable name: ${name}`);
+        }
+        const result = await this.executeCommand(`which ${name}`, { timeout: 5000 });
+        return { executable: name, path: result.stdout.trim() || null };
       },
       { permissionAction: 'execute', requiresPermission: false }
     );
@@ -148,7 +152,7 @@ export class ShellTool extends BaseTool {
         }
         return filtered;
       },
-      { requiresPermission: false }
+      { requiresPermission: true }
     );
   }
 

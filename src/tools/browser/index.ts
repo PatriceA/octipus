@@ -42,6 +42,12 @@ export class BrowserTool extends BaseTool {
         headless: { type: 'boolean', description: 'Run headless', default: true },
       }),
       async (args) => {
+        const { validateExternalUrl } = await import('@/utils/sanitize');
+        const validation = await validateExternalUrl(args.url as string);
+        if (!validation.valid) {
+          return { error: `URL blocked: ${validation.reason}` };
+        }
+
         const page = await this.getOrCreatePage(args.contextId as string);
         await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
 
@@ -65,6 +71,12 @@ export class BrowserTool extends BaseTool {
         url: { type: 'string', description: 'URL to navigate to', required: true },
       }),
       async (args) => {
+        const { validateExternalUrl } = await import('@/utils/sanitize');
+        const validation = await validateExternalUrl(args.url as string);
+        if (!validation.valid) {
+          return { error: `URL blocked: ${validation.reason}` };
+        }
+
         const page = this.getPage(args.pageId as string);
         await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
 

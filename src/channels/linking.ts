@@ -2,6 +2,7 @@ import { getRedis } from '@/db/redis';
 import { userRepository } from '@/db/repositories/user-repository';
 import type { ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
+import crypto from 'crypto';
 
 const LINK_CODE_PREFIX = 'link:';
 const LINK_CODE_TTL = 300; // 5 minutes
@@ -77,7 +78,7 @@ function randomCode(length: number): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars (0/O, 1/I)
   let code = '';
   for (let i = 0; i < length; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    code += chars[crypto.randomInt(0, chars.length)];
   }
   return code;
 }

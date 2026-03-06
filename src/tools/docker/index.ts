@@ -2,12 +2,17 @@ import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import type { AgentContext } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { spawn } from 'child_process';
 
 const EXEC_TIMEOUT = 30000; // 30s
+
+/** Validate that a string argument does not contain shell metacharacters */
+function validateArg(value: string, label: string): string {
+  if (/[;&|`$(){}!\\\n\r]/.test(value)) {
+    throw new Error(`Invalid ${label}: contains disallowed characters`);
+  }
+  return value;
+}
 
 /**
  * Docker tool for managing containers, building images, and viewing logs.
@@ -112,21 +117,36 @@ export class DockerTool extends BaseTool {
     );
   }
 
-  private async runDocker(cmd: string): Promise<{ stdout: string; stderr: string }> {
-    try {
-      const result = await execAsync(`docker ${cmd}`, { timeout: EXEC_TIMEOUT });
-      return result;
-    } catch (error: any) {
-      if (error.stdout || error.stderr) {
-        return { stdout: error.stdout || '', stderr: error.stderr || '' };
-      }
-      throw new Error(`Docker command failed: ${error.message}`);
-    }
+  private async runDocker(args: string[], timeout: number = EXEC_TIMEOUT): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('docker', args, { timeout });
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (data) => { stdout += data; });
+      child.stderr.on('data', (data) => { stderr += data; });
+
+      child.on('error', (err) => {
+        reject(new Error(`Docker command failed: ${err.message}`));
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          // Match previous behavior: return output even on non-zero exit
+          resolve({ stdout, stderr });
+        }
+      });
+    });
   }
 
   private async listContainers(args: Record<string, unknown>): Promise<unknown> {
-    const allFlag = args.show_all ? '-a' : '';
-    const { stdout } = await this.runDocker(`ps ${allFlag} --format "{{json .}}"`);
+    const dockerArgs = ['ps'];
+    if (args.show_all) dockerArgs.push('-a');
+    dockerArgs.push('--format', '{{json .}}');
+
+    const { stdout } = await this.runDocker(dockerArgs);
 
     const containers = stdout
       .trim()
@@ -141,51 +161,56 @@ export class DockerTool extends BaseTool {
   }
 
   private async startContainer(args: Record<string, unknown>): Promise<unknown> {
-    const container = args.container as string;
-    const { stdout, stderr } = await this.runDocker(`start ${container}`);
+    const container = validateArg(args.container as string, 'container');
+    const { stdout, stderr } = await this.runDocker(['start', container]);
     return { container, started: true, output: stdout.trim() || stderr.trim() };
   }
 
   private async stopContainer(args: Record<string, unknown>): Promise<unknown> {
-    const container = args.container as string;
+    const container = validateArg(args.container as string, 'container');
     const timeout = (args.timeout as number) || 10;
-    const { stdout, stderr } = await this.runDocker(`stop -t ${timeout} ${container}`);
+    const { stdout, stderr } = await this.runDocker(['stop', '-t', String(timeout), container]);
     return { container, stopped: true, output: stdout.trim() || stderr.trim() };
   }
 
   private async containerLogs(args: Record<string, unknown>): Promise<unknown> {
-    const container = args.container as string;
+    const container = validateArg(args.container as string, 'container');
     const tail = (args.tail as number) || 100;
     const since = args.since as string | undefined;
 
-    let cmd = `logs --tail ${tail}`;
-    if (since) cmd += ` --since ${since}`;
-    cmd += ` ${container}`;
+    const dockerArgs = ['logs', '--tail', String(tail)];
+    if (since) {
+      dockerArgs.push('--since', validateArg(since, 'since'));
+    }
+    dockerArgs.push(container);
 
-    const { stdout, stderr } = await this.runDocker(cmd);
+    const { stdout, stderr } = await this.runDocker(dockerArgs);
     const logs = (stdout + stderr).trim();
 
     return { container, logs, lineCount: logs.split('\n').length };
   }
 
   private async buildImage(args: Record<string, unknown>): Promise<unknown> {
-    const path = args.path as string;
-    const tag = args.tag as string;
-    const dockerfile = (args.dockerfile as string) || 'Dockerfile';
+    const path = validateArg(args.path as string, 'path');
+    const tag = validateArg(args.tag as string, 'tag');
+    const dockerfile = validateArg((args.dockerfile as string) || 'Dockerfile', 'dockerfile');
 
-    const { stdout, stderr } = await execAsync(
-      `docker build -t ${tag} -f ${dockerfile} ${path}`,
-      { timeout: 300000 }, // 5 minute timeout for builds
+    const { stdout, stderr } = await this.runDocker(
+      ['build', '-t', tag, '-f', dockerfile, path],
+      300000, // 5 minute timeout for builds
     );
 
     return { tag, path, output: (stdout + stderr).slice(-5000) };
   }
 
   private async execCommand(args: Record<string, unknown>): Promise<unknown> {
-    const container = args.container as string;
+    const container = validateArg(args.container as string, 'container');
     const command = args.command as string;
 
-    const { stdout, stderr } = await this.runDocker(`exec ${container} ${command}`);
+    // Split command into array for safe execution; use sh -c for complex commands
+    // but container name is validated and passed as a separate argument
+    const dockerArgs = ['exec', container, 'sh', '-c', command];
+    const { stdout, stderr } = await this.runDocker(dockerArgs);
     return { container, command, stdout: stdout.trim(), stderr: stderr.trim() };
   }
 }

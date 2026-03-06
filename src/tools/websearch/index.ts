@@ -272,6 +272,12 @@ export class WebSearchTool extends BaseTool {
     const url = args.url as string;
     const maxLength = (args.max_length as number) || 10000;
 
+    const { validateExternalUrl } = await import('@/utils/sanitize');
+    const validation = await validateExternalUrl(url);
+    if (!validation.valid) {
+      return { error: `URL blocked: ${validation.reason}` };
+    }
+
     const browser = await this.getOrCreateBrowser();
     const context = await this.createBrowserContext(browser);
     const page = await context.newPage();

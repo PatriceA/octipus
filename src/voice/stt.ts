@@ -241,10 +241,11 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
       const script = `
 import sys
 import json
+import os
 from faster_whisper import WhisperModel
 
-model = WhisperModel("${this.model}", device="auto", compute_type="auto")
-segments, info = model.transcribe("${audioPath}", language="${this.options.language}")
+model = WhisperModel(os.environ["WHISPER_MODEL"], device="auto", compute_type="auto")
+segments, info = model.transcribe(os.environ["WHISPER_AUDIO_PATH"], language=os.environ.get("WHISPER_LANGUAGE"))
 
 result = {
     "text": "",
@@ -268,6 +269,12 @@ print(json.dumps(result))
         cmd: [this.pythonPath, '-c', script],
         stdout: 'pipe',
         stderr: 'pipe',
+        env: {
+          ...process.env,
+          WHISPER_MODEL: this.model,
+          WHISPER_AUDIO_PATH: audioPath,
+          WHISPER_LANGUAGE: this.options.language || '',
+        },
       });
 
       const output = await new Response(proc.stdout).text();

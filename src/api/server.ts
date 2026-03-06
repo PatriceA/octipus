@@ -4,6 +4,7 @@ import { swagger } from '@elysiajs/swagger';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 import { getSessionManager } from '@/security/auth/session';
+import { secureCompare } from '@/utils/crypto';
 
 // Import routes
 import { authRoutes } from './routes/auth';
@@ -57,9 +58,16 @@ export function createServer() {
     .use(
       cors({
         origin: config.api.corsOrigins.includes('*') ? true : config.api.corsOrigins,
-        credentials: true,
+        credentials: !config.api.corsOrigins.includes('*'),
       })
     )
+    // Security headers
+    .onAfterHandle(({ set }) => {
+      set.headers['X-Content-Type-Options'] = 'nosniff';
+      set.headers['X-Frame-Options'] = 'DENY';
+      set.headers['X-XSS-Protection'] = '0';
+      set.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin';
+    })
     // Request logging
     .onRequest(({ request }) => {
       apiLogger.debug({ method: request.method, url: request.url }, 'Request received');
@@ -93,7 +101,7 @@ export function createServer() {
       if (!session) {
         // Fallback: validate against MASTER_KEY for API/MCP access
         const masterKey = process.env.MASTER_KEY;
-        if (masterKey && token === masterKey) {
+        if (masterKey && secureCompare(token, masterKey)) {
           return {
             user: { id: 'system', username: 'system', isAdmin: true },
             session: null,

@@ -3,7 +3,7 @@ import { getDb } from '@/db/postgres';
 import { vault, type VaultEntry, type NewVaultEntry, SECRET_PLACEHOLDER_PATTERN } from '@/db/schema/vault';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { encrypt, decrypt } from '@/utils/crypto';
-import { createHash } from 'crypto';
+import { pbkdf2Sync } from 'crypto';
 import { getConfig } from '@/config';
 import { securityLogger } from '@/utils/logger';
 
@@ -19,9 +19,13 @@ export async function initializeVault(): Promise<void> {
     throw new Error('Master key not configured');
   }
 
-  // Derive a deterministic 256-bit key from the master key via SHA-256.
-  // Unlike deriveKey() which uses a random salt, this is stable across restarts.
-  masterKey = createHash('sha256').update(config.security.masterKey).digest();
+  // BREAKING CHANGE: Existing vault data encrypted with the old SHA-256 key
+  // derivation will be unreadable. Re-encrypt all secrets after this update.
+  //
+  // Derive a deterministic 256-bit key from the master key via PBKDF2 with a
+  // fixed salt and 100 000 iterations.  Unlike deriveKey() (Argon2id + random
+  // salt) this is stable across restarts while still providing KDF stretching.
+  masterKey = pbkdf2Sync(config.security.masterKey, 'assistant-vault-v1', 100_000, 32, 'sha256');
 
   securityLogger.info('Vault initialized');
 }

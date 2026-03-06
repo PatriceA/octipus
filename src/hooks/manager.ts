@@ -127,6 +127,15 @@ export class HookManager extends EventEmitter {
   }
 
   /**
+   * Get webhook hooks that match a given path.
+   * Returns matched hooks so callers can inspect triggerConfig (e.g. webhookSecret).
+   */
+  getWebhookHooksByPath(path: string): Hook[] {
+    const webhookHooks = this.hookCache.get('webhook') || [];
+    return webhookHooks.filter(h => h.triggerConfig?.webhookPath === path && h.isEnabled);
+  }
+
+  /**
    * Create a new hook
    */
   async createHook(data: Omit<NewHook, 'id' | 'createdAt' | 'updatedAt'>): Promise<Hook> {

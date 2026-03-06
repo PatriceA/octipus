@@ -186,7 +186,10 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           // Test via LiteLLM proxy
           const config = getConfig();
           const litellmBase = config.litellm.proxyUrl || 'http://localhost:4000';
-          const litellmKey = config.litellm.apiKey || process.env.LITELLM_MASTER_KEY || 'sk-litellm-master-key';
+          const litellmKey = config.litellm.apiKey || process.env.LITELLM_MASTER_KEY;
+          if (!litellmKey) {
+            return { success: false, error: 'LITELLM_API_KEY is not configured' };
+          }
           try {
             const testRes = await fetch(`${litellmBase}/v1/chat/completions`, {
               method: 'POST',

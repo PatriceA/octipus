@@ -5,6 +5,10 @@ export default {
   out: './src/db/migrations',
   dialect: 'postgresql',
   dbCredentials: {
-    url: process.env.DATABASE_URL || 'postgresql://assistant:assistant@localhost:5432/assistant',
+    url: (() => {
+      const url = process.env.DATABASE_URL;
+      if (!url) throw new Error('DATABASE_URL environment variable is required');
+      return url;
+    })(),
   },
 } satisfies Config;

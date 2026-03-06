@@ -52,30 +52,34 @@ import sounddevice as sd
 import numpy as np
 import sys
 import json
+import os
+
+model_path = os.environ["WAKE_MODEL_PATH"]
+sensitivity = float(os.environ["WAKE_SENSITIVITY"])
+sample_rate_val = int(os.environ["WAKE_SAMPLE_RATE"])
 
 # Create keyword spotter
 config = sherpa_onnx.KeywordSpotterConfig(
-    tokens="${this.modelPath}/tokens.txt",
-    encoder="${this.modelPath}/encoder.onnx",
-    decoder="${this.modelPath}/decoder.onnx",
-    joiner="${this.modelPath}/joiner.onnx",
-    keywords_file="${this.modelPath}/keywords.txt",
-    keywords_threshold=${this.options.sensitivity},
+    tokens=os.path.join(model_path, "tokens.txt"),
+    encoder=os.path.join(model_path, "encoder.onnx"),
+    decoder=os.path.join(model_path, "decoder.onnx"),
+    joiner=os.path.join(model_path, "joiner.onnx"),
+    keywords_file=os.path.join(model_path, "keywords.txt"),
+    keywords_threshold=sensitivity,
     num_trailing_blanks=1,
 )
 
 spotter = sherpa_onnx.KeywordSpotter(config)
 stream = spotter.create_stream()
 
-sample_rate = ${this.options.sampleRate}
-samples_per_read = int(0.1 * sample_rate)  # 100ms chunks
+samples_per_read = int(0.1 * sample_rate_val)  # 100ms chunks
 
 def callback(indata, frames, time, status):
     if status:
         print(json.dumps({"error": str(status)}), file=sys.stderr)
 
     samples = np.frombuffer(indata, dtype=np.float32)
-    stream.accept_waveform(sample_rate, samples)
+    stream.accept_waveform(sample_rate_val, samples)
 
     while spotter.is_ready(stream):
         spotter.decode_stream(stream)
@@ -92,7 +96,7 @@ def callback(indata, frames, time, status):
 
 print(json.dumps({"type": "ready"}), flush=True)
 
-with sd.InputStream(samplerate=sample_rate, channels=1, dtype='float32',
+with sd.InputStream(samplerate=sample_rate_val, channels=1, dtype='float32',
                     blocksize=samples_per_read, callback=callback):
     while True:
         sd.sleep(1000)
@@ -104,6 +108,12 @@ with sd.InputStream(samplerate=sample_rate, channels=1, dtype='float32',
       cmd: [pythonPath, '-c', script],
       stdout: 'pipe',
       stderr: 'pipe',
+      env: {
+        ...process.env,
+        WAKE_MODEL_PATH: this.modelPath,
+        WAKE_SENSITIVITY: String(this.options.sensitivity),
+        WAKE_SAMPLE_RATE: String(this.options.sampleRate),
+      },
     });
 
     this.running = true;
@@ -231,19 +241,21 @@ export class PicovoiceWakeWordEngine extends EventEmitter implements WakeWordEng
   async start(): Promise<void> {
     if (this.running) return;
 
-    const keywordArgs = this.keywords.map(k => `"${k}"`).join(', ');
-    const sensitivities = this.keywords.map(() => this.options.sensitivity).join(', ');
-
     const script = `
 import pvporcupine
 import pvrecorder
 import json
 import sys
+import os
+
+access_key = os.environ["PORCUPINE_ACCESS_KEY"]
+keywords = json.loads(os.environ["PORCUPINE_KEYWORDS"])
+sensitivities = json.loads(os.environ["PORCUPINE_SENSITIVITIES"])
 
 porcupine = pvporcupine.create(
-    access_key="${this.accessKey}",
-    keywords=[${keywordArgs}],
-    sensitivities=[${sensitivities}],
+    access_key=access_key,
+    keywords=keywords,
+    sensitivities=sensitivities,
 )
 
 recorder = pvrecorder.PvRecorder(
@@ -263,7 +275,7 @@ try:
         if keyword_index >= 0:
             detection = {
                 "type": "detection",
-                "keyword": [${keywordArgs}][keyword_index],
+                "keyword": keywords[keyword_index],
                 "confidence": 1.0,
                 "timestamp": 0,
             }
@@ -282,6 +294,14 @@ finally:
       cmd: [pythonPath, '-c', script],
       stdout: 'pipe',
       stderr: 'pipe',
+      env: {
+        ...process.env,
+        PORCUPINE_ACCESS_KEY: this.accessKey,
+        PORCUPINE_KEYWORDS: JSON.stringify(this.keywords),
+        PORCUPINE_SENSITIVITIES: JSON.stringify(
+          this.keywords.map(() => this.options.sensitivity)
+        ),
+      },
     });
 
     this.running = true;

@@ -1,6 +1,6 @@
 import { readFile, writeFile, readdir, stat, mkdir, rm, copyFile, rename } from 'fs/promises';
 import { join, resolve, dirname, relative, basename } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest, AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
@@ -297,7 +297,21 @@ export class FilesystemTool extends BaseTool {
     const { root, additional } = getWorkspacePaths();
     const allPaths = [root, ...additional];
 
-    const allowed = allPaths.some(p => resolved.startsWith(p)) || resolved.startsWith('/tmp');
+    // Resolve symlinks to prevent symlink bypass attacks
+    let realPath: string;
+    try {
+      realPath = realpathSync(resolved);
+    } catch {
+      // File may not exist yet (e.g. write operations) — check parent directory
+      const parent = dirname(resolved);
+      try {
+        realPath = join(realpathSync(parent), basename(resolved));
+      } catch {
+        realPath = resolved;
+      }
+    }
+
+    const allowed = allPaths.some(p => realPath.startsWith(p)) || realPath.startsWith('/tmp/assistant-');
     if (!allowed) {
       throw new Error(`Path '${path}' is outside allowed workspace directories`);
     }

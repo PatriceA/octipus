@@ -126,6 +126,12 @@ async function executeWebhook(
     return { success: false, error: 'Webhook URL not configured' };
   }
 
+  const { validateExternalUrl } = await import('@/utils/sanitize');
+  const validation = await validateExternalUrl(url);
+  if (!validation.valid) {
+    return { success: false, error: `Webhook URL blocked: ${validation.reason}` };
+  }
+
   const method = config.webhookMethod || 'POST';
   const headers = config.webhookHeaders || {};
   const body = config.webhookBody
