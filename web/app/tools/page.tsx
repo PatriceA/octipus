@@ -3,12 +3,10 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Wrench as PageIcon,
-  Puzzle,
+  Wrench,
   Loader2,
   ChevronDown,
   ChevronRight,
-  Wrench,
   Shield,
   Cable,
   Search,
@@ -20,29 +18,29 @@ import {
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-interface SkillPermission {
+interface ToolPermission {
   action: string;
   description: string;
   defaultLevel: 'ALLOW' | 'ASK' | 'DENY';
   dangerous?: boolean;
 }
 
-interface SkillTool {
+interface ToolFunction {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
   returns: string;
 }
 
-interface Skill {
+interface ToolModule {
   id: string;
   name: string;
   version: string;
   description: string;
   author?: string;
   isInitialized: boolean;
-  permissions: SkillPermission[];
-  tools: SkillTool[];
+  permissions: ToolPermission[];
+  tools: ToolFunction[];
 }
 
 interface UserPermission {
@@ -61,35 +59,13 @@ interface MCPTool {
 
 type PermissionLevel = 'ALLOW' | 'ASK' | 'DENY';
 
-const LEVEL_CONFIG: Record<PermissionLevel, { color: string; icon: typeof Check; label: string }> = {
-  ALLOW: {
-    color: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
-    icon: Check,
-    label: 'Allow',
-  },
-  ASK: {
-    color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
-    icon: HelpCircle,
-    label: 'Ask',
-  },
-  DENY: {
-    color: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
-    icon: X,
-    label: 'Deny',
-  },
+const LEVEL_STYLES: Record<PermissionLevel, { active: string; label: string; icon: typeof Check }> = {
+  ALLOW: { active: 'bg-green-600 text-white', label: 'Allow', icon: Check },
+  ASK: { active: 'bg-yellow-500 text-white', label: 'Ask', icon: HelpCircle },
+  DENY: { active: 'bg-red-600 text-white', label: 'Deny', icon: X },
 };
 
-function LevelBadge({ level }: { level: PermissionLevel }) {
-  const { color, icon: Icon } = LEVEL_CONFIG[level];
-  return (
-    <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium', color)}>
-      <Icon className="w-3 h-3" />
-      {level}
-    </span>
-  );
-}
-
-function LevelSelector({
+function PermissionToggle({
   currentLevel,
   defaultLevel,
   onChange,
@@ -103,66 +79,75 @@ function LevelSelector({
   isOverride: boolean;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1">
       {(['ALLOW', 'ASK', 'DENY'] as PermissionLevel[]).map((level) => {
         const active = currentLevel === level;
-        const { icon: Icon } = LEVEL_CONFIG[level];
+        const { icon: Icon, active: activeStyle } = LEVEL_STYLES[level];
         return (
           <button
             key={level}
             onClick={() => onChange(level)}
             className={cn(
-              'px-2 py-1 rounded text-xs font-medium cursor-pointer flex items-center gap-1 transition-colors',
+              'px-1.5 py-0.5 rounded text-xs font-medium cursor-pointer flex items-center gap-0.5 transition-colors',
               active
-                ? level === 'ALLOW'
-                  ? 'bg-green-600 text-white'
-                  : level === 'ASK'
-                  ? 'bg-yellow-500 text-white'
-                  : 'bg-red-600 text-white'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                ? activeStyle
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
             )}
+            title={level}
           >
             <Icon className="w-3 h-3" />
-            {level}
           </button>
         );
       })}
       {isOverride && (
         <button
           onClick={onReset}
-          className="p-1 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
+          className="p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
           title={`Reset to default (${defaultLevel})`}
         >
-          <RotateCcw className="w-3.5 h-3.5" />
+          <RotateCcw className="w-3 h-3" />
         </button>
       )}
     </div>
   );
 }
 
-function SkillCard({
-  skill,
+function ToolModuleCard({
+  module,
   userPermissions,
   onPermissionChange,
   onPermissionReset,
 }: {
-  skill: Skill;
+  module: ToolModule;
   userPermissions: UserPermission[];
   onPermissionChange: (toolId: string, action: string, level: PermissionLevel) => void;
   onPermissionReset: (toolId: string, action: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const getEffectiveLevel = (perm: SkillPermission): PermissionLevel => {
-    const override = userPermissions.find((p) => p.toolId === skill.id && p.action === perm.action);
+  const getEffectiveLevel = (perm: ToolPermission): PermissionLevel => {
+    const override = userPermissions.find((p) => p.toolId === module.id && p.action === perm.action);
     return override?.level || perm.defaultLevel;
   };
 
-  const hasOverride = (perm: SkillPermission): boolean => {
-    return userPermissions.some((p) => p.toolId === skill.id && p.action === perm.action);
+  const hasOverride = (perm: ToolPermission): boolean => {
+    return userPermissions.some((p) => p.toolId === module.id && p.action === perm.action);
   };
 
-  const overrideCount = skill.permissions.filter((p) => hasOverride(p)).length;
+  const overrideCount = module.permissions.filter((p) => hasOverride(p)).length;
+
+  // Build a unified list: each permission matched with its corresponding tool function
+  const capabilities = module.permissions.map((perm) => {
+    const matchingTool = module.tools.find(
+      (t) => t.name === perm.action || t.name.endsWith(perm.action)
+    );
+    return { permission: perm, tool: matchingTool };
+  });
+
+  // Tools without a matching permission
+  const unmatchedTools = module.tools.filter(
+    (t) => !module.permissions.some((p) => p.action === t.name || t.name.endsWith(p.action))
+  );
 
   return (
     <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
@@ -171,145 +156,95 @@ function SkillCard({
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
       >
         <div className="flex items-center gap-3">
-          <div className="text-gray-500">
-            {expanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+          <div className="text-gray-400">
+            {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </div>
-          <Puzzle className="w-5 h-5 text-blue-500" />
+          <Wrench className="w-5 h-5 text-primary-500" />
           <div>
-            <h3 className="font-medium text-gray-900 dark:text-gray-100">{skill.name}</h3>
-            <p className="text-xs text-gray-500">{skill.description}</p>
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">{module.name}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{module.description}</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-500">{skill.tools.length} tools</span>
-          {skill.permissions.length > 0 && (
-            <span className="text-sm text-gray-500">{skill.permissions.length} permissions</span>
-          )}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500">
+            {module.tools.length + module.permissions.length > 0
+              ? `${Math.max(module.tools.length, module.permissions.length)} capabilities`
+              : 'no capabilities'}
+          </span>
           {overrideCount > 0 && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
               {overrideCount} custom
             </span>
           )}
-          <span className="text-xs text-gray-500">v{skill.version}</span>
+          <span className="text-xs text-gray-400">v{module.version}</span>
           <span
             className={cn(
               'px-2 py-0.5 text-xs rounded-full',
-              skill.isInitialized
-                ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
-                : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+              module.isInitialized
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
             )}
           >
-            {skill.isInitialized ? 'Active' : 'Inactive'}
+            {module.isInitialized ? 'Active' : 'Inactive'}
           </span>
         </div>
       </button>
 
       {expanded && (
-        <div className="border-t border-gray-200 dark:border-gray-700">
-          {/* Permissions */}
-          {skill.permissions.length > 0 && (
-            <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-1.5">
-                <Shield className="w-4 h-4" />
-                Permissions
-              </h4>
-              <div className="space-y-2">
-                {skill.permissions.map((perm) => {
-                  const effectiveLevel = getEffectiveLevel(perm);
-                  const isOverride = hasOverride(perm);
+        <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-1.5">
+          {/* Capabilities with inline permissions */}
+          {capabilities.map(({ permission, tool }) => {
+            const effectiveLevel = getEffectiveLevel(permission);
+            const isOverride = hasOverride(permission);
 
-                  return (
-                    <div
-                      key={perm.action}
-                      className={cn(
-                        'flex items-center justify-between py-2 px-3 rounded-lg',
-                        isOverride
-                          ? 'bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800'
-                          : 'bg-gray-50 dark:bg-gray-700/30'
-                      )}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                            {perm.action}
-                          </span>
-                          {perm.dangerous && (
-                            <span className="px-1.5 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs rounded">
-                              dangerous
-                            </span>
-                          )}
-                          {isOverride && (
-                            <span className="text-xs text-blue-500">
-                              (default: {perm.defaultLevel})
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-500 mt-0.5">{perm.description}</p>
-                      </div>
-                      <LevelSelector
-                        currentLevel={effectiveLevel}
-                        defaultLevel={perm.defaultLevel}
-                        onChange={(level) => onPermissionChange(skill.id, perm.action, level)}
-                        onReset={() => onPermissionReset(skill.id, perm.action)}
-                        isOverride={isOverride}
-                      />
-                    </div>
-                  );
-                })}
+            return (
+              <div
+                key={permission.action}
+                className={cn(
+                  'flex items-center justify-between py-2 px-3 rounded-lg',
+                  isOverride
+                    ? 'bg-blue-50 dark:bg-blue-900/10 ring-1 ring-blue-200 dark:ring-blue-800'
+                    : 'bg-gray-50 dark:bg-gray-700/30'
+                )}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
+                      {permission.action}
+                    </span>
+                    {permission.dangerous && (
+                      <span className="px-1 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-300 text-[10px] rounded font-medium">
+                        dangerous
+                      </span>
+                    )}
+                    {isOverride && (
+                      <span className="text-[10px] text-blue-500">default: {permission.defaultLevel}</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {tool?.description || permission.description}
+                  </p>
+                </div>
+                <PermissionToggle
+                  currentLevel={effectiveLevel}
+                  defaultLevel={permission.defaultLevel}
+                  onChange={(level) => onPermissionChange(module.id, permission.action, level)}
+                  onReset={() => onPermissionReset(module.id, permission.action)}
+                  isOverride={isOverride}
+                />
               </div>
-            </div>
-          )}
+            );
+          })}
 
-          {/* Tools */}
-          <div className="p-4">
-            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-              <Wrench className="w-4 h-4" />
-              Tools
-            </h4>
-            <div className="space-y-2">
-              {skill.tools.map((tool) => (
-                <ToolCard key={tool.name} tool={tool} />
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ToolCard({ tool }: { tool: SkillTool }) {
-  const [showParams, setShowParams] = useState(false);
-  const params = tool.parameters || {};
-  const properties = (params as Record<string, unknown>).properties as
-    | Record<string, { type?: string; description?: string }>
-    | undefined;
-
-  return (
-    <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <span className="text-sm font-mono text-gray-800 dark:text-gray-200">{tool.name}</span>
-          <p className="text-xs text-gray-500 mt-0.5">{tool.description}</p>
-        </div>
-        {properties && Object.keys(properties).length > 0 && (
-          <button
-            onClick={() => setShowParams(!showParams)}
-            className="text-xs text-blue-500 hover:text-blue-700 cursor-pointer"
-          >
-            {showParams ? 'hide params' : `${Object.keys(properties).length} params`}
-          </button>
-        )}
-      </div>
-
-      {showParams && properties && (
-        <div className="mt-2 space-y-1">
-          {Object.entries(properties).map(([name, schema]) => (
-            <div key={name} className="flex items-baseline gap-2 text-xs">
-              <span className="font-mono text-gray-700 dark:text-gray-300">{name}</span>
-              <span className="text-gray-500">{schema.type || 'any'}</span>
-              {schema.description && <span className="text-gray-500">— {schema.description}</span>}
+          {/* Tools without explicit permissions (shown as info-only) */}
+          {unmatchedTools.map((tool) => (
+            <div key={tool.name} className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-50 dark:bg-gray-700/30">
+              <div className="flex-1 min-w-0">
+                <span className="text-sm font-mono text-gray-800 dark:text-gray-200">{tool.name}</span>
+                <p className="text-xs text-gray-500 mt-0.5">{tool.description}</p>
+              </div>
+              <span className="text-xs text-gray-400 italic">inherited</span>
             </div>
           ))}
         </div>
@@ -318,15 +253,15 @@ function ToolCard({ tool }: { tool: SkillTool }) {
   );
 }
 
-export default function SkillsPage() {
+export default function ToolsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const queryClient = useQueryClient();
 
-  const { data: skillsData, isLoading: skillsLoading } = useQuery({
+  const { data: toolsData, isLoading } = useQuery({
     queryKey: ['tools'],
     queryFn: async () => {
       try {
-        return await api.get<{ tools: Skill[] }>('/tools');
+        return await api.get<{ tools: ToolModule[] }>('/tools');
       } catch {
         return { tools: [] };
       }
@@ -355,7 +290,7 @@ export default function SkillsPage() {
     },
   });
 
-  const skills = skillsData?.tools || [];
+  const toolModules = toolsData?.tools || [];
   const userPermissions = permissionsData?.permissions || [];
   const mcpTools = mcpData?.tools || [];
 
@@ -383,14 +318,15 @@ export default function SkillsPage() {
     [queryClient]
   );
 
-  const filteredSkills = searchQuery
-    ? skills.filter(
-        (s) =>
-          s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          s.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          s.tools.some((t) => t.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  const filteredModules = searchQuery
+    ? toolModules.filter(
+        (m) =>
+          m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          m.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          m.tools.some((t) => t.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          m.permissions.some((p) => p.action.toLowerCase().includes(searchQuery.toLowerCase()))
       )
-    : skills;
+    : toolModules;
 
   const filteredMcpTools = searchQuery
     ? mcpTools.filter(
@@ -400,46 +336,40 @@ export default function SkillsPage() {
       )
     : mcpTools;
 
-  const totalTools = skills.reduce((sum, s) => sum + s.tools.length, 0) + mcpTools.length;
-  const totalOverrides = userPermissions.length;
+  const totalCapabilities = toolModules.reduce(
+    (sum, m) => sum + Math.max(m.tools.length, m.permissions.length),
+    0
+  ) + mcpTools.length;
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-          <PageIcon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          <Wrench className="w-5 h-5 text-primary-600 dark:text-primary-400" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Tools</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Tools & Permissions</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {skills.length} tool modules, {totalTools} functions available
-            {totalOverrides > 0 && ` \u00b7 ${totalOverrides} custom permissions`}
+            {toolModules.length} tool modules, {totalCapabilities} capabilities
+            {userPermissions.length > 0 && ` · ${userPermissions.length} custom overrides`}
           </p>
         </div>
       </div>
 
-      {/* Permission level legend */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 border border-green-200 dark:border-green-800">
-          <div className="flex items-center gap-1.5 mb-1">
-            <Check className="w-4 h-4 text-green-600" />
-            <h3 className="font-semibold text-green-900 dark:text-green-100 text-sm">ALLOW</h3>
-          </div>
-          <p className="text-xs text-green-700 dark:text-green-300">Executes without confirmation</p>
+      {/* Permission legend */}
+      <div className="flex gap-4 text-xs text-gray-500">
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-green-600 text-white"><Check className="w-3 h-3" /></span>
+          <span>Allow — executes without confirmation</span>
         </div>
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-3 border border-yellow-200 dark:border-yellow-800">
-          <div className="flex items-center gap-1.5 mb-1">
-            <HelpCircle className="w-4 h-4 text-yellow-600" />
-            <h3 className="font-semibold text-yellow-900 dark:text-yellow-100 text-sm">ASK</h3>
-          </div>
-          <p className="text-xs text-yellow-700 dark:text-yellow-300">Requires your confirmation first</p>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-yellow-500 text-white"><HelpCircle className="w-3 h-3" /></span>
+          <span>Ask — requires your confirmation</span>
         </div>
-        <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 border border-red-200 dark:border-red-800">
-          <div className="flex items-center gap-1.5 mb-1">
-            <X className="w-4 h-4 text-red-600" />
-            <h3 className="font-semibold text-red-900 dark:text-red-100 text-sm">DENY</h3>
-          </div>
-          <p className="text-xs text-red-700 dark:text-red-300">Blocked, cannot execute</p>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-red-600 text-white"><X className="w-3 h-3" /></span>
+          <span>Deny — blocked</span>
         </div>
       </div>
 
@@ -450,28 +380,28 @@ export default function SkillsPage() {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search tools, functions, or permissions..."
-          className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-gray-100"
+          placeholder="Search tools, capabilities, permissions..."
+          className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
         />
       </div>
 
-      {/* Native Skills */}
-      {skillsLoading ? (
+      {/* Tool Modules */}
+      {isLoading ? (
         <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center text-gray-500">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
-      ) : filteredSkills.length === 0 ? (
+      ) : filteredModules.length === 0 && filteredMcpTools.length === 0 ? (
         <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center">
-          <Puzzle className="w-8 h-8 text-gray-500 mx-auto mb-2" />
+          <Wrench className="w-8 h-8 text-gray-400 mx-auto mb-2" />
           <p className="text-gray-500">No tools found</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredSkills.map((skill) => (
-            <SkillCard
-              key={skill.id}
-              skill={skill}
+          {filteredModules.map((module) => (
+            <ToolModuleCard
+              key={module.id}
+              module={module}
               userPermissions={userPermissions}
               onPermissionChange={handlePermissionChange}
               onPermissionReset={handlePermissionReset}

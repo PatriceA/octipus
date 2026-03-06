@@ -1,15 +1,18 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Bot, RefreshCw, Settings2, CheckCircle, XCircle } from 'lucide-react';
+import { Loader2, Bot, CheckCircle, XCircle, PanelRightClose, PanelRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api, createWebSocket } from '@/lib/api';
-import { ChatMessage, type ChatMessageData, type MessageMetadata } from '@/components/chat/chat-message';
-import { AgentActivityCard, TeamCard, type TrackedAgent, type ToolCallInfo } from '@/components/chat/agent-activity-card';
-import { ChatInput } from '@/components/chat/chat-input';
-import { SessionStats } from '@/components/chat/session-stats';
-import { PresetSelector } from '@/components/chat/preset-selector';
-import { SessionTabs, type SessionTab } from '@/components/chat/session-tabs';
+import MessageTimeline, {
+  type ChatMessageData,
+  type MessageMetadata,
+  type TrackedAgent,
+  type TeamState,
+} from '@/components/chat/message-timeline';
+import { SessionList, type SessionInfo } from '@/components/chat/session-list';
+import SidePanel from '@/components/chat/side-panel';
+import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 
 interface ApprovalRequest {
   requestId: string;
@@ -25,18 +28,11 @@ interface PermissionRequest {
   args?: Record<string, unknown>;
 }
 
-interface TeamState {
+interface ToolCallInfo {
   id: string;
-  memberIds: string[];
-  status: 'running' | 'completed';
-  durationMs?: number;
+  name: string;
+  argsSummary?: string;
 }
-
-// Unified timeline entry — either a message or an agent card
-type TimelineEntry =
-  | { kind: 'message'; data: ChatMessageData; ts: number }
-  | { kind: 'agent'; agentId: string; ts: number }
-  | { kind: 'team'; teamId: string; ts: number };
 
 // Per-session state
 interface SessionState {
@@ -49,7 +45,6 @@ interface SessionState {
 // Module-level guard to prevent React Strict Mode double WebSocket connections
 let wsInstance: WebSocket | null = null;
 
-const STORAGE_KEY_SESSIONS = 'chat_sessions';
 const STORAGE_KEY_ACTIVE = 'chat_active_session';
 
 function welcomeMessage(): ChatMessageData {
@@ -70,31 +65,38 @@ function newSessionState(): SessionState {
   };
 }
 
+interface Preset {
+  id: string;
+  name: string;
+  description?: string;
+  role: string;
+}
+
 export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
-  const [sessions, setSessions] = useState<SessionTab[]>([]);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
-  const [showModelSelect, setShowModelSelect] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [showSidePanel, setShowSidePanel] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Get active session state
+  // Active session state
   const activeState = activeSessionId ? sessionStates.get(activeSessionId) : null;
   const messages = activeState?.messages || [welcomeMessage()];
   const trackedAgents = activeState?.trackedAgents || new Map();
   const teams = activeState?.teams || new Map();
   const sessionTotalTokens = activeState?.totalTokens || 0;
 
-  // Helper to update a session's state
+  // Update a session's state
   const updateSessionState = useCallback((sessionId: string, updater: (prev: SessionState) => SessionState) => {
     setSessionStates(prev => {
       const next = new Map(prev);
@@ -109,9 +111,9 @@ export default function ChatPage() {
     try {
       const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }> }>('/sessions');
       if (data?.sessions?.length) {
-        const tabs: SessionTab[] = data.sessions
+        const items: SessionInfo[] = data.sessions
           .filter(s => s.status === 'active')
-          .slice(0, 20)
+          .slice(0, 50)
           .map(s => ({
             id: s.id,
             title: s.title || 'Untitled',
@@ -119,8 +121,8 @@ export default function ChatPage() {
             messageCount: s.messageCount,
             status: s.status,
           }));
-        setSessions(tabs);
-        return tabs;
+        setSessions(items);
+        return items;
       }
     } catch {}
     return [];
@@ -143,40 +145,39 @@ export default function ChatPage() {
           })),
         }));
       }
-    } catch {
-      // Session may have been deleted
-    }
+    } catch {}
   }, [updateSessionState]);
 
-  // Initialize — load sessions from backend
+  // Initialize
   useEffect(() => {
     if (!mounted) {
       setMounted(true);
-
       const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
 
-      loadSessions().then((tabs) => {
-        if (tabs.length > 0) {
-          // Try to restore last active, or pick the most recent
-          const target = savedActive && tabs.find(t => t.id === savedActive)
+      loadSessions().then((items) => {
+        if (items.length > 0) {
+          const target = savedActive && items.find(t => t.id === savedActive)
             ? savedActive
-            : tabs[0].id;
+            : items[0].id;
           setActiveSessionId(target);
           loadSessionMessages(target);
         }
       });
+
+      // Load presets
+      api.get<{ presets: Preset[] }>('/presets')
+        .then((data) => { if (data?.presets) setPresets(data.presets); })
+        .catch(() => {});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
 
-  // Persist active session ID
+  // Persist active session
   useEffect(() => {
-    if (activeSessionId) {
-      localStorage.setItem(STORAGE_KEY_ACTIVE, activeSessionId);
-    }
+    if (activeSessionId) localStorage.setItem(STORAGE_KEY_ACTIVE, activeSessionId);
   }, [activeSessionId]);
 
-  // Check connection via health endpoint and load models
+  // Check connection + load models
   const checkConnection = useCallback(async () => {
     try {
       const health = await api.get<{ status: string }>('/health');
@@ -184,7 +185,6 @@ export default function ChatPage() {
     } catch {
       setConnectionStatus('disconnected');
     }
-
     try {
       const data = await api.get<{ models: Array<{ name: string; isDefault: boolean }> }>('/models');
       if (data?.models) {
@@ -197,7 +197,7 @@ export default function ChatPage() {
 
   useEffect(() => { checkConnection(); }, [checkConnection]);
 
-  // WebSocket connection for real-time events
+  // WebSocket
   useEffect(() => {
     if (!mounted) return;
     const token = api.getToken();
@@ -217,7 +217,6 @@ export default function ChatPage() {
       ws = createWebSocket('/ws');
       wsInstance = ws;
       wsRef.current = ws;
-
       ws.onopen = () => setConnectionStatus('connected');
       ws.onmessage = (event) => {
         try { handleWsMessage(JSON.parse(event.data)); } catch {}
@@ -277,15 +276,12 @@ export default function ChatPage() {
               : prev.totalTokens + (meta?.tokens || 0),
           }));
 
-          // Add to sessions list if new
           if (data.sessionId) {
             setSessions(prev => {
               if (prev.find(s => s.id === data.sessionId)) return prev;
               return [{ id: data.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, status: 'active' }, ...prev];
             });
-            if (!activeSessionId) {
-              setActiveSessionId(data.sessionId);
-            }
+            if (!activeSessionId) setActiveSessionId(data.sessionId);
           }
         }
         break;
@@ -434,38 +430,6 @@ export default function ChatPage() {
     }
   };
 
-  // Build unified timeline for active session
-  const timeline: TimelineEntry[] = [];
-  messages.forEach((msg) => {
-    timeline.push({ kind: 'message', data: msg, ts: msg.timestamp.getTime() });
-  });
-
-  const agentEntries = Array.from(trackedAgents.values()).filter(a => a.role !== 'orchestrator');
-  const teamSet = new Set<string>();
-  agentEntries.forEach((agent) => {
-    if (agent.teamId) {
-      if (!teamSet.has(agent.teamId)) {
-        teamSet.add(agent.teamId);
-        timeline.push({ kind: 'team', teamId: agent.teamId, ts: agent.startTime });
-      }
-    } else {
-      timeline.push({ kind: 'agent', agentId: agent.id, ts: agent.startTime });
-    }
-  });
-
-  teams.forEach((team) => {
-    if (!teamSet.has(team.id)) {
-      timeline.push({ kind: 'team', teamId: team.id, ts: Date.now() });
-    }
-  });
-
-  timeline.sort((a, b) => a.ts - b.ts);
-
-  // Scroll to bottom on new messages/agents
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, trackedAgents]);
-
   // Session management
   const createSession = async () => {
     try {
@@ -475,16 +439,16 @@ export default function ChatPage() {
         title: 'New Chat',
       });
       if (result?.session) {
-        const tab: SessionTab = {
+        const item: SessionInfo = {
           id: result.session.id,
           title: result.session.title || 'New Chat',
           updatedAt: result.session.updatedAt,
           messageCount: 0,
           status: 'active',
         };
-        setSessions(prev => [tab, ...prev]);
-        setActiveSessionId(tab.id);
-        updateSessionState(tab.id, () => newSessionState());
+        setSessions(prev => [item, ...prev]);
+        setActiveSessionId(item.id);
+        updateSessionState(item.id, () => newSessionState());
         setIsLoading(false);
         setPendingApproval(null);
         setPendingPermission(null);
@@ -503,14 +467,13 @@ export default function ChatPage() {
     setPendingPermission(null);
     setStatusMessage(null);
 
-    // Lazy-load messages if not cached
     if (!sessionStates.has(id)) {
       updateSessionState(id, () => newSessionState());
       loadSessionMessages(id);
     }
   };
 
-  const closeSession = (id: string) => {
+  const deleteSession = (id: string) => {
     setSessions(prev => prev.filter(s => s.id !== id));
     setSessionStates(prev => {
       const next = new Map(prev);
@@ -520,11 +483,8 @@ export default function ChatPage() {
 
     if (activeSessionId === id) {
       const remaining = sessions.filter(s => s.id !== id);
-      if (remaining.length > 0) {
-        selectSession(remaining[0].id);
-      } else {
-        setActiveSessionId(null);
-      }
+      if (remaining.length > 0) selectSession(remaining[0].id);
+      else setActiveSessionId(null);
     }
   };
 
@@ -536,7 +496,7 @@ export default function ChatPage() {
   };
 
   // Send message
-  const sendMessage = async (userInput: string) => {
+  const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
     const sid = activeSessionId;
 
     const userMessage: ChatMessageData = {
@@ -567,7 +527,7 @@ export default function ChatPage() {
       return;
     }
 
-    // Fallback to REST API
+    // REST fallback
     try {
       const result = await api.post<{
         response: string;
@@ -618,7 +578,7 @@ export default function ChatPage() {
     setStatusMessage(null);
   };
 
-  // Handle approval response
+  // Approval / Permission handling
   const handleApproval = (approved: boolean, response?: string) => {
     if (!pendingApproval) return;
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -629,11 +589,7 @@ export default function ChatPage() {
         response,
       }));
     } else {
-      api.post('/chat/approve', {
-        requestId: pendingApproval.requestId,
-        approved,
-        response,
-      }).catch(console.error);
+      api.post('/chat/approve', { requestId: pendingApproval.requestId, approved, response }).catch(console.error);
     }
     setPendingApproval(null);
   };
@@ -651,208 +607,119 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="mb-2 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Chat</h1>
-          <div className="flex items-center gap-3 text-sm">
-            {connectionStatus === 'connected' ? (
-              <span className="text-green-600 flex items-center gap-1">
-                <span className="w-2 h-2 bg-green-500 rounded-full" />
-                Connected
-              </span>
-            ) : connectionStatus === 'connecting' ? (
-              <span className="text-yellow-600 flex items-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Connecting...
-              </span>
-            ) : (
-              <span className="text-red-600 flex items-center gap-1">
-                <span className="w-2 h-2 bg-red-500 rounded-full" />
-                Disconnected
-              </span>
-            )}
-            <span className="text-gray-500">|</span>
-            {/* Model selector */}
-            <div className="relative">
-              <button
-                onClick={() => setShowModelSelect(!showModelSelect)}
-                className="flex items-center gap-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-              >
-                <Settings2 className="w-4 h-4" />
-                <span className="font-mono text-xs">{selectedModel || 'auto'}</span>
-              </button>
-              {showModelSelect && models.length > 0 && (
-                <div className="absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 rounded-xl shadow-lg ring-1 ring-gray-200/60 dark:ring-gray-700/60 py-1 z-50 min-w-[200px]">
-                  <button
-                    onClick={() => { setSelectedModel(''); setShowModelSelect(false); }}
-                    className={cn(
-                      'w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-700',
-                      !selectedModel ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'text-gray-700 dark:text-gray-300'
-                    )}
-                  >
-                    auto (orchestrator decides)
-                  </button>
-                  {models.map((m) => (
-                    <button
-                      key={m.name}
-                      onClick={() => { setSelectedModel(m.name); setShowModelSelect(false); }}
-                      className={cn(
-                        'w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-700',
-                        m.name === selectedModel ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'text-gray-700 dark:text-gray-300'
-                      )}
-                    >
-                      {m.name} {m.isDefault && <span className="text-xs text-gray-500">(default)</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <span className="text-gray-500">|</span>
-            <SessionStats totalTokens={sessionTotalTokens} />
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={checkConnection}
-            className="p-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-            title="Refresh connection"
-          >
-            <RefreshCw className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Session tabs */}
-      <div className="mb-2">
-        <SessionTabs
+    <div className="h-full flex">
+      {/* Left panel — Session list */}
+      <div className="w-64 border-r border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
+        <SessionList
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelect={selectSession}
           onCreate={createSession}
-          onClose={closeSession}
+          onDelete={deleteSession}
           onRename={renameSession}
         />
       </div>
 
-      {/* Preset selector */}
-      <div className="mb-3">
-        <PresetSelector selectedPresetId={selectedPresetId} onSelect={setSelectedPresetId} />
-      </div>
-
-      {/* Chat area */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
-        {/* Unified timeline: messages + agent activity */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {timeline.map((entry) => {
-            if (entry.kind === 'message') {
-              return <ChatMessage key={entry.data.id} message={entry.data} />;
-            }
-            if (entry.kind === 'agent') {
-              const agent = trackedAgents.get(entry.agentId);
-              if (!agent) return null;
-              return <AgentActivityCard key={`agent-${agent.id}`} agent={agent} />;
-            }
-            if (entry.kind === 'team') {
-              const team = teams.get(entry.teamId);
-              const memberAgents = Array.from(trackedAgents.values()).filter(a => a.teamId === entry.teamId);
-              if (!team && memberAgents.length === 0) return null;
-              return (
-                <TeamCard
-                  key={`team-${entry.teamId}`}
-                  teamId={entry.teamId}
-                  members={memberAgents}
-                  status={team?.status || 'running'}
-                  durationMs={team?.durationMs}
-                />
-              );
-            }
-            return null;
-          })}
-
-          {/* Loading / status indicator */}
-          {isLoading && (
-            <div className="flex gap-3 justify-start">
-              <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              </div>
-              <div className="bg-gray-100 dark:bg-gray-700 px-4 py-2 rounded-lg flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
-                <span className="text-sm text-gray-500">
-                  {statusMessage || 'Thinking...'}
-                </span>
-              </div>
+      {/* Center — Messages + Input */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Inline banners for approval/permission */}
+        {pendingPermission && (
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-yellow-900 dark:text-yellow-200">Permission Required</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300">
+                <span className="font-mono">{pendingPermission.skillId}</span> wants to execute <span className="font-mono font-medium">{pendingPermission.action}</span>
+              </p>
             </div>
-          )}
+            <div className="flex gap-2">
+              <button onClick={() => handlePermissionResponse(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
+                <CheckCircle className="w-4 h-4" /> Allow
+              </button>
+              <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
+                <XCircle className="w-4 h-4" /> Deny
+              </button>
+            </div>
+          </div>
+        )}
 
-          {/* Permission request card */}
-          {pendingPermission && (
-            <div className="flex gap-3 justify-start">
-              <div className="w-8 h-8 rounded-full bg-yellow-100 dark:bg-yellow-900 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
-              </div>
-              <div className="max-w-[70%] bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 px-4 py-3 rounded-lg">
-                <p className="text-sm font-medium text-yellow-900 dark:text-yellow-200 mb-1">Permission Required</p>
-                <p className="text-sm text-gray-700 dark:text-gray-300 mb-1">
-                  Skill <span className="font-mono font-medium">{pendingPermission.skillId}</span> wants to execute:
-                </p>
-                <p className="text-sm font-mono bg-yellow-100 dark:bg-yellow-900/40 px-2 py-1 rounded mb-3">
-                  {pendingPermission.action}
-                </p>
-                <div className="flex gap-2">
-                  <button onClick={() => handlePermissionResponse(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">
-                    <CheckCircle className="w-4 h-4" /> Allow
+        {pendingApproval && (
+          <div className="bg-orange-50 dark:bg-orange-900/20 border-b border-orange-200 dark:border-orange-800 px-4 py-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-orange-900 dark:text-orange-200">Approval Required</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300">{pendingApproval.summary}</p>
+              <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mt-0.5">{pendingApproval.question}</p>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {pendingApproval.options?.length ? (
+                <>
+                  {pendingApproval.options.map((option, i) => (
+                    <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer">
+                      {option}
+                    </button>
+                  ))}
+                  <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-100 text-red-700 dark:text-red-400 cursor-pointer">
+                    Deny
                   </button>
-                  <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">
+                </>
+              ) : (
+                <>
+                  <button onClick={() => handleApproval(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
+                    <CheckCircle className="w-4 h-4" /> Approve
+                  </button>
+                  <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
                     <XCircle className="w-4 h-4" /> Deny
                   </button>
-                </div>
-              </div>
+                </>
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Approval card */}
-          {pendingApproval && (
-            <div className="flex gap-3 justify-start">
-              <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-orange-900 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-              </div>
-              <div className="max-w-[70%] bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 px-4 py-3 rounded-lg">
-                <p className="text-sm font-medium text-orange-900 dark:text-orange-200 mb-1">Approval Required</p>
-                <p className="text-sm text-gray-700 dark:text-gray-300 mb-1">{pendingApproval.summary}</p>
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">{pendingApproval.question}</p>
-                {pendingApproval.options && pendingApproval.options.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {pendingApproval.options.map((option, i) => (
-                      <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300">
-                        {option}
-                      </button>
-                    ))}
-                    <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-100 text-red-700 dark:text-red-400">
-                      Deny
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex gap-2">
-                    <button onClick={() => handleApproval(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">
-                      <CheckCircle className="w-4 h-4" /> Approve
-                    </button>
-                    <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">
-                      <XCircle className="w-4 h-4" /> Deny
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+        {/* Message timeline */}
+        <MessageTimeline
+          messages={messages}
+          trackedAgents={trackedAgents}
+          teams={teams}
+          isLoading={isLoading}
+          statusMessage={statusMessage}
+        />
 
-          <div ref={messagesEndRef} />
+        {/* Prompt input */}
+        <div className="border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
+          <PromptInput
+            onSend={sendMessage}
+            disabled={isLoading}
+            placeholder={activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
+          />
         </div>
-
-        {/* Input */}
-        <ChatInput onSend={sendMessage} disabled={isLoading} />
       </div>
+
+      {/* Right panel — Side panel */}
+      {showSidePanel && (
+        <div className="w-72 border-l border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
+          <SidePanel
+            totalTokens={sessionTotalTokens}
+            trackedAgents={trackedAgents}
+            teams={teams}
+            connectionStatus={connectionStatus}
+            selectedModel={selectedModel}
+            models={models}
+            onModelChange={setSelectedModel}
+            selectedPresetId={selectedPresetId}
+            presets={presets}
+            onPresetChange={setSelectedPresetId}
+          />
+        </div>
+      )}
+
+      {/* Side panel toggle */}
+      <button
+        onClick={() => setShowSidePanel(!showSidePanel)}
+        className="absolute top-20 right-2 p-1.5 rounded-lg bg-white dark:bg-gray-800 shadow-sm ring-1 ring-gray-200 dark:ring-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 z-10 cursor-pointer"
+        title={showSidePanel ? 'Hide panel' : 'Show panel'}
+      >
+        {showSidePanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
+      </button>
     </div>
   );
 }

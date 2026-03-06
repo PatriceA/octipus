@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { useAuth } from '@/lib/auth-context';
+import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 
 const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/setup'];
@@ -41,7 +42,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className={cn(
+          'flex-1 overflow-hidden',
+          pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-6'
+        )}>{children}</main>
       </div>
     </div>
   );

@@ -357,6 +357,10 @@ cmd_start() {
     return 1
   fi
 
+  # Clear Next.js cache so code changes take effect
+  log_step "Clearing web UI cache..."
+  rm -rf "$PROJECT_DIR/web/.next"
+
   # Start web UI only after backend is confirmed healthy
   cd "$PROJECT_DIR/web"
   if [[ "$dev_mode" == true ]]; then
@@ -489,6 +493,10 @@ cmd_restart() {
     diagnose_backend_failure
     return 1
   fi
+
+  # Clear Next.js cache so code changes take effect
+  log_step "Clearing web UI cache..."
+  rm -rf "$PROJECT_DIR/web/.next"
 
   # Start web UI
   cd "$PROJECT_DIR/web"
