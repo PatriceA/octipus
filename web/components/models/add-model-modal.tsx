@@ -38,6 +38,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     supportsVision: false,
     supportsTools: true,
     supportsStreaming: true,
+    disableThinking: false,
     topics: [] as string[],
     priority: 50,
     costPerInputToken: 0,
@@ -93,7 +94,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     setFormData({
       name: '', provider: 'ollama', modelId: '', endpoint: '',
       contextWindow: 4096, maxTokens: 4096, supportsVision: false,
-      supportsTools: true, supportsStreaming: true,
+      supportsTools: true, supportsStreaming: true, disableThinking: false,
       topics: [], priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
     });
     setError('');
@@ -114,6 +115,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       supportsVision: defaults.supportsVision || false,
       supportsTools: defaults.supportsTools ?? true,
       supportsStreaming: true,
+      disableThinking: false,
       topics: [],
       priority: 50,
       costPerInputToken: 0,
@@ -167,6 +169,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         priority: formData.priority,
         costPerInputToken: formData.costPerInputToken,
         costPerOutputToken: formData.costPerOutputToken,
+        metadata: formData.disableThinking ? { extraBody: { think: false } } : undefined,
       });
       onClose();
     } catch (err) {
@@ -441,6 +444,10 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={formData.supportsStreaming} onChange={(e) => setFormData({ ...formData, supportsStreaming: e.target.checked })} className="w-4 h-4 rounded" />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Streaming</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer" title="Disable reasoning/thinking tokens (e.g. for Qwen3, DeepSeek). Sends think:false to Ollama.">
+                <input type="checkbox" checked={formData.disableThinking} onChange={(e) => setFormData({ ...formData, disableThinking: e.target.checked })} className="w-4 h-4 rounded" />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Disable Thinking</span>
               </label>
             </div>
 

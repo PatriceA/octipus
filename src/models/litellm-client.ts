@@ -134,8 +134,14 @@ export class LiteLLMClient {
       const latencyMs = Date.now() - startTime;
       const choice = response.choices[0];
 
+      // Strip <think>...</think> blocks from models that include reasoning tokens
+      let content = choice.message.content || '';
+      if (content.includes('<think>')) {
+        content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      }
+
       const result: CompletionResult = {
-        content: choice.message.content || '',
+        content,
         finishReason: choice.finish_reason || 'stop',
         usage: {
           inputTokens: response.usage?.prompt_tokens || 0,
@@ -198,12 +204,42 @@ export class LiteLLMClient {
     const stream = await this.client.chat.completions.create(params);
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
+    let insideThinkBlock = false;
+    let thinkBuffer = '';
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
-        yield { content: delta.content };
+        // Filter out <think>...</think> blocks from streaming content
+        let text = delta.content;
+        if (insideThinkBlock) {
+          thinkBuffer += text;
+          const closeIdx = thinkBuffer.indexOf('</think>');
+          if (closeIdx !== -1) {
+            insideThinkBlock = false;
+            text = thinkBuffer.substring(closeIdx + 8);
+            thinkBuffer = '';
+            if (text) yield { content: text };
+          }
+          continue;
+        }
+        const openIdx = text.indexOf('<think>');
+        if (openIdx !== -1) {
+          const before = text.substring(0, openIdx);
+          if (before) yield { content: before };
+          insideThinkBlock = true;
+          thinkBuffer = text.substring(openIdx + 7);
+          const closeIdx = thinkBuffer.indexOf('</think>');
+          if (closeIdx !== -1) {
+            insideThinkBlock = false;
+            const after = thinkBuffer.substring(closeIdx + 8);
+            thinkBuffer = '';
+            if (after) yield { content: after };
+          }
+          continue;
+        }
+        yield { content: text };
       }
 
       if (delta?.tool_calls) {

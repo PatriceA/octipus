@@ -473,7 +473,13 @@ export default function ChatPage() {
     }
   };
 
-  const deleteSession = (id: string) => {
+  const deleteSession = async (id: string) => {
+    try {
+      await api.delete(`/sessions/${id}`);
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+    }
+
     setSessions(prev => prev.filter(s => s.id !== id));
     setSessionStates(prev => {
       const next = new Map(prev);
