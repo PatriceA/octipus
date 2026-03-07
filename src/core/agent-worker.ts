@@ -295,13 +295,19 @@ export class AgentWorker extends BaseAgentWorker {
 
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
+    // Agent workers benefit from reasoning — override think:false if set,
+    // since the LLM client strips <think> blocks from the output anyway.
+    const extraBody = metadata?.extraBody
+      ? { ...metadata.extraBody, think: true }
+      : undefined;
+
     const result = await client.complete({
       model: litellmModel,
       messages: this.messages,
       tools: tools.length > 0 ? tools : undefined,
       temperature: model.defaultTemperature || 0.7,
       maxTokens: model.defaultMaxTokens || 4096,
-      extraBody: metadata?.extraBody,
+      extraBody,
     });
 
     await costTracker.logUsageWithCost(
