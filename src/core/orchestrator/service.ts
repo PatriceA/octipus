@@ -446,20 +446,56 @@ export class OrchestratorService {
     const roleConfig = getRoleConfig(agentRole);
     const roleTools = getToolsForRole(agentRole);
 
+    // Auto-select a matching expert for this role (if not already using explicit overrides)
+    let expertPrompt: string | undefined;
+    let expertModel: string | undefined;
+    if (!overrides?.systemPrompt) {
+      try {
+        const { getDb } = await import('@/db/postgres');
+        const { experts } = await import('@/db/schema/experts');
+        const { eq, and } = await import('drizzle-orm');
+        const db = getDb();
+        const [matchingExpert] = await db.select().from(experts)
+          .where(and(eq(experts.role, agentRole), eq(experts.isSystem, true)))
+          .limit(1);
+        if (matchingExpert) {
+          expertPrompt = matchingExpert.systemPrompt || undefined;
+          expertModel = matchingExpert.modelPreference || undefined;
+
+          // Inject domain knowledge from assigned skills
+          const skillIds = (matchingExpert.skillIds as string[]) || [];
+          if (skillIds.length > 0) {
+            const { getSkillRegistry } = await import('@/skills/registry');
+            const fragment = await getSkillRegistry().buildPromptFragment(skillIds);
+            if (fragment) {
+              expertPrompt = (expertPrompt || '') + '\n\n# Domain Knowledge\n' + fragment;
+            }
+          }
+
+          coreLogger.info(
+            { role: agentRole, expert: matchingExpert.name, hasSkills: skillIds.length > 0 },
+            'Auto-selected expert for worker role',
+          );
+        }
+      } catch (err) {
+        coreLogger.debug({ err, role: agentRole }, 'Expert auto-selection skipped');
+      }
+    }
+
     const routing = await this.modelSelector.selectForWorker(
       roleConfig.defaultTopic,
       roleTools.length > 0,
     );
 
-    const finalModel = overrides?.model || routing.model;
+    const finalModel = overrides?.model || expertModel || routing.model;
     if (!finalModel) {
       return { error: 'No model configured. Please add one in the Models page.' };
     }
 
     const startTime = Date.now();
 
-    // For coding role, prepend project summary if available
-    let systemPrompt = overrides?.systemPrompt || roleConfig.systemPromptTemplate;
+    // Use expert prompt if available, otherwise fall back to role config
+    let systemPrompt = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
     if (agentRole === 'coding') {
       const projectSummary = await this.loadProjectSummary();
       if (projectSummary) {
