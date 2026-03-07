@@ -284,7 +284,7 @@ export class OrchestratorService {
 
     // Check response cache for casual messages
     const cache = getResponseCache();
-    const recentMessages = await messageRepository.findBySession(sessionId, 10, 0, ['user', 'assistant']);
+    const recentMessages = await messageRepository.findRecentBySession(sessionId, 6, ['user', 'assistant']);
     const recentContext = recentMessages.slice(0, 2).map(m => m.content).join('|');
 
     const cached = await cache.get(message, recentContext);

@@ -197,6 +197,16 @@ export default function ChatPage() {
 
   useEffect(() => { checkConnection(); }, [checkConnection]);
 
+  // Poll for new messages (handles telegram/channel sessions that bypass WebSocket)
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const interval = setInterval(() => {
+      loadSessionMessages(activeSessionId);
+      loadSessions();
+    }, 10_000); // Every 10 seconds
+    return () => clearInterval(interval);
+  }, [activeSessionId, loadSessionMessages, loadSessions]);
+
   // WebSocket
   useEffect(() => {
     if (!mounted) return;

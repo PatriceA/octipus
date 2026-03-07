@@ -25,6 +25,25 @@ export class MessageRepository {
       .offset(offset);
   }
 
+  /**
+   * Get the N most recent messages for a session (ordered oldest→newest).
+   * Unlike findBySession which gets the first N messages, this gets the last N.
+   */
+  async findRecentBySession(sessionId: string, limit: number = 10, roles?: string[]): Promise<Message[]> {
+    const conditions = roles?.length
+      ? and(eq(messages.sessionId, sessionId), inArray(messages.role, roles as ('system' | 'user' | 'assistant' | 'tool')[]))
+      : eq(messages.sessionId, sessionId);
+
+    const recent = await this.db
+      .select()
+      .from(messages)
+      .where(conditions)
+      .orderBy(desc(messages.createdAt))
+      .limit(limit);
+
+    return recent.reverse(); // Return in chronological order
+  }
+
   async findByAgent(agentId: string, limit: number = 100): Promise<Message[]> {
     return this.db
       .select()
