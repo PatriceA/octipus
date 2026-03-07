@@ -17,6 +17,7 @@ export interface Model {
   costPerOutputToken: number;
   metadata?: {
     description?: string;
+    extraBody?: Record<string, unknown>;
     cliAgent?: {
       permissionMode?: string;
       allowedTools?: string[];

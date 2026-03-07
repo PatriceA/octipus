@@ -22,6 +22,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     supportsVision: model.supportsVision,
     supportsTools: model.supportsTools,
     supportsStreaming: model.supportsStreaming,
+    disableThinking: model.metadata?.extraBody?.think === false,
     costPerInputToken: model.costPerInputToken,
     costPerOutputToken: model.costPerOutputToken,
     // CLI agent settings
@@ -53,7 +54,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         costPerOutputToken: formData.costPerOutputToken,
       };
 
-      // Include CLI agent settings in metadata
+      // Include thinking and CLI agent settings in metadata
+      if (formData.disableThinking || isCli) {
+        const existingMeta = model.metadata || {};
+        const extraBody = formData.disableThinking
+          ? { ...(existingMeta.extraBody || {}), think: false }
+          : (() => { const { think, ...rest } = (existingMeta.extraBody || {}); return Object.keys(rest).length ? rest : undefined; })();
+        payload.metadata = { ...existingMeta, extraBody };
+      }
+
       if (isCli) {
         const cliAgentConfig: Record<string, unknown> = {};
         if (formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
@@ -213,6 +222,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 className="w-4 h-4 rounded"
               />
               <span className="text-sm text-gray-700 dark:text-gray-300">Streaming</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer" title="Disable reasoning/thinking tokens (e.g. for Qwen3, DeepSeek). Sends think:false to Ollama.">
+              <input
+                type="checkbox"
+                checked={formData.disableThinking}
+                onChange={(e) => setFormData({ ...formData, disableThinking: e.target.checked })}
+                className="w-4 h-4 rounded"
+              />
+              <span className="text-sm text-gray-700 dark:text-gray-300">Disable Thinking</span>
             </label>
           </div>
 
