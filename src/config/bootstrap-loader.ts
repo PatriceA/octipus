@@ -1,7 +1,9 @@
 import type { Config } from './schema';
+import type { StorageMode } from './schema';
 import { defaultConfig } from './defaults';
 
 export interface BootstrapConfig {
+  storageMode: StorageMode;
   database: Config['database'];
   redis: Config['redis'];
   security: {
@@ -20,9 +22,13 @@ export interface BootstrapConfig {
  * Only reads the vars needed before DB/Redis are available.
  */
 export function loadBootstrapConfig(): BootstrapConfig {
+  const storageMode = (process.env.STORAGE_MODE || 'external') as StorageMode;
+
   return {
+    storageMode,
     database: {
       url: process.env.DATABASE_URL || defaultConfig.database!.url!,
+      dataDir: process.env.DATA_DIR || defaultConfig.database?.dataDir || '~/.assistant/data',
       poolSize: parseInt(process.env.DB_POOL_SIZE || '10', 10),
       idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT || '30000', 10),
       connectionTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000', 10),

@@ -3,11 +3,12 @@ import { getDb } from '@/db/postgres';
 import { vault, type VaultEntry, type NewVaultEntry, SECRET_PLACEHOLDER_PATTERN } from '@/db/schema/vault';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { encrypt, decrypt } from '@/utils/crypto';
-import { pbkdf2Sync } from 'crypto';
+import { pbkdf2Sync, createHash } from 'crypto';
 import { getConfig } from '@/config';
 import { securityLogger } from '@/utils/logger';
 
 let masterKey: Buffer | null = null;
+let legacyKey: Buffer | null = null;
 
 /**
  * Initialize the vault with the master key
@@ -19,13 +20,13 @@ export async function initializeVault(): Promise<void> {
     throw new Error('Master key not configured');
   }
 
-  // BREAKING CHANGE: Existing vault data encrypted with the old SHA-256 key
-  // derivation will be unreadable. Re-encrypt all secrets after this update.
-  //
   // Derive a deterministic 256-bit key from the master key via PBKDF2 with a
-  // fixed salt and 100 000 iterations.  Unlike deriveKey() (Argon2id + random
-  // salt) this is stable across restarts while still providing KDF stretching.
+  // fixed salt and 100 000 iterations.
   masterKey = pbkdf2Sync(config.security.masterKey, 'assistant-vault-v1', 100_000, 32, 'sha256');
+
+  // Keep the legacy SHA-256 key for backwards-compatible decryption of
+  // secrets that were encrypted before the PBKDF2 migration.
+  legacyKey = createHash('sha256').update(config.security.masterKey).digest();
 
   securityLogger.info('Vault initialized');
 }
@@ -41,7 +42,7 @@ function getMasterKey(): Buffer {
 }
 
 export class Vault {
-  private db = getDb();
+  private get db() { return getDb(); }
 
   /**
    * Store a credential
@@ -114,14 +115,33 @@ export class Vault {
     }
 
     const key = getMasterKey();
-    const decrypted = decrypt(
-      {
-        ciphertext: entry[0].encryptedValue,
-        iv: entry[0].encryptionIv,
-        authTag: entry[0].encryptionAuthTag,
-      },
-      key
-    );
+    const encData = {
+      ciphertext: entry[0].encryptedValue,
+      iv: entry[0].encryptionIv,
+      authTag: entry[0].encryptionAuthTag,
+    };
+
+    let decrypted: string;
+    try {
+      decrypted = decrypt(encData, key);
+    } catch {
+      // Try legacy SHA-256 key for pre-PBKDF2 migration data
+      if (!legacyKey) throw new Error('Decryption failed and no legacy key available');
+      try {
+        decrypted = decrypt(encData, legacyKey);
+        // Re-encrypt with new key so future reads use PBKDF2
+        const reEncrypted = encrypt(decrypted, key);
+        await this.db.update(vault).set({
+          encryptedValue: reEncrypted.ciphertext,
+          encryptionIv: reEncrypted.iv,
+          encryptionAuthTag: reEncrypted.authTag,
+          updatedAt: new Date(),
+        }).where(eq(vault.id, credentialId));
+        securityLogger.info({ credentialId }, 'Vault entry migrated to PBKDF2 key');
+      } catch {
+        throw new Error('Decryption failed with both current and legacy keys');
+      }
+    }
 
     // Update access tracking
     await this.db

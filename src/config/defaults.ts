@@ -1,8 +1,10 @@
 import type { Config } from './schema';
 
 export const defaultConfig: Partial<Config> = {
+  storageMode: 'external',
   database: {
     url: 'postgresql://assistant:assistant@localhost:5432/assistant',
+    dataDir: '~/.assistant/data',
     poolSize: 10,
     idleTimeout: 30000,
     connectionTimeout: 10000,
@@ -72,11 +74,16 @@ export const defaultConfig: Partial<Config> = {
   },
 };
 
+/** Required env vars — DATABASE_URL and REDIS_URL only needed in external mode */
 export const requiredEnvVars = [
-  'DATABASE_URL',
   'MASTER_KEY',
   'JWT_SECRET',
   'SESSION_SECRET',
+];
+
+/** Additional env vars required only in external storage mode */
+export const externalModeRequiredVars = [
+  'DATABASE_URL',
 ];
 
 export const optionalEnvVars = [

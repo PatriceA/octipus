@@ -23,7 +23,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         sessions = await sessionRepository.listByUser(user.id, limit);
       }
 
-      return { sessions };
+      const { getConfig } = await import('@/config');
+      const config = getConfig();
+      return { sessions, maxTokenBudget: config.agent.maxTokenBudget };
     },
     {
       query: t.Object({

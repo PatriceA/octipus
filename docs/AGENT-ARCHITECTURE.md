@@ -47,13 +47,25 @@ Orchestrator
     │
     └─ Task message? ──► Spawn orchestrator agent with meta-tools
                               │
-                              ├─ spawn_worker(role) ──► Single specialist worker
+                              ├─ spawn_worker(role) ──► Auto-match expert ──► Specialist worker
                               │
                               ├─ spawn_team(members) ──► Parallel workers
                               │
                               └─ create_pipeline(type) ──► Sequential stages
                                     Stage 1 → Stage 2 → ... → Stage N
 ```
+
+### Automatic Expert Selection
+
+When the orchestrator spawns a worker via `spawn_worker(role)`, it automatically matches a system expert from the database by role. The matched expert provides:
+
+- **System prompt** — expert-specific instructions and persona
+- **Domain knowledge** — skills are loaded via `SkillRegistry.buildPromptFragment()` and appended to the prompt
+- **Model preference** — the expert's preferred model (if configured)
+
+**Priority chain:** Explicit UI expert selection > Auto-matched expert by role > Generic role config
+
+This means workers automatically receive expert-level capabilities without manual selection. For example, `spawn_worker("coding")` finds the Coder expert and injects software architecture, data structures, and API design knowledge into the worker's context.
 
 ## How They Relate
 
@@ -86,6 +98,16 @@ Orchestrator
 | writing | filesystem, browser, websearch | technical-writing, api-design | Documentation |
 | communication | google-workspace, microsoft365, messaging | — | Email/calendar |
 | general | filesystem, shell, messaging | — | Fallback |
+
+## Thinking Token Management
+
+Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that consume output tokens. The system handles this at multiple levels:
+
+- **Model-level:** "Disable Thinking" checkbox in the model Add/Edit dialog sets `extraBody: { think: false }` — prevents the model from generating reasoning tokens entirely (Ollama)
+- **Agent workers:** Override `think: true` even when the model has thinking disabled — agent workers benefit from reasoning for complex tool-use tasks
+- **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, so users never see raw reasoning output
+
+**Strategy:** Disable thinking for fast orchestrator responses (classification, casual chat). Enable thinking for agent workers that need to reason about multi-step tool execution.
 
 ## Adding New Components
 

@@ -4,7 +4,7 @@ import { messages, type Message, type NewMessage } from '../schema/messages';
 import { dbLogger } from '@/utils/logger';
 
 export class MessageRepository {
-  private db = getDb();
+  private get db() { return getDb(); }
 
   async findById(id: string): Promise<Message | null> {
     const result = await this.db.select().from(messages).where(eq(messages.id, id)).limit(1);

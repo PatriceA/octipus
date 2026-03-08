@@ -87,6 +87,7 @@ export default function ChatPage() {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
+  const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Active session state
@@ -109,7 +110,8 @@ export default function ChatPage() {
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
     try {
-      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }> }>('/sessions');
+      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string }>; maxTokenBudget?: number }>('/sessions');
+      if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
           .filter(s => s.status === 'active')
@@ -119,14 +121,26 @@ export default function ChatPage() {
             title: s.title || 'Untitled',
             updatedAt: s.updatedAt,
             messageCount: s.messageCount,
+            tokenCount: s.tokenCount || 0,
             status: s.status,
           }));
         setSessions(items);
+
+        // Sync token counts into session states
+        for (const s of items) {
+          if (s.tokenCount > 0) {
+            updateSessionState(s.id, (prev) => ({
+              ...prev,
+              totalTokens: Math.max(prev.totalTokens, s.tokenCount),
+            }));
+          }
+        }
+
         return items;
       }
     } catch {}
     return [];
-  }, []);
+  }, [updateSessionState]);
 
   // Load messages for a session
   const loadSessionMessages = useCallback(async (sessionId: string) => {
@@ -134,17 +148,17 @@ export default function ChatPage() {
       const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system`
       );
-      if (data?.messages?.length) {
-        updateSessionState(sessionId, (prev) => ({
-          ...prev,
-          messages: data.messages.map((m) => ({
-            id: m.id,
-            role: m.role as ChatMessageData['role'],
-            content: m.content,
-            timestamp: new Date(m.createdAt),
-          })),
-        }));
-      }
+      updateSessionState(sessionId, (prev) => ({
+        ...prev,
+        messages: data?.messages?.length
+          ? data.messages.map((m) => ({
+              id: m.id,
+              role: m.role as ChatMessageData['role'],
+              content: m.content,
+              timestamp: new Date(m.createdAt),
+            }))
+          : [welcomeMessage()],
+      }));
     } catch {}
   }, [updateSessionState]);
 
@@ -289,7 +303,7 @@ export default function ChatPage() {
           if (data.sessionId) {
             setSessions(prev => {
               if (prev.find(s => s.id === data.sessionId)) return prev;
-              return [{ id: data.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, status: 'active' }, ...prev];
+              return [{ id: data.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, tokenCount: 0, status: 'active' }, ...prev];
             });
             if (!activeSessionId) setActiveSessionId(data.sessionId);
           }
@@ -372,16 +386,18 @@ export default function ChatPage() {
       case 'worker_completed': {
         const d = data.data as any;
         const agentId = d.workerId;
+        const workerStatus = d.status === 'failed' ? 'failed' : d.status === 'stopped' ? 'stopped' : 'completed';
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(agentId);
           if (existing) {
             next.set(agentId, {
               ...existing,
-              status: 'completed',
+              status: workerStatus,
               endTime: Date.now(),
               totalTokens: d.totalTokens,
               iterations: d.iterations,
+              error: d.error,
             });
           }
           return {
@@ -454,6 +470,7 @@ export default function ChatPage() {
           title: result.title || 'New Chat',
           updatedAt: result.updatedAt || new Date().toISOString(),
           messageCount: 0,
+          tokenCount: 0,
           status: 'active',
         };
         setSessions(prev => [item, ...prev]);
@@ -472,6 +489,7 @@ export default function ChatPage() {
   const selectSession = (id: string) => {
     if (id === activeSessionId) return;
     setActiveSessionId(id);
+    loadSessionMessages(id);
     setIsLoading(false);
     setPendingApproval(null);
     setPendingPermission(null);
@@ -572,7 +590,7 @@ export default function ChatPage() {
           setActiveSessionId(result.sessionId);
           setSessions(prev => {
             if (prev.find(s => s.id === result.sessionId)) return prev;
-            return [{ id: result.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, status: 'active' }, ...prev];
+            return [{ id: result.sessionId, title: 'New Chat', updatedAt: new Date().toISOString(), messageCount: 0, tokenCount: 0, status: 'active' }, ...prev];
           });
         }
       }
@@ -715,6 +733,7 @@ export default function ChatPage() {
         <div className="w-72 border-l border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
           <SidePanel
             totalTokens={sessionTotalTokens}
+            maxTokenBudget={maxTokenBudget}
             trackedAgents={trackedAgents}
             teams={teams}
             connectionStatus={connectionStatus}

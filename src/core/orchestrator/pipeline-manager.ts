@@ -14,7 +14,7 @@ import { getPipelineTemplate, expandPromptTemplate, buildStagesFromTemplate } fr
 import type { PipelineStatus, StageStatus } from './types';
 
 export class PipelineManager {
-  private db = getDb();
+  private get db() { return getDb(); }
 
   /**
    * Create a pipeline from a template type and start it.

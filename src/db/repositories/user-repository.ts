@@ -4,7 +4,7 @@ import { users, type User, type NewUser, type ChannelBinding } from '../schema/u
 import { dbLogger } from '@/utils/logger';
 
 export class UserRepository {
-  private db = getDb();
+  private get db() { return getDb(); }
 
   async findById(id: string): Promise<User | null> {
     const result = await this.db.select().from(users).where(eq(users.id, id)).limit(1);

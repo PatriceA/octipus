@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 import { getGateway } from '@/core/gateway';
 import { checkDbHealth } from '@/db/postgres';
 import { checkRedisHealth } from '@/db/redis';
+import { checkStorageHealth } from '@/db/storage';
 import { getHealthChecker } from '@/models/health-checker';
 import { getUMI } from '@/channels/interface';
 

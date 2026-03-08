@@ -43,12 +43,13 @@ export interface TrackedAgent {
   id: string;
   role: string;
   model: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'stopped';
   toolCalls: Array<{ id: string; name: string; argsSummary?: string }>;
   startTime: number;
   endTime?: number;
   totalTokens?: number;
   iterations?: number;
+  error?: string;
   parentAgentId?: string;
   teamId?: string;
 }
@@ -381,6 +382,12 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
 
         {agent.iterations != null && (
           <span className="text-muted-foreground">{agent.iterations} iter</span>
+        )}
+
+        {agent.error && (
+          <span className="text-red-500 truncate max-w-[300px]" title={agent.error}>
+            {agent.error}
+          </span>
         )}
 
         {agent.toolCalls.length > 0 && (

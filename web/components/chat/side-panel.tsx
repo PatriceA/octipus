@@ -23,12 +23,13 @@ interface TrackedAgent {
   id: string;
   role: string;
   model: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'stopped';
   toolCalls: Array<{ id: string; name: string; argsSummary?: string }>;
   startTime: number;
   endTime?: number;
   totalTokens?: number;
   iterations?: number;
+  error?: string;
   parentAgentId?: string;
   teamId?: string;
 }
@@ -42,6 +43,7 @@ interface TeamState {
 
 interface SidePanelProps {
   totalTokens: number;
+  maxTokenBudget: number;
   trackedAgents: Map<string, TrackedAgent>;
   teams: Map<string, TeamState>;
   connectionStatus: 'connected' | 'disconnected' | 'connecting';
@@ -74,7 +76,7 @@ const ROLE_COLORS: Record<string, string> = {
   writing: 'slate',
 };
 
-const TOKEN_BUDGET = 100_000;
+// TOKEN_BUDGET now comes from props (maxTokenBudget from backend config)
 
 // --- Helpers ---
 
@@ -138,6 +140,8 @@ function StatusIcon({ status }: { status: TrackedAgent['status'] }) {
       return <CheckCircle className="h-3.5 w-3.5 text-green-500" />;
     case 'failed':
       return <XCircle className="h-3.5 w-3.5 text-red-500" />;
+    case 'stopped':
+      return <XCircle className="h-3.5 w-3.5 text-yellow-500" />;
   }
 }
 
@@ -207,6 +211,12 @@ function AgentCard({ agent }: { agent: TrackedAgent }) {
         )}
       </div>
 
+      {agent.error && (
+        <p className="mt-1 text-[10px] text-red-500 truncate" title={agent.error}>
+          {agent.error}
+        </p>
+      )}
+
       {agent.toolCalls.length > 0 && (
         <div className="mt-1">
           <button
@@ -240,6 +250,7 @@ function AgentCard({ agent }: { agent: TrackedAgent }) {
 
 export default function SidePanel({
   totalTokens,
+  maxTokenBudget,
   trackedAgents,
   teams,
   connectionStatus,
@@ -266,7 +277,8 @@ export default function SidePanel({
   // Standalone agents (not in any team)
   const standaloneAgents = sortedAgents.filter((a) => !teamMemberIds.has(a.id));
 
-  const tokenPercent = Math.min((totalTokens / TOKEN_BUDGET) * 100, 100);
+  const isUnlimited = maxTokenBudget === 0;
+  const tokenPercent = isUnlimited ? 0 : Math.min((totalTokens / maxTokenBudget) * 100, 100);
 
   const connectionDot: Record<string, string> = {
     connected: 'bg-green-500',
@@ -367,7 +379,7 @@ export default function SidePanel({
                 Tokens
               </span>
               <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400">
-                {formatTokens(totalTokens)} / {formatTokens(TOKEN_BUDGET)}
+                {formatTokens(totalTokens)}{isUnlimited ? '' : ` / ${formatTokens(maxTokenBudget)}`}
               </span>
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">

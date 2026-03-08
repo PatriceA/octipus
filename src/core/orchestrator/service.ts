@@ -88,24 +88,27 @@ export class OrchestratorService {
         }
       }
 
-      // Token budget check
-      const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || 100_000;
+      // Token budget check — per-session override or global config
+      const config = getConfig();
+      const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || config.agent.maxTokenBudget;
       const sessionTokens = session?.tokenCount || 0;
-      if (sessionTokens >= tokenBudget) {
-        return {
-          response: `Session token budget (${tokenBudget.toLocaleString()}) exhausted. Start a new session to continue.`,
-          sessionId: resolvedSessionId,
-          classification: { type: 'casual', confidence: 1 },
-        };
-      }
-      if (sessionTokens >= tokenBudget * 0.8) {
-        this.emit({
-          type: 'status_update',
-          sessionId: resolvedSessionId,
-          userId,
-          data: { message: `Token usage at ${Math.round((sessionTokens / tokenBudget) * 100)}% of budget`, stage: 'budget_warning' },
-          timestamp: new Date(),
-        });
+      if (tokenBudget > 0) {
+        if (sessionTokens >= tokenBudget) {
+          return {
+            response: `Session token budget (${tokenBudget.toLocaleString()}) exhausted. Start a new session to continue.`,
+            sessionId: resolvedSessionId,
+            classification: { type: 'casual', confidence: 1 },
+          };
+        }
+        if (sessionTokens >= tokenBudget * 0.8) {
+          this.emit({
+            type: 'status_update',
+            sessionId: resolvedSessionId,
+            userId,
+            data: { message: `Token usage at ${Math.round((sessionTokens / tokenBudget) * 100)}% of budget`, stage: 'budget_warning' },
+            timestamp: new Date(),
+          });
+        }
       }
 
       // Expert bypass: skip classification and orchestrator, spawn worker directly
@@ -693,12 +696,25 @@ export class OrchestratorService {
   ): Promise<unknown> {
     coreLogger.error({ error, workerId, role: agentRole }, 'Worker agent failed');
 
+    // Always record tokens used by failed worker
+    const failedTokens = worker.getTotalTokens();
+    if (failedTokens > 0) {
+      sessionRepository.incrementMessageCount(context.sessionId, failedTokens).catch(() => {});
+    }
+
     // Don't fallback on user-initiated stops
     const errorMsg = error.message || '';
     const wasUserStopped = errorMsg.includes('aborted') || errorMsg.includes('stopped')
       || worker.getStatus() === 'stopped';
     if (wasUserStopped) {
       coreLogger.info({ workerId, role: agentRole }, 'Worker stopped by user, not retrying');
+      this.emit({
+        type: 'worker_completed',
+        sessionId: context.sessionId,
+        userId: context.userId,
+        data: { workerId, role: agentRole, status: 'stopped', totalTokens: failedTokens, durationMs: Date.now() - startTime },
+        timestamp: new Date(),
+      });
       return 'Agent was stopped by user.';
     }
 
@@ -750,6 +766,22 @@ export class OrchestratorService {
       }
     }
 
+    // Emit worker_completed with failure so the UI updates agent status
+    this.emit({
+      type: 'worker_completed',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: {
+        workerId,
+        role: agentRole,
+        status: 'failed',
+        error: error.message,
+        totalTokens: failedTokens,
+        durationMs: Date.now() - startTime,
+      },
+      timestamp: new Date(),
+    });
+
     getNotificationService().notify(
       context.userId,
       'agent_error',
@@ -758,7 +790,7 @@ export class OrchestratorService {
       { workerId, role: agentRole },
     ).catch(() => {});
 
-    return `Worker failed: ${error.message}`;
+    return `[WORKER FAILED] The "${agentRole}" worker encountered an error: ${error.message}\n\nIMPORTANT: Do NOT make up or fabricate any data. Tell the user that the task failed and explain the error. If appropriate, suggest they try again or offer alternative approaches.`;
   }
 
   // ── Pipeline (called by create_pipeline meta-tool) ───────────────

@@ -4,7 +4,7 @@ import { sessions, type Session, type NewSession } from '../schema/sessions';
 import { dbLogger } from '@/utils/logger';
 
 export class SessionRepository {
-  private db = getDb();
+  private get db() { return getDb(); }
 
   async findById(id: string): Promise<Session | null> {
     const result = await this.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);

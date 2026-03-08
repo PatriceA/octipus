@@ -367,13 +367,14 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Tokens</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Output Tokens</label>
                 <input
                   type="number"
                   value={formData.maxTokens}
                   onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
+                <p className="text-xs text-gray-400 mt-0.5">Max tokens per response (check model docs)</p>
               </div>
             </div>
 

@@ -17,7 +17,7 @@ export interface HookExecutionResult {
 }
 
 export class HookManager extends EventEmitter {
-  private db = getDb();
+  private get db() { return getDb(); }
   private hookCache: Map<TriggerType, Hook[]> = new Map();
   private scheduledJobs: Map<string, ReturnType<typeof setInterval>> = new Map();
 

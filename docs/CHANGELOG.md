@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-03-08
+
+### Embedded Database Mode (Zero External Dependencies)
+- **PGlite support**: In-process WASM PostgreSQL via `@electric-sql/pglite` — no external PostgreSQL needed
+- **In-memory storage**: `MemoryStorageProvider` replaces Redis for cache, pub/sub, and queues in embedded mode
+- **StorageProvider abstraction**: Interface over Redis with two implementations (`RedisStorageProvider`, `MemoryStorageProvider`) — existing code keeps working via compatibility wrappers
+- **Custom PGlite migrator**: Drizzle's built-in migrator uses `query()` (single statement only); custom migrator uses `exec()` for multi-statement SQL with automatic `uuid_generate_v4()` → `gen_random_uuid()` patching
+- **Lazy DB access**: All repositories and services use getter-based lazy initialization to support async DB startup in embedded mode
+- **`STORAGE_MODE` env var**: `embedded` (PGlite + in-memory) or `external` (PostgreSQL + Redis, default) — fully backward compatible
+- **Interactive setup wizard** (`bun run setup`): Auto-detects running services, storage mode selection, optional extras installation (Playwright, Ollama), generates `.env`, runs migrations
+
+### Agent & Orchestrator Fixes
+- **Worker failure events**: `worker_completed` event emitted with `failed`/`stopped` status so UI shows agents as failed instead of perpetually running
+- **Anti-hallucination guard**: Error return from failed workers prefixed with `[WORKER FAILED]... Do NOT make up or fabricate any data`
+- **maxTokens fix**: Removed hardcoded 8192 fallback — uses model's own `defaultMaxTokens` or `maxTokens` per model registry
+- **Max Output Tokens UI**: Field shown but disabled in edit model dialog (model capability, not user-configurable)
+
+## 2026-03-07
+
+### Telegram & Chat Fixes
+- **Recent message loading**: Fixed long-lived sessions loading oldest messages instead of most recent — `findRecentBySession()` replaces `findBySession()` in orchestrator context
+- **Thinking token stripping**: `<think>` blocks stripped from both sync and streaming LLM responses — prevents empty responses from models with reasoning enabled
+- **Disable Thinking UI**: Checkbox in model Add and Edit dialogs to set `extraBody: { think: false }` per model
+- **Agent worker reasoning**: Agent workers override `think: true` for complex tool-use tasks, even when model config disables thinking
+- **Chat auto-update**: 10-second polling for messages and session list — cross-channel messages (Telegram) appear in web UI without reload
+
+### Automatic Expert Selection
+- **Auto-match experts**: `spawn_worker(role)` automatically finds and applies the matching system expert — inherits system prompt, domain knowledge skills, and model preference
+- **Priority chain**: Explicit UI expert selection > auto-matched expert by role > generic role config
+- **Skill injection**: Expert's assigned skills loaded via `SkillRegistry.buildPromptFragment()` and appended as domain knowledge to worker context
+
+### Session Management
+- **Session delete fix**: Delete now calls backend API before removing from UI state — sessions no longer reappear on reload
+- **Auto-titling**: Sessions automatically titled from first message content
+- **Session cleanup cron**: Hourly job archives inactive webchat sessions older than 24h
+
+## 2026-03-06
+
+### Security Hardening (42 vulnerabilities fixed)
+- **Rate limiting**: Redis sliding-window rate limiter on auth endpoints (20 req/min per IP)
+- **Account lockout**: Exponential backoff after 5 failed login attempts (15/30/60 min)
+- **HttpOnly session cookies**: Set alongside JSON response for XSS-safe session persistence
+- **SSRF protection**: URL validation blocks private/internal IP ranges
+- **Command injection prevention**: `spawn` with args array replaces `exec` with string interpolation in backup scripts
+- **Timing-safe comparison**: HMAC-based constant-time comparison for webhook signatures
+- **ReDoS protection**: `safeRegExp()` utility for user-supplied regex patterns
+- **WebSocket sanitization**: Content trimmed to 50k chars, HTML entities escaped
+- **Generic error messages**: Validation errors and auth failures no longer leak implementation details
+- **Restricted health endpoints**: Detailed health info requires authentication
+- **Session limits**: Maximum 20 concurrent sessions per user
+- **Webhook HMAC verification**: Signatures verified before processing webhook payloads
+- **Password complexity**: Uppercase, lowercase, and digit required
+- **Secret name removal**: Error messages no longer include vault secret names
+- **CORS hardening**: Wildcard origin disables credentials; explicit origins required for credentialed requests
+- **Security headers**: Content-Type-Options, Frame-Options, XSS-Protection headers added
+
+### Chat UI Revamp
+- **3-panel editor layout**: Sessions sidebar, message timeline, context/tools panel
+- **Rich prompt input**: Multi-modal input with file attachments and expert selection
+- **Message timeline**: Code rendering, unified activity view, agent event display
+
 ## 2026-03-05
 
 ### Architecture Refactoring

@@ -1,8 +1,12 @@
 import { z } from 'zod';
 
+// Storage mode: 'embedded' (PGlite + in-memory) or 'external' (PostgreSQL + Redis)
+export const storageModeSchema = z.enum(['embedded', 'external']).default('external');
+
 // Database configuration schema
 export const databaseConfigSchema = z.object({
-  url: z.string().url().describe('PostgreSQL connection URL'),
+  url: z.string().default('postgresql://assistant:assistant@localhost:5432/assistant').describe('PostgreSQL connection URL (external mode)'),
+  dataDir: z.string().default('~/.assistant/data').describe('PGlite data directory (embedded mode)'),
   poolSize: z.number().min(1).max(100).default(10),
   idleTimeout: z.number().min(0).default(30000),
   connectionTimeout: z.number().min(0).default(10000),
@@ -159,6 +163,7 @@ export const workspaceConfigSchema = z.object({
 
 // Full configuration schema
 export const configSchema = z.object({
+  storageMode: storageModeSchema,
   database: databaseConfigSchema,
   redis: redisConfigSchema,
   litellm: litellmConfigSchema,
@@ -180,6 +185,7 @@ export const configSchema = z.object({
 });
 
 export type Config = z.infer<typeof configSchema>;
+export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type RedisConfig = z.infer<typeof redisConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;

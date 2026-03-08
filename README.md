@@ -42,13 +42,16 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **WebChat** — real-time WebSocket interface via the web UI
 
 ### Enterprise-Grade Security
-- **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor
+- **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor, HttpOnly session cookies
+- **Rate limiting** — Redis sliding-window rate limiter with account lockout (exponential backoff)
 - **Three-tier permissions** — ALLOW / ASK / DENY per tool action with path patterns, rate limits, and time windows
+- **Input validation** — SSRF protection, command injection prevention, ReDoS-safe regex, WebSocket content sanitization
 - **Encrypted vault** — AES-256-GCM credential storage with per-tool access control
 - **Audit logging** — every action tracked with user, resource, and context
+- **Hardened defaults** — HMAC webhook verification, generic error messages, restricted health endpoints, session limits
 
 ### Full Web UI and Terminal UI
-- **Web dashboard** (Next.js) — chat, agent monitoring, model management, pipeline builder, vault, hooks, settings
+- **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, settings
 - **Terminal UI** (Ink) — full-featured TUI with dashboard, agents, chat, logs, models, pipelines, secrets
 - **MCP server** — expose all capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients
 
@@ -65,30 +68,43 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 |---|---|
 | **[Bun](https://bun.sh)** >= 1.1 | Runtime for backend and scripts |
 | **[Node.js](https://nodejs.org)** >= 18 | Required by Next.js web UI |
-| **[Docker](https://docs.docker.com/get-docker/)** | PostgreSQL, Redis, and optional services |
 
-**Optional:** Ollama, LiteLLM, SearXNG, Telegram/Slack/Teams tokens, Playwright (`bunx playwright install`)
+**Optional:** Docker, PostgreSQL, Redis, Ollama, LiteLLM, SearXNG, Telegram/Slack/Teams tokens, Playwright
 
-## Quick Start
+## Quick Start (Embedded — Zero Dependencies)
+
+No PostgreSQL or Redis needed. Data is stored locally using PGlite (in-process WASM PostgreSQL) and in-memory cache.
 
 ```bash
-# Install
 cd assistant && bun install
 cd web && bun install && cd ..
 
-# Configure
-cp .env.example .env    # or: bun run setup (interactive wizard)
+bun run setup              # Interactive wizard — choose "Embedded" mode
+bin/assistant start
+```
 
-# Create database
+## Quick Start (External — Full Production)
+
+For production deployments with PostgreSQL + Redis:
+
+```bash
+cd assistant && bun install
+cd web && bun install && cd ..
+
+bun run setup              # Interactive wizard — choose "External" mode
+# Or manually: cp .env.example .env and edit
+
+# Create database (if needed)
 docker exec <db-container> psql -U <superuser> -c "CREATE DATABASE assistant;"
 docker exec <db-container> psql -U <superuser> -d assistant \
   -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 
-# Launch
 bin/assistant start
 ```
 
-The CLI handles everything — checks that PostgreSQL and Redis are reachable, starts the backend, waits for health, starts the web UI, and opens your browser. If anything goes wrong, it tells you exactly what and how to fix it.
+## CLI
+
+The CLI handles everything — checks services, starts the backend, waits for health, starts the web UI, and opens your browser.
 
 ```bash
 assistant start          # Start backend + web UI, open browser
@@ -120,7 +136,7 @@ Make globally available: `bun link`
 │ WebChat  │ Browser  │ Vault    │ Gemini   │ Pipelines       │
 │          │ Docker   │Permissions│LiteLLM  │ Notifications   │
 ├──────────┴──────────┴──────────┴──────────┴─────────────────┤
-│  PostgreSQL + pgvector  ·  Redis  ·  Drizzle ORM           │
+│  PostgreSQL/PGlite + pgvector  ·  Redis/In-Memory  ·  ORM  │
 └─────────────────────────────────────────────────────────────┘
 ```
 

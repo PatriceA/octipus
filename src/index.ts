@@ -6,7 +6,6 @@ import { seedSkills } from '@/db/seed-skills';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getHookManager } from '@/hooks/manager';
 import { initializeVault } from '@/security/vault';
-import { runMigrations } from '@/db/migrate';
 import { seedPresetTemplates } from '@/db/seed-presets';
 import { seedExperts } from '@/db/seed-experts';
 import { getSettingsService } from '@/config/settings-service';
@@ -24,11 +23,7 @@ async function main() {
     const gateway = getGateway();
     await gateway.start();
 
-    // Run database migrations (includes new settings table)
-    await runMigrations();
-    logger.info('Migrations complete');
-
-    // Seed system data
+    // Seed system data (migrations already ran inside gateway.start())
     await seedPresetTemplates();
     await seedSkills();
     await seedExperts();

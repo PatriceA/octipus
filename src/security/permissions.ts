@@ -26,7 +26,7 @@ export interface PermissionCheckResult {
 }
 
 export class PermissionManager {
-  private db = getDb();
+  private get db() { return getDb(); }
   private pendingRequests: Map<string, (approved: boolean, resolution?: string) => void> = new Map();
   private requestListeners: Set<(request: Record<string, unknown>) => void> = new Set();
 

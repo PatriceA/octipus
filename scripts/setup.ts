@@ -1,30 +1,14 @@
 #!/usr/bin/env bun
 /**
- * Minimal setup wizard — generates bootstrap .env file.
+ * Interactive setup wizard — generates bootstrap .env file.
  * All other configuration (LLM, channels, workspace, etc.) is done
  * via the web UI at /setup after first boot.
  */
 
-import { createInterface } from 'readline';
 import { existsSync } from 'fs';
+import { input, select, confirm, checkbox } from '@inquirer/prompts';
 
-const rl = createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-const prompt = (question: string): Promise<string> => {
-  return new Promise((resolve) => {
-    rl.question(question, resolve);
-  });
-};
-
-const confirm = async (question: string, defaultYes = true): Promise<boolean> => {
-  const suffix = defaultYes ? '[Y/n]' : '[y/N]';
-  const answer = await prompt(`${question} ${suffix}: `);
-  if (!answer.trim()) return defaultYes;
-  return answer.toLowerCase().startsWith('y');
-};
+// ── Helpers ──
 
 function generateSecureKey(): string {
   const bytes = new Uint8Array(32);
@@ -32,9 +16,36 @@ function generateSecureKey(): string {
   return Buffer.from(bytes).toString('base64');
 }
 
+async function checkTcpPort(host: string, port: number, timeoutMs = 2000): Promise<boolean> {
+  try {
+    const socket = await Bun.connect({ hostname: host, port, socket: {
+      data() {},
+      open(socket) { socket.end(); },
+      error() {},
+    }});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function checkHttp(url: string, timeoutMs = 3000): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Main ──
+
 async function main(): Promise<void> {
   console.log(`
-╔═══════════════════════════════════════════════════════════╗
+\x1b[36m╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
 ║     █████╗ ███████╗███████╗██╗███████╗████████╗          ║
 ║    ██╔══██╗██╔════╝██╔════╝██║██╔════╝╚══██╔══╝          ║
@@ -43,96 +54,220 @@ async function main(): Promise<void> {
 ║    ██║  ██║███████║███████║██║███████║   ██║             ║
 ║    ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚══════╝   ╚═╝             ║
 ║                                                           ║
-║              Bootstrap Setup                              ║
-╚═══════════════════════════════════════════════════════════╝
+║              Setup Wizard                                 ║
+╚═══════════════════════════════════════════════════════════╝\x1b[0m
 `);
 
   // Check if .env already exists
   if (existsSync('.env')) {
-    const overwrite = await confirm('.env already exists. Overwrite?', false);
+    const overwrite = await confirm({ message: '.env already exists. Overwrite?', default: false });
     if (!overwrite) {
       console.log('Setup cancelled.');
-      rl.close();
       return;
     }
   }
 
-  console.log('This wizard creates a minimal .env with database and security settings.');
+  console.log('This wizard creates a bootstrap .env file.');
   console.log('All other configuration is done via the web UI after first boot.\n');
 
-  // ─── Database ───
-  console.log('── Database ──');
-  const dbHost = (await prompt('PostgreSQL host [localhost]: ')).trim() || 'localhost';
-  const dbPort = (await prompt('PostgreSQL port [5432]: ')).trim() || '5432';
-  const dbName = (await prompt('Database name [assistant]: ')).trim() || 'assistant';
-  const dbUser = (await prompt('Database user [assistant]: ')).trim() || 'assistant';
-  const dbPassword = await prompt('Database password: ');
-  const databaseUrl = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${dbPort}/${dbName}`;
+  // ── Auto-detect services ──
+  console.log('\x1b[90mDetecting services...\x1b[0m');
+  const [pgAvailable, redisAvailable, ollamaAvailable] = await Promise.all([
+    checkTcpPort('localhost', 5432),
+    checkTcpPort('localhost', 6379),
+    checkHttp('http://localhost:11434/api/tags'),
+  ]);
 
-  // ─── Redis ───
-  console.log('\n── Redis ──');
-  const redisHost = (await prompt('Redis host [localhost]: ')).trim() || 'localhost';
-  const redisPort = (await prompt('Redis port [6379]: ')).trim() || '6379';
-  const redisPassword = await prompt('Redis password (leave empty if none): ');
-  const redisUrl = redisPassword
-    ? `redis://:${redisPassword}@${redisHost}:${redisPort}`
-    : `redis://${redisHost}:${redisPort}`;
+  if (pgAvailable || redisAvailable || ollamaAvailable) {
+    const detected: string[] = [];
+    if (pgAvailable) detected.push('PostgreSQL (5432)');
+    if (redisAvailable) detected.push('Redis (6379)');
+    if (ollamaAvailable) detected.push('Ollama (11434)');
+    console.log(`\x1b[32m✓ Detected:\x1b[0m ${detected.join(', ')}\n`);
+  } else {
+    console.log('\x1b[33m✗ No external services detected\x1b[0m\n');
+  }
 
-  // ─── API ───
-  console.log('\n── API Server ──');
-  const port = (await prompt('API port [3005]: ')).trim() || '3005';
-  const host = (await prompt('API host [0.0.0.0]: ')).trim() || '0.0.0.0';
+  // ── Storage mode ──
+  const defaultMode = (pgAvailable && redisAvailable) ? 'external' : 'embedded';
 
-  // ─── Security keys (auto-generated) ───
-  console.log('\n── Security ──');
+  const storageMode = await select({
+    message: 'Infrastructure mode',
+    choices: [
+      {
+        value: 'embedded',
+        name: 'Embedded (PGlite + in-memory cache)',
+        description: 'Zero external dependencies. Data stored locally. Best for personal use / getting started.',
+      },
+      {
+        value: 'external',
+        name: 'External (PostgreSQL + Redis)',
+        description: 'Full production setup. Requires PostgreSQL and Redis running.',
+      },
+    ],
+    default: defaultMode,
+  });
+
+  let databaseUrl = '';
+  let redisUrl = '';
+  let dataDir = '~/.assistant/data';
+
+  if (storageMode === 'external') {
+    // ── Database ──
+    console.log('\n\x1b[1m── Database ──\x1b[0m');
+    const dbHost = await input({ message: 'PostgreSQL host', default: 'localhost' });
+    const dbPort = await input({ message: 'PostgreSQL port', default: '5432' });
+    const dbName = await input({ message: 'Database name', default: 'assistant' });
+    const dbUser = await input({ message: 'Database user', default: 'assistant' });
+    const dbPassword = await input({ message: 'Database password' });
+    databaseUrl = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${dbPort}/${dbName}`;
+
+    // ── Redis ──
+    console.log('\n\x1b[1m── Redis ──\x1b[0m');
+    const redisHost = await input({ message: 'Redis host', default: 'localhost' });
+    const redisPort = await input({ message: 'Redis port', default: '6379' });
+    const redisPassword = await input({ message: 'Redis password (empty if none)', default: '' });
+    redisUrl = redisPassword
+      ? `redis://:${redisPassword}@${redisHost}:${redisPort}`
+      : `redis://${redisHost}:${redisPort}`;
+  } else {
+    // Embedded mode
+    dataDir = await input({ message: 'Data directory', default: '~/.assistant/data' });
+  }
+
+  // ── API ──
+  console.log('\n\x1b[1m── API Server ──\x1b[0m');
+  const port = await input({ message: 'API port', default: '3005' });
+  const host = await input({ message: 'API host', default: '0.0.0.0' });
+
+  // ── Security keys (auto-generated) ──
+  console.log('\n\x1b[1m── Security ──\x1b[0m');
   const masterKey = generateSecureKey();
   const jwtSecret = generateSecureKey();
   const sessionSecret = generateSecureKey();
   console.log('Security keys auto-generated (32 bytes each).');
 
-  // ─── Write .env ───
-  const envContent = `# Bootstrap Configuration (generated by setup wizard)
-# ${new Date().toISOString()}
-#
-# All other settings (LLM, channels, workspace, etc.) are configured
-# via the web UI at http://localhost:${port}/setup
+  // ── Optional extras ──
+  console.log('');
+  const extras = await checkbox({
+    message: 'Install optional extras?',
+    choices: [
+      {
+        value: 'playwright',
+        name: 'Playwright (browser automation for QA agent)',
+        checked: false,
+      },
+      {
+        value: 'ollama',
+        name: 'Ollama (local LLM inference)',
+        checked: false,
+        disabled: ollamaAvailable ? '(already running)' : false,
+      },
+    ],
+  });
 
-# Database
-DATABASE_URL=${databaseUrl}
-REDIS_URL=${redisUrl}
+  // ── Write .env ──
+  const lines = [
+    `# Bootstrap Configuration (generated by setup wizard)`,
+    `# ${new Date().toISOString()}`,
+    `#`,
+    `# All other settings (LLM, channels, workspace, etc.) are configured`,
+    `# via the web UI at http://localhost:${port}/setup`,
+    ``,
+    `# Storage mode: 'embedded' or 'external'`,
+    `STORAGE_MODE=${storageMode}`,
+    ``,
+  ];
 
-# Security (auto-generated, do not share)
-MASTER_KEY=${masterKey}
-JWT_SECRET=${jwtSecret}
-SESSION_SECRET=${sessionSecret}
+  if (storageMode === 'external') {
+    lines.push(
+      `# Database (external mode)`,
+      `DATABASE_URL=${databaseUrl}`,
+      `REDIS_URL=${redisUrl}`,
+      ``,
+    );
+  } else {
+    lines.push(
+      `# Data directory (embedded mode)`,
+      `DATA_DIR=${dataDir}`,
+      ``,
+    );
+  }
 
-# API Server
-PORT=${port}
-HOST=${host}
-`;
+  lines.push(
+    `# Security (auto-generated, do not share)`,
+    `MASTER_KEY=${masterKey}`,
+    `JWT_SECRET=${jwtSecret}`,
+    `SESSION_SECRET=${sessionSecret}`,
+    ``,
+    `# API Server`,
+    `PORT=${port}`,
+    `HOST=${host}`,
+    ``,
+  );
 
-  await Bun.write('.env', envContent);
-  console.log('\n✅ Bootstrap .env created');
+  await Bun.write('.env', lines.join('\n'));
+  console.log('\n\x1b[32m✅ Bootstrap .env created\x1b[0m');
 
-  // ─── Summary ───
+  // ── Install extras ──
+  if (extras.length > 0) {
+    console.log('\n\x1b[1m── Installing extras ──\x1b[0m');
+    for (const extra of extras) {
+      switch (extra) {
+        case 'playwright': {
+          console.log('Installing Playwright (chromium)...');
+          const proc = Bun.spawn(['bunx', 'playwright', 'install', 'chromium'], {
+            stdout: 'inherit',
+            stderr: 'inherit',
+          });
+          const code = await proc.exited;
+          if (code === 0) console.log('\x1b[32m✓ Playwright installed\x1b[0m');
+          else console.log('\x1b[33m⚠ Playwright install exited with code ' + code + '\x1b[0m');
+          break;
+        }
+        case 'ollama': {
+          console.log('To install Ollama, run:');
+          console.log('  curl -fsSL https://ollama.com/install.sh | sh');
+          console.log('Then start it with: ollama serve');
+          break;
+        }
+      }
+    }
+  }
+
+  // ── Run migrations ──
+  const runMigrate = await confirm({ message: 'Run database migrations now?', default: true });
+  if (runMigrate) {
+    console.log('\nRunning migrations...');
+    // Re-exec via bun so .env is loaded
+    const proc = Bun.spawn(['bun', 'run', 'scripts/migrate.ts'], {
+      stdout: 'inherit',
+      stderr: 'inherit',
+      env: { ...process.env, STORAGE_MODE: storageMode, ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}), ...(dataDir !== '~/.assistant/data' ? { DATA_DIR: dataDir } : {}) },
+    });
+    const code = await proc.exited;
+    if (code === 0) console.log('\x1b[32m✓ Migrations complete\x1b[0m');
+    else console.log('\x1b[33m⚠ Migration exited with code ' + code + '\x1b[0m');
+  }
+
+  // ── Summary ──
   console.log(`
-╔═══════════════════════════════════════════════════════════╗
+\x1b[36m╔═══════════════════════════════════════════════════════════╗
 ║                    SETUP COMPLETE                         ║
-╚═══════════════════════════════════════════════════════════╝
+╚═══════════════════════════════════════════════════════════╝\x1b[0m
+
+  Mode:     ${storageMode === 'embedded' ? 'Embedded (PGlite + in-memory)' : 'External (PostgreSQL + Redis)'}
+  API:      http://${host === '0.0.0.0' ? 'localhost' : host}:${port}
+  ${storageMode === 'embedded' ? `Data dir: ${dataDir}` : `Database: ${databaseUrl.replace(/:[^:@]*@/, ':***@')}`}
 
 Next steps:
   1. Start the server:  bun run dev
   2. Open the setup wizard:  http://localhost:${port}/setup
   3. Create your admin account and configure LLM, channels, etc.
-
-The web setup wizard will guide you through the remaining configuration.
 `);
-
-  rl.close();
 }
 
 main().catch((error) => {
   console.error('Setup failed:', error);
-  rl.close();
   process.exit(1);
 });

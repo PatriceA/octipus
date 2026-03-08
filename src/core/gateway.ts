@@ -1,5 +1,7 @@
-import { getDb, closeDb, initializeExtensions, checkDbHealth } from '@/db/postgres';
-import { getRedis, closeRedis, checkRedisHealth } from '@/db/redis';
+import { initializeDb, closeDb, initializeExtensions, checkDbHealth } from '@/db/postgres';
+import { checkRedisHealth } from '@/db/redis';
+import { initializeStorage, closeStorage } from '@/db/storage';
+import { runMigrations } from '@/db/migrate';
 import { loadConfig, getConfig } from '@/config';
 import { getAgentManager, type AgentInfo } from './agent-manager';
 import { getScheduler } from './scheduler';
@@ -42,16 +44,25 @@ export class Gateway {
     try {
       // Load configuration
       loadConfig();
-      coreLogger.info('Configuration loaded');
+      const config = getConfig();
+      const storageMode = config.storageMode || 'external';
+      coreLogger.info({ storageMode }, 'Configuration loaded');
 
-      // Initialize database
-      const db = getDb();
+      // Initialize storage provider (Redis or in-memory)
+      initializeStorage({
+        mode: storageMode,
+        redis: storageMode === 'external' ? config.redis : undefined,
+      });
+      coreLogger.info({ mode: storageMode }, 'Storage initialized');
+
+      // Initialize database (PostgreSQL or PGlite)
+      await initializeDb();
       await initializeExtensions();
-      coreLogger.info('Database initialized');
+      coreLogger.info({ mode: storageMode }, 'Database initialized');
 
-      // Initialize Redis
-      getRedis();
-      coreLogger.info('Redis initialized');
+      // Run migrations before any queries
+      await runMigrations();
+      coreLogger.info('Migrations complete');
 
       // Initialize model registry
       getModelRegistry();
@@ -117,9 +128,9 @@ export class Gateway {
         }
       }
 
-      // Close database connections
+      // Close database and storage connections
       await closeDb();
-      await closeRedis();
+      await closeStorage();
 
       this.state = 'stopped';
       coreLogger.info('Gateway stopped');

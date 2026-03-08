@@ -213,7 +213,37 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Get completion from LLM
       const llmStart = Date.now();
-      const completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
+      let completion: CompletionResult;
+      try {
+        completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
+      } catch (err) {
+        const errMsg = (err as Error).message || '';
+        // Handle context window overflow — aggressively compact and retry
+        if (errMsg.includes('ContextWindowExceeded') || errMsg.includes('context_length_exceeded') || errMsg.includes('maximum context length')) {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            messageCount: this.messages.length,
+          }, 'Context window exceeded, compacting aggressively and retrying');
+
+          // Truncate large tool results (keep first 2000 chars each)
+          for (const msg of this.messages) {
+            if (msg.role === 'tool' && msg.content.length > 2000) {
+              msg.content = msg.content.slice(0, 2000) + '\n\n[... truncated due to context window limit]';
+            }
+          }
+
+          // Force aggressive compaction with smaller window
+          const { messages: compacted } = await compactMessagesWithSummary(this.messages, {
+            maxTokens: Math.floor(this.config.contextWindowSize * 0.5),
+            preserveSystemMessages: true,
+            preserveRecentCount: 6,
+            summaryModel: this.context.model,
+          });
+          this.messages = compacted;
+          continue;
+        }
+        throw err;
+      }
       this.totalTokensUsed += completion.usage.totalTokens;
 
       agentLogger.info({
@@ -250,6 +280,15 @@ export class AgentWorker extends BaseAgentWorker {
       }
 
       // No tool calls — treat as final response
+      // If content is empty (e.g. thinking tokens consumed entire output), retry once
+      if (!completion.content?.trim() && this.iteration < (this.config.maxIterations || 10)) {
+        agentLogger.warn({
+          agentId: this.context.id, iteration: this.iteration,
+          outputTokens: completion.usage.outputTokens,
+        }, 'Empty response (likely thinking-only output), retrying');
+        continue;
+      }
+
       const response = completion.content || 'I was unable to generate a response.';
 
       // Only persist messages for orchestrator agents
@@ -295,10 +334,13 @@ export class AgentWorker extends BaseAgentWorker {
 
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
-    // Agent workers benefit from reasoning — override think:false if set,
+    // Task workers benefit from reasoning — override think:false if set,
     // since the LLM client strips <think> blocks from the output anyway.
+    // The orchestrator should NOT think: it needs to call meta-tools quickly,
+    // and thinking tokens consume the output budget, preventing tool calls.
+    const isOrchestrator = this.context.role === 'orchestrator';
     const extraBody = metadata?.extraBody
-      ? { ...metadata.extraBody, think: true }
+      ? { ...metadata.extraBody, ...(isOrchestrator ? {} : { think: true }) }
       : undefined;
 
     const result = await client.complete({
@@ -306,7 +348,7 @@ export class AgentWorker extends BaseAgentWorker {
       messages: this.messages,
       tools: tools.length > 0 ? tools : undefined,
       temperature: model.defaultTemperature || 0.7,
-      maxTokens: model.defaultMaxTokens || 4096,
+      maxTokens: model.defaultMaxTokens || model.maxTokens || 4096,
       extraBody,
     });
 

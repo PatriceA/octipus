@@ -35,7 +35,7 @@ export function refreshConfigKey(key: string, value: unknown): void {
   const field = path[1];
 
   // Don't allow hot-updating bootstrap fields
-  const bootstrapFields = new Set(['database', 'redis']);
+  const bootstrapFields = new Set(['database', 'redis', 'storageMode']);
   if (bootstrapFields.has(section)) return;
   if (section === 'security' && ['masterKey', 'jwtSecret', 'sessionSecret'].includes(field)) return;
   if (section === 'api' && ['host', 'port'].includes(field)) return;
@@ -44,7 +44,7 @@ export function refreshConfigKey(key: string, value: unknown): void {
   if (sectionObj && typeof sectionObj === 'object') {
     (sectionObj as any)[field] = value;
   } else if (value) {
-    const def = defaultConfig[section];
+    const def = defaultConfig[section] as Record<string, unknown> | undefined;
     (cachedConfig as any)[section] = { ...def, [field]: value };
   }
 

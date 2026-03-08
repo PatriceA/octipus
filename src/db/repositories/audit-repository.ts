@@ -4,7 +4,7 @@ import { auditLog, auditActionEnum, type AuditLogEntry, type NewAuditLogEntry, t
 import { dbLogger } from '@/utils/logger';
 
 export class AuditRepository {
-  private db = getDb();
+  private get db() { return getDb(); }
 
   async log(entry: Omit<NewAuditLogEntry, 'id' | 'createdAt'>): Promise<AuditLogEntry> {
     const result = await this.db.insert(auditLog).values(entry).returning();

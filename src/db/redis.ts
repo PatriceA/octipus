@@ -1,239 +1,158 @@
-import Redis from 'ioredis';
-import { getConfig } from '@/config';
-import { dbLogger } from '@/utils/logger';
-
-let redis: Redis | null = null;
-let subscriber: Redis | null = null;
+/**
+ * Redis compatibility layer — delegates to the active StorageProvider.
+ *
+ * Existing code that imports RedisCache/RedisQueue/RedisPubSub keeps working.
+ * In embedded mode, these use the in-memory provider instead of ioredis.
+ */
+import type Redis from 'ioredis';
+import { getStorageProvider } from './storage';
+import { RedisStorageProvider } from './storage/redis-provider';
+import type { CacheProvider, QueueProvider, PubSubProvider } from './storage/types';
 
 /**
- * Get or create Redis connection
+ * Get raw ioredis instance (external mode only).
+ * In embedded mode, throws if caller truly needs ioredis.
+ * Most callers should use RedisCache/getStorageProvider() instead.
  */
 export function getRedis(): Redis {
-  if (redis) {
-    return redis;
+  let provider: import('./storage/types').StorageProvider;
+  try { provider = getStorageProvider(); } catch {
+    // Not yet initialized — return a lazy proxy
+    return createLazyProxy() as unknown as Redis;
   }
-
-  const config = getConfig();
-
-  redis = new Redis(config.redis.url, {
-    maxRetriesPerRequest: config.redis.maxRetries,
-    retryStrategy: (times) => {
-      if (times > config.redis.maxRetries) {
-        return null; // Stop retrying
-      }
-      return Math.min(times * config.redis.retryDelay, 5000);
-    },
-    keyPrefix: config.redis.keyPrefix,
-  });
-
-  redis.on('connect', () => {
-    dbLogger.info('Redis connection established');
-  });
-
-  redis.on('error', (error) => {
-    dbLogger.error({ error }, 'Redis error');
-  });
-
-  redis.on('close', () => {
-    dbLogger.info('Redis connection closed');
-  });
-
-  return redis;
+  if (provider instanceof RedisStorageProvider) {
+    return provider.getRedisClient();
+  }
+  return createRawProxy() as unknown as Redis;
 }
 
 /**
- * Get or create Redis subscriber (for pub/sub)
+ * Get raw ioredis subscriber (external mode only).
  */
 export function getRedisSubscriber(): Redis {
-  if (subscriber) {
-    return subscriber;
+  let provider: import('./storage/types').StorageProvider;
+  try { provider = getStorageProvider(); } catch {
+    return createLazyProxy() as unknown as Redis;
   }
-
-  const config = getConfig();
-
-  subscriber = new Redis(config.redis.url, {
-    maxRetriesPerRequest: config.redis.maxRetries,
-    keyPrefix: config.redis.keyPrefix,
-  });
-
-  subscriber.on('connect', () => {
-    dbLogger.info('Redis subscriber connection established');
-  });
-
-  return subscriber;
+  if (provider instanceof RedisStorageProvider) {
+    return provider.getRedisSubscriber();
+  }
+  return createRawProxy() as unknown as Redis;
 }
 
 /**
- * Close all Redis connections
+ * Close all Redis connections (delegates to storage provider).
  */
-export async function closeRedis() {
-  if (redis) {
-    await redis.quit();
-    redis = null;
-  }
-  if (subscriber) {
-    await subscriber.quit();
-    subscriber = null;
-  }
-  dbLogger.info('All Redis connections closed');
+export async function closeRedis(): Promise<void> {
+  // Handled by closeStorage() — this is kept for backward compat
 }
 
 /**
- * Check Redis connection health
+ * Check Redis connection health.
  */
 export async function checkRedisHealth(): Promise<{ healthy: boolean; latency?: number; error?: string }> {
   const start = Date.now();
   try {
-    const r = getRedis();
-    await r.ping();
-    return { healthy: true, latency: Date.now() - start };
+    const provider = getStorageProvider();
+    const ok = await provider.ping();
+    return { healthy: ok, latency: Date.now() - start };
   } catch (error) {
     return { healthy: false, error: (error as Error).message };
   }
 }
 
-// Cache helper functions
+/**
+ * Create a minimal proxy that covers the raw ioredis methods used
+ * by oauth.ts (setex, get, del) and linking.ts (setex, get, del).
+ */
+function createRawProxy() {
+  const provider = getStorageProvider();
+  return {
+    get: (key: string) => provider.getRaw(key),
+    setex: (key: string, ttl: number, value: string) => provider.setRaw(key, value, ttl),
+    del: (key: string) => provider.delRaw(key),
+    ping: () => provider.ping().then(() => 'PONG'),
+    quit: () => Promise.resolve('OK'),
+    on: () => {}, // no-op for event handlers
+  };
+}
+
+/**
+ * Lazy proxy for module-level getRedis() calls that happen before storage init.
+ * Defers all operations to the real provider once it's available.
+ */
+function createLazyProxy() {
+  const handler: ProxyHandler<Record<string, unknown>> = {
+    get(_target, prop) {
+      if (prop === 'on' || prop === 'once' || prop === 'removeListener') return () => {};
+      // Defer to real provider on actual use
+      return (...args: unknown[]) => {
+        const real = getRedis();
+        const fn = (real as any)[prop];
+        if (typeof fn === 'function') return fn.apply(real, args);
+        return fn;
+      };
+    },
+  };
+  return new Proxy({}, handler);
+}
+
+// ── Compatibility wrappers ──
+// These classes delegate to the StorageProvider so existing imports keep working.
+
 export class RedisCache {
-  private redis: Redis;
+  private _cache: CacheProvider | null = null;
   private defaultTtl: number;
 
   constructor(ttlSeconds: number = 3600) {
-    this.redis = getRedis();
     this.defaultTtl = ttlSeconds;
   }
 
-  async get<T>(key: string): Promise<T | null> {
-    const value = await this.redis.get(key);
-    if (!value) return null;
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return value as unknown as T;
-    }
+  private get cache(): CacheProvider {
+    if (!this._cache) this._cache = getStorageProvider().createCache('', this.defaultTtl);
+    return this._cache;
   }
 
-  async set(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
-    const ttl = ttlSeconds ?? this.defaultTtl;
-    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-    if (ttl > 0) {
-      await this.redis.setex(key, ttl, serialized);
-    } else {
-      await this.redis.set(key, serialized);
-    }
-  }
-
-  async delete(key: string): Promise<void> {
-    await this.redis.del(key);
-  }
-
-  async exists(key: string): Promise<boolean> {
-    return (await this.redis.exists(key)) === 1;
-  }
-
-  async increment(key: string, by: number = 1): Promise<number> {
-    return this.redis.incrby(key, by);
-  }
-
-  async expire(key: string, ttlSeconds: number): Promise<void> {
-    await this.redis.expire(key, ttlSeconds);
-  }
-
-  async ttl(key: string): Promise<number> {
-    return this.redis.ttl(key);
-  }
+  get<T>(key: string): Promise<T | null> { return this.cache.get<T>(key); }
+  set(key: string, value: unknown, ttlSeconds?: number): Promise<void> { return this.cache.set(key, value, ttlSeconds); }
+  delete(key: string): Promise<void> { return this.cache.delete(key); }
+  exists(key: string): Promise<boolean> { return this.cache.exists(key); }
+  increment(key: string, by?: number): Promise<number> { return this.cache.increment(key, by); }
+  expire(key: string, ttlSeconds: number): Promise<void> { return this.cache.expire(key, ttlSeconds); }
+  ttl(key: string): Promise<number> { return this.cache.ttl(key); }
 }
 
-// Queue helper for task scheduling
 export class RedisQueue {
-  private redis: Redis;
+  private _queue: QueueProvider | null = null;
   private queueName: string;
 
   constructor(queueName: string) {
-    this.redis = getRedis();
     this.queueName = queueName;
   }
 
-  async push(item: unknown, priority: number = 0): Promise<void> {
-    const score = Date.now() - priority * 1000; // Lower score = higher priority
-    await this.redis.zadd(this.queueName, score, JSON.stringify(item));
+  private get queue(): QueueProvider {
+    if (!this._queue) this._queue = getStorageProvider().createQueue(this.queueName);
+    return this._queue;
   }
 
-  async pop(): Promise<unknown | null> {
-    const result = await this.redis.zpopmin(this.queueName);
-    if (!result || result.length === 0) return null;
-    try {
-      return JSON.parse(result[0]);
-    } catch {
-      return result[0];
-    }
-  }
-
-  async peek(): Promise<unknown | null> {
-    const result = await this.redis.zrange(this.queueName, 0, 0);
-    if (!result || result.length === 0) return null;
-    try {
-      return JSON.parse(result[0]);
-    } catch {
-      return result[0];
-    }
-  }
-
-  async length(): Promise<number> {
-    return this.redis.zcard(this.queueName);
-  }
-
-  async clear(): Promise<void> {
-    await this.redis.del(this.queueName);
-  }
+  push(item: unknown, priority?: number): Promise<void> { return this.queue.push(item, priority); }
+  pop(): Promise<unknown | null> { return this.queue.pop(); }
+  peek(): Promise<unknown | null> { return this.queue.peek(); }
+  length(): Promise<number> { return this.queue.length(); }
+  clear(): Promise<void> { return this.queue.clear(); }
 }
 
-// Pub/Sub helper
 export class RedisPubSub {
-  private publisher: Redis;
-  private subscriber: Redis;
-  private handlers: Map<string, Set<(message: unknown) => void>>;
+  private _pubsub: PubSubProvider | null = null;
 
-  constructor() {
-    this.publisher = getRedis();
-    this.subscriber = getRedisSubscriber();
-    this.handlers = new Map();
+  constructor() {}
 
-    this.subscriber.on('message', (channel, message) => {
-      const handlers = this.handlers.get(channel);
-      if (handlers) {
-        try {
-          const parsed = JSON.parse(message);
-          handlers.forEach((handler) => handler(parsed));
-        } catch {
-          handlers.forEach((handler) => handler(message));
-        }
-      }
-    });
+  private get pubsub(): PubSubProvider {
+    if (!this._pubsub) this._pubsub = getStorageProvider().createPubSub();
+    return this._pubsub;
   }
 
-  async publish(channel: string, message: unknown): Promise<void> {
-    const serialized = typeof message === 'string' ? message : JSON.stringify(message);
-    await this.publisher.publish(channel, serialized);
-  }
-
-  async subscribe(channel: string, handler: (message: unknown) => void): Promise<void> {
-    if (!this.handlers.has(channel)) {
-      this.handlers.set(channel, new Set());
-      await this.subscriber.subscribe(channel);
-    }
-    this.handlers.get(channel)!.add(handler);
-  }
-
-  async unsubscribe(channel: string, handler?: (message: unknown) => void): Promise<void> {
-    const handlers = this.handlers.get(channel);
-    if (handlers) {
-      if (handler) {
-        handlers.delete(handler);
-      }
-      if (!handler || handlers.size === 0) {
-        this.handlers.delete(channel);
-        await this.subscriber.unsubscribe(channel);
-      }
-    }
-  }
+  publish(channel: string, message: unknown): Promise<void> { return this.pubsub.publish(channel, message); }
+  subscribe(channel: string, handler: (message: unknown) => void): Promise<void> { return this.pubsub.subscribe(channel, handler); }
+  unsubscribe(channel: string, handler?: (message: unknown) => void): Promise<void> { return this.pubsub.unsubscribe(channel, handler); }
 }

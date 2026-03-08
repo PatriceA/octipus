@@ -87,8 +87,11 @@ export function classifyMessage(message: string): MessageClassification {
   }
 
   // Check casual patterns (greetings, thanks, etc.)
+  // Only treat as casual if the message is short — "hi" is casual,
+  // "hi, give me my gmail messages" is a task with a greeting prefix.
+  const wordCount = normalized.split(/\s+/).length;
   for (const pattern of CASUAL_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(normalized) && wordCount <= 5) {
       return { type: 'casual', confidence: 0.9, complexity: 'simple' };
     }
   }

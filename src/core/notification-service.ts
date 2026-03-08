@@ -8,7 +8,7 @@ interface NotificationHandler {
 }
 
 export class NotificationService {
-  private db = getDb();
+  private get db() { return getDb(); }
   private wsHandlers: Set<NotificationHandler> = new Set();
 
   onNotification(handler: NotificationHandler): () => void {

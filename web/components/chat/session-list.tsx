@@ -10,6 +10,7 @@ export interface SessionInfo {
   title: string;
   updatedAt: string;
   messageCount: number;
+  tokenCount: number;
   status: string;
 }
 

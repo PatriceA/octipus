@@ -44,7 +44,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       const payload: Record<string, unknown> = {
         endpoint: formData.endpoint || undefined,
         contextWindow: formData.contextWindow,
-        maxTokens: formData.maxTokens,
         topics: formData.topics,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
@@ -128,13 +127,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Tokens</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Output Tokens</label>
               <input
                 type="number"
                 value={formData.maxTokens}
-                onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 0 })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                disabled
+                title="Model capability limit — max tokens the model can generate per API call"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 cursor-not-allowed"
               />
+              <p className="text-xs text-gray-400 mt-0.5">Max tokens per response (model limit, set on add)</p>
             </div>
           </div>
 
