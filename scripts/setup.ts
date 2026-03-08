@@ -2,7 +2,7 @@
 /**
  * Interactive setup wizard — generates bootstrap .env file.
  * All other configuration (LLM, channels, workspace, etc.) is done
- * via the web UI at /setup after first boot.
+ * via the web UI at http://localhost:3007/setup after first boot.
  */
 
 import { existsSync } from 'fs';
@@ -138,7 +138,7 @@ async function main(): Promise<void> {
   // ── API ──
   console.log('\n\x1b[1m── API Server ──\x1b[0m');
   const port = await input({ message: 'API port', default: '3005' });
-  const host = await input({ message: 'API host', default: '0.0.0.0' });
+  const host = await input({ message: 'API host', default: '127.0.0.1' });
 
   // ── Security keys (auto-generated) ──
   console.log('\n\x1b[1m── Security ──\x1b[0m');
@@ -172,7 +172,7 @@ async function main(): Promise<void> {
     `# ${new Date().toISOString()}`,
     `#`,
     `# All other settings (LLM, channels, workspace, etc.) are configured`,
-    `# via the web UI at http://localhost:${port}/setup`,
+    `# via the web UI at http://localhost:3007/setup`,
     ``,
     `# Storage mode: 'embedded' or 'external'`,
     `STORAGE_MODE=${storageMode}`,
@@ -203,6 +203,7 @@ async function main(): Promise<void> {
     `# API Server`,
     `PORT=${port}`,
     `HOST=${host}`,
+    `CORS_ORIGINS=http://localhost:3007`,
     ``,
   );
 
@@ -261,9 +262,9 @@ async function main(): Promise<void> {
   ${storageMode === 'embedded' ? `Data dir: ${dataDir}` : `Database: ${databaseUrl.replace(/:[^:@]*@/, ':***@')}`}
 
 Next steps:
-  1. Start the server:  bun run dev
-  2. Open the setup wizard:  http://localhost:${port}/setup
-  3. Create your admin account and configure LLM, channels, etc.
+  1. Start the assistant:  assistant start --dev
+  2. Open http://localhost:3007 and register your admin account
+  3. Configure LLM providers, channels, etc. via the web UI
 `);
 }
 

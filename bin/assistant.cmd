@@ -27,6 +27,14 @@ if not defined WEB_PORT set "WEB_PORT=3007"
 
 if not exist "%STATE_DIR%" mkdir "%STATE_DIR%"
 
+:: Detect storage mode from .env
+set "STORAGE_MODE=embedded"
+if exist "%PROJECT_DIR%\.env" (
+    for /f "tokens=1,* delims==" %%a in ('findstr /b "STORAGE_MODE=" "%PROJECT_DIR%\.env" 2^>nul') do (
+        set "STORAGE_MODE=%%b"
+    )
+)
+
 set "COMMAND=%~1"
 if "%COMMAND%"=="" set "COMMAND=help"
 
@@ -44,13 +52,43 @@ echo   [ERROR] Unknown command: %COMMAND%
 echo.
 goto :cmd_help
 
-:: ─── Start ───────────────────────────────────────────────────────────────────
+:: ─── Helpers ────────────────────────────────────────────────────────────────
+
+:kill_port
+:: Kill all processes listening on a given port
+:: Usage: call :kill_port 3005
+set "_PORT=%~1"
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":%_PORT% " ^| findstr "LISTENING"') do (
+    taskkill /f /pid %%a >nul 2>&1
+)
+exit /b 0
+
+:check_port
+:: Check if a port is reachable (returns errorlevel 0 if yes)
+:: Usage: call :check_port 5432
+set "_CP=%~1"
+powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('localhost', %_CP%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>&1
+exit /b %errorlevel%
+
+:kill_all_assistant
+:: Kill tracked processes and free ports
+call :kill_port %API_PORT%
+call :kill_port %WEB_PORT%
+if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
+if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%"
+exit /b 0
+
+:: ─── Start ──────────────────────────────────────────────────────────────────
 :cmd_start
 echo.
 echo   ╔═══════════════════════════════════╗
 echo   ║         A S S I S T A N T         ║
 echo   ╚═══════════════════════════════════╝
 echo.
+
+:: Kill any existing processes first (clean slate)
+call :kill_all_assistant
+timeout /t 1 /nobreak >nul
 
 :: Check bun
 where bun >nul 2>&1
@@ -63,49 +101,74 @@ set "DEV_MODE=false"
 if "%~2"=="--dev" set "DEV_MODE=true"
 if "%~2"=="-d" set "DEV_MODE=true"
 
+:: Check required services (only for external storage mode)
+if "!STORAGE_MODE!"=="external" (
+    echo   [..] Checking services...
+    call :check_port 5432
+    if errorlevel 1 (
+        echo   [ERROR] PostgreSQL not reachable on port 5432
+        echo          Start it: cd ~/docker-services ^&^& docker compose up -d db
+        exit /b 1
+    )
+    echo   [OK] PostgreSQL is reachable
+
+    call :check_port 6379
+    if errorlevel 1 (
+        echo   [ERROR] Redis not reachable on port 6379
+        echo          Start it: cd ~/docker-services ^&^& docker compose up -d redis
+        exit /b 1
+    )
+    echo   [OK] Redis is reachable
+) else (
+    echo   [OK] Embedded mode (PGlite + in-memory cache^)
+)
+
 :: Start backend
-echo   Starting backend...
 cd /d "%PROJECT_DIR%"
-if "%DEV_MODE%"=="true" (
-    start /b "" cmd /c "bun run dev > "%LOG_FILE%" 2>&1"
+if "!DEV_MODE!"=="true" (
+    echo   [..] Starting backend (dev mode with hot reload^)...
+    start "Assistant Backend" /min cmd /c "bun run dev 1>"%LOG_FILE%" 2>&1"
 ) else (
-    start /b "" cmd /c "bun run start > "%LOG_FILE%" 2>&1"
+    echo   [..] Starting backend...
+    start "Assistant Backend" /min cmd /c "bun run start 1>"%LOG_FILE%" 2>&1"
 )
 
-:: Get backend PID (approximate via wmic)
-timeout /t 2 /nobreak >nul
-for /f "tokens=2" %%a in ('tasklist /fi "windowtitle eq bun" /fo list 2^>nul ^| find "PID"') do (
-    echo %%a > "%PID_FILE_BACKEND%"
-)
-
-:: Start web UI
-echo   Starting web UI...
-cd /d "%PROJECT_DIR%\web"
-if "%DEV_MODE%"=="true" (
-    start /b "" cmd /c "bun run dev > "%WEB_LOG_FILE%" 2>&1"
-) else (
-    start /b "" cmd /c "bun run start > "%WEB_LOG_FILE%" 2>&1"
-)
-
-:: Wait for health
-echo   Waiting for backend...
+:: Wait for backend to be healthy BEFORE starting web UI
+echo   [..] Waiting for backend to be ready...
 set "ATTEMPTS=0"
-:health_loop
-if %ATTEMPTS% geq 30 goto :health_timeout
-curl -sf http://localhost:%API_PORT%/health >nul 2>&1
-if not errorlevel 1 goto :health_ok
+:start_health_loop
+if !ATTEMPTS! geq 60 goto :start_health_timeout
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
+if not errorlevel 1 goto :start_health_ok
 timeout /t 1 /nobreak >nul
 set /a ATTEMPTS+=1
-goto :health_loop
+goto :start_health_loop
 
-:health_ok
-echo   [OK] Backend is ready
-goto :start_done
+:start_health_ok
+echo   [OK] Backend is ready on port %API_PORT%
 
-:health_timeout
-echo   [WARN] Backend health check timed out
+:: Clear Next.js cache so code changes take effect
+echo   [..] Clearing web UI cache...
+if exist "%PROJECT_DIR%\web\.next" rmdir /s /q "%PROJECT_DIR%\web\.next"
+if exist "%PROJECT_DIR%\web\node_modules\.cache" rmdir /s /q "%PROJECT_DIR%\web\node_modules\.cache"
 
-:start_done
+:: Start web UI only after backend is confirmed healthy
+cd /d "%PROJECT_DIR%\web"
+if "!DEV_MODE!"=="true" (
+    echo   [..] Starting web UI (dev mode^)...
+    start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+) else (
+    echo   [..] Building web UI...
+    call bun run build >"%WEB_LOG_FILE%" 2>&1
+    if errorlevel 1 (
+        echo   [WARN] Production build failed, using dev mode instead
+        start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+    ) else (
+        echo   [..] Starting web UI...
+        start "Assistant WebUI" /min cmd /c "bun run start 1>>"%WEB_LOG_FILE%" 2>&1"
+    )
+)
+
 timeout /t 2 /nobreak >nul
 echo   [OK] Web UI starting on port %WEB_PORT%
 
@@ -121,30 +184,150 @@ echo   API Docs:  http://localhost:%API_PORT%/swagger
 echo.
 exit /b 0
 
-:: ─── Stop ────────────────────────────────────────────────────────────────────
+:start_health_timeout
+echo   [ERROR] Backend health check timed out (60s^)
+echo   [..] Check logs: assistant logs
+:: Kill the backend we started since it didn't come up
+call :kill_port %API_PORT%
+if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
+exit /b 1
+
+:: ─── Stop ───────────────────────────────────────────────────────────────────
 :cmd_stop
 echo.
-echo   Stopping assistant...
+echo   ╔═══════════════════════════════════╗
+echo   ║         A S S I S T A N T         ║
+echo   ╚═══════════════════════════════════╝
+echo.
 
-:: Kill bun processes for this project
-taskkill /f /fi "WINDOWTITLE eq bun*" >nul 2>&1
-taskkill /f /im "bun.exe" >nul 2>&1
-taskkill /f /fi "WINDOWTITLE eq next*" >nul 2>&1
-
-if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
-if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%"
+echo   [..] Stopping assistant...
+call :kill_all_assistant
 
 echo   [OK] Assistant stopped
 echo.
 exit /b 0
 
-:: ─── Restart ─────────────────────────────────────────────────────────────────
+:: ─── Restart ────────────────────────────────────────────────────────────────
 :cmd_restart
-call :cmd_stop
-call :cmd_start %2
+echo.
+echo   ╔═══════════════════════════════════╗
+echo   ║         A S S I S T A N T         ║
+echo   ╚═══════════════════════════════════╝
+echo.
+
+set "DEV_MODE=false"
+if "%~2"=="--dev" set "DEV_MODE=true"
+if "%~2"=="-d" set "DEV_MODE=true"
+
+:: ── 1. STOP ─────────────────────────────────────────────────────────────────
+echo   [..] Stopping all processes...
+call :kill_all_assistant
+timeout /t 2 /nobreak >nul
+echo   [OK] Processes stopped
+
+:: ── 2. CLEAR CACHES ─────────────────────────────────────────────────────────
+echo   [..] Clearing caches...
+if exist "%PROJECT_DIR%\web\.next" rmdir /s /q "%PROJECT_DIR%\web\.next"
+if exist "%PROJECT_DIR%\web\node_modules\.cache" rmdir /s /q "%PROJECT_DIR%\web\node_modules\.cache"
+echo   [OK] Caches cleared
+echo.
+
+:: ── 3. START ─────────────────────────────────────────────────────────────────
+
+:: Check bun
+where bun >nul 2>&1
+if errorlevel 1 (
+    echo   [ERROR] bun is not installed. Install from https://bun.sh
+    exit /b 1
+)
+
+:: Check required services (only for external storage mode)
+if "!STORAGE_MODE!"=="external" (
+    echo   [..] Checking services...
+    call :check_port 5432
+    if errorlevel 1 (
+        echo   [ERROR] PostgreSQL not reachable on port 5432
+        echo          Start it: cd ~/docker-services ^&^& docker compose up -d db
+        exit /b 1
+    )
+    echo   [OK] PostgreSQL is reachable
+
+    call :check_port 6379
+    if errorlevel 1 (
+        echo   [ERROR] Redis not reachable on port 6379
+        echo          Start it: cd ~/docker-services ^&^& docker compose up -d redis
+        exit /b 1
+    )
+    echo   [OK] Redis is reachable
+) else (
+    echo   [OK] Embedded mode (PGlite + in-memory cache^)
+)
+
+:: Start backend
+cd /d "%PROJECT_DIR%"
+if "!DEV_MODE!"=="true" (
+    echo   [..] Starting backend (dev mode with hot reload^)...
+    start "Assistant Backend" /min cmd /c "bun run dev 1>"%LOG_FILE%" 2>&1"
+) else (
+    echo   [..] Starting backend...
+    start "Assistant Backend" /min cmd /c "bun run start 1>"%LOG_FILE%" 2>&1"
+)
+
+:: Wait for backend to be healthy BEFORE starting web UI
+echo   [..] Waiting for backend to be ready...
+set "ATTEMPTS=0"
+:restart_health_loop
+if !ATTEMPTS! geq 60 goto :restart_health_timeout
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
+if not errorlevel 1 goto :restart_health_ok
+timeout /t 1 /nobreak >nul
+set /a ATTEMPTS+=1
+goto :restart_health_loop
+
+:restart_health_ok
+echo   [OK] Backend is ready on port %API_PORT%
+
+:: Start web UI (cache already cleared above)
+cd /d "%PROJECT_DIR%\web"
+if "!DEV_MODE!"=="true" (
+    echo   [..] Starting web UI (dev mode^)...
+    start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+) else (
+    echo   [..] Building web UI...
+    call bun run build >"%WEB_LOG_FILE%" 2>&1
+    if errorlevel 1 (
+        echo   [WARN] Production build failed, using dev mode instead
+        start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+    ) else (
+        echo   [..] Starting web UI...
+        start "Assistant WebUI" /min cmd /c "bun run start 1>>"%WEB_LOG_FILE%" 2>&1"
+    )
+)
+
+timeout /t 2 /nobreak >nul
+echo   [OK] Web UI starting on port %WEB_PORT%
+
+:: Open browser
+start "" "http://localhost:%WEB_PORT%"
+
+echo.
+echo   Assistant is running!
+echo.
+echo   Web UI:    http://localhost:%WEB_PORT%
+echo   API:       http://localhost:%API_PORT%
+echo   API Docs:  http://localhost:%API_PORT%/swagger
+echo.
 exit /b 0
 
-:: ─── Status ──────────────────────────────────────────────────────────────────
+:restart_health_timeout
+echo   [ERROR] Backend health check timed out (60s^)
+echo   [..] Check logs: assistant logs
+:: Kill the backend we started since it didn't come up
+call :kill_port %API_PORT%
+if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
+exit /b 1
+
+:: ─── Status ─────────────────────────────────────────────────────────────────
 :cmd_status
 echo.
 echo   ╔═══════════════════════════════════╗
@@ -154,7 +337,7 @@ echo.
 echo   Process Status
 echo.
 
-curl -sf http://localhost:%API_PORT%/health >nul 2>&1
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Backend: running on port %API_PORT%
 ) else (
@@ -169,6 +352,43 @@ if not errorlevel 1 (
 )
 
 echo.
+echo   Service Status (!STORAGE_MODE! mode^)
+echo.
+
+if "!STORAGE_MODE!"=="external" (
+    call :check_port 5432
+    if errorlevel 1 (
+        echo   [--] PostgreSQL: not reachable
+    ) else (
+        echo   [OK] PostgreSQL: reachable (port 5432^)
+    )
+
+    call :check_port 6379
+    if errorlevel 1 (
+        echo   [--] Redis: not reachable
+    ) else (
+        echo   [OK] Redis: reachable (port 6379^)
+    )
+) else (
+    echo   [OK] PGlite: embedded database
+    echo   [OK] Cache: in-memory
+)
+
+call :check_port 11434
+if errorlevel 1 (
+    echo   [--] Ollama: not reachable (optional^)
+) else (
+    echo   [OK] Ollama: reachable (port 11434^)
+)
+
+call :check_port 4000
+if errorlevel 1 (
+    echo   [--] LiteLLM: not reachable (optional^)
+) else (
+    echo   [OK] LiteLLM: reachable (port 4000^)
+)
+
+echo.
 echo   URLs
 echo   Web UI:    http://localhost:%WEB_PORT%
 echo   API:       http://localhost:%API_PORT%
@@ -176,14 +396,14 @@ echo   API Docs:  http://localhost:%API_PORT%/swagger
 echo.
 exit /b 0
 
-:: ─── Logs ────────────────────────────────────────────────────────────────────
+:: ─── Logs ───────────────────────────────────────────────────────────────────
 :cmd_logs
 if "%~2"=="--web" (
     if exist "%WEB_LOG_FILE%" (
         type "%WEB_LOG_FILE%"
         echo.
         echo   [Watching %WEB_LOG_FILE%]
-        powershell -Command "Get-Content '%WEB_LOG_FILE%' -Wait -Tail 50"
+        powershell -NoProfile -Command "Get-Content '%WEB_LOG_FILE%' -Wait -Tail 50"
     ) else (
         echo   [ERROR] No web log file found. Start the assistant first.
     )
@@ -192,20 +412,20 @@ if "%~2"=="--web" (
         type "%LOG_FILE%"
         echo.
         echo   [Watching %LOG_FILE%]
-        powershell -Command "Get-Content '%LOG_FILE%' -Wait -Tail 50"
+        powershell -NoProfile -Command "Get-Content '%LOG_FILE%' -Wait -Tail 50"
     ) else (
         echo   [ERROR] No log file found. Start the assistant first.
     )
 )
 exit /b 0
 
-:: ─── Open ────────────────────────────────────────────────────────────────────
+:: ─── Open ───────────────────────────────────────────────────────────────────
 :cmd_open
 start "" "http://localhost:%WEB_PORT%"
 echo   [OK] Opening http://localhost:%WEB_PORT%
 exit /b 0
 
-:: ─── Help ────────────────────────────────────────────────────────────────────
+:: ─── Help ───────────────────────────────────────────────────────────────────
 :cmd_help
 echo.
 echo   ╔═══════════════════════════════════╗
@@ -218,7 +438,7 @@ echo   Commands:
 echo     start [--dev]    Start backend and web UI
 echo     stop             Stop all assistant processes
 echo     restart [--dev]  Restart everything
-echo     status           Show running state
+echo     status           Show running state and service health
 echo     logs [--web]     Tail backend logs (--web for web UI)
 echo     open             Open web UI in browser
 echo     help             Show this help message

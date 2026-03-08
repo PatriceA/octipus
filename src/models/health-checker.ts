@@ -217,10 +217,14 @@ export class HealthChecker {
         lastChecked: new Date(),
       };
     } catch (error) {
+      const msg = (error as Error).message;
+      const isTimeout = (error as Error).name === 'AbortError';
+      const isNetworkError = msg.includes('Unable to connect') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed');
+
       return {
         service: 'litellm',
-        status: 'unhealthy',
-        message: (error as Error).name === 'AbortError' ? 'Health check timed out' : (error as Error).message,
+        status: isNetworkError ? 'not_configured' : 'unhealthy',
+        message: isTimeout ? 'Health check timed out' : isNetworkError ? 'Not configured' : msg,
         lastChecked: new Date(),
       };
     }
@@ -255,10 +259,13 @@ export class HealthChecker {
         lastChecked: new Date(),
       };
     } catch (error) {
+      const msg = (error as Error).message;
+      const isNetworkError = msg.includes('Unable to connect') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed');
+
       return {
         service: 'ollama',
-        status: 'unhealthy',
-        message: (error as Error).message,
+        status: isNetworkError ? 'not_configured' : 'unhealthy',
+        message: isNetworkError ? 'Not running' : msg,
         lastChecked: new Date(),
       };
     }

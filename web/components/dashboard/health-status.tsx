@@ -34,6 +34,8 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
         return <CheckCircle className="w-5 h-5 text-green-500" />;
       case 'degraded':
         return <AlertCircle className="w-5 h-5 text-yellow-500" />;
+      case 'not_configured':
+        return <AlertCircle className="w-5 h-5 text-gray-400" />;
       default:
         return <XCircle className="w-5 h-5 text-red-500" />;
     }
@@ -46,6 +48,8 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
         return 'bg-gray-50 dark:bg-gray-700/50';
       case 'degraded':
         return 'bg-yellow-50/50 dark:bg-yellow-900/10';
+      case 'not_configured':
+        return 'bg-gray-50 dark:bg-gray-700/50';
       default:
         return 'bg-red-50/50 dark:bg-red-900/10';
     }
@@ -58,6 +62,8 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
         return 'Healthy';
       case 'degraded':
         return 'Degraded';
+      case 'not_configured':
+        return 'Not configured';
       default:
         return 'Unhealthy';
     }
@@ -105,6 +111,11 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
                   {service?.status === 'unhealthy' && service.message && (
                     <p className="text-xs text-red-500 dark:text-red-400 mt-0.5 truncate" title={service.message}>
                       {service.message}
+                    </p>
+                  )}
+                  {service?.status === 'not_configured' && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                      Optional
                     </p>
                   )}
                 </div>
