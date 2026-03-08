@@ -11,8 +11,13 @@ export async function testHealth(runner: TestRunner, client: APIClient) {
     assert(data.status === 'ok', `Expected status ok, got ${data.status}`);
   });
 
-  await runner.test('GET /health/detailed returns services', async () => {
-    const { status, data } = await client.request<{ status: string; health?: unknown }>('GET', '/health/detailed', undefined, '');
+  await runner.test('GET /health/detailed rejects unauthenticated requests', async () => {
+    const { status } = await client.request<{ error: string }>('GET', '/health/detailed', undefined, '');
+    assertStatus(status, 401);
+  });
+
+  await runner.test('GET /health/detailed returns services (authenticated)', async () => {
+    const { status, data } = await client.request<{ status: string; health?: unknown }>('GET', '/health/detailed');
     assertStatus(status, 200);
     assert(!!data.status, 'Missing status field');
   });
