@@ -41,8 +41,8 @@ async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
   const { vector } = await import('@electric-sql/pglite/vector');
   const { drizzle } = await import('drizzle-orm/pglite');
 
-  // Expand ~ to home directory
-  const resolvedDir = dataDir.replace(/^~/, process.env.HOME || '/tmp');
+  // Expand ~ to home directory (HOME may be unset on Windows)
+  const resolvedDir = dataDir.replace(/^~/, process.env.HOME || process.env.USERPROFILE || '/tmp');
 
   // Ensure data directory exists
   const { mkdirSync } = await import('fs');

@@ -78,6 +78,18 @@ if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
 if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%"
 exit /b 0
 
+:start_hidden
+:: Launch a process in a hidden window (no visible console)
+:: Usage: call :start_hidden "name" "working_dir" "command" "log_file" [append]
+set "_SH_BAT=%STATE_DIR%\run_%~1.cmd"
+if "%~5"=="append" (
+    > "%_SH_BAT%" echo @cd /d "%~2" ^&^& %~3 ^>^>"%~4" 2^>^&1
+) else (
+    > "%_SH_BAT%" echo @cd /d "%~2" ^&^& %~3 ^>"%~4" 2^>^&1
+)
+powershell -NoProfile -Command "Start-Process cmd.exe -ArgumentList '/c %_SH_BAT%' -WindowStyle Hidden"
+exit /b 0
+
 :: ─── Start ──────────────────────────────────────────────────────────────────
 :cmd_start
 echo.
@@ -124,13 +136,12 @@ if "!STORAGE_MODE!"=="external" (
 )
 
 :: Start backend
-cd /d "%PROJECT_DIR%"
 if "!DEV_MODE!"=="true" (
     echo   [..] Starting backend (dev mode with hot reload^)...
-    start "Assistant Backend" /min cmd /c "bun run dev 1>"%LOG_FILE%" 2>&1"
+    call :start_hidden "backend" "%PROJECT_DIR%" "bun run dev" "%LOG_FILE%"
 ) else (
     echo   [..] Starting backend...
-    start "Assistant Backend" /min cmd /c "bun run start 1>"%LOG_FILE%" 2>&1"
+    call :start_hidden "backend" "%PROJECT_DIR%" "bun run start" "%LOG_FILE%"
 )
 
 :: Wait for backend to be healthy BEFORE starting web UI
@@ -153,19 +164,19 @@ if exist "%PROJECT_DIR%\web\.next" rmdir /s /q "%PROJECT_DIR%\web\.next"
 if exist "%PROJECT_DIR%\web\node_modules\.cache" rmdir /s /q "%PROJECT_DIR%\web\node_modules\.cache"
 
 :: Start web UI only after backend is confirmed healthy
-cd /d "%PROJECT_DIR%\web"
 if "!DEV_MODE!"=="true" (
     echo   [..] Starting web UI (dev mode^)...
-    start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+    call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
 ) else (
     echo   [..] Building web UI...
+    cd /d "%PROJECT_DIR%\web"
     call bun run build >"%WEB_LOG_FILE%" 2>&1
     if errorlevel 1 (
         echo   [WARN] Production build failed, using dev mode instead
-        start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
     ) else (
         echo   [..] Starting web UI...
-        start "Assistant WebUI" /min cmd /c "bun run start 1>>"%WEB_LOG_FILE%" 2>&1"
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run start" "%WEB_LOG_FILE%" append
     )
 )
 
@@ -264,13 +275,12 @@ if "!STORAGE_MODE!"=="external" (
 )
 
 :: Start backend
-cd /d "%PROJECT_DIR%"
 if "!DEV_MODE!"=="true" (
     echo   [..] Starting backend (dev mode with hot reload^)...
-    start "Assistant Backend" /min cmd /c "bun run dev 1>"%LOG_FILE%" 2>&1"
+    call :start_hidden "backend" "%PROJECT_DIR%" "bun run dev" "%LOG_FILE%"
 ) else (
     echo   [..] Starting backend...
-    start "Assistant Backend" /min cmd /c "bun run start 1>"%LOG_FILE%" 2>&1"
+    call :start_hidden "backend" "%PROJECT_DIR%" "bun run start" "%LOG_FILE%"
 )
 
 :: Wait for backend to be healthy BEFORE starting web UI
@@ -288,19 +298,19 @@ goto :restart_health_loop
 echo   [OK] Backend is ready on port %API_PORT%
 
 :: Start web UI (cache already cleared above)
-cd /d "%PROJECT_DIR%\web"
 if "!DEV_MODE!"=="true" (
     echo   [..] Starting web UI (dev mode^)...
-    start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+    call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
 ) else (
     echo   [..] Building web UI...
+    cd /d "%PROJECT_DIR%\web"
     call bun run build >"%WEB_LOG_FILE%" 2>&1
     if errorlevel 1 (
         echo   [WARN] Production build failed, using dev mode instead
-        start "Assistant WebUI" /min cmd /c "bun run dev 1>"%WEB_LOG_FILE%" 2>&1"
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
     ) else (
         echo   [..] Starting web UI...
-        start "Assistant WebUI" /min cmd /c "bun run start 1>>"%WEB_LOG_FILE%" 2>&1"
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run start" "%WEB_LOG_FILE%" append
     )
 )
 
