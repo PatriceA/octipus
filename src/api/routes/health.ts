@@ -12,8 +12,12 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     return { status: 'ok', timestamp: new Date().toISOString() };
   })
 
-  // Detailed health check
-  .get('/detailed', async () => {
+  // Detailed health check — requires authentication to avoid leaking infrastructure info
+  .get('/detailed', async (ctx: any) => {
+    if (!ctx.user) {
+      ctx.set.status = 401;
+      return { error: 'Authentication required' };
+    }
     try {
       const gateway = getGateway();
       const status = await gateway.getStatus();
@@ -62,7 +66,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         health: {
           database: { service: 'database', status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() },
           redis: { service: 'redis', status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() },
-          litellm: { service: 'litellm', status: 'unhealthy', message: (error as Error).message, lastChecked: new Date() },
+          litellm: { service: 'litellm', status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() },
         },
       };
     }

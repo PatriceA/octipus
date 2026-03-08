@@ -44,8 +44,7 @@ function verifyWebhookSignature(
  * Signature verification (HMAC-SHA256 via X-Hub-Signature-256):
  *  - If a matching hook has a webhookSecret configured and the signature is
  *    missing or invalid, the request is rejected with 401.
- *  - If no hook has a webhookSecret, the request is processed with a warning
- *    (backward compatibility).
+ *  - If no hook has a webhookSecret, the request is rejected with 401.
  */
 export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
   .post(
@@ -78,11 +77,15 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
             });
           }
         } else {
-          // No secret configured — warn but allow (backward compatibility)
+          // No secret configured — reject for security
           apiLogger.warn(
             { webhookPath, hookId: hook.id },
-            'Webhook hook has no secret configured — skipping signature verification',
+            'Webhook rejected: no webhookSecret configured on hook',
           );
+          return new Response(JSON.stringify({ error: 'Webhook secret not configured. Set a webhookSecret on this hook.' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
       }
 

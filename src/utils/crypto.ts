@@ -1,5 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, createHash, timingSafeEqual } from 'crypto';
-import argon2 from 'argon2';
+import { createCipheriv, createDecipheriv, randomBytes, createHash, timingSafeEqual, scryptSync } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
@@ -14,19 +13,15 @@ export interface EncryptedData {
 }
 
 /**
- * Derive a key from a password using Argon2id
+ * Derive a key from a password using scrypt (Node.js built-in, no native addons)
  */
 export async function deriveKey(password: string, salt?: Buffer): Promise<{ key: Buffer; salt: Buffer }> {
   const actualSalt = salt || randomBytes(SALT_LENGTH);
 
-  const key = await argon2.hash(password, {
-    type: argon2.argon2id,
-    salt: actualSalt,
-    memoryCost: 65536, // 64 MB
-    timeCost: 3,
-    parallelism: 4,
-    hashLength: 32,
-    raw: true,
+  const key = scryptSync(password, actualSalt, 32, {
+    N: 16384,  // CPU/memory cost (2^14)
+    r: 8,      // block size
+    p: 1,      // parallelization
   });
 
   return { key: Buffer.from(key), salt: actualSalt };
@@ -112,14 +107,13 @@ export function sha256(data: string): string {
 }
 
 /**
- * Hash password using Argon2id
+ * Hash password using Argon2id (Bun built-in, no native addons)
  */
 export async function hashPassword(password: string): Promise<string> {
-  return argon2.hash(password, {
-    type: argon2.argon2id,
-    memoryCost: 65536,
+  return Bun.password.hash(password, {
+    algorithm: 'argon2id',
+    memoryCost: 65536, // 64 MB
     timeCost: 3,
-    parallelism: 4,
   });
 }
 
@@ -127,7 +121,7 @@ export async function hashPassword(password: string): Promise<string> {
  * Verify password against hash
  */
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return argon2.verify(hash, password);
+  return Bun.password.verify(password, hash);
 }
 
 /**

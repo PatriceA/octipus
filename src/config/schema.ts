@@ -5,7 +5,7 @@ export const storageModeSchema = z.enum(['embedded', 'external']).default('exter
 
 // Database configuration schema
 export const databaseConfigSchema = z.object({
-  url: z.string().default('postgresql://assistant:assistant@localhost:5432/assistant').describe('PostgreSQL connection URL (external mode)'),
+  url: z.string().describe('PostgreSQL connection URL (external mode — set DATABASE_URL)'),
   dataDir: z.string().default('~/.assistant/data').describe('PGlite data directory (embedded mode)'),
   poolSize: z.number().min(1).max(100).default(10),
   idleTimeout: z.number().min(0).default(30000),

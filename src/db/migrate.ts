@@ -105,8 +105,15 @@ async function runEmbeddedMigrations(): Promise<void> {
 
       logger.info({ tag: entry.tag }, 'Applying migration');
       await executeRaw(patchedSql);
+      // Use parameterized-safe values: hash is a hex SHA-256 (safe chars only),
+      // entry.when is a number from the journal. Validate both defensively.
+      const safeHash = hash.replace(/[^a-f0-9]/g, '');
+      const safeWhen = Number(entry.when);
+      if (!safeHash || isNaN(safeWhen)) {
+        throw new Error(`Invalid migration metadata: hash=${hash}, when=${entry.when}`);
+      }
       await executeRaw(
-        `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${hash}', ${entry.when})`
+        `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
       );
     }
 

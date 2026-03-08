@@ -399,9 +399,10 @@ import sounddevice as sd
 import numpy as np
 import json
 import sys
+import os
 
-sample_rate = ${this.options.sampleRate}
-threshold = ${this.options.sensitivity}
+sample_rate = int(os.environ["VAD_SAMPLE_RATE"])
+threshold = float(os.environ["VAD_SENSITIVITY"])
 chunk_duration = 0.1  # 100ms chunks
 chunk_samples = int(sample_rate * chunk_duration)
 
@@ -450,6 +451,11 @@ with sd.InputStream(samplerate=sample_rate, channels=1, dtype='float32',
       cmd: [pythonPath, '-c', script],
       stdout: 'pipe',
       stderr: 'pipe',
+      env: {
+        ...process.env,
+        VAD_SAMPLE_RATE: String(this.options.sampleRate),
+        VAD_SENSITIVITY: String(this.options.sensitivity),
+      },
     });
 
     this.running = true;

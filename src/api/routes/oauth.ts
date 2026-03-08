@@ -130,6 +130,11 @@ export const oauthRoutes = new Elysia({ prefix: '/auth/oauth' })
 // --- HTML templates for OAuth popup callback ---
 
 function successPage(provider: string): string {
+  // Sanitize provider — only allow alpha chars
+  const safeProvider = provider.replace(/[^a-zA-Z]/g, '');
+  const displayName = safeProvider.charAt(0).toUpperCase() + safeProvider.slice(1);
+  const jsData = JSON.stringify({ type: 'oauth_callback', provider: safeProvider, success: true });
+
   return `<!DOCTYPE html>
 <html>
 <head><title>Connected</title><style>
@@ -142,18 +147,22 @@ p { color: #6b7280; margin: 0; }
 <body>
 <div class="card">
   <div class="icon">&#10004;</div>
-  <h2>${provider.charAt(0).toUpperCase() + provider.slice(1)} Connected</h2>
+  <h2>${displayName} Connected</h2>
   <p>You can close this window.</p>
 </div>
 <script>
-  window.opener?.postMessage({ type: 'oauth_callback', provider: '${provider}', success: true }, '*');
-  setTimeout(() => window.close(), 2000);
+  if (window.opener) { window.opener.postMessage(${jsData}, window.location.origin); }
+  setTimeout(function() { window.close(); }, 2000);
 </script>
 </body></html>`;
 }
 
 function errorPage(message: string): string {
-  const safeMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Sanitize for HTML context
+  const safeHtml = message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  // Use JSON.stringify for safe JS interpolation (escapes all special chars)
+  const jsData = JSON.stringify({ type: 'oauth_callback', success: false, error: message });
+
   return `<!DOCTYPE html>
 <html>
 <head><title>Error</title><style>
@@ -167,10 +176,10 @@ p { color: #dc2626; margin: 0; word-break: break-word; }
 <div class="card">
   <div class="icon">&#10008;</div>
   <h2>Connection Failed</h2>
-  <p>${safeMessage}</p>
+  <p>${safeHtml}</p>
 </div>
 <script>
-  window.opener?.postMessage({ type: 'oauth_callback', success: false, error: '${safeMessage.replace(/'/g, "\\'")}' }, '*');
+  if (window.opener) { window.opener.postMessage(${jsData}, window.location.origin); }
 </script>
 </body></html>`;
 }

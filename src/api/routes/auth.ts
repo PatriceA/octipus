@@ -174,6 +174,15 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     async ({ body, request, set }) => {
       const { username, email, password } = body;
 
+      // Rate-limit registration attempts by IP
+      const rateLimiter = getRateLimiter();
+      const ip = request.headers.get('x-forwarded-for') || 'unknown';
+      const regCheck = await rateLimiter.check(`register:${ip}`, 5, 300000); // 5 attempts per 5 min
+      if (!regCheck.allowed) {
+        set.status = 429;
+        return { error: 'Too many registration attempts. Try again later.' };
+      }
+
       // Enforce password complexity
       const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
       if (!passwordRegex.test(password)) {
@@ -308,6 +317,15 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   .post(
     '/passkey/auth/verify',
     async ({ body, request, set }) => {
+      // Rate-limit passkey auth attempts by IP
+      const rateLimiter = getRateLimiter();
+      const ip = request.headers.get('x-forwarded-for') || 'unknown';
+      const passkeyCheck = await rateLimiter.check(`passkey:${ip}`, 10, 300000); // 10 attempts per 5 min
+      if (!passkeyCheck.allowed) {
+        set.status = 429;
+        return { error: 'Too many authentication attempts. Try again later.' };
+      }
+
       const passkeyAuth = getPasskeyAuth();
       const ipAddress = request.headers.get('x-forwarded-for') || undefined;
 
@@ -349,9 +367,17 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Link channel account via code
   .post(
     '/link',
-    async ({ user, body }) => {
+    async ({ user, body, request, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
+      }
+
+      // Rate-limit link code attempts
+      const rateLimiter = getRateLimiter();
+      const linkCheck = await rateLimiter.check(`link:${user.id}`, 10, 300000); // 10 attempts per 5 min
+      if (!linkCheck.allowed) {
+        set.status = 429;
+        return { error: 'Too many link attempts. Try again later.' };
       }
 
       const result = await redeemLinkCode(body.code, user.id);

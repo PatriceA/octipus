@@ -86,7 +86,7 @@ Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`, or create via API (`P
 | Terminal UI | Ink |
 | LLM Client | OpenAI SDK (via LiteLLM proxy) |
 | Channels | grammY (Telegram), Bolt.js (Slack), Bot Framework (Teams) |
-| Auth | argon2, @simplewebauthn/server, otplib |
+| Auth | Bun.password (argon2id), scrypt, @simplewebauthn/server, otplib |
 | Browser | Playwright |
 | Logging | Pino |
 | Validation | Zod |

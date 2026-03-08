@@ -68,6 +68,8 @@ export function createServer() {
       set.headers['X-Frame-Options'] = 'DENY';
       set.headers['X-XSS-Protection'] = '0';
       set.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin';
+      set.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
+      set.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
     })
     // Request logging
     .onRequest(({ request }) => {
@@ -114,6 +116,10 @@ export function createServer() {
         // Fallback: validate against MASTER_KEY for API/MCP access
         const masterKey = process.env.MASTER_KEY;
         if (masterKey && secureCompare(token, masterKey)) {
+          apiLogger.warn(
+            { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
+            'MASTER_KEY authentication used — system user access'
+          );
           return {
             user: { id: 'system', username: 'system', isAdmin: true },
             session: null,

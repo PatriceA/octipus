@@ -3,7 +3,7 @@ import type { Config } from './schema';
 export const defaultConfig: Partial<Config> = {
   storageMode: 'external',
   database: {
-    url: 'postgresql://assistant:assistant@localhost:5432/assistant',
+    url: '', // Must be set via DATABASE_URL env var in external mode
     dataDir: '~/.assistant/data',
     poolSize: 10,
     idleTimeout: 30000,
