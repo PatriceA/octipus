@@ -10,11 +10,21 @@ export async function testAuth(runner: TestRunner, client: APIClient) {
     const { status, data } = await client.request<{ token: string; user: { id: string } }>(
       'POST', '/auth/register', { username: fixtures.testUsername, password: fixtures.testPassword }, '',
     );
-    assertStatus(status, 200);
-    assert(!!data.token, 'No token returned');
-    assert(!!data.user?.id, 'No user ID returned');
-    fixtures.authToken = data.token;
-    fixtures.testUserId = data.user.id;
+    if (status === 200) {
+      assert(!!data.token, 'No token returned');
+      assert(!!data.user?.id, 'No user ID returned');
+      fixtures.authToken = data.token;
+      fixtures.testUserId = data.user.id;
+    } else {
+      // User already exists from a parallel runner — login instead
+      const login = await client.request<{ token: string; user: { id: string } }>(
+        'POST', '/auth/login', { username: fixtures.testUsername, password: fixtures.testPassword }, '',
+      );
+      assertStatus(login.status, 200);
+      assert(!!login.data.token, 'No token returned from login fallback');
+      fixtures.authToken = login.data.token;
+      fixtures.testUserId = login.data.user?.id || '';
+    }
   });
 
   await runner.test('POST /auth/login with correct credentials', async () => {

@@ -11,8 +11,8 @@ const PUBLIC_PATH_PREFIXES = [
 function isPublicPath(path: string): boolean {
   // OAuth callbacks are public (state-based auth)
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
-  // Exact match for basic health endpoint (blocks /api/health/detailed, /api/health/database, etc.)
-  if (path === '/api/health') return true;
+  // All health endpoints are public (used by monitoring, load balancers, k8s probes)
+  if (path.startsWith('/api/health')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
