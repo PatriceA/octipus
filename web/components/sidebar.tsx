@@ -81,9 +81,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200/80 dark:border-gray-800 shrink-0">
         <div className="flex items-center gap-2.5 overflow-hidden">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shrink-0 shadow-sm">
-            <Bot className="w-4.5 h-4.5 text-white" />
-          </div>
+          <img src="/logo.png" alt="Assistant" className="w-8 h-8 rounded-lg shrink-0 shadow-sm object-cover" />
           {!collapsed && (
             <span className="text-lg font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
               Assistant

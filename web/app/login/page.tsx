@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Bot, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
 
@@ -110,9 +110,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary-600 mb-4">
-            <Bot className="w-10 h-10 text-white" />
-          </div>
+          <img src="/logo.png" alt="Assistant" className="w-16 h-16 rounded-2xl mb-4 inline-block object-cover" />
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Assistant</h1>
           <p className="text-gray-600 dark:text-gray-400">Autonomous Development Assistant</p>
         </div>
