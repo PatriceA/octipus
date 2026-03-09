@@ -298,7 +298,7 @@ export class AgentManager {
         createdAt: context.createdAt,
         iteration: worker.getIteration(),
       };
-    });
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   /**

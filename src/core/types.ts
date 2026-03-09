@@ -313,7 +313,7 @@ export interface SystemEvent {
 // Health Check Types
 export interface HealthStatus {
   service: string;
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'not_configured';
   latency?: number;
   message?: string;
   lastChecked: Date;

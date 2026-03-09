@@ -25,8 +25,13 @@ export class EmbeddingService {
 
   async generateEmbedding(text: string): Promise<number[]> {
     const client = getLiteLLMClient();
-    const [embedding] = await client.embed(text, this.model);
-    return embedding;
+    try {
+      const [embedding] = await client.embed(text, this.model);
+      return embedding;
+    } catch (err) {
+      coreLogger.warn({ err, model: this.model }, 'Embedding generation failed — model may not be available');
+      throw err;
+    }
   }
 
   async store(
@@ -75,7 +80,13 @@ export class EmbeddingService {
   }
 
   async search(query: string, limit = 5, sourceType?: string): Promise<SearchResult[]> {
-    const queryEmbedding = await this.generateEmbedding(query);
+    let queryEmbedding: number[];
+    try {
+      queryEmbedding = await this.generateEmbedding(query);
+    } catch {
+      coreLogger.warn('Embedding search unavailable — returning empty results');
+      return [];
+    }
     const db = getDb();
 
     const similarityExpr = cosineSimilarity(embeddings.embedding, queryEmbedding);

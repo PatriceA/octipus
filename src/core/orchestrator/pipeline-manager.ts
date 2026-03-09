@@ -106,7 +106,7 @@ export class PipelineManager {
 
         // Request approval from user
         const approvalResult = await orchestrator.requestApproval(
-          `Pipeline "${title}" — Stage "${stage.name}" complete.\n\nResult:\n${previousOutput.slice(0, 2000)}`,
+          `Pipeline "${title}" — Stage "${stage.name}" complete.\n\nResult:\n${(previousOutput || '').slice(0, 2000)}`,
           `Proceed with "${stages[i]?.name || 'next stage'}"?`,
           context,
           ['Approve', 'Skip', 'Stop Pipeline'],
@@ -187,7 +187,7 @@ export class PipelineManager {
       pipeline.userId,
       'pipeline_complete',
       `Pipeline "${title}" completed`,
-      previousOutput.slice(0, 200),
+      (previousOutput || '').slice(0, 200),
       { pipelineId: pipeline.id },
     ).catch(() => {});
 
@@ -289,7 +289,7 @@ export class PipelineManager {
         await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
 
         const approvalResult = await orchestrator.requestApproval(
-          `Pipeline "${pipeline.title}" — Stage "${stage.name}" ready.\n\nPrevious result:\n${previousOutput.slice(0, 2000)}`,
+          `Pipeline "${pipeline.title}" — Stage "${stage.name}" ready.\n\nPrevious result:\n${(previousOutput || '').slice(0, 2000)}`,
           `Proceed with "${stage.name}"?`,
           context,
           ['Approve', 'Skip', 'Stop Pipeline'],
@@ -338,7 +338,7 @@ export class PipelineManager {
       pipeline.userId,
       'pipeline_complete',
       `Pipeline "${pipeline.title}" completed`,
-      previousOutput.slice(0, 200),
+      (previousOutput || '').slice(0, 200),
       { pipelineId: pipeline.id },
     ).catch(() => {});
 

@@ -131,44 +131,55 @@ export class ToolExecutor {
       }
 
       if (permResult.level === 'ASK') {
-        const requestId = await permissionManager.requestApproval(
-          this.context.userId,
-          this.context.id,
-          toolId,
-          toolCall.name,
-          toolCall.arguments,
-          this.context.sessionId
-        );
+        // Autonomous agent workers (non-orchestrator roles spawned by the orchestrator)
+        // cannot prompt a human — auto-approve their tool calls at ASK level.
+        const isAutonomousWorker = this.context.role && this.context.role !== 'orchestrator';
 
-        this.emitFn('permission_request', {
-          requestId,
-          toolName: toolCall.name,
-          args: toolCall.arguments,
-          toolId,
-        });
-
-        const approved = await permissionManager.waitForApproval(requestId);
-
-        if (!approved) {
-          agentLogger.info(
-            { agentId: this.context.id, tool: toolCall.name, requestId },
-            'Tool call denied by user'
+        if (!isAutonomousWorker) {
+          const requestId = await permissionManager.requestApproval(
+            this.context.userId,
+            this.context.id,
+            toolId,
+            toolCall.name,
+            toolCall.arguments,
+            this.context.sessionId
           );
 
-          results.push({
-            toolCallId: toolCall.id,
-            result: null,
-            error: 'Permission denied: user rejected the request',
+          this.emitFn('permission_request', {
+            requestId,
+            toolName: toolCall.name,
+            args: toolCall.arguments,
+            toolId,
           });
 
-          await auditRepository.logToolDenied(
-            this.context.userId,
-            this.context.sessionId,
-            toolCall.name,
-            toolId,
-            { args: toolCall.arguments, reason: 'user_denied', requestId }
+          const approved = await permissionManager.waitForApproval(requestId);
+
+          if (!approved) {
+            agentLogger.info(
+              { agentId: this.context.id, tool: toolCall.name, requestId },
+              'Tool call denied by user'
+            );
+
+            results.push({
+              toolCallId: toolCall.id,
+              result: null,
+              error: 'Permission denied: user rejected the request',
+            });
+
+            await auditRepository.logToolDenied(
+              this.context.userId,
+              this.context.sessionId,
+              toolCall.name,
+              toolId,
+              { args: toolCall.arguments, reason: 'user_denied', requestId }
+            );
+            continue;
+          }
+        } else {
+          agentLogger.info(
+            { agentId: this.context.id, tool: toolCall.name, role: this.context.role },
+            'Auto-approving ASK-level tool for autonomous worker'
           );
-          continue;
         }
       }
 
