@@ -204,17 +204,19 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       }
 
       // Construct a minimal AgentContext for API-driven execution
+      // System user (master key auth) uses nil UUID since permission DB expects UUID format
+      const userId = user.id === 'system' ? '00000000-0000-0000-0000-000000000000' : user.id;
       const context: import('@/core/types').AgentContext = {
         id: `api-${Date.now().toString(36)}`,
         sessionId: 'api',
-        userId: user.id,
+        userId,
         topic: 'api',
         model: 'api',
         role: 'general',
         status: 'running',
         createdAt: new Date(),
         updatedAt: new Date(),
-        metadata: { source: 'mcp-bridge' },
+        metadata: { source: 'mcp-bridge', isSystemUser: user.id === 'system' },
       };
 
       try {

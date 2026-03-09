@@ -20,6 +20,7 @@ export class AgentWorker extends BaseAgentWorker {
   private abortController: AbortController;
   private totalTokensUsed: number = 0;
   private startTime: number = 0;
+  private emptyRetries: number = 0;
 
   /** Milliseconds since agent start */
   private elapsed(): number {
@@ -291,25 +292,23 @@ export class AgentWorker extends BaseAgentWorker {
       }
 
       // No tool calls — treat as final response
-      // If content is empty (e.g. thinking tokens consumed entire output), retry once
-      if (!completion.content?.trim() && this.iteration < (this.config.maxIterations || 10)) {
-        agentLogger.warn({
-          agentId: this.context.id, iteration: this.iteration,
-          outputTokens: completion.usage.outputTokens,
-        }, 'Empty response (likely thinking-only output), retrying');
-        continue;
+      // If content is empty (e.g. thinking tokens consumed entire output), retry up to 3 times
+      if (!completion.content?.trim()) {
+        this.emptyRetries = (this.emptyRetries || 0) + 1;
+        if (this.emptyRetries <= 3) {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            outputTokens: completion.usage.outputTokens, emptyRetry: this.emptyRetries,
+          }, 'Empty response (likely thinking-only output), retrying');
+          continue;
+        }
+        agentLogger.warn({ agentId: this.context.id }, 'Max empty retries reached, returning fallback');
       }
 
       const response = completion.content || 'I was unable to generate a response.';
 
-      // Only persist messages for orchestrator agents
+      // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
       if (this.context.role === 'orchestrator') {
-        await messageRepository.create({
-          sessionId: this.context.sessionId,
-          role: 'assistant',
-          content: response,
-          agentId: this.context.id,
-        });
         await sessionRepository.incrementMessageCount(this.context.sessionId, completion.usage.totalTokens);
       }
 
@@ -345,13 +344,11 @@ export class AgentWorker extends BaseAgentWorker {
 
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
-    // Task workers benefit from reasoning — override think:false if set,
-    // since the LLM client strips <think> blocks from the output anyway.
-    // The orchestrator should NOT think: it needs to call meta-tools quickly,
-    // and thinking tokens consume the output budget, preventing tool calls.
-    const isOrchestrator = this.context.role === 'orchestrator';
-    const extraBody = metadata?.extraBody
-      ? { ...metadata.extraBody, ...(isOrchestrator ? {} : { think: true }) }
+    // Respect the model's configured extraBody (e.g. think:false for Qwen).
+    // Forcing think:true on tool-use models can cause thinking tokens to consume
+    // the entire output budget, leaving nothing for tool calls.
+    const extraBody = metadata?.extraBody && Object.keys(metadata.extraBody).length > 0
+      ? metadata.extraBody
       : undefined;
 
     const result = await client.complete({

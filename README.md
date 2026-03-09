@@ -36,6 +36,7 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Docker** — manage containers, images, exec commands
 - **Google Workspace** — Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks
 - **Microsoft 365** — Outlook, Calendar, OneDrive, To Do, Contacts
+- **Browser Extension** — control the user's real browser via Chrome extension (existing cookies/auth, no bot detection)
 - **Knowledge Base** — RAG pipeline with pgvector for semantic search
 - **Cross-Channel Messaging** — send messages across any connected channel
 
@@ -73,9 +74,26 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 | **[Bun](https://bun.sh)** >= 1.1 | Runtime for backend and scripts |
 | **[Node.js](https://nodejs.org)** >= 18 | Required by Next.js web UI |
 
-**Optional:** Docker, PostgreSQL, Redis, Ollama, LiteLLM, SearXNG, Telegram/Slack/Teams tokens, Playwright
+**Optional:** Docker, PostgreSQL, Redis, Ollama, LiteLLM, SearXNG, Chromium, Telegram/Slack/Teams tokens, Playwright
 
 **For RAG (knowledge base):** Requires an embedding model. Pull `nomic-embed-text` on Ollama (`ollama pull nomic-embed-text`) and register it in LiteLLM with topic `embedding`. Enables semantic search across indexed documents and code via pgvector.
+
+### Model Recommendations by Role
+
+Not all models handle every role well. Local models (e.g. qwen3:14b, qwen3.5:35b) are fast and free but may loop or ignore tool results in agentic roles. Cloud models (deepseek-chat, gpt-4o, claude) handle complex tool orchestration more reliably.
+
+| Role | Recommended | Notes |
+|------|-------------|-------|
+| **orchestrator** | qwen3:14b, deepseek-chat | Must support tool calling. Routing-only, low complexity |
+| **coding** | qwen3:14b, qwen3.5:35b | Local models work well — filesystem/shell/git tools |
+| **research** | deepseek-chat, gpt-4o | Web search + browser requires good instruction following |
+| **general** | deepseek-chat, gpt-4o | Browser-ext interaction — local models tend to loop instead of answering |
+| **review** | qwen3:14b, qwen3.5:35b | Read-only analysis, local models handle it fine |
+| **qa** | deepseek-chat | Browser testing needs reliable tool sequencing |
+| **devops / security** | qwen3.5:35b, deepseek-chat | Shell-heavy, benefits from larger context |
+| **embedding** | nomic-embed-text | Via Ollama, for RAG/knowledge base |
+
+Configure per-topic model routing in the web UI under **Settings → Models** or via the API.
 
 ## Quick Start (Embedded — Zero Dependencies)
 
@@ -155,6 +173,7 @@ Make globally available: `bun link`
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | How tools, skills, experts, and agents work together |
 | **[API Reference](docs/API.md)** | Complete REST API with all endpoints |
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
+| **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control by AI agents |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Embeddings, auto-indexing, and semantic search |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |

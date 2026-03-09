@@ -39,13 +39,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   async addUserMessage(content: string): Promise<void> {
     this.messages.push({ role: 'user', content, timestamp: new Date() });
-    await messageRepository.create({
-      sessionId: this.context.sessionId,
-      role: 'user',
-      content,
-      agentId: this.context.id,
-    });
-    await sessionRepository.incrementMessageCount(this.context.sessionId);
+    // Only persist for orchestrator (root agent) — sub-workers use handleMessage for persistence
+    if (this.context.role === 'orchestrator') {
+      await messageRepository.create({
+        sessionId: this.context.sessionId,
+        role: 'user',
+        content,
+        agentId: this.context.id,
+      });
+      await sessionRepository.incrementMessageCount(this.context.sessionId);
+    }
   }
 
   async loadHistory(): Promise<void> {
@@ -240,7 +243,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
           return;
         }
 
-        if (accumulatedText) {
+        // Only persist for orchestrator (root agent) — sub-workers use handleMessage for persistence
+        if (accumulatedText && this.context.role === 'orchestrator') {
           await messageRepository.create({
             sessionId: this.context.sessionId,
             role: 'assistant',

@@ -4,6 +4,8 @@ import { getAgentManager } from '@/core/agent-manager';
 import { webChatChannel } from '@/channels/webchat';
 import { getPermissionManager } from '@/security/permissions';
 import { getOrchestratorService } from '@/core/orchestrator';
+import { getBrowserBridge } from './browser-bridge';
+import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 
 interface WebSocketData {
@@ -305,4 +307,82 @@ export function setupWebSocket(app: Elysia): void {
       apiLogger.info({ userId: data.userId }, 'Permission WS disconnected');
     },
   });
+
+  // Browser bridge WebSocket — registered alongside other WS routes
+  const bridge = getBrowserBridge();
+
+  app.ws('/ws/browser-bridge', {
+    open(ws) {
+      const url = new URL(ws.data?.request?.url || '', 'http://localhost');
+      const token = url.searchParams.get('token');
+
+      if (!token) {
+        ws.close(4001, 'Missing authentication token');
+        return;
+      }
+
+      const config = getConfig();
+      const masterKey = config.security.masterKey;
+
+      if (token !== masterKey) {
+        ws.close(4001, 'Invalid authentication token');
+        return;
+      }
+
+      (ws.data as any)._bridgeAuthed = true;
+      apiLogger.info('Browser bridge: WebSocket connected, awaiting handshake');
+      ws.send(JSON.stringify({ type: 'ready' }));
+    },
+
+    message(ws, message) {
+      if (!(ws.data as any)?._bridgeAuthed) return;
+
+      let parsed: any;
+      try {
+        if (typeof message === 'object' && message !== null && !(message instanceof Buffer) && !(message instanceof Uint8Array)) {
+          parsed = message;
+        } else {
+          const str = typeof message === 'string' ? message : new TextDecoder().decode(message as any);
+          parsed = JSON.parse(str);
+        }
+      } catch (err) {
+        apiLogger.warn({ error: (err as Error).message }, 'Browser bridge: failed to parse message');
+        return;
+      }
+
+      switch (parsed.type) {
+        case 'connect':
+          bridge.registerConnection(ws, {
+            version: parsed.version,
+            tabCount: parsed.tabCount,
+            userAgent: parsed.userAgent,
+          });
+          ws.send(JSON.stringify({ type: 'connected' }));
+          break;
+
+        case 'result':
+          bridge.handleResult(parsed.id, parsed.result, parsed.error);
+          break;
+
+        case 'tab_update':
+          bridge.handleTabUpdate(parsed.tab);
+          break;
+
+        case 'ping':
+          ws.send(JSON.stringify({ type: 'pong' }));
+          break;
+      }
+    },
+
+    close(ws) {
+      if ((ws.data as any)?._bridgeAuthed) {
+        bridge.handleDisconnect();
+      }
+    },
+
+    error(ws: any) {
+      apiLogger.error('Browser bridge WebSocket error');
+    },
+  });
+
 }

@@ -148,16 +148,51 @@ export default function ChatPage() {
       const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system`
       );
+      const msgs = data?.messages?.length
+        ? data.messages.map((m) => ({
+            id: m.id,
+            role: m.role as ChatMessageData['role'],
+            content: m.content,
+            timestamp: new Date(m.createdAt),
+          }))
+        : [welcomeMessage()];
+
+      // Restore agent activity for this session
+      let restoredAgents = new Map<string, TrackedAgent>();
+      try {
+        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; iteration: number }> }>('/agents');
+        const sessionAgents = (agentData?.agents || []).filter(a => a.sessionId === sessionId);
+        for (const a of sessionAgents) {
+          let toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
+          try {
+            const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
+            for (const ev of evData?.events || []) {
+              if (ev.type === 'action' && ev.data?.toolCalls) {
+                toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
+                  id: tc.id || Date.now().toString(),
+                  name: tc.name,
+                  argsSummary: tc.argsSummary,
+                })));
+              }
+            }
+          } catch {}
+          restoredAgents.set(a.id, {
+            id: a.id,
+            role: a.role,
+            model: a.model,
+            status: (a.status === 'running' || a.status === 'idle' ? 'running' : a.status === 'failed' ? 'failed' : 'completed') as TrackedAgent['status'],
+            toolCalls,
+            startTime: new Date(a.createdAt).getTime(),
+            endTime: a.status !== 'running' && a.status !== 'idle' ? Date.now() : undefined,
+            iterations: a.iteration,
+          });
+        }
+      } catch {}
+
       updateSessionState(sessionId, (prev) => ({
         ...prev,
-        messages: data?.messages?.length
-          ? data.messages.map((m) => ({
-              id: m.id,
-              role: m.role as ChatMessageData['role'],
-              content: m.content,
-              timestamp: new Date(m.createdAt),
-            }))
-          : [welcomeMessage()],
+        messages: msgs,
+        trackedAgents: restoredAgents.size > 0 ? restoredAgents : prev.trackedAgents,
       }));
     } catch {}
   }, [updateSessionState]);

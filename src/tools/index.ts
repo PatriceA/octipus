@@ -14,6 +14,7 @@ export { GoogleWorkspaceTool, googleWorkspaceTool } from './google-workspace';
 export { Microsoft365Tool, microsoft365Tool } from './microsoft365';
 export { KnowledgeTool, knowledgeTool } from './knowledge';
 export { MessagingTool, messagingTool } from './messaging';
+export { BrowserExtTool, browserExtTool } from './browser-ext';
 
 import { getToolRegistry } from './registry';
 import { filesystemTool } from './filesystem';
@@ -28,6 +29,7 @@ import { googleWorkspaceTool } from './google-workspace';
 import { microsoft365Tool } from './microsoft365';
 import { knowledgeTool } from './knowledge';
 import { messagingTool } from './messaging';
+import { browserExtTool } from './browser-ext';
 
 /**
  * Register all built-in tools
@@ -47,4 +49,5 @@ export async function registerBuiltinTools(): Promise<void> {
   await registry.register(microsoft365Tool);
   await registry.register(knowledgeTool);
   await registry.register(messagingTool);
+  await registry.register(browserExtTool);
 }

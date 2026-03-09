@@ -9,7 +9,7 @@ import type { AssistantClient } from '../client.js';
 export function registerToolModuleTools(server: McpServer, client: AssistantClient): void {
   server.tool(
     'assistant_list_tools',
-    'List all available tools and their sub-tools. Tools include: filesystem, shell, git, browser, websearch, docker.',
+    'List all available tools and their sub-tools. Tools include: filesystem, shell, git, browser, browser-ext, websearch, docker, knowledge.',
     {},
     async () => {
       try {
@@ -44,8 +44,8 @@ export function registerToolModuleTools(server: McpServer, client: AssistantClie
     'assistant_execute_tool',
     'Execute a specific tool on the assistant server. Use assistant_list_tools to see available tools. Example: tool_id="filesystem", tool_name="read_file", args={"path": "/etc/hostname"}',
     {
-      tool_id: z.string().describe('Tool ID (e.g., "filesystem", "shell", "git", "docker", "websearch", "browser")'),
-      tool_name: z.string().describe('Tool name within the tool module (e.g., "read_file", "execute", "status")'),
+      tool_id: z.string().describe('Tool ID (e.g., "filesystem", "shell", "git", "docker", "websearch", "browser", "browser-ext", "knowledge")'),
+      tool_name: z.string().describe('Tool name within the tool module (e.g., "read_file", "execute", "status", "get_tabs", "screenshot", "extract_content")'),
       args: z.record(z.unknown()).optional().default({}).describe('Arguments for the tool as a JSON object'),
     },
     async ({ tool_id, tool_name, args }) => {

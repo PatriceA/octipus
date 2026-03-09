@@ -21,7 +21,7 @@ Standalone MCP server (`mcp-server/`) that exposes assistant capabilities as MCP
 | `assistant_chat_with_expert` | Chat using a specific expert |
 | `assistant_list_experts` | List available experts |
 | `assistant_list_tools` | List available tools |
-| `assistant_execute_tool` | Execute any tool function |
+| `assistant_execute_tool` | Execute any tool (filesystem, shell, git, browser-ext, etc.) |
 | `assistant_list_skills` | List domain knowledge skills |
 | `assistant_get_skill` | Get skill details |
 | `assistant_create_skill` | Create a custom domain knowledge skill |
@@ -73,6 +73,19 @@ cd mcp-server && npm install && npm run build
   }
 }
 ```
+
+## Browser Extension via MCP
+
+CLI models can interact with your real browser through the MCP bridge:
+
+```
+assistant_execute_tool(tool_id="browser-ext", tool_name="get_tabs", args={})
+assistant_execute_tool(tool_id="browser-ext", tool_name="screenshot", args={})
+assistant_execute_tool(tool_id="browser-ext", tool_name="extract_content", args={"selector": "main"})
+assistant_execute_tool(tool_id="browser-ext", tool_name="navigate", args={"url": "https://example.com"})
+```
+
+Requires the Chrome extension to be connected. See [Browser Extension](BROWSER-EXTENSION.md).
 
 ## HTTP Transport
 

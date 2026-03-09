@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { modelConfig, type ModelConfigEntry, type NewModelConfigEntry } from '@/db/schema/models';
 import { RedisCache } from '@/db/redis';
@@ -151,7 +151,14 @@ export class ModelRegistry {
       .select()
       .from(modelConfig)
       .where(eq(modelConfig.isEnabled, true))
-      .orderBy(desc(modelConfig.priority));
+      .orderBy(desc(modelConfig.priority), asc(modelConfig.name));
+  }
+
+  async getAllModelsIncludeDisabled(): Promise<ModelConfigEntry[]> {
+    return this.db
+      .select()
+      .from(modelConfig)
+      .orderBy(desc(modelConfig.isEnabled), desc(modelConfig.priority), asc(modelConfig.name));
   }
 
   /**

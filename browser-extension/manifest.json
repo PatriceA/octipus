@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Assistant Browser Bridge",
+  "version": "1.0.0",
+  "description": "Connects your browser to the Assistant platform, enabling AI agents to interact with web pages using your existing sessions and cookies.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://localhost:3005/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

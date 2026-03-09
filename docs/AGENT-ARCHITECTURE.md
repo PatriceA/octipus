@@ -85,19 +85,19 @@ This means workers automatically receive expert-level capabilities without manua
 | orchestrator | meta-tools only | — | Routes tasks to specialists |
 | coding | filesystem, shell, git, knowledge | architecture, data-structures, db-design, api-design | Code implementation |
 | review | filesystem, git, knowledge | architecture, testing, security, performance | Code review |
-| research | browser, websearch, knowledge, filesystem | technical-writing | Investigation |
+| research | browser, browser-ext, websearch, knowledge, filesystem | technical-writing | Investigation |
 | design | browser, filesystem | design-principles, design-frameworks | UI/UX |
 | devops | shell, docker, git, filesystem | devops, containers, cloud, networking | Infrastructure |
-| security | shell, filesystem, browser, websearch, knowledge | security, networking, cloud | Security analysis |
+| security | shell, filesystem, browser, browser-ext, websearch, knowledge | security, networking, cloud | Security analysis |
 | data | shell, filesystem, knowledge | db-design, data-engineering, performance | Data/DB work |
-| ai | shell, filesystem, browser, websearch, knowledge | ai-engineering, ML, data-structures | AI/ML tasks |
-| qa | browser, shell, docker | test-automation, performance | Testing |
+| ai | shell, filesystem, browser, browser-ext, websearch, knowledge | ai-engineering, ML, data-structures | AI/ML tasks |
+| qa | browser, browser-ext, shell, docker | test-automation, performance | Testing |
 | finance | browser, websearch, filesystem | financial-analysis | Financial work |
 | automation | shell, docker, filesystem | automation-patterns, devops | Workflows |
 | pm | filesystem, messaging | project-management, technical-writing | Project mgmt |
 | writing | filesystem, browser, websearch, knowledge | technical-writing, api-design | Documentation |
 | communication | google-workspace, microsoft365, messaging | — | Email/calendar |
-| general | filesystem, shell, messaging, knowledge | — | Fallback |
+| general | filesystem, shell, messaging, knowledge, browser-ext | — | Fallback |
 
 ## Thinking Token Management
 

@@ -168,7 +168,7 @@ export function createServer() {
   // Webhooks — unauthenticated, outside /api group
   app.group('/api', (app) => app.use(webhookRoutes));
 
-  // WebSocket setup
+  // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
   setupWebSocket(app as any);
 
   return app;

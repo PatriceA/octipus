@@ -35,6 +35,7 @@ export class OrchestratorService {
   private eventHandlers: Set<OrchestratorEventHandler> = new Set();
   private approvalManager = new ApprovalManager();
   private modelSelector = new ModelSelector();
+  private _lastWorkerResult: string | null = null;
 
   onEvent(handler: OrchestratorEventHandler): () => void {
     this.eventHandlers.add(handler);
@@ -141,6 +142,10 @@ export class OrchestratorService {
 
       const startTime = Date.now();
       const { response, agentId } = await this.runOrchestrator(resolvedSessionId, userId, message, classification);
+
+      // Save the final response to DB (done here instead of agent-worker to use the correct worker result)
+      await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: response });
+      await sessionRepository.incrementMessageCount(resolvedSessionId);
 
       // Trigger async compaction check after response
       this.maybeCompactSession(resolvedSessionId).catch(err =>
@@ -424,9 +429,16 @@ export class OrchestratorService {
     });
 
     try {
+      this._lastWorkerResult = null; // Reset before orchestrator run
       const response = await worker.run(message);
-      return { response, agentId };
+
+      // Use the worker's result directly if available (avoids orchestrator paraphrasing)
+      const finalResponse = this._lastWorkerResult || response;
+      this._lastWorkerResult = null; // Clean up
+
+      return { response: finalResponse, agentId };
     } catch (error) {
+      this._lastWorkerResult = null;
       coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
       return {
         response: `I encountered an error while processing your request: ${(error as Error).message}`,
@@ -559,6 +571,9 @@ export class OrchestratorService {
         result.slice(0, 200),
         { workerId, role: agentRole, durationMs },
       ).catch(() => {});
+
+      // Store for runOrchestrator to use directly (avoids orchestrator paraphrasing)
+      this._lastWorkerResult = result;
 
       return result;
     } catch (error) {
