@@ -280,6 +280,7 @@ export class LiteLLMClient {
     const response = await this.client.embeddings.create({
       model: embeddingModel,
       input,
+      encoding_format: 'float',
     });
 
     return response.data.map((d) => d.embedding);

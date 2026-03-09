@@ -75,6 +75,8 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 
 **Optional:** Docker, PostgreSQL, Redis, Ollama, LiteLLM, SearXNG, Telegram/Slack/Teams tokens, Playwright
 
+**For RAG (knowledge base):** Requires an embedding model. Pull `nomic-embed-text` on Ollama (`ollama pull nomic-embed-text`) and register it in LiteLLM with topic `embedding`. Enables semantic search across indexed documents and code via pgvector.
+
 ## Quick Start (Embedded — Zero Dependencies)
 
 No PostgreSQL or Redis needed. Data is stored locally using PGlite (in-process WASM PostgreSQL) and in-memory cache.
