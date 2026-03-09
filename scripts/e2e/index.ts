@@ -61,6 +61,28 @@ export async function run() {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);
   }
 
+  // Cleanup: stop and remove all agents spawned during tests
+  if (fixtures.authToken) {
+    try {
+      const { data } = await client.request<{ agents: Array<{ id: string; status: string }> }>('GET', '/agents');
+      if (data.agents?.length) {
+        for (const agent of data.agents) {
+          try {
+            if (agent.status === 'running' || agent.status === 'idle') {
+              await client.request('POST', `/agents/${agent.id}/stop`);
+            }
+            await client.request('DELETE', `/agents/${agent.id}`);
+          } catch {
+            // Ignore individual cleanup failures
+          }
+        }
+        console.log(`\n\x1b[2mCleaned up ${data.agents.length} agent(s)\x1b[0m`);
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
   // Cleanup: delete test user session (logout)
   if (fixtures.authToken) {
     try {
