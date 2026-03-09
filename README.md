@@ -155,6 +155,7 @@ Make globally available: `bun link`
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | How tools, skills, experts, and agents work together |
 | **[API Reference](docs/API.md)** | Complete REST API with all endpoints |
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
+| **[RAG / Knowledge Base](docs/RAG.md)** | Embeddings, auto-indexing, and semantic search |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and solutions |

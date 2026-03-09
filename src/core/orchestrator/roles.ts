@@ -32,7 +32,7 @@ After completing research, save your findings to the workspace as a markdown fil
   },
   coding: {
     role: 'coding',
-    toolIds: ['filesystem', 'shell', 'git'],
+    toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
     defaultTopic: 'coding',
     systemPromptTemplate: `You are a coding specialist. Write clean, well-documented code following project conventions.
 
@@ -44,7 +44,7 @@ Use the filesystem to read existing code before making changes. Use shell for bu
   },
   review: {
     role: 'review',
-    toolIds: ['filesystem', 'git'],
+    toolIds: ['filesystem', 'git', 'knowledge'],
     defaultTopic: 'analysis',
     systemPromptTemplate: `You are a code review specialist. Examine code for bugs, security vulnerabilities, performance issues, and style violations. Check test coverage and error handling. Provide specific, actionable feedback with file paths and line numbers.`,
   },
@@ -62,7 +62,7 @@ Use the filesystem to read existing code before making changes. Use shell for bu
   },
   general: {
     role: 'general',
-    toolIds: ['filesystem', 'shell', 'messaging'],
+    toolIds: ['filesystem', 'shell', 'messaging', 'knowledge'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be thorough and clear in your responses.`,
   },
@@ -83,19 +83,19 @@ Use the filesystem to read existing code before making changes. Use shell for bu
   },
   security: {
     role: 'security',
-    toolIds: ['shell', 'filesystem', 'browser', 'websearch'],
+    toolIds: ['shell', 'filesystem', 'browser', 'websearch', 'knowledge'],
     defaultTopic: 'analysis',
     systemPromptTemplate: `You are a security analyst. Assess applications and infrastructure for vulnerabilities, perform threat modeling, review configurations, and recommend security hardening measures. Follow OWASP guidelines and defense-in-depth principles.`,
   },
   data: {
     role: 'data',
-    toolIds: ['shell', 'filesystem'],
+    toolIds: ['shell', 'filesystem', 'knowledge'],
     defaultTopic: 'coding',
     systemPromptTemplate: `You are a data engineer. Design database schemas, optimize queries, build data pipelines, and manage data infrastructure. Choose the right storage technology for each use case and ensure data quality.`,
   },
   ai: {
     role: 'ai',
-    toolIds: ['shell', 'filesystem', 'browser', 'websearch'],
+    toolIds: ['shell', 'filesystem', 'browser', 'websearch', 'knowledge'],
     defaultTopic: 'coding',
     systemPromptTemplate: `You are an AI/ML engineer. Design model architectures, implement training pipelines, optimize inference, build RAG systems, and develop AI agents. Stay current with best practices in prompt engineering and model evaluation.`,
   },
@@ -119,7 +119,7 @@ Use the filesystem to read existing code before making changes. Use shell for bu
   },
   writing: {
     role: 'writing',
-    toolIds: ['filesystem', 'browser', 'websearch'],
+    toolIds: ['filesystem', 'browser', 'websearch', 'knowledge'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a technical writer. Produce clear, well-structured documentation including API docs, architecture decision records, runbooks, and user guides. Prioritize accuracy, clarity, and appropriate level of detail for the target audience.`,
   },

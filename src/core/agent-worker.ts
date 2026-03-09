@@ -4,6 +4,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
 import { agentLogger } from '@/utils/logger';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import type { AgentMessage, ToolCall } from './types';
@@ -115,6 +116,16 @@ export class AgentWorker extends BaseAgentWorker {
         this.context.userId, this.context.sessionId, this.context.id,
         { durationMs, iterations: this.iteration, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
+
+      // Auto-index output into knowledge base (fire-and-forget)
+      autoIndexAgentOutput({
+        agentId: this.context.id,
+        sessionId: this.context.sessionId,
+        userId: this.context.userId,
+        role: this.context.role,
+        topic: this.context.topic,
+        output: typeof result === 'string' ? result : JSON.stringify(result),
+      }).catch(() => {}); // Never block on indexing failures
 
       return result;
     } catch (error) {
