@@ -274,6 +274,27 @@ export class AssistantClient {
     return this.request(`/api/skills/${id}`);
   }
 
+  async createSkill(params: {
+    name: string; description: string; category?: string;
+    principles?: string[]; bestPractices?: string[]; antiPatterns?: string[]; frameworks?: string[];
+  }): Promise<Record<string, unknown>> {
+    return this.request('/api/skills', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async updateSkill(id: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request(`/api/skills/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async deleteSkill(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/skills/${id}`, { method: 'DELETE' }) as Promise<{ deleted: boolean }>;
+  }
+
   // ─── Recurring Tasks ───
 
   async listRecurringTasks(): Promise<Array<{

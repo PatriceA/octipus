@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Edit, X, Loader2, Info, Lightbulb } from 'lucide-react';
+import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -260,8 +260,278 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   );
 }
 
+interface EditHookModalProps {
+  hook: Hook;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
+  const [name, setName] = useState(hook.name);
+  const [description, setDescription] = useState(hook.description || '');
+  const [trigger, setTrigger] = useState(hook.trigger);
+  const [action, setAction] = useState(hook.action);
+
+  // Trigger config
+  const [webhookPath, setWebhookPath] = useState((hook.triggerConfig?.webhookPath as string) || '');
+  const [cronExpression, setCronExpression] = useState((hook.triggerConfig?.cronExpression as string) || '');
+  const [messagePattern, setMessagePattern] = useState((hook.triggerConfig?.pattern as string) || '');
+
+  // Action config — spawn_agent
+  const [agentPrompt, setAgentPrompt] = useState((hook.actionConfig?.agentPrompt as string) || '');
+  const [orchestrated, setOrchestrated] = useState(Boolean(hook.actionConfig?.orchestrated));
+  const [agentTopic, setAgentTopic] = useState((hook.actionConfig?.agentTopic as string) || '');
+  const [agentModel, setAgentModel] = useState((hook.actionConfig?.agentModel as string) || '');
+
+  // Action config — notify
+  const [notifyChannels, setNotifyChannels] = useState((hook.actionConfig?.notifyChannels as string[] || []).join(', '));
+  const [notifyMessage, setNotifyMessage] = useState((hook.actionConfig?.notifyMessage as string) || '');
+
+  // Action config — outgoing webhook
+  const [webhookUrl, setWebhookUrl] = useState((hook.actionConfig?.webhookUrl as string) || '');
+  const [webhookMethod, setWebhookMethod] = useState((hook.actionConfig?.webhookMethod as string) || 'POST');
+  const [webhookBody, setWebhookBody] = useState((hook.actionConfig?.webhookBody as string) || '');
+
+  // Action config — n8n_workflow
+  const [workflowId, setWorkflowId] = useState((hook.actionConfig?.workflowId as string) || '');
+
+  // Action config — execute_skill (tool)
+  const [toolId, setToolId] = useState((hook.actionConfig?.toolId as string) || '');
+  const [toolAction, setToolAction] = useState((hook.actionConfig?.toolAction as string) || '');
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const buildTriggerConfig = (): Record<string, unknown> => {
+    const cfg: Record<string, unknown> = {};
+    if (trigger === 'webhook') cfg.webhookPath = webhookPath;
+    if (trigger === 'schedule') cfg.cronExpression = cronExpression;
+    if (trigger === 'message_received' && messagePattern) cfg.pattern = messagePattern;
+    return cfg;
+  };
+
+  const buildActionConfig = (): Record<string, unknown> => {
+    const cfg: Record<string, unknown> = {};
+    switch (action) {
+      case 'spawn_agent':
+        cfg.agentPrompt = agentPrompt;
+        cfg.orchestrated = orchestrated;
+        if (agentTopic) cfg.agentTopic = agentTopic;
+        if (agentModel) cfg.agentModel = agentModel;
+        break;
+      case 'notify':
+        cfg.notifyChannels = notifyChannels.split(',').map(s => s.trim()).filter(Boolean);
+        cfg.notifyMessage = notifyMessage;
+        break;
+      case 'webhook':
+        cfg.webhookUrl = webhookUrl;
+        cfg.webhookMethod = webhookMethod;
+        if (webhookBody) cfg.webhookBody = webhookBody;
+        break;
+      case 'n8n_workflow':
+        cfg.workflowId = workflowId;
+        break;
+      case 'execute_skill':
+        cfg.toolId = toolId;
+        cfg.toolAction = toolAction;
+        break;
+    }
+    return cfg;
+  };
+
+  const handleSubmit = async () => {
+    if (!name.trim()) return;
+    setIsSubmitting(true);
+    setError('');
+
+    try {
+      await api.patch(`/hooks/${hook.id}`, {
+        name,
+        description,
+        triggerConfig: buildTriggerConfig(),
+        actionConfig: buildActionConfig(),
+      });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+    setIsSubmitting(false);
+  };
+
+  const inputCls = 'w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200';
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Edit Hook</h2>
+          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-600 cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {/* Name & Description */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+            <input type="text" value={description} onChange={e => setDescription(e.target.value)} className={inputCls} />
+          </div>
+
+          {/* Trigger (read-only label + config) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Trigger</label>
+            <div className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-700 dark:text-gray-300">
+              {TRIGGER_OPTIONS.find(t => t.value === trigger)?.label || trigger}
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              {TRIGGER_OPTIONS.find(t => t.value === trigger)?.desc}
+            </p>
+          </div>
+
+          {/* Trigger-specific config */}
+          {trigger === 'webhook' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Webhook Path</label>
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-gray-500">/api/webhooks/</span>
+                <input type="text" value={webhookPath} onChange={e => setWebhookPath(e.target.value)} className={'flex-1 ' + inputCls.replace('w-full ', '')} placeholder="github" />
+              </div>
+            </div>
+          )}
+          {trigger === 'schedule' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cron Expression</label>
+              <input type="text" value={cronExpression} onChange={e => setCronExpression(e.target.value)} className={inputCls + ' font-mono'} placeholder="0 9 * * MON-FRI" />
+            </div>
+          )}
+          {trigger === 'message_received' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Message Pattern (optional regex)</label>
+              <input type="text" value={messagePattern} onChange={e => setMessagePattern(e.target.value)} className={inputCls + ' font-mono'} placeholder=".*deploy.*" />
+            </div>
+          )}
+
+          {/* Action (read-only label + config) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Action</label>
+            <div className="px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-700 dark:text-gray-300">
+              {ACTION_OPTIONS.find(a => a.value === action)?.label || action}
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              {ACTION_OPTIONS.find(a => a.value === action)?.desc}
+            </p>
+          </div>
+
+          {/* Action-specific config */}
+          {action === 'spawn_agent' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Agent Prompt</label>
+                <textarea value={agentPrompt} onChange={e => setAgentPrompt(e.target.value)} rows={3} className={inputCls} placeholder="Review the changes..." />
+                <p className="mt-1 text-xs text-gray-500">Use {'{{webhook.body.field}}'} for template variables</p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />
+                Route through orchestrator
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Topic (optional)</label>
+                  <input type="text" value={agentTopic} onChange={e => setAgentTopic(e.target.value)} className={inputCls} placeholder="coding" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model (optional)</label>
+                  <input type="text" value={agentModel} onChange={e => setAgentModel(e.target.value)} className={inputCls} placeholder="default" />
+                </div>
+              </div>
+            </>
+          )}
+
+          {action === 'notify' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Channels</label>
+                <input type="text" value={notifyChannels} onChange={e => setNotifyChannels(e.target.value)} className={inputCls} placeholder="telegram:123456, slack:general" />
+                <p className="mt-1 text-xs text-gray-500">Comma-separated, format: type:channelId</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Message Template</label>
+                <textarea value={notifyMessage} onChange={e => setNotifyMessage(e.target.value)} rows={2} className={inputCls} placeholder="Hook triggered: {{event.type}}" />
+              </div>
+            </>
+          )}
+
+          {action === 'webhook' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Webhook URL</label>
+                <input type="text" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} className={inputCls} placeholder="https://example.com/webhook" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">HTTP Method</label>
+                <select value={webhookMethod} onChange={e => setWebhookMethod(e.target.value)} className={inputCls}>
+                  <option value="POST">POST</option>
+                  <option value="GET">GET</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Body Template (optional)</label>
+                <textarea value={webhookBody} onChange={e => setWebhookBody(e.target.value)} rows={3} className={inputCls + ' font-mono'} placeholder='{"event": "{{event.type}}"}' />
+              </div>
+            </>
+          )}
+
+          {action === 'n8n_workflow' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Workflow ID</label>
+              <input type="text" value={workflowId} onChange={e => setWorkflowId(e.target.value)} className={inputCls} placeholder="1" />
+            </div>
+          )}
+
+          {action === 'execute_skill' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tool ID</label>
+                <input type="text" value={toolId} onChange={e => setToolId(e.target.value)} className={inputCls} placeholder="shell" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tool Action</label>
+                <input type="text" value={toolAction} onChange={e => setToolAction(e.target.value)} className={inputCls} placeholder="execute" />
+              </div>
+            </div>
+          )}
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100 cursor-pointer">
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={isSubmitting || !name.trim()}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
+            >
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save Changes
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HooksPage() {
   const [showCreate, setShowCreate] = useState(false);
+  const [editingHook, setEditingHook] = useState<Hook | null>(null);
   const queryClient = useQueryClient();
 
   const { data: hooks = [], isLoading } = useQuery({
@@ -435,6 +705,13 @@ export default function HooksPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <button
+                          onClick={() => setEditingHook(hook)}
+                          className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded cursor-pointer"
+                          title="Edit"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => handleDelete(hook.id)}
                           className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded cursor-pointer"
                           title="Delete"
@@ -456,6 +733,14 @@ export default function HooksPage() {
         onClose={() => setShowCreate(false)}
         onCreated={() => queryClient.invalidateQueries({ queryKey: ['hooks'] })}
       />
+
+      {editingHook && (
+        <EditHookModal
+          hook={editingHook}
+          onClose={() => setEditingHook(null)}
+          onSaved={() => queryClient.invalidateQueries({ queryKey: ['hooks'] })}
+        />
+      )}
     </div>
   );
 }

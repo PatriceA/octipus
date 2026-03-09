@@ -24,6 +24,9 @@ Standalone MCP server (`mcp-server/`) that exposes assistant capabilities as MCP
 | `assistant_execute_tool` | Execute any tool function |
 | `assistant_list_skills` | List domain knowledge skills |
 | `assistant_get_skill` | Get skill details |
+| `assistant_create_skill` | Create a custom domain knowledge skill |
+| `assistant_update_skill` | Update an existing skill |
+| `assistant_delete_skill` | Delete a custom skill |
 | `assistant_search_knowledge` | Search the RAG knowledge base |
 | `assistant_index_file` | Index a file into the knowledge base |
 | `assistant_create_recurring_task` | Create a scheduled task |

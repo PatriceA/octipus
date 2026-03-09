@@ -33,7 +33,7 @@ WEB_PORT="${WEB_PORT:-3007}"
 # Detect storage mode from .env
 STORAGE_MODE="embedded"
 if [[ -f "$PROJECT_DIR/.env" ]]; then
-  _mode=$(grep -E '^STORAGE_MODE=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
+  _mode=$(grep -E '^STORAGE_MODE=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
   if [[ -n "$_mode" ]]; then
     STORAGE_MODE="$_mode"
   fi

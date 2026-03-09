@@ -14,8 +14,9 @@ import { SecretsView } from './views/secrets.js';
 import { SettingsView } from './views/settings.js';
 import { IntegrationsView } from './views/integrations.js';
 import { TasksView } from './views/tasks.js';
+import { SkillsView } from './views/skills.js';
 
-type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations' | 'tasks';
+type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations' | 'tasks' | 'skills';
 
 function App() {
   const { exit } = useApp();
@@ -38,6 +39,7 @@ function App() {
     if (input === '8') setCurrentView('integrations');
     if (input === '9') setCurrentView('settings');
     if (input === '0') setCurrentView('tasks');
+    if (input === 's') setCurrentView('skills');
     if (input === 'q') exit();
   });
 
@@ -63,6 +65,8 @@ function App() {
         return <SettingsView />;
       case 'tasks':
         return <TasksView />;
+      case 'skills':
+        return <SkillsView />;
       default:
         return <DashboardView />;
     }
@@ -86,6 +90,7 @@ function App() {
           <Text color="yellow">[3]</Text><Text color="white">Chat </Text>
           <Text color="yellow">[4]</Text><Text color="white">Logs </Text>
           <Text color="yellow">[5]</Text><Text color="white">Models </Text>
+          <Text color="yellow">[s]</Text><Text color="white">Skills </Text>
           <Text color="yellow">[6]</Text><Text color="white">Pipes </Text>
           <Text color="yellow">[7]</Text><Text color="white">Secrets </Text>
           <Text color="yellow">[8]</Text><Text color="white">Integ </Text>

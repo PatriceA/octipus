@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
   Loader2,
@@ -12,6 +12,10 @@ import {
   ThumbsUp,
   AlertTriangle,
   Layers,
+  Plus,
+  Pencil,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -28,6 +32,8 @@ interface Skill {
   isSystem: boolean;
 }
 
+const CATEGORIES = ['engineering', 'design', 'security', 'devops', 'data', 'ai', 'management', 'finance', 'science', 'other'];
+
 const CATEGORY_COLORS: Record<string, string> = {
   engineering: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
   design: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
@@ -43,7 +49,440 @@ function getCategoryColor(category: string): string {
   return CATEGORY_COLORS[category] || 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
 }
 
-function SkillCard({ skill }: { skill: Skill }) {
+// --- Array field input component ---
+function ArrayFieldInput({
+  label,
+  items,
+  onAdd,
+  onRemove,
+}: {
+  label: string;
+  items: string[];
+  onAdd: (item: string) => void;
+  onRemove: (index: number) => void;
+}) {
+  const [value, setValue] = useState('');
+
+  const handleAdd = () => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      onAdd(trimmed);
+      setValue('');
+    }
+  };
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
+      <div className="flex gap-2 mb-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              handleAdd();
+            }
+          }}
+          placeholder={`Add ${label.toLowerCase()}...`}
+          className="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+        />
+        <button
+          type="button"
+          onClick={handleAdd}
+          className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+        >
+          Add
+        </button>
+      </div>
+      {items.length > 0 && (
+        <div className="space-y-1">
+          {items.map((item, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-lg px-3 py-1.5">
+              <span className="flex-1">{item}</span>
+              <button
+                type="button"
+                onClick={() => onRemove(i)}
+                className="text-gray-400 hover:text-red-500 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Create Skill Dialog ---
+function CreateSkillDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState('engineering');
+  const [description, setDescription] = useState('');
+  const [principles, setPrinciples] = useState<string[]>([]);
+  const [bestPractices, setBestPractices] = useState<string[]>([]);
+  const [antiPatterns, setAntiPatterns] = useState<string[]>([]);
+  const [frameworks, setFrameworks] = useState<string[]>([]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError('Name is required');
+      return;
+    }
+    setError('');
+    setSubmitting(true);
+    try {
+      await api.post('/skills', {
+        name: name.trim(),
+        category,
+        description: description.trim(),
+        principles,
+        bestPractices,
+        antiPatterns,
+        frameworks,
+      });
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create skill');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Create Skill</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {error && (
+            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Skill name"
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+            >
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Skill description"
+              rows={3}
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-none"
+            />
+          </div>
+
+          <ArrayFieldInput
+            label="Principles"
+            items={principles}
+            onAdd={(item) => setPrinciples([...principles, item])}
+            onRemove={(i) => setPrinciples(principles.filter((_, idx) => idx !== i))}
+          />
+
+          <ArrayFieldInput
+            label="Best Practices"
+            items={bestPractices}
+            onAdd={(item) => setBestPractices([...bestPractices, item])}
+            onRemove={(i) => setBestPractices(bestPractices.filter((_, idx) => idx !== i))}
+          />
+
+          <ArrayFieldInput
+            label="Anti-Patterns"
+            items={antiPatterns}
+            onAdd={(item) => setAntiPatterns([...antiPatterns, item])}
+            onRemove={(i) => setAntiPatterns(antiPatterns.filter((_, idx) => idx !== i))}
+          />
+
+          <ArrayFieldInput
+            label="Frameworks"
+            items={frameworks}
+            onAdd={(item) => setFrameworks([...frameworks, item])}
+            onRemove={(i) => setFrameworks(frameworks.filter((_, idx) => idx !== i))}
+          />
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 cursor-pointer"
+            >
+              {submitting ? 'Creating...' : 'Create Skill'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// --- Edit Skill Dialog ---
+function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const [name, setName] = useState(skill.name);
+  const [category, setCategory] = useState(skill.category);
+  const [description, setDescription] = useState(skill.description);
+  const [principles, setPrinciples] = useState<string[]>([...skill.principles]);
+  const [bestPractices, setBestPractices] = useState<string[]>([...skill.bestPractices]);
+  const [antiPatterns, setAntiPatterns] = useState<string[]>([...skill.antiPatterns]);
+  const [frameworks, setFrameworks] = useState<string[]>([...skill.frameworks]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError('Name is required');
+      return;
+    }
+    setError('');
+    setSubmitting(true);
+    try {
+      await api.patch(`/skills/${skill.id}`, {
+        name: name.trim(),
+        category,
+        description: description.trim(),
+        principles,
+        bestPractices,
+        antiPatterns,
+        frameworks,
+      });
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update skill');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Edit Skill</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {error && (
+            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Skill name"
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+            >
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Skill description"
+              rows={3}
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-none"
+            />
+          </div>
+
+          <ArrayFieldInput
+            label="Principles"
+            items={principles}
+            onAdd={(item) => setPrinciples([...principles, item])}
+            onRemove={(i) => setPrinciples(principles.filter((_, idx) => idx !== i))}
+          />
+
+          <ArrayFieldInput
+            label="Best Practices"
+            items={bestPractices}
+            onAdd={(item) => setBestPractices([...bestPractices, item])}
+            onRemove={(i) => setBestPractices(bestPractices.filter((_, idx) => idx !== i))}
+          />
+
+          <ArrayFieldInput
+            label="Anti-Patterns"
+            items={antiPatterns}
+            onAdd={(item) => setAntiPatterns([...antiPatterns, item])}
+            onRemove={(i) => setAntiPatterns(antiPatterns.filter((_, idx) => idx !== i))}
+          />
+
+          <ArrayFieldInput
+            label="Frameworks"
+            items={frameworks}
+            onAdd={(item) => setFrameworks([...frameworks, item])}
+            onRemove={(i) => setFrameworks(frameworks.filter((_, idx) => idx !== i))}
+          />
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 cursor-pointer"
+            >
+              {submitting ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// --- Delete Confirm Dialog ---
+function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    setError('');
+    setDeleting(true);
+    try {
+      await api.delete(`/skills/${skill.id}`);
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete skill');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Delete Skill</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {error && (
+            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
+
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            Are you sure you want to delete <strong>{skill.name}</strong>? This action cannot be undone.
+          </p>
+
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+            >
+              {deleting ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Skill Card ---
+function SkillCard({
+  skill,
+  onEdit,
+  onDelete,
+}: {
+  skill: Skill;
+  onEdit: (skill: Skill) => void;
+  onDelete: (skill: Skill) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -71,6 +510,30 @@ function SkillCard({ skill }: { skill: Skill }) {
             <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
               system
             </span>
+          )}
+          {!skill.isSystem && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit(skill);
+                }}
+                className="p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+                title="Edit skill"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(skill);
+                }}
+                className="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+                title="Delete skill"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
           )}
         </div>
       </button>
@@ -149,6 +612,9 @@ function SkillCard({ skill }: { skill: Skill }) {
 export default function SkillsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
+  const [deletingSkill, setDeletingSkill] = useState<Skill | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['skills'],
@@ -184,12 +650,19 @@ export default function SkillsPage() {
         <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
           <BookOpen className="w-5 h-5 text-primary-600 dark:text-primary-400" />
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Skills</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {skills.length} domain knowledge skills across {categories.length} categories
           </p>
         </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 cursor-pointer"
+        >
+          <Plus className="w-4 h-4" />
+          Create Skill
+        </button>
       </div>
 
       <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -251,10 +724,20 @@ export default function SkillsPage() {
       ) : (
         <div className="space-y-3">
           {filtered.map((skill) => (
-            <SkillCard key={skill.id} skill={skill} />
+            <SkillCard
+              key={skill.id}
+              skill={skill}
+              onEdit={setEditingSkill}
+              onDelete={setDeletingSkill}
+            />
           ))}
         </div>
       )}
+
+      {/* Dialogs */}
+      {showCreate && <CreateSkillDialog onClose={() => setShowCreate(false)} />}
+      {editingSkill && <EditSkillDialog skill={editingSkill} onClose={() => setEditingSkill(null)} />}
+      {deletingSkill && <DeleteSkillDialog skill={deletingSkill} onClose={() => setDeletingSkill(null)} />}
     </div>
   );
 }
