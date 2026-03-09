@@ -55,19 +55,24 @@ export function setupWebSocket(app: Elysia): void {
         apiLogger.debug({ userId: session.userId }, 'Closed previous WebSocket connection');
       }
 
+      // Safe send helper — prevents crashes when WebSocket is closed
+      const safeSend = (data: unknown) => {
+        try { ws.send(JSON.stringify(data)); } catch { /* connection closed */ }
+      };
+
       // Subscribe to agent events for this user
       const agentManager = getAgentManager();
       const unsubscribe = agentManager.onEvent((event) => {
         // Only send events for agents belonging to this user
         const agent = agentManager.get(event.agentId);
         if (agent?.getContext().userId === session.userId) {
-          ws.send(JSON.stringify({
+          safeSend({
             type: 'agent_event',
             event: event.type,
             agentId: event.agentId,
             data: event.data,
             timestamp: event.timestamp,
-          }));
+          });
         }
       });
 
@@ -76,23 +81,23 @@ export function setupWebSocket(app: Elysia): void {
       const unsubscribeOrchestrator = orchestrator.onEvent((event) => {
         // Only send events belonging to this user
         if (event.userId && event.userId !== session.userId) return;
-        ws.send(JSON.stringify({
+        safeSend({
           type: 'orchestrator_event',
           event: event.type,
           sessionId: event.sessionId,
           data: event.data,
           timestamp: event.timestamp,
-        }));
+        });
       });
 
       // Subscribe to permission requests for this user
       const permissionManager = getPermissionManager();
       const unsubscribePermissions = permissionManager.onRequest?.((request: any) => {
         if (request.userId === session.userId) {
-          ws.send(JSON.stringify({
+          safeSend({
             type: 'permission_request',
             ...request,
-          }));
+          });
         }
       });
 

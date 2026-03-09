@@ -1,9 +1,12 @@
 import { spawn, type ChildProcess } from 'child_process';
+import { resolve as resolvePath } from 'path';
 import { getModelRegistry } from '@/models/model-registry';
+import { getConfig } from '@/config';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { agentLogger } from '@/utils/logger';
+import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { getCLIToolConfig } from './cli-agent-factory';
 import { BaseAgentWorker } from './agent-base';
@@ -82,6 +85,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
         this.context.userId, this.context.sessionId, this.context.id,
         { durationMs: Date.now() - this.context.createdAt.getTime(), iterations: this.iteration, model: this.context.model, role: this.context.role },
       );
+
+      // Auto-index output into knowledge base (fire-and-forget)
+      autoIndexAgentOutput({
+        agentId: this.context.id,
+        sessionId: this.context.sessionId,
+        userId: this.context.userId,
+        role: this.context.role,
+        topic: this.context.topic,
+        output: result,
+      }).catch(() => {});
 
       return result;
     } catch (error) {
@@ -169,8 +182,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const env = { ...process.env };
       delete env.CLAUDECODE;
 
+      // Run in workspace root, not the assistant project directory
+      let workspaceCwd: string;
+      try {
+        workspaceCwd = resolvePath(getConfig().workspace.rootPath);
+      } catch {
+        workspaceCwd = process.cwd();
+      }
+
       const proc = spawn(binary, args, {
         env,
+        cwd: workspaceCwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: this.config.timeout,
       });

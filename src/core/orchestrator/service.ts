@@ -403,9 +403,6 @@ export class OrchestratorService {
       systemPrompt += `\n\nThe user's message could not be confidently classified. Analyze it yourself and decide the best course of action.`;
     }
 
-    const config = getConfig();
-    const workerTimeout = config.agent.defaultTimeout;
-
     const worker = await agentManager.spawn({
       sessionId,
       userId,
@@ -415,7 +412,7 @@ export class OrchestratorService {
       systemPrompt,
       tools: metaTools,
       maxIterations: 10,
-      timeout: workerTimeout * 2 + 60_000,
+      timeout: 0, // No timeout — orchestrator delegates to workers which have their own timeouts
     });
 
     const agentId = worker.getContext().id;

@@ -12,19 +12,59 @@ export interface RoutingDecision {
 const TOPIC_KEYWORDS: Record<string, string[]> = {
   coding: [
     'code', 'function', 'bug', 'error', 'implement', 'debug', 'fix', 'refactor',
-    'typescript', 'javascript', 'python', 'rust', 'go', 'java', 'sql',
-    'api', 'database', 'backend', 'frontend', 'test', 'deploy',
+    'typescript', 'javascript', 'python', 'rust', 'go', 'java',
+    'api', 'backend', 'frontend', 'compile', 'build', 'package',
   ],
   analysis: [
     'analyze', 'review', 'explain', 'understand', 'compare', 'evaluate',
-    'pros', 'cons', 'architecture', 'design', 'pattern', 'best practice',
+    'pros', 'cons', 'architecture', 'pattern', 'best practice',
   ],
   chat: [
     'hello', 'hi', 'hey', 'thanks', 'help', 'how are', 'what is',
-    'tell me', 'explain', 'simple', 'quick',
+    'tell me', 'simple', 'quick',
   ],
   embedding: [
-    'embed', 'vector', 'similarity', 'search', 'semantic',
+    'embed', 'vector', 'similarity', 'semantic',
+  ],
+  design: [
+    'ui', 'ux', 'layout', 'color', 'font', 'responsive', 'accessibility',
+    'wireframe', 'mockup', 'figma', 'css', 'tailwind', 'style',
+  ],
+  devops: [
+    'docker', 'container', 'kubernetes', 'k8s', 'ci/cd', 'pipeline', 'deploy',
+    'nginx', 'infrastructure', 'terraform', 'ansible', 'helm', 'compose',
+  ],
+  security: [
+    'security', 'vulnerability', 'owasp', 'xss', 'injection', 'auth',
+    'encryption', 'certificate', 'firewall', 'pentest', 'threat',
+  ],
+  data: [
+    'database', 'sql', 'postgres', 'mysql', 'redis', 'migration',
+    'schema', 'query', 'etl', 'data pipeline', 'warehouse',
+  ],
+  ai: [
+    'machine learning', 'ml', 'model', 'training', 'inference', 'rag',
+    'llm', 'prompt', 'fine-tune', 'embedding', 'neural', 'transformer',
+  ],
+  qa: [
+    'test', 'testing', 'playwright', 'selenium', 'e2e', 'unit test',
+    'integration test', 'coverage', 'regression', 'bug report',
+  ],
+  finance: [
+    'finance', 'stock', 'market', 'investment', 'revenue', 'budget',
+    'forecast', 'accounting', 'portfolio', 'trading',
+  ],
+  automation: [
+    'workflow', 'automate', 'cron', 'schedule', 'n8n', 'webhook',
+    'trigger', 'bpmn', 'orchestrate', 'batch',
+  ],
+  pm: [
+    'project', 'milestone', 'sprint', 'kanban', 'roadmap', 'timeline',
+    'estimate', 'stakeholder', 'backlog', 'requirement',
+  ],
+  writing: [
+    'document', 'documentation', 'readme', 'guide', 'tutorial',
+    'blog', 'article', 'report', 'specification', 'changelog',
   ],
 };
 
@@ -153,10 +193,20 @@ export class Router {
           {
             role: 'system',
             content: `You are a message classifier. Classify the user's message into one of these topics:
-- coding: Programming, debugging, implementation tasks
-- analysis: Code review, architecture discussion, comparisons
+- coding: Programming, debugging, implementation
+- analysis: Code review, architecture, comparisons
 - chat: General conversation, simple questions
-- embedding: Vector/semantic search related
+- embedding: Vector/semantic search
+- design: UI/UX, layout, styling
+- devops: Docker, CI/CD, infrastructure, deployment
+- security: Security analysis, vulnerabilities
+- data: Databases, SQL, data pipelines
+- ai: Machine learning, LLMs, RAG
+- qa: Testing, QA, bug reports
+- finance: Financial analysis, markets
+- automation: Workflows, scheduling
+- pm: Project management, planning
+- writing: Documentation, technical writing
 
 Respond with ONLY the topic name, nothing else.`,
             timestamp: new Date(),
@@ -172,7 +222,7 @@ Respond with ONLY the topic name, nothing else.`,
       });
 
       const topic = result.content.trim().toLowerCase();
-      const validTopics = ['coding', 'analysis', 'chat', 'embedding'];
+      const validTopics = ['coding', 'analysis', 'chat', 'embedding', 'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing'];
 
       if (validTopics.includes(topic)) {
         const model = await registry.getModelForTopic(topic);

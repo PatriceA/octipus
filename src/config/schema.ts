@@ -111,7 +111,7 @@ export const loggingConfigSchema = z.object({
 // Agent configuration schema
 export const agentConfigSchema = z.object({
   maxConcurrentAgents: z.number().min(1).max(100).default(10),
-  defaultTimeout: z.number().min(0).default(300000), // 5 minutes
+  defaultTimeout: z.number().min(0).default(900000), // 15 minutes
   maxIterations: z.number().min(1).max(1000).default(50),
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited

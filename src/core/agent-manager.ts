@@ -112,10 +112,10 @@ export class AgentManager {
     };
 
     const workerConfig: AgentWorkerConfig = {
-      maxIterations: options.maxIterations || config.agent.maxIterations,
+      maxIterations: options.maxIterations ?? config.agent.maxIterations,
       contextWindowSize: config.agent.contextWindowSize,
-      timeout: options.timeout || config.agent.defaultTimeout,
-      maxTokenBudget: options.maxTokenBudget || config.agent.maxTokenBudget,
+      timeout: options.timeout ?? config.agent.defaultTimeout,
+      maxTokenBudget: options.maxTokenBudget ?? config.agent.maxTokenBudget,
     };
 
     // Determine if this is a CLI model (autonomous sub-agent)

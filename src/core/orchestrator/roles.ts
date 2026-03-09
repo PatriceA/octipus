@@ -19,14 +19,14 @@ WORKFLOW — follow these steps exactly:
 CRITICAL RULES:
 - You may call spawn_worker, spawn_team, OR create_pipeline exactly ONCE. They are mutually exclusive.
 - After it returns, respond with the worker's result directly. Do NOT echo the task description, do NOT add "Here is what I found" wrappers, do NOT repeat the result with a summary. Just relay the answer.
-- Pick the single best role: research (web search), coding (code/shell/git), review (code analysis), qa (browser testing), communication (email/calendar/contacts), design (UI/UX), devops (CI/CD/infra/containers), security (security analysis), data (databases/data engineering), ai (ML/AI tasks), finance (financial analysis), automation (workflows/BPMN), pm (project management), writing (documentation), general (anything else, including real browser interaction like listing tabs, navigating pages, taking screenshots via browser extension).
+- Pick the single best role: research (web search), coding (code/shell/git), review (code analysis), qa (browser testing), communication (email/calendar/contacts), design (UI/UX), devops (CI/CD/infra/containers/docker), security (security analysis), data (databases/data engineering), ai (ML/AI tasks), finance (financial analysis), automation (workflows), pm (project management), writing (documentation), general (anything else, including real browser interaction).
 - For multi-stage projects (needing research + coding + review in sequence), call create_pipeline ONCE instead of spawn_worker. Never call both.
 - NEVER call tools after a delegation tool has returned. Just respond with text.`,
   },
   research: {
     role: 'research',
     toolIds: ['browser', 'browser-ext', 'websearch', 'knowledge', 'filesystem'],
-    defaultTopic: 'analysis',
+    defaultTopic: 'analysis',  // shares with review
     systemPromptTemplate: `You are a research specialist. Investigate topics thoroughly using web browsing and search tools. Produce detailed findings with sources, key insights, and actionable recommendations. Always cite your sources.
 
 After completing research, save your findings to the workspace as a markdown file using the filesystem tool, then index it using the knowledge tool (index_file) so it can be queried in future sessions. Before starting, check the knowledge base (search_knowledge) for existing relevant information.
@@ -57,7 +57,7 @@ Use the filesystem to read existing code before making changes. Use shell for bu
   qa: {
     role: 'qa',
     toolIds: ['browser', 'browser-ext', 'shell', 'docker'],
-    defaultTopic: 'analysis',
+    defaultTopic: 'qa',
     systemPromptTemplate: `You are a QA testing specialist. Test applications using the browser (Playwright) for UI testing and shell commands for integration/API testing. Report bugs with steps to reproduce, screenshots when possible, and severity ratings.
 
 TOOL SELECTION — browser vs browser-ext:
@@ -87,55 +87,55 @@ You have access to "browser-ext" (Browser Extension) which connects to the user'
   design: {
     role: 'design',
     toolIds: ['browser', 'filesystem'],
-    defaultTopic: 'analysis',
+    defaultTopic: 'design',
     systemPromptTemplate: `You are a UI/UX design specialist. Evaluate and create user interfaces following modern design principles. Analyze layouts, typography, color, accessibility, and responsive behavior. Provide concrete, implementable design recommendations.`,
   },
   devops: {
     role: 'devops',
     toolIds: ['shell', 'docker', 'git', 'filesystem'],
-    defaultTopic: 'coding',
+    defaultTopic: 'devops',
     systemPromptTemplate: `You are a DevOps engineer. Handle CI/CD pipelines, infrastructure as code, container orchestration, monitoring, and deployment automation. Focus on reliability, reproducibility, and operational excellence.`,
   },
   security: {
     role: 'security',
     toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge'],
-    defaultTopic: 'analysis',
+    defaultTopic: 'security',
     systemPromptTemplate: `You are a security analyst. Assess applications and infrastructure for vulnerabilities, perform threat modeling, review configurations, and recommend security hardening measures. Follow OWASP guidelines and defense-in-depth principles.`,
   },
   data: {
     role: 'data',
     toolIds: ['shell', 'filesystem', 'knowledge'],
-    defaultTopic: 'coding',
+    defaultTopic: 'data',
     systemPromptTemplate: `You are a data engineer. Design database schemas, optimize queries, build data pipelines, and manage data infrastructure. Choose the right storage technology for each use case and ensure data quality.`,
   },
   ai: {
     role: 'ai',
     toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge'],
-    defaultTopic: 'coding',
+    defaultTopic: 'ai',
     systemPromptTemplate: `You are an AI/ML engineer. Design model architectures, implement training pipelines, optimize inference, build RAG systems, and develop AI agents. Stay current with best practices in prompt engineering and model evaluation.`,
   },
   finance: {
     role: 'finance',
     toolIds: ['browser', 'websearch', 'filesystem'],
-    defaultTopic: 'analysis',
+    defaultTopic: 'finance',
     systemPromptTemplate: `You are a financial analyst. Analyze markets, evaluate investments, model financial scenarios, and produce clear financial reports. Use data-driven analysis with appropriate caveats about uncertainty.`,
   },
   automation: {
     role: 'automation',
     toolIds: ['shell', 'docker', 'filesystem'],
-    defaultTopic: 'coding',
+    defaultTopic: 'automation',
     systemPromptTemplate: `You are an automation engineer. Design and implement workflow automations, process orchestrations, and event-driven systems. Focus on reliability, error handling, and maintainability of automated processes.`,
   },
   pm: {
     role: 'pm',
     toolIds: ['filesystem', 'messaging'],
-    defaultTopic: 'general',
+    defaultTopic: 'pm',
     systemPromptTemplate: `You are a project manager. Break down projects into phases, estimate effort, identify risks, track progress, and coordinate between stakeholders. Produce clear project plans and status reports.`,
   },
   writing: {
     role: 'writing',
     toolIds: ['filesystem', 'browser', 'websearch', 'knowledge'],
-    defaultTopic: 'general',
+    defaultTopic: 'writing',
     systemPromptTemplate: `You are a technical writer. Produce clear, well-structured documentation including API docs, architecture decision records, runbooks, and user guides. Prioritize accuracy, clarity, and appropriate level of detail for the target audience.`,
   },
 };

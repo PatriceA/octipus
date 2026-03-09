@@ -256,47 +256,109 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [activeSessionId, loadSessionMessages, loadSessions]);
 
-  // WebSocket
+  // Check for pending approvals (polling fallback when WebSocket reconnects or events are missed)
+  const checkPendingApprovals = useCallback(async () => {
+    try {
+      const res = await api.get('/chat/approvals/pending');
+      if (res?.approvals?.length > 0 && !pendingApproval) {
+        const a = res.approvals[0];
+        setPendingApproval({
+          requestId: a.requestId,
+          summary: a.summary,
+          question: a.question,
+          options: a.options,
+        });
+      }
+    } catch { /* ignore */ }
+  }, [pendingApproval]);
+
+  // WebSocket with auto-reconnection
+  const reconnectDelay = useRef(1000);
+
   useEffect(() => {
     if (!mounted) return;
     const token = api.getToken();
     if (!token) return;
 
-    if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) {
-      wsRef.current = wsInstance;
-      wsInstance.onmessage = (event) => {
-        try { handleWsMessage(JSON.parse(event.data)); } catch {}
-      };
-      setConnectionStatus(wsInstance.readyState === WebSocket.OPEN ? 'connected' : 'connecting');
-      return;
-    }
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
-    let ws: WebSocket;
-    try {
-      ws = createWebSocket('/ws');
-      wsInstance = ws;
-      wsRef.current = ws;
-      ws.onopen = () => setConnectionStatus('connected');
-      ws.onmessage = (event) => {
-        try { handleWsMessage(JSON.parse(event.data)); } catch {}
-      };
-      ws.onclose = (event) => {
-        if (event.code === 4000) return;
-        if (wsInstance === ws) {
-          setConnectionStatus('disconnected');
-          wsRef.current = null;
-          wsInstance = null;
+    const connect = () => {
+      if (cancelled) return;
+
+      if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) {
+        wsRef.current = wsInstance;
+        wsInstance.onmessage = (event) => {
+          try { handleWsMessage(JSON.parse(event.data)); } catch {}
+        };
+        setConnectionStatus(wsInstance.readyState === WebSocket.OPEN ? 'connected' : 'connecting');
+        return;
+      }
+
+      let ws: WebSocket;
+      try {
+        ws = createWebSocket('/ws');
+        wsInstance = ws;
+        wsRef.current = ws;
+        ws.onopen = () => {
+          setConnectionStatus('connected');
+          reconnectDelay.current = 1000; // Reset backoff on successful connect
+          // Check for any approvals that arrived while disconnected
+          checkPendingApprovals();
+        };
+        ws.onmessage = (event) => {
+          try { handleWsMessage(JSON.parse(event.data)); } catch {}
+        };
+        ws.onclose = (event) => {
+          if (event.code === 4000) return; // Superseded by new connection
+          if (cancelled) return;
+          if (wsInstance === ws) {
+            setConnectionStatus('disconnected');
+            wsRef.current = null;
+            wsInstance = null;
+            // Auto-reconnect with exponential backoff (max 30s)
+            reconnectTimer = setTimeout(() => {
+              reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, 30000);
+              connect();
+            }, reconnectDelay.current);
+          }
+        };
+        ws.onerror = () => {
+          if (wsInstance === ws) setConnectionStatus('disconnected');
+        };
+      } catch {
+        setConnectionStatus('disconnected');
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, reconnectDelay.current);
         }
-      };
-      ws.onerror = () => {
-        if (wsInstance === ws) setConnectionStatus('disconnected');
-      };
-    } catch {
-      setConnectionStatus('disconnected');
-    }
+      }
+    };
 
-    return () => {};
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
+
+  // Periodic approval poll (every 15s) as fallback for missed WebSocket events
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(checkPendingApprovals, 15_000);
+    return () => clearInterval(interval);
+  }, [mounted, checkPendingApprovals]);
+
+  // WebSocket keepalive ping every 30s to prevent idle disconnection
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
   }, [mounted]);
 
   const handleWsMessage = (data: any) => {
@@ -398,6 +460,25 @@ export default function ChatPage() {
           options: (data.data as any).options,
         });
         break;
+
+      case 'pipeline_event': {
+        const pe = data.data as any;
+        switch (pe.event) {
+          case 'pipeline_created':
+            setStatusMessage(`Pipeline "${pe.title}" started (${pe.stageCount} stages)`);
+            break;
+          case 'stage_started':
+            setStatusMessage(`Stage ${(pe.index ?? 0) + 1}: ${pe.name}...`);
+            break;
+          case 'stage_completed':
+            setStatusMessage(`Stage "${pe.name}" completed`);
+            break;
+          case 'pipeline_completed':
+            setStatusMessage(null);
+            break;
+        }
+        break;
+      }
 
       case 'worker_spawned': {
         const d = data.data as any;

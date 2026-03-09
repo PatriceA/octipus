@@ -105,4 +105,30 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       }),
       detail: { tags: ['chat'] },
     },
+  )
+
+  // Get pending approvals (polling fallback when WebSocket disconnects)
+  .get(
+    '/approvals/pending',
+    async ({ user }) => {
+      if (!user) {
+        return { error: 'Not authenticated' };
+      }
+
+      const orchestrator = getOrchestratorService();
+      const pending = orchestrator.getPendingApprovals();
+
+      return {
+        approvals: pending.map((a) => ({
+          requestId: a.id,
+          summary: a.summary,
+          question: a.question,
+          options: a.options,
+          createdAt: a.createdAt,
+        })),
+      };
+    },
+    {
+      detail: { tags: ['chat'] },
+    },
   );

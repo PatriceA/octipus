@@ -105,9 +105,10 @@ export class PipelineManager {
         });
 
         // Request approval from user
+        const prevStageName = i > 0 ? stages[i - 1].name : 'Initial';
         const approvalResult = await orchestrator.requestApproval(
-          `Pipeline "${title}" — Stage "${stage.name}" complete.\n\nResult:\n${(previousOutput || '').slice(0, 2000)}`,
-          `Proceed with "${stages[i]?.name || 'next stage'}"?`,
+          `Pipeline "${title}" — Stage "${prevStageName}" completed.\n\nResult:\n${(previousOutput || '').slice(0, 2000)}`,
+          `Proceed with next stage: "${stage.name}"?`,
           context,
           ['Approve', 'Skip', 'Stop Pipeline'],
         ) as { approved: boolean; response?: string };
