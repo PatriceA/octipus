@@ -259,7 +259,7 @@ export default function ChatPage() {
   // Check for pending approvals (polling fallback when WebSocket reconnects or events are missed)
   const checkPendingApprovals = useCallback(async () => {
     try {
-      const res = await api.get('/chat/approvals/pending');
+      const res = await api.get<{ approvals: ApprovalRequest[] }>('/chat/approvals/pending');
       if (res?.approvals?.length > 0 && !pendingApproval) {
         const a = res.approvals[0];
         setPendingApproval({
