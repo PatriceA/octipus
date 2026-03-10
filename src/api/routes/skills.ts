@@ -61,6 +61,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         name: body.name,
         category: body.category ?? 'engineering',
         description: body.description,
+        content: body.content ?? '',
         principles: body.principles ?? [],
         bestPractices: body.bestPractices ?? [],
         antiPatterns: body.antiPatterns ?? [],
@@ -77,6 +78,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         name: t.String(),
         category: t.Optional(t.String()),
         description: t.String(),
+        content: t.Optional(t.String()),
         principles: t.Optional(t.Array(t.String())),
         bestPractices: t.Optional(t.Array(t.String())),
         antiPatterns: t.Optional(t.Array(t.String())),
@@ -101,6 +103,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       if (body.name !== undefined) updateData.name = body.name;
       if (body.category !== undefined) updateData.category = body.category;
       if (body.description !== undefined) updateData.description = body.description;
+      if (body.content !== undefined) updateData.content = body.content;
       if (body.principles !== undefined) updateData.principles = body.principles;
       if (body.bestPractices !== undefined) updateData.bestPractices = body.bestPractices;
       if (body.antiPatterns !== undefined) updateData.antiPatterns = body.antiPatterns;
@@ -120,6 +123,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         name: t.Optional(t.String()),
         category: t.Optional(t.String()),
         description: t.Optional(t.String()),
+        content: t.Optional(t.String()),
         principles: t.Optional(t.Array(t.String())),
         bestPractices: t.Optional(t.Array(t.String())),
         antiPatterns: t.Optional(t.Array(t.String())),

@@ -50,15 +50,16 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
 
   server.tool(
     'assistant_create_skill',
-    'Create a new domain knowledge skill with principles, best practices, anti-patterns, and frameworks.',
+    'Create a new domain knowledge skill. Supports two modes: (1) Markdown content — paste a Claude Code-style .md skill definition into the "content" field, or (2) Structured — provide principles, best practices, anti-patterns, and frameworks as arrays. When content is set, it takes priority over structured fields.',
     {
       name: z.string().describe('Unique skill name (e.g., "cloud-infrastructure")'),
       description: z.string().describe('Short description of the skill domain'),
       category: z.string().optional().default('engineering').describe('Skill category (default: "engineering")'),
-      principles: z.array(z.string()).optional().describe('Core principles for this domain'),
-      bestPractices: z.array(z.string()).optional().describe('Recommended best practices'),
-      antiPatterns: z.array(z.string()).optional().describe('Common anti-patterns to avoid'),
-      frameworks: z.array(z.string()).optional().describe('Related frameworks or tools'),
+      content: z.string().optional().describe('Markdown content — paste a full skill definition here (Claude Code .md format). When set, this is used directly as the skill prompt instead of structured fields.'),
+      principles: z.array(z.string()).optional().describe('Core principles for this domain (structured mode)'),
+      bestPractices: z.array(z.string()).optional().describe('Recommended best practices (structured mode)'),
+      antiPatterns: z.array(z.string()).optional().describe('Common anti-patterns to avoid (structured mode)'),
+      frameworks: z.array(z.string()).optional().describe('Related frameworks or tools (structured mode)'),
     },
     async (params) => {
       try {
@@ -77,16 +78,17 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
 
   server.tool(
     'assistant_update_skill',
-    'Update an existing domain knowledge skill.',
+    'Update an existing domain knowledge skill. Can update markdown content and/or structured fields.',
     {
       skill_id: z.string().describe('Skill ID to update'),
       name: z.string().optional().describe('New skill name'),
       description: z.string().optional().describe('New description'),
       category: z.string().optional().describe('New category'),
-      principles: z.array(z.string()).optional().describe('Updated principles'),
-      bestPractices: z.array(z.string()).optional().describe('Updated best practices'),
-      antiPatterns: z.array(z.string()).optional().describe('Updated anti-patterns'),
-      frameworks: z.array(z.string()).optional().describe('Updated frameworks'),
+      content: z.string().optional().describe('Markdown content — paste a full skill definition (Claude Code .md format). Set to empty string to clear and use structured fields instead.'),
+      principles: z.array(z.string()).optional().describe('Updated principles (structured mode)'),
+      bestPractices: z.array(z.string()).optional().describe('Updated best practices (structured mode)'),
+      antiPatterns: z.array(z.string()).optional().describe('Updated anti-patterns (structured mode)'),
+      frameworks: z.array(z.string()).optional().describe('Updated frameworks (structured mode)'),
     },
     async ({ skill_id, ...fields }) => {
       try {

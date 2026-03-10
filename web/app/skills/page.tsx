@@ -16,6 +16,8 @@ import {
   Pencil,
   Trash2,
   X,
+  FileText,
+  List,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -25,6 +27,7 @@ interface Skill {
   name: string;
   category: string;
   description: string;
+  content?: string;
   principles: string[];
   bestPractices: string[];
   antiPatterns: string[];
@@ -116,15 +119,45 @@ function ArrayFieldInput({
   );
 }
 
+// --- Mode toggle for Markdown vs Structured ---
+function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onChange: (m: 'markdown' | 'structured') => void }) {
+  return (
+    <div className="flex rounded-lg bg-gray-100 dark:bg-gray-700 p-0.5">
+      <button
+        type="button"
+        onClick={() => onChange('markdown')}
+        className={cn(
+          'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
+          mode === 'markdown' ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm' : 'text-gray-500 dark:text-gray-400'
+        )}
+      >
+        <FileText className="w-3.5 h-3.5" /> Markdown
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('structured')}
+        className={cn(
+          'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
+          mode === 'structured' ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm' : 'text-gray-500 dark:text-gray-400'
+        )}
+      >
+        <List className="w-3.5 h-3.5" /> Structured
+      </button>
+    </div>
+  );
+}
+
 // --- Create Skill Dialog ---
 function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState<'markdown' | 'structured'>('markdown');
 
   const [name, setName] = useState('');
   const [category, setCategory] = useState('engineering');
   const [description, setDescription] = useState('');
+  const [content, setContent] = useState('');
   const [principles, setPrinciples] = useState<string[]>([]);
   const [bestPractices, setBestPractices] = useState<string[]>([]);
   const [antiPatterns, setAntiPatterns] = useState<string[]>([]);
@@ -136,17 +169,22 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
       setError('Name is required');
       return;
     }
+    if (mode === 'markdown' && !content.trim()) {
+      setError('Markdown content is required');
+      return;
+    }
     setError('');
     setSubmitting(true);
     try {
       await api.post('/skills', {
         name: name.trim(),
         category,
-        description: description.trim(),
-        principles,
-        bestPractices,
-        antiPatterns,
-        frameworks,
+        description: description.trim() || (mode === 'markdown' ? content.trim().split('\n')[0].replace(/^#\s*/, '').slice(0, 200) : ''),
+        content: mode === 'markdown' ? content : '',
+        principles: mode === 'structured' ? principles : [],
+        bestPractices: mode === 'structured' ? bestPractices : [],
+        antiPatterns: mode === 'structured' ? antiPatterns : [],
+        frameworks: mode === 'structured' ? frameworks : [],
       });
       queryClient.invalidateQueries({ queryKey: ['skills'] });
       onClose();
@@ -160,14 +198,17 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Create Skill</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            <ModeToggle mode={mode} onChange={setMode} />
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
@@ -177,68 +218,84 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Skill name"
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
-            >
-              {CATEGORIES.map((cat) => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Skill name"
+                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+              >
+                {CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-            <textarea
+            <input
+              type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Skill description"
-              rows={3}
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-none"
+              placeholder={mode === 'markdown' ? 'Short description (auto-generated from content if empty)' : 'Skill description'}
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
             />
           </div>
 
-          <ArrayFieldInput
-            label="Principles"
-            items={principles}
-            onAdd={(item) => setPrinciples([...principles, item])}
-            onRemove={(i) => setPrinciples(principles.filter((_, idx) => idx !== i))}
-          />
-
-          <ArrayFieldInput
-            label="Best Practices"
-            items={bestPractices}
-            onAdd={(item) => setBestPractices([...bestPractices, item])}
-            onRemove={(i) => setBestPractices(bestPractices.filter((_, idx) => idx !== i))}
-          />
-
-          <ArrayFieldInput
-            label="Anti-Patterns"
-            items={antiPatterns}
-            onAdd={(item) => setAntiPatterns([...antiPatterns, item])}
-            onRemove={(i) => setAntiPatterns(antiPatterns.filter((_, idx) => idx !== i))}
-          />
-
-          <ArrayFieldInput
-            label="Frameworks"
-            items={frameworks}
-            onAdd={(item) => setFrameworks([...frameworks, item])}
-            onRemove={(i) => setFrameworks(frameworks.filter((_, idx) => idx !== i))}
-          />
+          {mode === 'markdown' ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Markdown Content
+                <span className="ml-2 text-xs font-normal text-gray-400">Paste a Claude Code skill (.md) or write your own</span>
+              </label>
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder={"# My Skill\n\nInstructions for the AI agent...\n\n## Guidelines\n- Do this\n- Don't do that\n\n## Examples\n..."}
+                rows={16}
+                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-y font-mono"
+              />
+            </div>
+          ) : (
+            <>
+              <ArrayFieldInput
+                label="Principles"
+                items={principles}
+                onAdd={(item) => setPrinciples([...principles, item])}
+                onRemove={(i) => setPrinciples(principles.filter((_, idx) => idx !== i))}
+              />
+              <ArrayFieldInput
+                label="Best Practices"
+                items={bestPractices}
+                onAdd={(item) => setBestPractices([...bestPractices, item])}
+                onRemove={(i) => setBestPractices(bestPractices.filter((_, idx) => idx !== i))}
+              />
+              <ArrayFieldInput
+                label="Anti-Patterns"
+                items={antiPatterns}
+                onAdd={(item) => setAntiPatterns([...antiPatterns, item])}
+                onRemove={(i) => setAntiPatterns(antiPatterns.filter((_, idx) => idx !== i))}
+              />
+              <ArrayFieldInput
+                label="Frameworks"
+                items={frameworks}
+                onAdd={(item) => setFrameworks([...frameworks, item])}
+                onRemove={(i) => setFrameworks(frameworks.filter((_, idx) => idx !== i))}
+              />
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -267,10 +324,13 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
   const queryClient = useQueryClient();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const hasContent = !!(skill.content?.trim());
+  const [mode, setMode] = useState<'markdown' | 'structured'>(hasContent ? 'markdown' : 'structured');
 
   const [name, setName] = useState(skill.name);
   const [category, setCategory] = useState(skill.category);
   const [description, setDescription] = useState(skill.description);
+  const [content, setContent] = useState(skill.content || '');
   const [principles, setPrinciples] = useState<string[]>([...skill.principles]);
   const [bestPractices, setBestPractices] = useState<string[]>([...skill.bestPractices]);
   const [antiPatterns, setAntiPatterns] = useState<string[]>([...skill.antiPatterns]);
@@ -289,10 +349,11 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
         name: name.trim(),
         category,
         description: description.trim(),
-        principles,
-        bestPractices,
-        antiPatterns,
-        frameworks,
+        content: mode === 'markdown' ? content : '',
+        principles: mode === 'structured' ? principles : [],
+        bestPractices: mode === 'structured' ? bestPractices : [],
+        antiPatterns: mode === 'structured' ? antiPatterns : [],
+        frameworks: mode === 'structured' ? frameworks : [],
       });
       queryClient.invalidateQueries({ queryKey: ['skills'] });
       onClose();
@@ -306,14 +367,17 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Edit Skill</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            <ModeToggle mode={mode} onChange={setMode} />
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
@@ -323,68 +387,84 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
             </div>
           )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Skill name"
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
-            >
-              {CATEGORIES.map((cat) => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Skill name"
+                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+              >
+                {CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
-            <textarea
+            <input
+              type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Skill description"
-              rows={3}
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-none"
+              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
             />
           </div>
 
-          <ArrayFieldInput
-            label="Principles"
-            items={principles}
-            onAdd={(item) => setPrinciples([...principles, item])}
-            onRemove={(i) => setPrinciples(principles.filter((_, idx) => idx !== i))}
-          />
-
-          <ArrayFieldInput
-            label="Best Practices"
-            items={bestPractices}
-            onAdd={(item) => setBestPractices([...bestPractices, item])}
-            onRemove={(i) => setBestPractices(bestPractices.filter((_, idx) => idx !== i))}
-          />
-
-          <ArrayFieldInput
-            label="Anti-Patterns"
-            items={antiPatterns}
-            onAdd={(item) => setAntiPatterns([...antiPatterns, item])}
-            onRemove={(i) => setAntiPatterns(antiPatterns.filter((_, idx) => idx !== i))}
-          />
-
-          <ArrayFieldInput
-            label="Frameworks"
-            items={frameworks}
-            onAdd={(item) => setFrameworks([...frameworks, item])}
-            onRemove={(i) => setFrameworks(frameworks.filter((_, idx) => idx !== i))}
-          />
+          {mode === 'markdown' ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Markdown Content
+                <span className="ml-2 text-xs font-normal text-gray-400">Paste a Claude Code skill (.md) or write your own</span>
+              </label>
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder={"# My Skill\n\nInstructions for the AI agent...\n\n## Guidelines\n- Do this\n- Don't do that"}
+                rows={16}
+                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-y font-mono"
+              />
+            </div>
+          ) : (
+            <>
+              <ArrayFieldInput
+                label="Principles"
+                items={principles}
+                onAdd={(item) => setPrinciples([...principles, item])}
+                onRemove={(i) => setPrinciples(principles.filter((_, idx) => idx !== i))}
+              />
+              <ArrayFieldInput
+                label="Best Practices"
+                items={bestPractices}
+                onAdd={(item) => setBestPractices([...bestPractices, item])}
+                onRemove={(i) => setBestPractices(bestPractices.filter((_, idx) => idx !== i))}
+              />
+              <ArrayFieldInput
+                label="Anti-Patterns"
+                items={antiPatterns}
+                onAdd={(item) => setAntiPatterns([...antiPatterns, item])}
+                onRemove={(i) => setAntiPatterns(antiPatterns.filter((_, idx) => idx !== i))}
+              />
+              <ArrayFieldInput
+                label="Frameworks"
+                items={frameworks}
+                onAdd={(item) => setFrameworks([...frameworks, item])}
+                onRemove={(i) => setFrameworks(frameworks.filter((_, idx) => idx !== i))}
+              />
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -506,6 +586,11 @@ function SkillCard({
           <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getCategoryColor(skill.category))}>
             {skill.category}
           </span>
+          {skill.content?.trim() && (
+            <span className="px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">
+              md
+            </span>
+          )}
           {skill.isSystem && (
             <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
               system
@@ -540,68 +625,82 @@ function SkillCard({
 
       {expanded && (
         <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-4">
-          {skill.principles.length > 0 && (
+          {skill.content?.trim() ? (
             <div>
               <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-                <Lightbulb className="w-4 h-4 text-yellow-500" />
-                Principles
+                <FileText className="w-4 h-4 text-primary-500" />
+                Markdown Content
               </h4>
-              <ul className="space-y-1">
-                {skill.principles.map((p, i) => (
-                  <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-yellow-400">
-                    {p}
-                  </li>
-                ))}
-              </ul>
+              <pre className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
+                {skill.content}
+              </pre>
             </div>
-          )}
+          ) : (
+            <>
+              {skill.principles.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                    <Lightbulb className="w-4 h-4 text-yellow-500" />
+                    Principles
+                  </h4>
+                  <ul className="space-y-1">
+                    {skill.principles.map((p, i) => (
+                      <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-yellow-400">
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          {skill.bestPractices.length > 0 && (
-            <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-                <ThumbsUp className="w-4 h-4 text-green-500" />
-                Best Practices
-              </h4>
-              <ul className="space-y-1">
-                {skill.bestPractices.map((p, i) => (
-                  <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-green-400">
-                    {p}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+              {skill.bestPractices.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                    <ThumbsUp className="w-4 h-4 text-green-500" />
+                    Best Practices
+                  </h4>
+                  <ul className="space-y-1">
+                    {skill.bestPractices.map((p, i) => (
+                      <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-green-400">
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          {skill.antiPatterns.length > 0 && (
-            <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-red-500" />
-                Anti-Patterns
-              </h4>
-              <ul className="space-y-1">
-                {skill.antiPatterns.map((p, i) => (
-                  <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-red-400">
-                    {p}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+              {skill.antiPatterns.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-red-500" />
+                    Anti-Patterns
+                  </h4>
+                  <ul className="space-y-1">
+                    {skill.antiPatterns.map((p, i) => (
+                      <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-red-400">
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-          {skill.frameworks.length > 0 && (
-            <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-                <Layers className="w-4 h-4 text-blue-500" />
-                Frameworks
-              </h4>
-              <div className="flex flex-wrap gap-1.5">
-                {skill.frameworks.map((f, i) => (
-                  <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
-                    {f}
-                  </span>
-                ))}
-              </div>
-            </div>
+              {skill.frameworks.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-blue-500" />
+                    Frameworks
+                  </h4>
+                  <div className="flex flex-wrap gap-1.5">
+                    {skill.frameworks.map((f, i) => (
+                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                        {f}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -639,6 +738,7 @@ export default function SkillsPage() {
       s.name.toLowerCase().includes(q) ||
       s.description.toLowerCase().includes(q) ||
       s.category.toLowerCase().includes(q) ||
+      s.content?.toLowerCase().includes(q) ||
       s.principles.some((p) => p.toLowerCase().includes(q)) ||
       s.frameworks.some((f) => f.toLowerCase().includes(q))
     );

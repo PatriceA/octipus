@@ -4,16 +4,28 @@ import { skills } from '@/db/schema/skills';
 import type { Skill } from '@/db/schema/skills';
 
 function buildPromptFragment(skill: Skill): string {
+  // Prefer markdown content (Claude Code-style) over structured fields
+  if (skill.content?.trim()) {
+    return `## ${skill.name}\n\n${skill.content.trim()}`;
+  }
+
+  // Fallback to structured fields
   const lines = [
     `## ${skill.name}`,
     skill.description,
-    '',
-    '**Principles:** ' + (skill.principles as string[]).join(' | '),
-    '',
-    '**Best Practices:** ' + (skill.bestPractices as string[]).join(' | '),
-    '',
-    '**Avoid:** ' + (skill.antiPatterns as string[]).join(' | '),
   ];
+  const principles = skill.principles as string[];
+  if (principles.length > 0) {
+    lines.push('', '**Principles:** ' + principles.join(' | '));
+  }
+  const bp = skill.bestPractices as string[];
+  if (bp.length > 0) {
+    lines.push('', '**Best Practices:** ' + bp.join(' | '));
+  }
+  const ap = skill.antiPatterns as string[];
+  if (ap.length > 0) {
+    lines.push('', '**Avoid:** ' + ap.join(' | '));
+  }
   const fw = skill.frameworks as string[];
   if (fw.length > 0) {
     lines.push('', '**Frameworks:** ' + fw.join(', '));

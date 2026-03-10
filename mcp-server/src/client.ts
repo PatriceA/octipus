@@ -275,7 +275,7 @@ export class AssistantClient {
   }
 
   async createSkill(params: {
-    name: string; description: string; category?: string;
+    name: string; description: string; category?: string; content?: string;
     principles?: string[]; bestPractices?: string[]; antiPatterns?: string[]; frameworks?: string[];
   }): Promise<Record<string, unknown>> {
     return this.request('/api/skills', {
