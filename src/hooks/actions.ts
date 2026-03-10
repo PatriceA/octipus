@@ -74,10 +74,10 @@ async function executeSpawnAgent(
   config: Hook['actionConfig'],
   context: TriggerContext
 ): Promise<ActionResult> {
-  // Get session info from context
+  // Get session info from context — generate a UUID for hook-triggered sessions
   const sessionId = (context.message?.metadata?.sessionId as string | undefined) ||
                     context.agent?.sessionId ||
-                    'hook-session';
+                    crypto.randomUUID();
   const userId = context.message?.userId || context.agent?.userId || 'system';
 
   const prompt = interpolateTemplate(config.agentPrompt || '', context);
@@ -234,8 +234,8 @@ async function executeTool(
 
   // Create a synthetic agent context
   const agentContext = context.agent || {
-    id: 'hook-agent',
-    sessionId: 'hook-session',
+    id: crypto.randomUUID(),
+    sessionId: crypto.randomUUID(),
     userId: context.message?.userId || 'system',
     topic: 'hook',
     model: 'default',
