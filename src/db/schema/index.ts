@@ -13,3 +13,4 @@ export * from './settings';
 export * from './experts';
 export * from './recurring-tasks';
 export * from './skills';
+export * from './hook-executions';

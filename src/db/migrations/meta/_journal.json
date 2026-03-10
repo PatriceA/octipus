@@ -71,6 +71,20 @@
       "when": 1709800000000,
       "tag": "0009_skill_content",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1709900000000,
+      "tag": "0010_hook_executions",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1710000000000,
+      "tag": "0011_merge_tasks_into_hooks",
+      "breakpoints": true
     }
   ]
 }

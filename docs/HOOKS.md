@@ -1,0 +1,233 @@
+# Hooks & Tasks
+
+Unified automation system. Hooks react to events (messages, agent completions, webhooks) or run on cron schedules (tasks). Both are stored in the same `hooks` table — a "task" is simply a hook with a `schedule` trigger.
+
+## Hooks
+
+### Concepts
+
+A hook has three parts:
+1. **Trigger** — what event fires the hook
+2. **Conditions** (optional) — filter rules that must match
+3. **Action** — what to do when triggered
+
+### Triggers
+
+| Trigger | Fires when | Config fields |
+|---------|-----------|---------------|
+| `message_received` | New message on any channel | `channelTypes[]`, `messagePatterns[]` (regex), `sessionFilter` |
+| `agent_started` | Agent begins work | `sessionFilter.topics[]`, `sessionFilter.userIds[]` |
+| `agent_completed` | Agent finishes successfully | same as above |
+| `agent_failed` | Agent errors out | same as above |
+| `tool_executed` | A tool runs | `toolIds[]`, `toolNames[]` |
+| `permission_requested` | Tool needs user approval | — |
+| `schedule` | Cron timer fires | `cronExpression`, `timezone` |
+| `webhook` | HTTP request to `/api/webhooks/:path` | `webhookPath`, `webhookSecret` |
+
+### Actions
+
+| Action | What it does | Config fields |
+|--------|-------------|---------------|
+| `notify` | Send message to channel(s) | `notifyChannels[]`, `notifyMessage` |
+| `spawn_agent` | Start an AI agent | `agentPrompt`, `agentTopic`, `agentModel`, `orchestrated` |
+| `webhook` | Send outgoing HTTP request | `webhookUrl`, `webhookMethod`, `webhookHeaders`, `webhookBody` |
+| `n8n_workflow` | Trigger N8N workflow | `workflowId`, `workflowData` |
+| `execute_tool` | Run a registered tool | `toolId`, `toolAction`, `toolParams` |
+
+### Notify Action — Channel Format
+
+`notifyChannels` uses format `type:channelId`:
+
+```
+telegram:123456789        # Telegram chat ID
+slack:C0123ABCDEF         # Slack channel ID
+webchat:session-uuid      # WebChat session ID
+teams:channel-id          # Microsoft Teams channel
+```
+
+To find your Telegram chat ID: send any message to the bot and check backend logs (`~/.assistant/backend.log`).
+
+### Template Variables
+
+Use `{{path.to.value}}` in `notifyMessage`, `agentPrompt`, and `webhookBody`:
+
+| Variable | Available in triggers |
+|----------|---------------------|
+| `{{message.content}}` | message_received |
+| `{{message.channelType}}` | message_received |
+| `{{message.channelId}}` | message_received |
+| `{{message.userId}}` | message_received |
+| `{{agent.id}}` | agent_started, agent_completed, agent_failed |
+| `{{agent.sessionId}}` | agent_started, agent_completed, agent_failed |
+| `{{agent.topic}}` | agent_started, agent_completed, agent_failed |
+| `{{agent.status}}` | agent_completed, agent_failed |
+| `{{tool.name}}` | tool_executed |
+| `{{tool.toolId}}` | tool_executed |
+| `{{webhook.path}}` | webhook |
+| `{{webhook.method}}` | webhook |
+| `{{webhook.body.*}}` | webhook (nested fields) |
+| `{{schedule.cronExpression}}` | schedule |
+| `{{schedule.scheduledTime}}` | schedule |
+
+### Conditions
+
+Optional array of rules that ALL must match for the hook to fire:
+
+```json
+{
+  "conditions": [
+    { "field": "message.content", "operator": "contains", "value": "deploy" },
+    { "field": "message.channelType", "operator": "equals", "value": "telegram" }
+  ]
+}
+```
+
+Operators: `equals`, `contains`, `matches` (regex), `gt`, `lt`, `in` (array).
+
+### Execution Control
+
+| Field | Purpose |
+|-------|---------|
+| `isEnabled` | Toggle hook on/off |
+| `priority` | Higher priority hooks run first (default: 0) |
+| `maxExecutions` | Stop after N runs (null = unlimited) |
+| `cooldownMs` | Minimum ms between executions (default: 0) |
+
+### Example Configurations
+
+**GitHub PR review via webhook:**
+```json
+{
+  "name": "Review PRs",
+  "trigger": "webhook",
+  "triggerConfig": { "webhookPath": "github", "webhookSecret": "my-secret" },
+  "action": "spawn_agent",
+  "actionConfig": {
+    "agentPrompt": "Review the PR: {{webhook.body.pull_request.html_url}}",
+    "orchestrated": true
+  }
+}
+```
+
+**Notify on agent failure:**
+```json
+{
+  "name": "Error alert",
+  "trigger": "agent_failed",
+  "triggerConfig": {},
+  "action": "notify",
+  "actionConfig": {
+    "notifyChannels": ["telegram:123456789"],
+    "notifyMessage": "Agent failed on topic '{{agent.topic}}'"
+  }
+}
+```
+
+**Scheduled daily check:**
+```json
+{
+  "name": "Morning email check",
+  "trigger": "schedule",
+  "triggerConfig": { "cronExpression": "0 9 * * *", "timezone": "Europe/Berlin" },
+  "action": "spawn_agent",
+  "actionConfig": {
+    "agentPrompt": "Check Gmail for unread emails and summarize.",
+    "orchestrated": true
+  }
+}
+```
+
+## Scheduled Tasks
+
+A scheduled task is a hook with `trigger: "schedule"`. The cron runner checks every 60 seconds for due hooks and executes them. In the UI, these appear under the "Scheduled Tasks" tab.
+
+### Schedule-Specific Fields
+
+| Field | Purpose |
+|-------|---------|
+| `triggerConfig.cronExpression` | Cron schedule |
+| `triggerConfig.timezone` | Timezone (default: UTC) |
+| `nextRunAt` | Computed next execution time |
+| `lastError` | Last execution error (null on success) |
+
+### Cron Expression Format
+
+```
+* * * * *
+│ │ │ │ │
+│ │ │ │ └── Day of week
+│ │ │ └──── Month
+│ │ └────── Day of month
+│ └──────── Hour
+└────────── Minute
+
+*/5 * * * *     Every 5 minutes
+0 * * * *       Every hour at :00
+0 9 * * *       Daily at 9:00 AM
+0 */2 * * *     Every 2 hours
+0 9 * * 1-5     Weekdays at 9:00 AM
+```
+
+### Task Status (derived)
+
+| Status | Condition |
+|--------|-----------|
+| `active` | `isEnabled` and no `lastError` |
+| `paused` | `!isEnabled` |
+| `error` | `lastError` is set — check execution log for details |
+
+## Execution Log
+
+Every hook and recurring task execution is recorded in the `hook_executions` table. View logs in the UI under Hooks > Execution Log tab.
+
+Each log entry contains:
+- **source**: `hook` or `manual_test`
+- **status**: `success`, `error`, or `skipped`
+- **triggerType / actionType**: what fired and what ran
+- **result**: full action output (JSON)
+- **error**: error message if failed
+- **durationMs**: execution time
+- **triggerContext**: sanitized snapshot of what triggered the hook
+
+### Debugging Hooks
+
+1. Go to Hooks page > click the history icon on the hook row
+2. Or switch to "Execution Log" tab for all executions
+3. Expand an entry to see full result/error and trigger context
+4. If no executions appear, verify:
+   - Hook is enabled
+   - Trigger config matches (channel types, patterns, webhook path)
+   - Conditions aren't filtering everything out
+   - Cooldown hasn't blocked it
+   - Max executions hasn't been reached
+
+## API Endpoints
+
+### Hooks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/hooks` | List user's hooks |
+| POST | `/api/hooks` | Create hook |
+| GET | `/api/hooks/:id` | Get hook |
+| PATCH | `/api/hooks/:id` | Update hook |
+| DELETE | `/api/hooks/:id` | Delete hook |
+| POST | `/api/hooks/:id/toggle` | Enable/disable |
+| POST | `/api/hooks/:id/test` | Trigger manually |
+| GET | `/api/hooks/:id/executions` | Execution history for hook |
+| GET | `/api/hooks/executions/all` | All user executions |
+| GET | `/api/hooks/suggestions` | Suggested hooks |
+| POST | `/api/hooks/suggestions/:id/apply` | Apply suggestion |
+
+### Recurring Tasks (compatibility)
+
+The `/api/recurring-tasks` endpoints still work as a compatibility layer — they map to schedule-triggered hooks internally.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/recurring-tasks` | List schedule hooks |
+| POST | `/api/recurring-tasks` | Create schedule hook |
+| GET | `/api/recurring-tasks/:id` | Get schedule hook |
+| PATCH | `/api/recurring-tasks/:id` | Update schedule hook |
+| GET | `/api/recurring-tasks/:id/executions` | Execution history |
+| DELETE | `/api/recurring-tasks/:id` | Delete schedule hook |

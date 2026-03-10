@@ -1,9 +1,10 @@
 import { getDb } from '@/db/postgres';
-import { recurringTasks } from '@/db/schema/recurring-tasks';
-import { eq, and, lte, sql } from 'drizzle-orm';
+import { hooks } from '@/db/schema/hooks';
+import { eq, and, lte, sql, isNotNull } from 'drizzle-orm';
 import { getScheduler } from './scheduler';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
+import { getHookManager } from '@/hooks/manager';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
@@ -14,7 +15,7 @@ let lastSessionCleanup = 0;
 /**
  * Parse a simple cron expression and compute the next run date.
  * Supports: minute hour dayOfMonth month dayOfWeek
- * Also supports interval shorthand: *​/N (every N units)
+ * Also supports interval shorthand: star/N (every N units)
  */
 export function getNextCronDate(cronExpr: string, timezone = 'UTC'): Date {
   const now = new Date();
@@ -109,55 +110,89 @@ async function processCronTick(): Promise<void> {
     const db = getDb();
     const now = new Date();
 
-    const dueTasks = await db
+    // Find schedule-triggered hooks that are due
+    const dueHooks = await db
       .select()
-      .from(recurringTasks)
+      .from(hooks)
       .where(
         and(
-          eq(recurringTasks.isEnabled, true),
-          eq(recurringTasks.status, 'active'),
-          lte(recurringTasks.nextRunAt, now),
+          eq(hooks.trigger, 'schedule'),
+          eq(hooks.isEnabled, true),
+          isNotNull(hooks.nextRunAt),
+          lte(hooks.nextRunAt, now),
         ),
       );
 
-    if (dueTasks.length === 0) return;
+    if (dueHooks.length === 0) return;
 
-    coreLogger.info({ count: dueTasks.length }, 'Processing due recurring tasks');
+    coreLogger.info({ count: dueHooks.length }, 'Processing due scheduled hooks');
     const scheduler = getScheduler();
+    const hookManager = getHookManager();
 
-    for (const task of dueTasks) {
+    for (const hook of dueHooks) {
+      const startTime = Date.now();
+      const cronExpression = hook.triggerConfig?.cronExpression as string;
+      const timezone = (hook.triggerConfig?.timezone as string) || 'UTC';
+
       try {
-        // Schedule the task execution via the existing scheduler
-        await scheduler.schedule(task.userId, task.actionType, {
-          ...task.actionConfig as Record<string, unknown>,
-          recurringTaskId: task.id,
+        // Execute via scheduler (same as old recurring tasks)
+        await scheduler.schedule(hook.userId, hook.action, {
+          ...hook.actionConfig as Record<string, unknown>,
+          hookId: hook.id,
         });
 
-        // Update next run
-        const nextRun = getNextCronDate(task.cronExpression, task.timezone || 'UTC');
+        const durationMs = Date.now() - startTime;
+        const nextRun = getNextCronDate(cronExpression, timezone);
+
+        // Update hook state
         await db
-          .update(recurringTasks)
+          .update(hooks)
           .set({
-            lastRunAt: now,
+            lastExecutedAt: now,
             nextRunAt: nextRun,
-            runCount: sql`run_count + 1`,
+            executionCount: sql`execution_count + 1`,
             lastError: null,
             updatedAt: now,
           })
-          .where(eq(recurringTasks.id, task.id));
+          .where(eq(hooks.id, hook.id));
 
-        coreLogger.info({ taskId: task.id, name: task.name, nextRun }, 'Recurring task triggered');
+        // Log execution
+        await hookManager.logExecution({
+          hookId: hook.id,
+          source: 'hook',
+          status: 'success',
+          triggerType: 'schedule',
+          actionType: hook.action,
+          result: { scheduled: true },
+          durationMs,
+          triggerContext: { cronExpression, hookName: hook.name },
+        }).catch(() => {});
+
+        coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook triggered');
       } catch (err) {
+        const durationMs = Date.now() - startTime;
+
         await db
-          .update(recurringTasks)
+          .update(hooks)
           .set({
             lastError: (err as Error).message,
-            status: 'error',
             updatedAt: now,
           })
-          .where(eq(recurringTasks.id, task.id));
+          .where(eq(hooks.id, hook.id));
 
-        coreLogger.error({ err, taskId: task.id }, 'Recurring task execution failed');
+        // Log failed execution
+        await hookManager.logExecution({
+          hookId: hook.id,
+          source: 'hook',
+          status: 'error',
+          triggerType: 'schedule',
+          actionType: hook.action,
+          error: (err as Error).message,
+          durationMs,
+          triggerContext: { cronExpression, hookName: hook.name },
+        }).catch(() => {});
+
+        coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
       }
     }
   } catch (err) {

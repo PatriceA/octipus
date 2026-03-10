@@ -54,8 +54,7 @@ const navGroups: NavGroup[] = [
     label: 'System',
     items: [
       { name: 'MCP', href: '/mcp', icon: Cable },
-      { name: 'Hooks', href: '/hooks', icon: Webhook },
-      { name: 'Tasks', href: '/tasks', icon: Clock },
+      { name: 'Hooks & Tasks', href: '/hooks', icon: Webhook },
     ],
   },
   {

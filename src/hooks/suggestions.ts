@@ -88,7 +88,7 @@ export async function getHookSuggestions(userId: string): Promise<HookSuggestion
         integration: 'telegram',
         trigger: 'schedule',
         triggerConfig: { cronExpression: '0 18 * * *' },
-        action: 'send_message',
+        action: 'notify',
         actionConfig: {
           notifyMessage: 'Daily activity digest',
           notifyChannels: ['telegram'],
