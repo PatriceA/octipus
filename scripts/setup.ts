@@ -184,6 +184,11 @@ async function main(): Promise<void> {
         name: 'Browser Extension (real browser control for AI agents)',
         checked: false,
       }] : []),
+      {
+        value: 'mcp',
+        name: 'MCP Server (use assistant tools from Claude Code, Gemini CLI, etc.)',
+        checked: true,
+      },
     ],
   });
 
@@ -271,6 +276,51 @@ async function main(): Promise<void> {
           } catch (err) {
             console.log('\x1b[33m⚠ Failed to copy browser extension: ' + (err as Error).message + '\x1b[0m');
           }
+          break;
+        }
+        case 'mcp': {
+          const mcpDir = import.meta.dir + '/../mcp-server';
+          console.log('Building MCP server...');
+          const installProc = Bun.spawn(['npm', 'install'], {
+            cwd: mcpDir,
+            stdout: 'inherit',
+            stderr: 'inherit',
+          });
+          if (await installProc.exited !== 0) {
+            console.log('\x1b[33m⚠ MCP server npm install failed\x1b[0m');
+            break;
+          }
+          const buildProc = Bun.spawn(['npm', 'run', 'build'], {
+            cwd: mcpDir,
+            stdout: 'inherit',
+            stderr: 'inherit',
+          });
+          if (await buildProc.exited !== 0) {
+            console.log('\x1b[33m⚠ MCP server build failed\x1b[0m');
+            break;
+          }
+          console.log('\x1b[32m✓ MCP server built\x1b[0m');
+
+          // Generate .mcp.json for Claude Code / Gemini CLI
+          const mcpDistPath = mcpDir + '/dist/index.js';
+          const mcpConfig = {
+            mcpServers: {
+              assistant: {
+                command: 'node',
+                args: [mcpDistPath],
+                env: {
+                  ASSISTANT_URL: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
+                  ASSISTANT_API_KEY: masterKey,
+                },
+              },
+            },
+          };
+          const mcpJsonPath = import.meta.dir + '/../.mcp.json';
+          await Bun.write(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + '\n');
+          console.log('\x1b[32m✓ .mcp.json generated\x1b[0m');
+          console.log(`\n  MCP server is ready. To use with Claude Code:`);
+          console.log(`  - The .mcp.json in the project root is auto-detected`);
+          console.log(`  - Or copy it to your home directory: cp .mcp.json ~/.mcp.json\n`);
           break;
         }
       }
