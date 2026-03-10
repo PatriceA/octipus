@@ -1,3 +1,6 @@
+-- Fix action_type enum: rename execute_skill to execute_tool (the action runs tools, not skills)
+ALTER TYPE "action_type" RENAME VALUE 'execute_skill' TO 'execute_tool';
+
 -- Merge recurring tasks into hooks: add schedule-specific columns to hooks
 ALTER TABLE "hooks" ADD COLUMN IF NOT EXISTS "next_run_at" timestamp;
 ALTER TABLE "hooks" ADD COLUMN IF NOT EXISTS "last_error" text;

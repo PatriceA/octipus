@@ -170,7 +170,7 @@ const ACTION_OPTIONS = [
   { value: 'spawn_agent', label: 'Spawn Agent', desc: 'Start an agent (direct or orchestrated)' },
   { value: 'webhook', label: 'Outgoing Webhook', desc: 'Send an HTTP request' },
   { value: 'n8n_workflow', label: 'N8N Workflow', desc: 'Trigger an N8N workflow' },
-  { value: 'execute_skill', label: 'Execute Skill', desc: 'Run a specific skill tool' },
+  { value: 'execute_tool', label: 'Execute Tool', desc: 'Run a specific tool action' },
 ];
 
 interface CreateHookModalProps {
@@ -433,7 +433,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   // Action config — n8n_workflow
   const [workflowId, setWorkflowId] = useState((hook.actionConfig?.workflowId as string) || '');
 
-  // Action config — execute_skill (tool)
+  // Action config — execute_tool (tool)
   const [toolId, setToolId] = useState((hook.actionConfig?.toolId as string) || '');
   const [toolAction, setToolAction] = useState((hook.actionConfig?.toolAction as string) || '');
 
@@ -469,7 +469,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
       case 'n8n_workflow':
         cfg.workflowId = workflowId;
         break;
-      case 'execute_skill':
+      case 'execute_tool':
         cfg.toolId = toolId;
         cfg.toolAction = toolAction;
         break;
@@ -633,7 +633,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
             </div>
           )}
 
-          {action === 'execute_skill' && (
+          {action === 'execute_tool' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tool ID</label>
