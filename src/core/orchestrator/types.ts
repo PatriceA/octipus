@@ -19,7 +19,6 @@ export interface MessageClassification {
   type: 'casual' | 'task' | 'followup' | 'approval' | 'ambiguous';
   confidence: number;
   complexity?: 'simple' | 'moderate' | 'complex';
-  suggestedPipeline?: 'development' | 'research' | 'general';
   topic?: string;
   reasoning?: string;
 }

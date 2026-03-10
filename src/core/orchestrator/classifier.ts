@@ -127,12 +127,10 @@ export function classifyMessage(message: string): MessageClassification {
 
   // High confidence task
   if (bestScore >= 2 && bestCategory) {
-    const suggestedPipeline = bestCategory as MessageClassification['suggestedPipeline'];
     return {
       type: 'task',
       confidence: Math.min(bestScore / 4, 1),
       complexity,
-      suggestedPipeline,
       topic: bestCategory,
     };
   }
@@ -143,7 +141,6 @@ export function classifyMessage(message: string): MessageClassification {
       type: 'task',
       confidence: 0.4,
       complexity,
-      suggestedPipeline: bestCategory as MessageClassification['suggestedPipeline'],
       topic: bestCategory,
     };
   }

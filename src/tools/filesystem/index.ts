@@ -1,10 +1,11 @@
 import { readFile, writeFile, readdir, stat, mkdir, rm, copyFile, rename } from 'fs/promises';
-import { join, resolve, dirname, relative, basename } from 'path';
+import { join, resolve, dirname, relative, basename, extname } from 'path';
 import { existsSync, realpathSync } from 'fs';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest, AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
 import { safeRegExp } from '@/utils/sanitize';
+import { coreLogger } from '@/utils/logger';
 
 function getWorkspacePaths(): { root: string; additional: string[] } {
   try {
@@ -19,6 +20,68 @@ function getWorkspacePaths(): { root: string; additional: string[] } {
       root: resolve(process.env.WORKSPACE_PATH || process.cwd()),
       additional: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean).map(p => resolve(p)) || [],
     };
+  }
+}
+
+// File extensions eligible for RAG auto-indexing
+const INDEXABLE_EXTENSIONS = new Set([
+  '.md', '.txt', '.rst', '.csv', '.json', '.yaml', '.yml',
+  '.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs', '.java',
+  '.sh', '.bash', '.zsh', '.sql', '.html', '.css', '.xml',
+  '.toml', '.ini', '.cfg', '.conf', '.env.example', '.log',
+]);
+
+/**
+ * Get or create the session output directory for an agent.
+ * Format: {workspace}/sessions/{YYYY-MM-DD}-{topic}/
+ */
+async function getSessionOutputDir(context?: AgentContext): Promise<string | null> {
+  try {
+    const config = getConfig();
+    if (!config.workspace.sessionFolders) return null;
+    if (!context?.sessionId) return null;
+
+    const { root } = getWorkspacePaths();
+    const date = new Date().toISOString().slice(0, 10);
+    const topic = (context.topic || context.role || 'general')
+      .replace(/[^a-zA-Z0-9_-]/g, '-')
+      .slice(0, 40);
+    const shortId = context.sessionId.slice(0, 8);
+    const dirName = `${date}-${topic}-${shortId}`;
+    const sessionDir = join(root, 'sessions', dirName);
+
+    if (!existsSync(sessionDir)) {
+      await mkdir(sessionDir, { recursive: true });
+    }
+
+    return sessionDir;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Auto-index a written file into the RAG knowledge base (fire-and-forget).
+ */
+function autoIndexFile(filePath: string): void {
+  try {
+    const config = getConfig();
+    if (!config.workspace.autoIndexFiles) return;
+
+    const ext = extname(filePath).toLowerCase();
+    if (!INDEXABLE_EXTENSIONS.has(ext)) return;
+
+    // Fire-and-forget — don't block the write operation
+    import('@/core/rag/indexer').then(({ getFileIndexer }) => {
+      const sourceType = ['.md', '.txt', '.rst', '.csv', '.log'].includes(ext) ? 'document' : 'code';
+      getFileIndexer().indexFile(filePath, sourceType).then((chunks) => {
+        coreLogger.debug({ filePath, chunks }, 'Auto-indexed file into knowledge base');
+      }).catch((err) => {
+        coreLogger.debug({ err, filePath }, 'Auto-index skipped (embedding service may be unavailable)');
+      });
+    }).catch(() => {});
+  } catch {
+    // Silently skip if anything fails
   }
 }
 
@@ -89,14 +152,23 @@ export class FilesystemTool extends BaseTool {
 
     this.registerTool(
       'write_file',
-      'Write content to a file, creating it if it does not exist',
+      'Write content to a file, creating it if it does not exist. Relative paths are resolved to the session output directory (if enabled) or workspace root.',
       createParameterSchema({
         path: { type: 'string', description: 'Relative or absolute path to the file', required: true },
         content: { type: 'string', description: 'Content to write', required: true },
         createDirs: { type: 'boolean', description: 'Create parent directories if needed', default: true },
       }),
-      async (args) => {
-        const filePath = this.resolvePath(args.path as string);
+      async (args, context) => {
+        const rawPath = args.path as string;
+        let filePath: string;
+
+        // For relative paths, try session directory first
+        if (!rawPath.startsWith('/')) {
+          const sessionDir = await getSessionOutputDir(context);
+          filePath = sessionDir ? resolve(sessionDir, rawPath) : this.resolvePath(rawPath);
+        } else {
+          filePath = this.resolvePath(rawPath);
+        }
         this.validatePath(filePath);
 
         if (args.createDirs !== false) {
@@ -107,6 +179,10 @@ export class FilesystemTool extends BaseTool {
         }
 
         await writeFile(filePath, args.content as string, 'utf-8');
+
+        // Auto-index into RAG knowledge base
+        autoIndexFile(filePath);
+
         return { success: true, path: filePath, bytesWritten: (args.content as string).length };
       },
       { permissionAction: 'write' }
@@ -125,6 +201,9 @@ export class FilesystemTool extends BaseTool {
 
         const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
         await writeFile(filePath, existing + args.content, 'utf-8');
+
+        // Auto-index into RAG
+        autoIndexFile(filePath);
 
         return { success: true, path: filePath };
       },

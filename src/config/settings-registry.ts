@@ -309,6 +309,22 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'WORKSPACE_ADDITIONAL_PATHS',
   },
+  {
+    key: 'workspace.sessionFolders',
+    category: 'workspace',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Create per-session output directories (workspace/sessions/<date>-<topic>/)',
+    isSecret: false,
+  },
+  {
+    key: 'workspace.autoIndexFiles',
+    category: 'workspace',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Automatically index written files into the RAG knowledge base',
+    isSecret: false,
+  },
 
   // ── Logging ──
   {

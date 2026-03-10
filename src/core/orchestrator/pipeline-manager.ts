@@ -135,14 +135,13 @@ export class PipelineManager {
           input,
           previousOutput,
           context,
-        ) as { result: string; workerId: string };
+        );
 
-        previousOutput = result.result;
+        previousOutput = String(result || '');
 
         await this.updateStage(stage.id, {
           status: 'completed',
           output: previousOutput,
-          workerAgentId: result.workerId,
           completedAt: new Date(),
         });
 
@@ -315,13 +314,12 @@ export class PipelineManager {
           input,
           previousOutput,
           context,
-        ) as { result: string; workerId: string };
+        );
 
-        previousOutput = result.result;
+        previousOutput = String(result || '');
         await this.updateStage(stage.id, {
           status: 'completed',
           output: previousOutput,
-          workerAgentId: result.workerId,
           completedAt: new Date(),
         });
       } catch (error) {

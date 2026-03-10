@@ -113,6 +113,8 @@ export function loadFromEnvLegacy(): Partial<Config> {
     workspace: {
       rootPath: process.env.WORKSPACE_PATH || './workspace',
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
+      sessionFolders: true,
+      autoIndexFiles: true,
     },
     oauth: {
       publicUrl: process.env.PUBLIC_URL,

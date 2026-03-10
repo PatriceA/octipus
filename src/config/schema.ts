@@ -159,6 +159,8 @@ export const oauthConfigSchema = z.object({
 export const workspaceConfigSchema = z.object({
   rootPath: z.string().default('./workspace'),
   additionalPaths: z.array(z.string()).default([]),
+  sessionFolders: z.boolean().default(true),
+  autoIndexFiles: z.boolean().default(true),
 });
 
 // Full configuration schema

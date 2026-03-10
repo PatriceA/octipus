@@ -396,8 +396,8 @@ export class OrchestratorService {
       systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
     }
 
-    if (classification.suggestedPipeline) {
-      systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.suggestedPipeline}" task (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for deciding how to delegate.`;
+    if (classification.topic) {
+      systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for choosing the worker role. Prefer spawn_worker for most tasks — only use create_pipeline when the user explicitly asks for a multi-stage workflow (e.g., "research then implement then review").`;
     }
     if (classification.type === 'ambiguous') {
       systemPrompt += `\n\nThe user's message could not be confidently classified. Analyze it yourself and decide the best course of action.`;

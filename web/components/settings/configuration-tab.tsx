@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Cpu, Bot, Server } from 'lucide-react';
+import { Loader2, Cpu, Bot, Server, FolderOpen } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   type SettingItem,
@@ -16,6 +16,7 @@ const SERVER_CATEGORIES = new Set([
   'ollama',
   'agent',
   'orchestrator',
+  'workspace',
   'api',
   'logging',
   'voice',
@@ -42,6 +43,15 @@ const SECTIONS = [
     subsections: [
       { category: 'agent', label: 'Agent' },
       { category: 'orchestrator', label: 'Orchestrator' },
+    ],
+  },
+  {
+    id: 'workspace',
+    title: 'Workspace',
+    description: 'File output directory, session folders, and RAG indexing',
+    icon: FolderOpen,
+    subsections: [
+      { category: 'workspace', label: 'Workspace' },
     ],
   },
   {

@@ -71,6 +71,8 @@ export const defaultConfig: Partial<Config> = {
   workspace: {
     rootPath: './workspace',
     additionalPaths: [],
+    sessionFolders: true,
+    autoIndexFiles: true,
   },
 };
 
