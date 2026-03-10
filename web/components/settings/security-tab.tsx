@@ -87,7 +87,7 @@ export function SecurityTab() {
               <button
                 onClick={handleSetup}
                 disabled={loading}
-                className="px-3 py-1.5 text-xs bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                className="px-3 py-1.5 text-xs bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50"
               >
                 {loading ? 'Setting up...' : 'Enable 2FA'}
               </button>

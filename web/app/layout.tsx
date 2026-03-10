@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     icon: '/icon.svg',
     apple: '/icon.svg',
   },
-  themeColor: '#2563eb',
+  themeColor: '#06b6d4',
   appleWebApp: {
     capable: true,
     title: 'Assistant',

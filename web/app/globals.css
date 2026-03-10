@@ -3,19 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f0f9ff;
+  --foreground: #0c1829;
   --surface-card: #ffffff;
-  --surface-hover: #f1f5f9;
-  --border-subtle: #e2e8f0;
+  --surface-hover: #e0f2fe;
+  --border-subtle: #bae6fd;
 }
 
 .dark {
-  --background: #0f172a;
-  --foreground: #f1f5f9;
-  --surface-card: #1e293b;
-  --surface-hover: #334155;
-  --border-subtle: #334155;
+  --background: #0B1120;
+  --foreground: #e2e8f0;
+  --surface-card: #131C2E;
+  --surface-hover: #1A2540;
+  --border-subtle: #1E2D45;
 }
 
 body {
@@ -31,7 +31,7 @@ body {
 }
 
 .dark .glass {
-  background: rgba(15, 23, 42, 0.85);
+  background: rgba(11, 17, 32, 0.85);
 }
 
 /* Smooth transitions for interactive elements */
@@ -53,20 +53,21 @@ select {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #94a3b8;
+  background: #0891b2;
   border-radius: 3px;
+  opacity: 0.5;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: #06b6d4;
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: #164e63;
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: #0e7490;
 }
 
 /* Focus ring utility */

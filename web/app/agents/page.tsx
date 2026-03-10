@@ -143,7 +143,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !task.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50 text-sm"
             >
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -201,7 +201,7 @@ export default function AgentsPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <Bot className="w-5 h-5 text-primary-700 dark:text-primary-400" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Agents</h1>
@@ -210,7 +210,7 @@ export default function AgentsPage() {
         </div>
         <button
           onClick={() => setShowNewAgent(true)}
-          className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 flex items-center gap-2"
+          className="px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 flex items-center gap-2"
         >
           <Bot className="w-4 h-4" />
           New Agent

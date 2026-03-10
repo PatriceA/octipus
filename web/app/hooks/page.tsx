@@ -382,7 +382,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50 text-sm"
             >
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -655,7 +655,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50 text-sm"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Changes
@@ -730,7 +730,7 @@ export default function HooksPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-            <Webhook className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <Webhook className="w-5 h-5 text-primary-700 dark:text-primary-400" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Hooks & Tasks</h1>
@@ -739,7 +739,7 @@ export default function HooksPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 flex items-center gap-2 cursor-pointer"
+          className="px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 flex items-center gap-2 cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           Create Hook
@@ -755,7 +755,7 @@ export default function HooksPage() {
             className={cn(
               'px-4 py-2 text-sm font-medium border-b-2 -mb-px cursor-pointer',
               activeTab === tab
-                ? 'border-primary-600 text-primary-600 dark:text-primary-400'
+                ? 'border-primary-600 text-primary-700 dark:text-primary-400'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             )}
           >

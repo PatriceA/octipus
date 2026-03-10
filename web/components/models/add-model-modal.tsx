@@ -497,7 +497,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-1 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 <Plus className="w-4 h-4" />
                 {loading ? 'Adding...' : 'Add Model'}

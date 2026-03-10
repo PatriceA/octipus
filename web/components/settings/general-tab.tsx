@@ -102,7 +102,7 @@ export function GeneralTab() {
         className="flex items-center justify-between p-4 bg-primary-50 dark:bg-primary-950/30 rounded-xl ring-1 ring-primary-200/60 dark:ring-primary-800/40 hover:bg-primary-100/80 dark:hover:bg-primary-950/50 transition-colors group"
       >
         <div className="flex items-center gap-3">
-          <KeyRound className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          <KeyRound className="w-5 h-5 text-primary-700 dark:text-primary-400" />
           <div>
             <p className="text-sm font-medium text-primary-900 dark:text-primary-300">Secrets & Credentials</p>
             <p className="text-xs text-primary-700/70 dark:text-primary-400/60">Manage API keys, OAuth credentials, and other secrets</p>

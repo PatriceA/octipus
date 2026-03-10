@@ -308,7 +308,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer"
             >
               {submitting ? 'Creating...' : 'Create Skill'}
             </button>
@@ -477,7 +477,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer"
             >
               {submitting ? 'Saving...' : 'Save Changes'}
             </button>
@@ -748,7 +748,7 @@ export default function SkillsPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-          <BookOpen className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          <BookOpen className="w-5 h-5 text-primary-700 dark:text-primary-400" />
         </div>
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Skills</h1>
@@ -758,7 +758,7 @@ export default function SkillsPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 cursor-pointer"
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           Create Skill
@@ -787,7 +787,7 @@ export default function SkillsPage() {
             className={cn(
               'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
               !categoryFilter
-                ? 'bg-primary-600 text-white'
+                ? 'bg-primary-800 text-white'
                 : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
             )}
           >
@@ -800,7 +800,7 @@ export default function SkillsPage() {
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
                 categoryFilter === cat
-                  ? 'bg-primary-600 text-white'
+                  ? 'bg-primary-800 text-white'
                   : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
               )}
             >

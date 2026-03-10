@@ -106,7 +106,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-accent-50 dark:from-[#0B1120] dark:to-[#0E1726] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -117,7 +117,7 @@ export default function LoginPage() {
 
         {/* TOTP Verification */}
         {totpRequired ? (
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+          <div className="bg-white dark:bg-[#131C2E] rounded-xl shadow-lg p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Two-Factor Authentication</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter the 6-digit code from your authenticator app.</p>
             <form onSubmit={handleTotpVerify} className="space-y-4">
@@ -126,7 +126,7 @@ export default function LoginPage() {
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
-                className="w-full px-4 py-3 text-center text-2xl tracking-widest border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-3 text-center text-2xl tracking-widest border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500"
                 autoFocus
                 required
               />
@@ -138,7 +138,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={isLoading || totpCode.length !== 6}
-                className="w-full py-2 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-2 bg-primary-800 text-white font-medium rounded-lg hover:bg-primary-900 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Verify'}
               </button>
@@ -154,13 +154,13 @@ export default function LoginPage() {
         ) : (
 
         /* Form */
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+        <div className="bg-white dark:bg-[#131C2E] rounded-xl shadow-lg p-6">
           <div className="flex mb-6">
             <button
               onClick={() => setIsLogin(true)}
               className={`flex-1 py-2 text-center font-medium rounded-lg transition-colors ${
                 isLogin
-                  ? 'bg-primary-600 text-white'
+                  ? 'bg-primary-800 text-white'
                   : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
             >
@@ -170,7 +170,7 @@ export default function LoginPage() {
               onClick={() => setIsLogin(false)}
               className={`flex-1 py-2 text-center font-medium rounded-lg transition-colors ${
                 !isLogin
-                  ? 'bg-primary-600 text-white'
+                  ? 'bg-primary-800 text-white'
                   : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
             >
@@ -188,7 +188,7 @@ export default function LoginPage() {
                 value={formData.username}
                 onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                 placeholder="Enter your username"
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 required
               />
             </div>
@@ -203,7 +203,7 @@ export default function LoginPage() {
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   placeholder="Enter your email"
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   required={!isLogin}
                 />
               </div>
@@ -219,7 +219,7 @@ export default function LoginPage() {
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   placeholder="Enter your password"
-                  className="w-full px-4 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-4 py-2 pr-10 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   required
                 />
                 <button
@@ -242,7 +242,7 @@ export default function LoginPage() {
                   value={formData.confirmPassword}
                   onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                   placeholder="Confirm your password"
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   required={!isLogin}
                 />
               </div>
@@ -257,7 +257,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-2 bg-primary-600 text-white font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full py-2 bg-primary-800 text-white font-medium rounded-lg hover:bg-primary-900 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>

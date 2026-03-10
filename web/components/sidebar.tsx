@@ -73,12 +73,12 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex flex-col bg-white dark:bg-gray-900 border-r border-gray-200/80 dark:border-gray-800 transition-all duration-300 ease-in-out',
+        'flex flex-col bg-white dark:bg-[#0E1726] border-r border-primary-100 dark:border-[#1E2D45] transition-all duration-300 ease-in-out',
         collapsed ? 'w-16' : 'w-64'
       )}
     >
       {/* Logo */}
-      <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200/80 dark:border-gray-800 shrink-0">
+      <div className="h-16 flex items-center justify-between px-4 border-b border-primary-100 dark:border-[#1E2D45] shrink-0">
         <div className="flex items-center gap-2.5 overflow-hidden">
           <img src="/logo.png" alt="Assistant" className="w-8 h-8 rounded-lg shrink-0 shadow-sm object-cover" />
           {!collapsed && (
@@ -89,7 +89,7 @@ export function Sidebar() {
         </div>
         <button
           onClick={toggle}
-          className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer shrink-0"
+          className="p-1.5 text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-950/30 cursor-pointer shrink-0"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? (
@@ -127,7 +127,7 @@ export function Sidebar() {
                       collapsed ? 'justify-center px-2 py-2.5' : 'px-2.5 py-2',
                       isActive
                         ? 'bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-400'
-                        : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800/60 hover:text-gray-900 dark:hover:text-gray-200'
+                        : 'text-gray-600 hover:bg-primary-50 dark:text-gray-400 dark:hover:bg-primary-950/30 hover:text-primary-700 dark:hover:text-primary-300'
                     )}
                   >
                     {isActive && (

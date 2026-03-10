@@ -138,7 +138,7 @@ function OAuthGroupCard({
           <button
             onClick={handleSaveAll}
             disabled={saving || group.keys.every((k) => !values[k.vaultName])}
-            className="px-3 py-1.5 text-xs font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 text-xs font-medium bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
           >
             {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
             Save
@@ -179,7 +179,7 @@ function OAuthGroupCard({
             href={guide.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 hover:underline mt-1"
+            className="inline-flex items-center gap-1 text-primary-700 dark:text-primary-400 hover:underline mt-1"
           >
             Open developer console <ExternalLink className="w-3 h-3" />
           </a>

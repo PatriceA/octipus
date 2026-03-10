@@ -64,25 +64,25 @@ export default function DashboardPage() {
       name: 'Active Agents',
       value: health?.agents?.running || 0,
       icon: Bot,
-      color: 'text-blue-600',
+      color: 'text-primary-500',
     },
     {
       name: 'Total Sessions',
       value: health?.agents?.total || 0,
       icon: MessageSquare,
-      color: 'text-green-600',
+      color: 'text-accent-500',
     },
     {
       name: 'API Requests',
       value: usage?.stats?.requestCount || 0,
       icon: Activity,
-      color: 'text-purple-600',
+      color: 'text-primary-400',
     },
     {
       name: 'Total Cost',
       value: `$${(usage?.stats?.totalCost || 0).toFixed(2)}`,
       icon: Zap,
-      color: 'text-orange-600',
+      color: 'text-accent-400',
     },
   ];
 
@@ -90,7 +90,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-          <LayoutDashboard className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          <LayoutDashboard className="w-5 h-5 text-primary-700 dark:text-primary-400" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>

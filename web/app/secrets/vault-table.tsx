@@ -76,7 +76,7 @@ export function VaultTable({ credentials, onRefresh }: VaultTableProps) {
         </h2>
         <button
           onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700 cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-800 text-white rounded-lg hover:bg-primary-900 cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           Add Secret
@@ -308,7 +308,7 @@ function AddSecretForm({
             })
           }
           disabled={!name || !value}
-          className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           Add
         </button>
@@ -347,7 +347,7 @@ function RotateForm({
         <button
           onClick={() => onRotate(value)}
           disabled={!value}
-          className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           Rotate
         </button>

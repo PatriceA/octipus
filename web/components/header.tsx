@@ -112,7 +112,7 @@ export function Header() {
   };
 
   return (
-    <header className="h-14 bg-white dark:bg-gray-900 border-b border-gray-200/80 dark:border-gray-800 px-6 shrink-0">
+    <header className="h-14 bg-white dark:bg-[#0E1726] border-b border-primary-100 dark:border-[#1E2D45] px-6 shrink-0">
       <div className="h-full flex items-center justify-between">
         {/* Search */}
         <div className="flex-1 max-w-md">
@@ -121,7 +121,7 @@ export function Header() {
             <input
               type="text"
               placeholder="Search..."
-              className="w-full pl-10 pr-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200 placeholder-gray-500 dark:placeholder-gray-500"
+              className="w-full pl-10 pr-4 py-2 bg-primary-50/50 dark:bg-[#131C2E] border border-primary-200 dark:border-[#1E2D45] rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200 placeholder-gray-500 dark:placeholder-gray-500"
             />
           </div>
         </div>
@@ -132,7 +132,7 @@ export function Header() {
           <div className="relative" ref={notifRef}>
             <button
               onClick={() => { setIsNotifOpen(!isNotifOpen); if (!isNotifOpen) fetchNotifications(); }}
-              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 relative cursor-pointer"
+              className="p-2 text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-950/30 relative cursor-pointer"
             >
               <Bell className="w-5 h-5" />
               {unreadCount > 0 && (
@@ -143,7 +143,7 @@ export function Header() {
             </button>
 
             {isNotifOpen && (
-              <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60 z-50 max-h-96 flex flex-col overflow-hidden">
+              <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-[#131C2E] rounded-xl shadow-xl ring-1 ring-primary-200/60 dark:ring-[#1E2D45] z-50 max-h-96 flex flex-col overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700/60">
                   <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Notifications</span>
                   {unreadCount > 0 && (
@@ -199,9 +199,9 @@ export function Header() {
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setIsProfileOpen(!isProfileOpen)}
-              className="flex items-center gap-2 p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer"
+              className="flex items-center gap-2 p-1.5 text-gray-600 hover:text-primary-700 dark:text-gray-400 dark:hover:text-primary-300 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-950/30 cursor-pointer"
             >
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-sm">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center shadow-sm">
                 <User className="w-4 h-4 text-white" />
               </div>
               <span className="text-sm font-medium hidden sm:block">{user?.username || 'Guest'}</span>
@@ -209,7 +209,7 @@ export function Header() {
             </button>
 
             {isProfileOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-xl shadow-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60 py-1 z-50">
+              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-[#131C2E] rounded-xl shadow-xl ring-1 ring-primary-200/60 dark:ring-[#1E2D45] py-1 z-50">
                 {user ? (
                   <>
                     <div className="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/60">
@@ -249,7 +249,7 @@ export function Header() {
                     </div>
                     <button
                       onClick={handleLogin}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20"
+                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-primary-700 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20"
                     >
                       <User className="w-4 h-4" />
                       Sign In

@@ -117,7 +117,7 @@ export default function PipelinesPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-            <GitBranch className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <GitBranch className="w-5 h-5 text-primary-700 dark:text-primary-400" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Pipelines</h1>
@@ -126,7 +126,7 @@ export default function PipelinesPage() {
         </div>
         <button
           onClick={handleCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 text-sm font-medium"
+          className="flex items-center gap-2 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 text-sm font-medium"
         >
           <Plus className="w-4 h-4" />
           New Template
@@ -143,7 +143,7 @@ export default function PipelinesPage() {
           </p>
           <button
             onClick={handleCreate}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 text-sm"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 text-sm"
           >
             <Plus className="w-4 h-4" />
             Create Template
@@ -477,7 +477,7 @@ function TemplateEditor({
           <button
             onClick={handleSubmit}
             disabled={!name.trim()}
-            className="px-4 py-2 text-sm bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50"
           >
             {template ? 'Save Changes' : 'Create Template'}
           </button>
