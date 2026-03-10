@@ -596,18 +596,18 @@ function SkillCard({
               system
             </span>
           )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(skill);
+            }}
+            className="p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+            title="Edit skill"
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
           {!skill.isSystem && (
             <>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onEdit(skill);
-                }}
-                className="p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
-                title="Edit skill"
-              >
-                <Pencil className="w-4 h-4" />
-              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();

@@ -97,7 +97,8 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const [existing] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
 
       if (!existing) return { error: 'Skill not found' };
-      if (!user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
+      // System skills can be edited by any authenticated user; custom skills only by owner or admin
+      if (!existing.isSystem && !user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
 
       const updateData: Record<string, unknown> = { updatedAt: new Date() };
       if (body.name !== undefined) updateData.name = body.name;
