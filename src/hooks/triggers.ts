@@ -54,8 +54,14 @@ export function matchesTrigger(hook: Hook, event: TriggerEvent, context: Trigger
     case 'webhook':
       return matchesWebhookTrigger(config, context.webhook);
 
-    case 'schedule':
-      return true; // Schedule triggers are handled externally
+    case 'schedule': {
+      // Only match the specific hook targeted by the cron-runner
+      const scheduleData = event.data as { hookId?: string } | undefined;
+      if (scheduleData?.hookId) {
+        return hook.id === scheduleData.hookId;
+      }
+      return true;
+    }
 
     case 'permission_requested':
       return true; // All permission requests match
