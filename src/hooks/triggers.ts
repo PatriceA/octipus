@@ -25,6 +25,7 @@ export interface TriggerContext {
   schedule?: {
     cronExpression: string;
     scheduledTime: Date;
+    hookName?: string;
   };
 }
 

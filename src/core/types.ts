@@ -176,6 +176,7 @@ export interface TriggerConfig {
 
 export interface ActionConfig {
   // For notify
+  notifyOwner?: boolean;
   notifyChannels?: string[];
   notifyMessage?: string;
   // For spawn_agent

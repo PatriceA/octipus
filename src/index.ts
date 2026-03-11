@@ -81,7 +81,6 @@ async function main() {
       logger.info('Shutting down...');
 
       stopCronLoop();
-      hookManager.cleanup();
       await mcpBridge.disconnectAll();
       await gateway.stop();
 

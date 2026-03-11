@@ -371,8 +371,23 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
 
       const [executions, countResult] = await Promise.all([
         db
-          .select()
+          .select({
+            id: hookExecutions.id,
+            hookId: hookExecutions.hookId,
+            recurringTaskId: hookExecutions.recurringTaskId,
+            source: hookExecutions.source,
+            status: hookExecutions.status,
+            triggerType: hookExecutions.triggerType,
+            actionType: hookExecutions.actionType,
+            result: hookExecutions.result,
+            error: hookExecutions.error,
+            durationMs: hookExecutions.durationMs,
+            triggerContext: hookExecutions.triggerContext,
+            createdAt: hookExecutions.createdAt,
+            hookName: hooksTable.name,
+          })
           .from(hookExecutions)
+          .leftJoin(hooksTable, eq(hookExecutions.hookId, hooksTable.id))
           .where(where)
           .orderBy(desc(hookExecutions.createdAt))
           .limit(limit)

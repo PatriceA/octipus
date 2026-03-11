@@ -428,9 +428,14 @@ export class ModelRegistry {
     await this.cache.delete(`model:${name}`);
     await this.cache.delete('model:default');
     // Clear all topic caches (simplified - in production you'd track these)
-    const topics = ['general', 'coding', 'analysis', 'communication', 'chat', 'embedding'];
+    const topics = [
+      'general', 'coding', 'analysis', 'communication', 'chat', 'embedding',
+      'data', 'design', 'devops', 'security', 'ai', 'finance', 'automation',
+      'qa', 'pm', 'writing', 'research', 'review', 'local', 'simple',
+    ];
     for (const topic of topics) {
       await this.cache.delete(`model:topic:${topic}`);
+      await this.cache.delete(`model:topic:backup:${topic}`);
     }
   }
 }

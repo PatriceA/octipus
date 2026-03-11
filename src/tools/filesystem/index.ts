@@ -38,8 +38,14 @@ const INDEXABLE_EXTENSIONS = new Set([
 async function getSessionOutputDir(context?: AgentContext): Promise<string | null> {
   try {
     const config = getConfig();
-    if (!config.workspace.sessionFolders) return null;
-    if (!context?.sessionId) return null;
+    if (!config.workspace.sessionFolders) {
+      coreLogger.debug('Session folders disabled in config');
+      return null;
+    }
+    if (!context?.sessionId) {
+      coreLogger.debug('No sessionId in context, skipping session folder');
+      return null;
+    }
 
     const { root } = getWorkspacePaths();
     const date = new Date().toISOString().slice(0, 10);
@@ -52,10 +58,12 @@ async function getSessionOutputDir(context?: AgentContext): Promise<string | nul
 
     if (!existsSync(sessionDir)) {
       await mkdir(sessionDir, { recursive: true });
+      coreLogger.info({ sessionDir }, 'Created session output directory');
     }
 
     return sessionDir;
-  } catch {
+  } catch (err) {
+    coreLogger.debug({ err }, 'Failed to get session output dir');
     return null;
   }
 }
@@ -162,10 +170,23 @@ export class FilesystemTool extends BaseTool {
         const rawPath = args.path as string;
         let filePath: string;
 
-        // For relative paths, try session directory first
-        if (!rawPath.startsWith('/')) {
-          const sessionDir = await getSessionOutputDir(context);
-          filePath = sessionDir ? resolve(sessionDir, rawPath) : this.resolvePath(rawPath);
+        // Redirect to session directory when possible
+        const sessionDir = await getSessionOutputDir(context);
+        if (sessionDir) {
+          if (!rawPath.startsWith('/')) {
+            // Relative path → resolve into session dir
+            filePath = resolve(sessionDir, rawPath);
+          } else {
+            // Absolute path within workspace root → redirect to session dir
+            const { root } = getWorkspacePaths();
+            const resolved = resolve(rawPath);
+            if (resolved.startsWith(root) && !resolved.includes('/sessions/')) {
+              const relFromRoot = relative(root, resolved);
+              filePath = resolve(sessionDir, relFromRoot);
+            } else {
+              filePath = this.resolvePath(rawPath);
+            }
+          }
         } else {
           filePath = this.resolvePath(rawPath);
         }

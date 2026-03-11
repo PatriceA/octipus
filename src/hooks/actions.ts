@@ -22,7 +22,7 @@ export async function executeAction(
   try {
     switch (hook.action) {
       case 'notify':
-        return await executeNotify(config, context);
+        return await executeNotify(config, context, hook);
 
       case 'spawn_agent':
         return await executeSpawnAgent(config, context);
@@ -47,27 +47,70 @@ export async function executeAction(
 
 async function executeNotify(
   config: Hook['actionConfig'],
-  context: TriggerContext
+  context: TriggerContext,
+  hook?: Hook,
 ): Promise<ActionResult> {
-  const umi = getUMI();
-  const channels = config.notifyChannels || [];
   const message = interpolateTemplate(config.notifyMessage || 'Hook triggered', context);
 
-  const results: { channel: string; success: boolean }[] = [];
+  // Resolve target channels
+  const resolvedChannels: { type: string; id: string; label: string }[] = [];
 
-  for (const channelSpec of channels) {
-    // channelSpec format: "type:channelId" e.g., "telegram:123456"
-    const [channelType, channelId] = channelSpec.split(':');
+  // If notifyOwner is set, resolve from the hook owner's channel bindings
+  if (config.notifyOwner && hook?.userId) {
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    const user = await userRepository.findById(hook.userId);
+    const bindings = (user?.channelBindings as import('@/db/schema/users').ChannelBinding[]) || [];
 
-    try {
-      await umi.send(channelType as any, channelId, { content: message });
-      results.push({ channel: channelSpec, success: true });
-    } catch (error) {
-      results.push({ channel: channelSpec, success: false });
+    if (bindings.length === 0) {
+      return { success: false, error: 'No channels linked to your account. Link a channel in Settings → Channels.' };
+    }
+
+    for (const binding of bindings) {
+      if (binding.isVerified) {
+        resolvedChannels.push({
+          type: binding.channelType,
+          id: binding.channelUserId,
+          label: `${binding.channelType}:${binding.channelUserName || binding.channelUserId}`,
+        });
+      }
     }
   }
 
-  return { success: results.some((r) => r.success), data: { results } };
+  // Also add explicitly configured channels (type:id format)
+  const explicitChannels = config.notifyChannels || [];
+  if (Array.isArray(explicitChannels)) {
+    for (const channelSpec of explicitChannels) {
+      const [channelType, channelId] = String(channelSpec).split(':');
+      if (channelType && channelId) {
+        resolvedChannels.push({ type: channelType, id: channelId, label: String(channelSpec) });
+      }
+    }
+  }
+
+  if (resolvedChannels.length === 0) {
+    return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
+  }
+
+  const umi = getUMI();
+  const results: { channel: string; success: boolean; error?: string }[] = [];
+
+  for (const ch of resolvedChannels) {
+    try {
+      await umi.send(ch.type as any, ch.id, { content: message });
+      results.push({ channel: ch.label, success: true });
+    } catch (error) {
+      results.push({ channel: ch.label, success: false, error: (error as Error).message });
+    }
+  }
+
+  const anySuccess = results.some((r) => r.success);
+  const errorSummary = results.filter(r => !r.success).map(r => `${r.channel}: ${r.error}`).join('; ');
+
+  return {
+    success: anySuccess,
+    data: { results },
+    error: anySuccess ? undefined : errorSummary || 'All notification channels failed',
+  };
 }
 
 async function executeSpawnAgent(

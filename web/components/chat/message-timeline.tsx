@@ -127,13 +127,14 @@ function getRoleBadgeColor(role: string): string {
 // ElapsedTimer
 // ---------------------------------------------------------------------------
 
-function ElapsedTimer({ startTime }: { startTime: number }) {
+function ElapsedTimer({ startTime, active = true }: { startTime: number; active?: boolean }) {
   const [elapsed, setElapsed] = useState(Date.now() - startTime);
 
   useEffect(() => {
+    if (!active) return;
     const id = setInterval(() => setElapsed(Date.now() - startTime), 100);
     return () => clearInterval(id);
-  }, [startTime]);
+  }, [startTime, active]);
 
   return <span className="tabular-nums text-xs text-muted-foreground">{formatDuration(elapsed)}</span>;
 }
@@ -368,7 +369,7 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
         <span className="text-muted-foreground">{agent.model}</span>
 
         {agent.status === 'running' ? (
-          <ElapsedTimer startTime={agent.startTime} />
+          <ElapsedTimer startTime={agent.startTime} active={agent.status === 'running'} />
         ) : durationMs != null ? (
           <span className="text-muted-foreground tabular-nums">{formatDuration(durationMs)}</span>
         ) : null}

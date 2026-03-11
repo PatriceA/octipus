@@ -20,7 +20,6 @@ export interface HookExecutionResult {
 export class HookManager extends EventEmitter {
   private get db() { return getDb(); }
   private hookCache: Map<TriggerType, Hook[]> = new Map();
-  private scheduledJobs: Map<string, ReturnType<typeof setInterval>> = new Map();
 
   /**
    * Load hooks from database
@@ -40,9 +39,6 @@ export class HookManager extends EventEmitter {
       }
       this.hookCache.get(hook.trigger)!.push(hook);
     }
-
-    // Set up scheduled hooks
-    this.setupScheduledHooks();
 
     coreLogger.info({ count: allHooks.length }, 'Hooks loaded');
   }
@@ -250,75 +246,6 @@ export class HookManager extends EventEmitter {
   }
 
   /**
-   * Set up scheduled hooks
-   */
-  private setupScheduledHooks(): void {
-    // Clear existing scheduled jobs
-    for (const job of this.scheduledJobs.values()) {
-      clearInterval(job);
-    }
-    this.scheduledJobs.clear();
-
-    const scheduledHooks = this.hookCache.get('schedule') || [];
-
-    for (const hook of scheduledHooks) {
-      const cronExpression = hook.triggerConfig.cronExpression;
-      if (!cronExpression) continue;
-
-      // Simple cron parsing - in production, use a proper cron library
-      const interval = this.parseCronToInterval(cronExpression);
-      if (!interval) continue;
-
-      const job = setInterval(async () => {
-        await this.trigger(
-          { type: 'schedule', data: { hookId: hook.id }, timestamp: new Date() },
-          {
-            schedule: {
-              cronExpression,
-              scheduledTime: new Date(),
-            },
-          }
-        );
-      }, interval);
-
-      this.scheduledJobs.set(hook.id, job);
-      coreLogger.debug({ hookId: hook.id, intervalMs: interval }, 'Scheduled hook set up');
-    }
-  }
-
-  /**
-   * Parse cron expression to interval (simplified)
-   */
-  private parseCronToInterval(cron: string): number | null {
-    // Very simplified cron parsing - handle common patterns
-    const parts = cron.split(' ');
-
-    // Every minute: * * * * *
-    if (parts.length === 5 && parts[0] === '*') {
-      return 60 * 1000;
-    }
-
-    // Every N minutes: */N * * * *
-    const minuteMatch = parts[0]?.match(/^\*\/(\d+)$/);
-    if (minuteMatch) {
-      return parseInt(minuteMatch[1], 10) * 60 * 1000;
-    }
-
-    // Every hour: 0 * * * *
-    if (parts[0] === '0' && parts[1] === '*') {
-      return 60 * 60 * 1000;
-    }
-
-    // Every N hours: 0 */N * * *
-    const hourMatch = parts[1]?.match(/^\*\/(\d+)$/);
-    if (parts[0] === '0' && hourMatch) {
-      return parseInt(hourMatch[1], 10) * 60 * 60 * 1000;
-    }
-
-    return null;
-  }
-
-  /**
    * Log an execution to the hook_executions table
    */
   async logExecution(data: {
@@ -409,15 +336,6 @@ export class HookManager extends EventEmitter {
     return sanitized;
   }
 
-  /**
-   * Clean up scheduled jobs
-   */
-  cleanup(): void {
-    for (const job of this.scheduledJobs.values()) {
-      clearInterval(job);
-    }
-    this.scheduledJobs.clear();
-  }
 }
 
 // Singleton instance

@@ -295,7 +295,7 @@ export class OrchestratorService {
     const recentMessages = await messageRepository.findRecentBySession(sessionId, 6, ['user', 'assistant']);
     const recentContext = recentMessages.slice(0, 2).map(m => m.content).join('|');
 
-    const cached = await cache.get(message, recentContext);
+    const cached = await cache.get(sessionId, message, recentContext);
     if (cached) {
       await messageRepository.create({ sessionId, role: 'assistant', content: cached.response });
       await sessionRepository.incrementMessageCount(sessionId);
@@ -345,7 +345,7 @@ export class OrchestratorService {
       await sessionRepository.incrementMessageCount(sessionId);
 
       // Cache the response
-      await cache.set(message, recentContext, {
+      await cache.set(sessionId, message, recentContext, {
         response: result.content,
         model: modelName,
         tokens,

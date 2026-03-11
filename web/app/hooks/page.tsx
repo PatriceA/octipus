@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Play } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { SchedulePicker, describeCron } from '@/components/schedule-picker';
 
 interface Hook {
   id: string;
@@ -25,6 +26,7 @@ interface HookExecution {
   id: string;
   hookId?: string;
   recurringTaskId?: string;
+  hookName?: string;
   source: 'hook' | 'recurring_task' | 'manual_test';
   status: 'success' | 'error' | 'skipped';
   triggerType?: string;
@@ -92,6 +94,10 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
+                {(() => {
+                  const name = exec.hookName || String((exec.triggerContext as Record<string, unknown>)?.hookName || '');
+                  return name ? <span className="text-xs font-medium text-gray-900 dark:text-gray-100">{name}</span> : null;
+                })()}
                 <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
                   {exec.source === 'recurring_task' ? 'task' : exec.source}
                 </span>
@@ -185,11 +191,29 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [trigger, setTrigger] = useState('webhook');
   const [action, setAction] = useState('spawn_agent');
   const [webhookPath, setWebhookPath] = useState('');
+  const [webhookSecret, setWebhookSecret] = useState('');
   const [cronExpression, setCronExpression] = useState('');
+  const [messagePattern, setMessagePattern] = useState('');
   const [agentPrompt, setAgentPrompt] = useState('');
   const [orchestrated, setOrchestrated] = useState(true);
+  const [notifyOwner, setNotifyOwner] = useState(true);
+  const [notifyChannels, setNotifyChannels] = useState('');
+  const [notifyMessage, setNotifyMessage] = useState('');
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [userChannels, setUserChannels] = useState<{ channelType: string; channelUserName?: string }[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  // Fetch user's linked channels for the notify action
+  useEffect(() => {
+    if (!open) return;
+    api.get<{ channelBindings?: { channelType: string; channelUserName?: string; isVerified: boolean }[] }>('/auth/me')
+      .then(data => {
+        const bindings = (data.channelBindings || []).filter(b => b.isVerified);
+        setUserChannels(bindings);
+      })
+      .catch(() => {});
+  }, [open]);
 
   if (!open) return null;
 
@@ -200,13 +224,27 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
 
     try {
       const triggerConfig: Record<string, unknown> = {};
-      if (trigger === 'webhook') triggerConfig.webhookPath = webhookPath;
+      if (trigger === 'webhook') {
+        triggerConfig.webhookPath = webhookPath;
+        if (webhookSecret) triggerConfig.webhookSecret = webhookSecret;
+      }
       if (trigger === 'schedule') triggerConfig.cronExpression = cronExpression;
+      if (trigger === 'message_received' && messagePattern) triggerConfig.pattern = messagePattern;
 
       const actionConfig: Record<string, unknown> = {};
       if (action === 'spawn_agent') {
         actionConfig.agentPrompt = agentPrompt;
         actionConfig.orchestrated = orchestrated;
+      }
+      if (action === 'notify') {
+        actionConfig.notifyOwner = notifyOwner;
+        if (!notifyOwner && notifyChannels.trim()) {
+          actionConfig.notifyChannels = notifyChannels.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        actionConfig.notifyMessage = notifyMessage;
+      }
+      if (action === 'webhook') {
+        actionConfig.webhookUrl = webhookUrl;
       }
 
       await api.post('/hooks', {
@@ -227,9 +265,15 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
       setTrigger('webhook');
       setAction('spawn_agent');
       setWebhookPath('');
+      setWebhookSecret('');
       setCronExpression('');
+      setMessagePattern('');
       setAgentPrompt('');
       setOrchestrated(true);
+      setNotifyOwner(true);
+      setNotifyChannels('');
+      setNotifyMessage('');
+      setWebhookUrl('');
     } catch (err) {
       setError((err as Error).message);
     }
@@ -289,34 +333,65 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
 
           {/* Trigger-specific config */}
           {trigger === 'webhook' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Webhook Path
-              </label>
-              <div className="flex items-center gap-1">
-                <span className="text-sm text-gray-500">/api/webhooks/</span>
-                <input
-                  type="text"
-                  value={webhookPath}
-                  onChange={e => setWebhookPath(e.target.value)}
-                  className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
-                  placeholder="github"
-                />
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Webhook Path
+                </label>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-gray-500">/api/webhooks/</span>
+                  <input
+                    type="text"
+                    value={webhookPath}
+                    onChange={e => setWebhookPath(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                    placeholder="github"
+                  />
+                </div>
               </div>
-            </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Webhook Secret
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={webhookSecret}
+                    onChange={e => setWebhookSecret(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                    placeholder="Generate or enter a secret..."
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setWebhookSecret(crypto.randomUUID().replace(/-/g, ''))}
+                    className="px-3 py-2 text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer whitespace-nowrap"
+                  >
+                    Generate
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">Used to verify HMAC-SHA256 signatures (X-Hub-Signature-256). Required for GitHub/GitLab webhooks.</p>
+              </div>
+            </>
           )}
 
           {trigger === 'schedule' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Cron Expression
+                Schedule
               </label>
+              <SchedulePicker value={cronExpression} onChange={setCronExpression} />
+            </div>
+          )}
+
+          {trigger === 'message_received' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Message Pattern (optional regex)</label>
               <input
                 type="text"
-                value={cronExpression}
-                onChange={e => setCronExpression(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200 font-mono"
-                placeholder="0 9 * * MON-FRI"
+                value={messagePattern}
+                onChange={e => setMessagePattern(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                placeholder=".*deploy.*"
               />
             </div>
           )}
@@ -368,6 +443,71 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             </>
           )}
 
+          {action === 'notify' && (
+            <>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifyOwner}
+                    onChange={e => setNotifyOwner(e.target.checked)}
+                    className="rounded"
+                  />
+                  Notify me on my linked channels
+                </label>
+                {notifyOwner && userChannels.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {userChannels.map((ch, i) => (
+                      <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-primary-50 dark:bg-primary-950/30 text-primary-700 dark:text-primary-300 text-xs rounded-md border border-primary-200 dark:border-primary-800">
+                        {ch.channelType}{ch.channelUserName ? `: ${ch.channelUserName}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {notifyOwner && userChannels.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">No channels linked. Go to Settings → Channels to link Telegram, Slack, etc.</p>
+                )}
+              </div>
+              {!notifyOwner && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Channels (advanced)</label>
+                  <input
+                    type="text"
+                    value={notifyChannels}
+                    onChange={e => setNotifyChannels(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                    placeholder="telegram:123456, slack:general"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Comma-separated, format: type:channelId</p>
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Message Template</label>
+                <textarea
+                  value={notifyMessage}
+                  onChange={e => setNotifyMessage(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                  placeholder="{{webhook.body.action}} on {{webhook.body.repository.full_name}}"
+                />
+                <p className="mt-1 text-xs text-gray-500">Use {'{{webhook.body.field}}'} for template variables</p>
+              </div>
+            </>
+          )}
+
+          {action === 'webhook' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Outgoing Webhook URL</label>
+              <input
+                type="text"
+                value={webhookUrl}
+                onChange={e => setWebhookUrl(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                placeholder="https://example.com/webhook"
+              />
+            </div>
+          )}
+
           {error && (
             <p className="text-sm text-red-600">{error}</p>
           )}
@@ -412,6 +552,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 
   // Trigger config
   const [webhookPath, setWebhookPath] = useState((hook.triggerConfig?.webhookPath as string) || '');
+  const [webhookSecret, setWebhookSecret] = useState((hook.triggerConfig?.webhookSecret as string) || '');
   const [cronExpression, setCronExpression] = useState((hook.triggerConfig?.cronExpression as string) || '');
   const [messagePattern, setMessagePattern] = useState((hook.triggerConfig?.pattern as string) || '');
 
@@ -422,8 +563,10 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [agentModel, setAgentModel] = useState((hook.actionConfig?.agentModel as string) || '');
 
   // Action config — notify
+  const [notifyOwner, setNotifyOwner] = useState(hook.actionConfig?.notifyOwner !== false);
   const [notifyChannels, setNotifyChannels] = useState((hook.actionConfig?.notifyChannels as string[] || []).join(', '));
   const [notifyMessage, setNotifyMessage] = useState((hook.actionConfig?.notifyMessage as string) || '');
+  const [userChannels, setUserChannels] = useState<{ channelType: string; channelUserName?: string }[]>([]);
 
   // Action config — outgoing webhook
   const [webhookUrl, setWebhookUrl] = useState((hook.actionConfig?.webhookUrl as string) || '');
@@ -440,9 +583,22 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  // Fetch user's linked channels
+  useEffect(() => {
+    api.get<{ channelBindings?: { channelType: string; channelUserName?: string; isVerified: boolean }[] }>('/auth/me')
+      .then(data => {
+        const bindings = (data.channelBindings || []).filter(b => b.isVerified);
+        setUserChannels(bindings);
+      })
+      .catch(() => {});
+  }, []);
+
   const buildTriggerConfig = (): Record<string, unknown> => {
     const cfg: Record<string, unknown> = {};
-    if (trigger === 'webhook') cfg.webhookPath = webhookPath;
+    if (trigger === 'webhook') {
+      cfg.webhookPath = webhookPath;
+      if (webhookSecret) cfg.webhookSecret = webhookSecret;
+    }
     if (trigger === 'schedule') cfg.cronExpression = cronExpression;
     if (trigger === 'message_received' && messagePattern) cfg.pattern = messagePattern;
     return cfg;
@@ -458,7 +614,10 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
         if (agentModel) cfg.agentModel = agentModel;
         break;
       case 'notify':
-        cfg.notifyChannels = notifyChannels.split(',').map(s => s.trim()).filter(Boolean);
+        cfg.notifyOwner = notifyOwner;
+        if (!notifyOwner && notifyChannels.trim()) {
+          cfg.notifyChannels = notifyChannels.split(',').map(s => s.trim()).filter(Boolean);
+        }
         cfg.notifyMessage = notifyMessage;
         break;
       case 'webhook':
@@ -533,18 +692,30 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 
           {/* Trigger-specific config */}
           {trigger === 'webhook' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Webhook Path</label>
-              <div className="flex items-center gap-1">
-                <span className="text-sm text-gray-500">/api/webhooks/</span>
-                <input type="text" value={webhookPath} onChange={e => setWebhookPath(e.target.value)} className={'flex-1 ' + inputCls.replace('w-full ', '')} placeholder="github" />
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Webhook Path</label>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-gray-500">/api/webhooks/</span>
+                  <input type="text" value={webhookPath} onChange={e => setWebhookPath(e.target.value)} className={'flex-1 ' + inputCls.replace('w-full ', '')} placeholder="github" />
+                </div>
               </div>
-            </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Webhook Secret</label>
+                <div className="flex items-center gap-2">
+                  <input type="text" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)} className={inputCls + ' font-mono'} placeholder="Enter or generate a secret..." />
+                  <button type="button" onClick={() => setWebhookSecret(crypto.randomUUID().replace(/-/g, ''))} className="px-3 py-2 text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer whitespace-nowrap">
+                    Generate
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-gray-500">HMAC-SHA256 secret for X-Hub-Signature-256 verification</p>
+              </div>
+            </>
           )}
           {trigger === 'schedule' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cron Expression</label>
-              <input type="text" value={cronExpression} onChange={e => setCronExpression(e.target.value)} className={inputCls + ' font-mono'} placeholder="0 9 * * MON-FRI" />
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Schedule</label>
+              <SchedulePicker value={cronExpression} onChange={setCronExpression} />
             </div>
           )}
           {trigger === 'message_received' && (
@@ -593,10 +764,30 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {action === 'notify' && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Channels</label>
-                <input type="text" value={notifyChannels} onChange={e => setNotifyChannels(e.target.value)} className={inputCls} placeholder="telegram:123456, slack:general" />
-                <p className="mt-1 text-xs text-gray-500">Comma-separated, format: type:channelId</p>
+                <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                  <input type="checkbox" checked={notifyOwner} onChange={e => setNotifyOwner(e.target.checked)} className="rounded" />
+                  Notify me on my linked channels
+                </label>
+                {notifyOwner && userChannels.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {userChannels.map((ch, i) => (
+                      <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-primary-50 dark:bg-primary-950/30 text-primary-700 dark:text-primary-300 text-xs rounded-md border border-primary-200 dark:border-primary-800">
+                        {ch.channelType}{ch.channelUserName ? `: ${ch.channelUserName}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {notifyOwner && userChannels.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">No channels linked. Go to Settings → Channels to link Telegram, Slack, etc.</p>
+                )}
               </div>
+              {!notifyOwner && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Channels (advanced)</label>
+                  <input type="text" value={notifyChannels} onChange={e => setNotifyChannels(e.target.value)} className={inputCls} placeholder="telegram:123456, slack:general" />
+                  <p className="mt-1 text-xs text-gray-500">Comma-separated, format: type:channelId</p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Message Template</label>
                 <textarea value={notifyMessage} onChange={e => setNotifyMessage(e.target.value)} rows={2} className={inputCls} placeholder="Hook triggered: {{event.type}}" />
@@ -819,8 +1010,9 @@ export default function HooksPage() {
                         {hook.description && <div className="text-xs text-gray-500 mt-0.5">{hook.description}</div>}
                         {hook.lastError && <div className="text-xs text-red-500 mt-0.5">{hook.lastError}</div>}
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-600 dark:text-gray-400">
-                        {(hook.triggerConfig?.cronExpression as string) || '—'}
+                      <td className="px-4 py-3 text-xs text-gray-600 dark:text-gray-400">
+                        <div>{describeCron((hook.triggerConfig?.cronExpression as string) || '')}</div>
+                        <div className="font-mono text-[10px] text-gray-400 mt-0.5">{(hook.triggerConfig?.cronExpression as string) || '—'}</div>
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-xs rounded">

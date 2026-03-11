@@ -1,7 +1,6 @@
 import { getDb } from '@/db/postgres';
 import { hooks } from '@/db/schema/hooks';
 import { eq, and, lte, sql, isNotNull } from 'drizzle-orm';
-import { getScheduler } from './scheduler';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
 import { getHookManager } from '@/hooks/manager';
@@ -126,52 +125,33 @@ async function processCronTick(): Promise<void> {
     if (dueHooks.length === 0) return;
 
     coreLogger.info({ count: dueHooks.length }, 'Processing due scheduled hooks');
-    const scheduler = getScheduler();
     const hookManager = getHookManager();
 
     for (const hook of dueHooks) {
-      const startTime = Date.now();
       const cronExpression = hook.triggerConfig?.cronExpression as string;
       const timezone = (hook.triggerConfig?.timezone as string) || 'UTC';
 
       try {
-        // Execute via scheduler (same as old recurring tasks)
-        await scheduler.schedule(hook.userId, hook.action, {
-          ...hook.actionConfig as Record<string, unknown>,
-          hookId: hook.id,
-        });
+        // Execute directly via hookManager.trigger() — this handles action execution + logging
+        await hookManager.trigger(
+          { type: 'schedule', data: { hookId: hook.id }, timestamp: now },
+          { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } },
+        );
 
-        const durationMs = Date.now() - startTime;
         const nextRun = getNextCronDate(cronExpression, timezone);
 
-        // Update hook state
+        // Update nextRunAt for the next tick
         await db
           .update(hooks)
           .set({
-            lastExecutedAt: now,
             nextRunAt: nextRun,
-            executionCount: sql`execution_count + 1`,
             lastError: null,
             updatedAt: now,
           })
           .where(eq(hooks.id, hook.id));
 
-        // Log execution
-        await hookManager.logExecution({
-          hookId: hook.id,
-          source: 'hook',
-          status: 'success',
-          triggerType: 'schedule',
-          actionType: hook.action,
-          result: { scheduled: true },
-          durationMs,
-          triggerContext: { cronExpression, hookName: hook.name },
-        }).catch(() => {});
-
         coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook triggered');
       } catch (err) {
-        const durationMs = Date.now() - startTime;
-
         await db
           .update(hooks)
           .set({
@@ -179,18 +159,6 @@ async function processCronTick(): Promise<void> {
             updatedAt: now,
           })
           .where(eq(hooks.id, hook.id));
-
-        // Log failed execution
-        await hookManager.logExecution({
-          hookId: hook.id,
-          source: 'hook',
-          status: 'error',
-          triggerType: 'schedule',
-          actionType: hook.action,
-          error: (err as Error).message,
-          durationMs,
-          triggerContext: { cronExpression, hookName: hook.name },
-        }).catch(() => {});
 
         coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
       }

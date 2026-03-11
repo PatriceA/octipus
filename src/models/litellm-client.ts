@@ -66,10 +66,33 @@ export class LiteLLMClient {
   }
 
   /**
+   * Remove orphaned tool messages that have no preceding assistant message
+   * with matching tool_calls. This prevents LLM API errors.
+   */
+  private sanitizeToolMessages(messages: AgentMessage[]): AgentMessage[] {
+    // Collect all tool_call IDs from assistant messages
+    const validToolCallIds = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        for (const tc of msg.toolCalls) {
+          validToolCallIds.add(tc.id);
+        }
+      }
+    }
+
+    // Filter out tool messages whose toolCallId isn't in the set
+    return messages.filter((msg) => {
+      if (msg.role !== 'tool') return true;
+      return msg.toolCallId && validToolCallIds.has(msg.toolCallId);
+    });
+  }
+
+  /**
    * Convert internal message format to OpenAI format
    */
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    const sanitized = this.sanitizeToolMessages(messages);
+    return sanitized.map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
