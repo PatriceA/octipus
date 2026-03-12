@@ -38,6 +38,8 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Microsoft 365** — Outlook, Calendar, OneDrive, To Do, Contacts
 - **Browser Extension** — control the user's real browser via Chrome extension (existing cookies/auth, no bot detection)
 - **Knowledge Base** — RAG pipeline with pgvector for semantic search
+- **GitHub/GitLab** — repository management, issues, PRs, reviews, and webhook integration
+- **Scheduling** — create and manage cron tasks, hooks, and event automations from within agent conversations
 - **Cross-Channel Messaging** — send messages across any connected channel
 
 ### Reach Users Everywhere
@@ -61,8 +63,10 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **MCP server** — expose all capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients
 
 ### Automation and Extensibility
-- **Event hooks** — trigger actions on messages, agent events, tool calls, schedules, webhooks
+- **Event hooks** — trigger actions on messages, agent events, tool calls, schedules, and incoming webhooks with HMAC verification
 - **Recurring tasks** — cron-based scheduling with full CRUD management
+- **Webhook receiver** — accept events from GitHub, GitLab, Stripe, and any HMAC-signed service with auto-notification to channels
+- **Channel progress feedback** — real-time status updates ("Got it, working on it", "Started coding agent") sent to Telegram/Slack/Teams during long-running tasks
 - **N8N integration** — connect to workflow automation
 - **Custom skills and experts** — create your own domain knowledge and expert personas via API
 - **Voice interface** — STT (Whisper), TTS (Piper, Edge TTS), wake word detection
@@ -177,6 +181,8 @@ Make globally available: `bun link`
 | **[RAG / Knowledge Base](docs/RAG.md)** | Embeddings, auto-indexing, and semantic search |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |
+| **[Hooks & Automation](docs/HOOKS.md)** | Event hooks, webhooks, cron tasks, and execution control |
+| **[Webhooks](docs/WEBHOOKS.md)** | Receive events from GitHub, GitLab, and external services |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
 | **[Changelog](docs/CHANGELOG.md)** | Release history |
 

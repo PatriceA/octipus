@@ -194,6 +194,63 @@ export async function initializeChannels(): Promise<void> {
       const orchestrator = getOrchestratorService();
 
       const sessionId = (message.metadata?.sessionId as string) || `${message.channelType}-${message.channelId}`;
+
+      // Platform-native message ID for reply-to (e.g. Telegram message_id)
+      const platformMessageId = message.metadata?.messageId != null
+        ? String(message.metadata.messageId)
+        : undefined;
+
+      // Subscribe to orchestrator events for progress feedback on non-webchat channels
+      const isExternalChannel = message.channelType !== 'webchat';
+      let unsubscribe: (() => void) | null = null;
+      const sentStatuses = new Set<string>();
+
+      if (isExternalChannel) {
+        unsubscribe = orchestrator.onEvent((event) => {
+          if (event.sessionId !== sessionId) return;
+
+          let statusMsg: string | null = null;
+
+          switch (event.type) {
+            case 'worker_spawned': {
+              const d = event.data as { role?: string; workerId?: string };
+              const role = d.role === 'orchestrator' ? null : d.role;
+              if (role) {
+                const key = `spawned-${role}`;
+                if (!sentStatuses.has(key)) {
+                  sentStatuses.add(key);
+                  statusMsg = `Working on it — started a *${role}* agent.`;
+                }
+              } else if (!sentStatuses.has('ack')) {
+                sentStatuses.add('ack');
+                statusMsg = 'Got it, working on it.';
+              }
+              break;
+            }
+            case 'team_started': {
+              const d = event.data as { members?: Array<{ role: string }> };
+              const roles = d.members?.map(m => m.role).join(', ') || 'multiple';
+              statusMsg = `Started a team of agents (${roles}), waiting for results.`;
+              break;
+            }
+            case 'status_update': {
+              const d = event.data as { message?: string; stage?: string };
+              if (d.message && d.stage === 'budget_warning') {
+                statusMsg = d.message;
+              }
+              break;
+            }
+          }
+
+          if (statusMsg) {
+            umi.send(message.channelType, message.channelId, {
+              content: statusMsg,
+              replyTo: platformMessageId,
+            }).catch(() => {});
+          }
+        });
+      }
+
       const result = await orchestrator.handleMessage(
         sessionId,
         message.userId,
@@ -201,12 +258,10 @@ export async function initializeChannels(): Promise<void> {
         message.channelType,
       );
 
-      // Send reply back through the same channel
-      // Use the platform-native message ID for reply-to (e.g. Telegram message_id)
-      const platformMessageId = message.metadata?.messageId != null
-        ? String(message.metadata.messageId)
-        : undefined;
+      // Unsubscribe from events
+      if (unsubscribe) unsubscribe();
 
+      // Send final reply back through the same channel
       if (result.response) {
         await umi.send(message.channelType, message.channelId, {
           content: result.response,
