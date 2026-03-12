@@ -36,7 +36,8 @@ export async function run() {
   const client = new APIClient(BASE_URL);
 
   console.log(`\x1b[1m\x1b[36mAssistant E2E Test Suite\x1b[0m`);
-  console.log(`API: ${BASE_URL}\n`);
+  console.log(`API: ${BASE_URL}`);
+  console.log(`Auth: ${fixtures.usingMasterKey ? 'MASTER_KEY' : 'register/login'}\n`);
 
   try {
     await testHealth(runner, client);

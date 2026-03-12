@@ -10,6 +10,8 @@ import {
 } from '@/config/settings-registry';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { apiLogger } from '@/utils/logger';
+import { existsSync, statSync } from 'fs';
+import { resolve } from 'path';
 
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)
@@ -145,6 +147,14 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
 
       if (!def) {
         return { error: `Unknown setting: ${key}` };
+      }
+
+      // Validate workspace paths before saving
+      if (key === 'workspace.rootPath' && typeof value === 'string') {
+        const resolved = resolve(value);
+        if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+          return { error: `Invalid path: ${value} (does not exist or is not a directory)` };
+        }
       }
 
       try {

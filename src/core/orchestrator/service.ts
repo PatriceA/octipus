@@ -404,6 +404,29 @@ export class OrchestratorService {
       systemPrompt += `\n\nThe user's message could not be confidently classified. Analyze it yourself and decide the best course of action.`;
     }
 
+    // Inject workspace awareness so the orchestrator can resolve project references
+    const wsConfig = getConfig();
+    const wsRoot = resolve(wsConfig.workspace.rootPath);
+    const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    try {
+      const { readdirSync, statSync: statS } = await import('fs');
+      const dirs = readdirSync(wsRoot)
+        .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
+        .map(name => `  - ${name}/`);
+      let wsContext = `\nWORKSPACE: Root is ${wsRoot}`;
+      if (dirs.length > 0 && dirs.length <= 30) {
+        wsContext += `\nProjects:\n${dirs.join('\n')}`;
+      }
+      if (wsAdditional.length > 0) {
+        wsContext += `\nAdditional paths: ${wsAdditional.join(', ')}`;
+      }
+      wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (assistant)", your task descriptions must say "audit the project at ${wsRoot}/assistant". Workers do NOT know which project the user means unless you tell them the exact path.`;
+      systemPrompt += wsContext;
+    } catch {
+      // Fallback: just inject the root path
+      systemPrompt += `\nWORKSPACE: ${wsRoot}`;
+    }
+
     const worker = await agentManager.spawn({
       sessionId,
       userId,
@@ -426,6 +449,7 @@ export class OrchestratorService {
       timestamp: new Date(),
     });
 
+    const orchStartTime = Date.now();
     try {
       this._lastWorkerResult = null; // Reset before orchestrator run
       const response = await worker.run(message);
@@ -434,10 +458,46 @@ export class OrchestratorService {
       const finalResponse = this._lastWorkerResult || response;
       this._lastWorkerResult = null; // Clean up
 
+      // Emit completed so the UI timer stops
+      this.emit({
+        type: 'worker_completed',
+        sessionId,
+        userId,
+        data: {
+          workerId: agentId,
+          role: 'orchestrator',
+          result: '',
+          model: modelName,
+          durationMs: Date.now() - orchStartTime,
+          totalTokens: worker.getTotalTokens(),
+          iterations: worker.getIteration(),
+        },
+        timestamp: new Date(),
+      });
+
       return { response: finalResponse, agentId };
     } catch (error) {
       this._lastWorkerResult = null;
       coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
+
+      this.emit({
+        type: 'worker_completed',
+        sessionId,
+        userId,
+        data: {
+          workerId: agentId,
+          role: 'orchestrator',
+          result: '',
+          model: modelName,
+          status: 'failed',
+          durationMs: Date.now() - orchStartTime,
+          totalTokens: worker.getTotalTokens(),
+          iterations: worker.getIteration(),
+          error: (error as Error).message,
+        },
+        timestamp: new Date(),
+      });
+
       return {
         response: `I encountered an error while processing your request: ${(error as Error).message}`,
         agentId,
@@ -516,6 +576,17 @@ export class OrchestratorService {
       }
     }
 
+    // Inject workspace context so workers stay within the project directory
+    const config = getConfig();
+    const workspaceRoot = resolve(config.workspace.rootPath);
+    const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
+    if (additionalPaths.length > 0) {
+      workspaceHint += ` Additional allowed paths: ${additionalPaths.join(', ')}.`;
+    }
+    workspaceHint += ` Focus your work within these directories. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
+    systemPrompt += workspaceHint;
+
     const worker = await agentManager.spawn({
       sessionId: context.sessionId,
       userId: context.userId,
@@ -537,19 +608,9 @@ export class OrchestratorService {
     });
 
     try {
-      // Inject workspace context so workers know where the project files are
-      const config = getConfig();
-      const workspaceRoot = resolve(config.workspace.rootPath);
-      const additionalPaths = config.workspace.additionalPaths || [];
-      let workspaceHint = `\n\n--- Workspace ---\nProject root: ${workspaceRoot}`;
-      if (additionalPaths.length > 0) {
-        workspaceHint += `\nAdditional paths: ${additionalPaths.join(', ')}`;
-      }
-      workspaceHint += `\nWhen using filesystem tools, use the project root path above as the base directory. Do NOT use "." — always use absolute paths.`;
-
       const workerMessage = input
-        ? `${task}${workspaceHint}\n\n--- Context from previous steps ---\n${input}`
-        : `${task}${workspaceHint}`;
+        ? `${task}\n\n--- Context from previous steps ---\n${input}`
+        : task;
 
       const result = await worker.run(workerMessage);
       const durationMs = Date.now() - startTime;

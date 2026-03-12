@@ -6,6 +6,7 @@
  */
 
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { input, select, confirm, checkbox } from '@inquirer/prompts';
 
 // ── Helpers ──
@@ -260,7 +261,7 @@ async function main(): Promise<void> {
         }
         case 'browser-ext': {
           const extSrc = import.meta.dir + '/../browser-extension';
-          const extDest = (process.env.HOME || '~') + '/.assistant/browser-extension';
+          const extDest = homedir() + '/.assistant/browser-extension';
           console.log('Installing browser extension...');
           try {
             const { mkdirSync, cpSync } = await import('fs');
