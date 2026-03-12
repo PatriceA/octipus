@@ -187,6 +187,55 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'TEAMS_TENANT_ID',
   },
 
+  // ── WhatsApp ──
+  {
+    key: 'whatsapp.accessToken',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'WhatsApp Cloud API access token',
+    isSecret: true,
+    vaultName: 'whatsapp_access_token',
+    envVar: 'WHATSAPP_ACCESS_TOKEN',
+  },
+  {
+    key: 'whatsapp.phoneNumberId',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'WhatsApp phone number ID',
+    isSecret: false,
+    envVar: 'WHATSAPP_PHONE_NUMBER_ID',
+  },
+  {
+    key: 'whatsapp.verifyToken',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: 'assistant-whatsapp-verify',
+    description: 'Webhook verification token',
+    isSecret: false,
+    envVar: 'WHATSAPP_VERIFY_TOKEN',
+  },
+  {
+    key: 'whatsapp.appSecret',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Meta app secret for webhook signature verification',
+    isSecret: true,
+    vaultName: 'whatsapp_app_secret',
+    envVar: 'WHATSAPP_APP_SECRET',
+  },
+  {
+    key: 'whatsapp.businessAccountId',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'WhatsApp Business Account ID',
+    isSecret: false,
+    envVar: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
+  },
+
   // ── Agent ──
   {
     key: 'agent.maxConcurrentAgents',

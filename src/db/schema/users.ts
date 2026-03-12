@@ -27,7 +27,7 @@ export interface PasskeyCredential {
 }
 
 export interface ChannelBinding {
-  channelType: 'telegram' | 'teams' | 'slack' | 'webchat';
+  channelType: 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat';
   channelUserId: string;
   channelUserName?: string;
   isVerified: boolean;

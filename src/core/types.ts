@@ -103,7 +103,7 @@ export interface ModelUsage {
 }
 
 // Channel Types
-export type ChannelType = 'telegram' | 'teams' | 'slack' | 'webchat' | 'api';
+export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat' | 'api';
 
 export interface UnifiedMessage {
   id: string;

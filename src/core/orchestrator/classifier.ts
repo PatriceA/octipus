@@ -141,8 +141,12 @@ export function classifyMessage(message: string): MessageClassification {
     };
   }
 
-  // Single keyword match — moderate confidence
+  // Single keyword match — only classify as task if the message has enough context
+  // (a lone word like "test" or "run" isn't a real task request)
   if (bestScore === 1 && bestCategory) {
+    if (wordCount <= 2) {
+      return { type: 'casual', confidence: 0.8, complexity: 'simple' };
+    }
     return {
       type: 'task',
       confidence: 0.4,

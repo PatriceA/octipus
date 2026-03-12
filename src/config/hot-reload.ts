@@ -52,6 +52,10 @@ export function initializeHotReload(): void {
           await reinitializeChannel('teams' as ChannelType);
           break;
 
+        case 'whatsapp':
+          await reinitializeChannel('whatsapp' as ChannelType);
+          break;
+
         case 'logging':
           // Logger reconfiguration: pino doesn't support level change on the fly
           // but the logger reads config on each call in most setups.

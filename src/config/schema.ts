@@ -77,6 +77,15 @@ export const slackConfigSchema = z.object({
   signingSecret: z.string().optional(),
 });
 
+// WhatsApp configuration schema
+export const whatsappConfigSchema = z.object({
+  accessToken: z.string().optional(),
+  phoneNumberId: z.string().optional(),
+  verifyToken: z.string().default('assistant-whatsapp-verify'),
+  appSecret: z.string().optional(),
+  businessAccountId: z.string().optional(),
+});
+
 // Voice configuration schema
 export const voiceConfigSchema = z.object({
   sttEnabled: z.boolean().default(false),
@@ -175,6 +184,7 @@ export const configSchema = z.object({
   telegram: telegramConfigSchema.optional(),
   teams: teamsConfigSchema.optional(),
   slack: slackConfigSchema.optional(),
+  whatsapp: whatsappConfigSchema.optional(),
   voice: voiceConfigSchema,
   mcp: mcpConfigSchema,
   n8n: n8nConfigSchema.optional(),
@@ -205,4 +215,5 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;

@@ -20,6 +20,7 @@ import { vaultRoutes } from './routes/vault';
 import { chatRoutes } from './routes/chat';
 import { pipelineRoutes } from './routes/pipelines';
 import { webhookRoutes } from './routes/webhooks';
+import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
 import { mcpRoutes } from './routes/mcp';
 import { toolRoutes } from './routes/tools';
 import { voiceRoutes } from './routes/voice';
@@ -181,6 +182,9 @@ export function createServer() {
 
   // Webhooks — unauthenticated, outside /api group
   app.group('/api', (app) => app.use(webhookRoutes));
+
+  // WhatsApp webhook — unauthenticated (Meta calls directly)
+  app.group('/api', (app) => app.use(whatsappWebhookRoutes));
 
   // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
   setupWebSocket(app as any);

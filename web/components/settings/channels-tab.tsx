@@ -69,7 +69,7 @@ export function ChannelsTab() {
           <h3 className="font-medium text-blue-900 dark:text-blue-200">Link a Channel</h3>
         </div>
         <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
-          To link your Telegram or Slack account, send <code className="font-mono bg-blue-100 dark:bg-blue-900/40 px-1 rounded">/link</code> to the bot,
+          To link your Telegram, Slack, or WhatsApp account, send <code className="font-mono bg-blue-100 dark:bg-blue-900/40 px-1 rounded">/link</code> to the bot,
           then enter the 6-character code below.
         </p>
 
@@ -139,6 +139,8 @@ export function ChannelsTab() {
                       ? '\u{1F4AC}'
                       : binding.channelType === 'teams'
                       ? '\u{1F3E2}'
+                      : binding.channelType === 'whatsapp'
+                      ? '\u{1F4F2}'
                       : '\u{1F310}'}
                   </span>
                   <div>
@@ -193,6 +195,7 @@ function ChannelStatusList() {
     { type: 'telegram', label: 'Telegram' },
     { type: 'slack', label: 'Slack' },
     { type: 'teams', label: 'Microsoft Teams' },
+    { type: 'whatsapp', label: 'WhatsApp' },
     { type: 'webchat', label: 'Web Chat' },
   ];
 
@@ -245,6 +248,11 @@ const CHANNEL_GROUPS = [
     id: 'teams',
     label: 'Microsoft Teams',
     prefix: 'teams.',
+  },
+  {
+    id: 'whatsapp',
+    label: 'WhatsApp',
+    prefix: 'whatsapp.',
   },
 ];
 

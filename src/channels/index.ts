@@ -3,12 +3,14 @@ import { BaseChannel } from './interface';
 export { TelegramChannel, telegramChannel } from './telegram';
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
+export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 export { WebChatChannel, webChatChannel, type WebChatConnection, type WebChatMessage } from './webchat';
 
 import { getUMI } from './interface';
 import { telegramChannel } from './telegram';
 import { slackChannel } from './slack';
 import { teamsChannel } from './teams';
+import { whatsappChannel } from './whatsapp';
 import { webChatChannel } from './webchat';
 import { getConfig } from '@/config';
 import { channelLogger } from '@/utils/logger';
@@ -104,6 +106,12 @@ export async function reinitializeChannel(channelType: ChannelType): Promise<voi
         newChannel = new TeamsChannel();
       }
       break;
+    case 'whatsapp':
+      if (config.whatsapp?.accessToken) {
+        const { WhatsAppChannel } = await import('./whatsapp');
+        newChannel = new WhatsAppChannel();
+      }
+      break;
     default:
       channelLogger.warn({ channelType }, 'Cannot reinitialize channel type');
       return;
@@ -145,6 +153,11 @@ export async function initializeChannels(): Promise<void> {
   // Register Teams if configured
   if (config.teams?.appId) {
     umi.register(teamsChannel);
+  }
+
+  // Register WhatsApp if configured
+  if (config.whatsapp?.accessToken) {
+    umi.register(whatsappChannel);
   }
 
   // Connect all registered channels

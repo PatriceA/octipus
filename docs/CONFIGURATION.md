@@ -40,6 +40,10 @@ SLACK_BOT_TOKEN=                       # xoxb-...
 SLACK_APP_TOKEN=                       # xapp-...
 TEAMS_APP_ID=
 TEAMS_APP_PASSWORD=
+WHATSAPP_ACCESS_TOKEN=                 # Meta Cloud API token
+WHATSAPP_PHONE_NUMBER_ID=             # From Meta dashboard
+WHATSAPP_VERIFY_TOKEN=                 # Webhook verify token
+WHATSAPP_APP_SECRET=                   # Meta App Secret
 WEBCHAT_PORT=3006
 
 # ─── Agent Limits ────────────────────────────────────────────
