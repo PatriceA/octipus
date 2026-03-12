@@ -25,7 +25,7 @@ export async function executeAction(
         return await executeNotify(config, context, hook);
 
       case 'spawn_agent':
-        return await executeSpawnAgent(config, context);
+        return await executeSpawnAgent(config, context, hook);
 
       case 'webhook':
         return await executeWebhook(config, context);
@@ -115,15 +115,29 @@ async function executeNotify(
 
 async function executeSpawnAgent(
   config: Hook['actionConfig'],
-  context: TriggerContext
+  context: TriggerContext,
+  hook?: Hook,
 ): Promise<ActionResult> {
   // Get session info from context — generate a UUID for hook-triggered sessions
   const sessionId = (context.message?.metadata?.sessionId as string | undefined) ||
                     context.agent?.sessionId ||
                     crypto.randomUUID();
-  const userId = context.message?.userId || context.agent?.userId || 'system';
+  // Use the hook owner's userId so notifications and permissions resolve correctly
+  const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
 
-  const prompt = interpolateTemplate(config.agentPrompt || '', context);
+  let prompt = interpolateTemplate(config.agentPrompt || '', context);
+
+  // Embed trigger context (webhook payload, tool result, etc.) into the prompt
+  if (context.webhook) {
+    prompt += `\n\n--- Webhook Payload ---\n${JSON.stringify(context.webhook.body, null, 2)}`;
+    if (context.webhook.headers) {
+      const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';
+      if (eventType) prompt += `\nEvent type: ${eventType}`;
+    }
+  } else if (context.tool) {
+    prompt += `\n\n--- Tool Context ---\n${JSON.stringify(context.tool, null, 2)}`;
+  }
+
   const message = context.message?.content || prompt;
 
   // If orchestrated, route through the orchestrator instead of bare spawn
@@ -132,6 +146,13 @@ async function executeSpawnAgent(
     const orchestrator = getOrchestratorService();
 
     const result = await orchestrator.handleMessage(sessionId, userId, message, 'hook');
+
+    // Notify owner with the orchestrator's response
+    if (config.notifyOwner && userId && result.response) {
+      notifyOwnerWithResult(userId, result.response).catch((err) => {
+        coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
+      });
+    }
 
     return {
       success: true,
@@ -150,9 +171,17 @@ async function executeSpawnAgent(
     systemPrompt: prompt,
   });
 
-  // Run the agent if there's a message
+  // Run the agent and optionally notify owner with the result
   if (message) {
-    agent.run(message).catch((error) => {
+    agent.run(message).then(async (result) => {
+      if (config.notifyOwner && userId && result) {
+        try {
+          await notifyOwnerWithResult(userId, result);
+        } catch (err) {
+          coreLogger.error({ error: err, agentId: agent.getContext().id }, 'Failed to notify owner with agent result');
+        }
+      }
+    }).catch((error) => {
       coreLogger.error({ error, agentId: agent.getContext().id }, 'Spawned agent failed');
     });
   }
@@ -292,6 +321,30 @@ async function executeTool(
   const result = await tool.execute(params, agentContext);
 
   return { success: true, data: result };
+}
+
+/**
+ * Send agent result to the owner's linked channels (Telegram, etc.)
+ */
+async function notifyOwnerWithResult(userId: string, result: string): Promise<void> {
+  const { userRepository } = await import('@/db/repositories/user-repository');
+  const user = await userRepository.findById(userId);
+  const bindings = (user?.channelBindings as import('@/db/schema/users').ChannelBinding[]) || [];
+  const verified = bindings.filter(b => b.isVerified);
+
+  if (verified.length === 0) return;
+
+  const umi = getUMI();
+  // Truncate very long results for messaging
+  const truncated = result.length > 3000 ? result.slice(0, 3000) + '\n\n…(truncated)' : result;
+
+  for (const binding of verified) {
+    try {
+      await umi.send(binding.channelType as any, binding.channelUserId, { content: truncated });
+    } catch (err) {
+      coreLogger.warn({ error: err, channel: binding.channelType }, 'Failed to notify owner channel');
+    }
+  }
 }
 
 /**

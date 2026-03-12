@@ -74,7 +74,7 @@ export class HealthChecker {
    */
   async checkProvider(
     provider: string,
-    models: { name: string; modelId: string }[]
+    models: { name: string; modelId: string; topics?: string[] | null }[]
   ): Promise<ProviderHealth> {
     const modelResults: ModelHealth[] = [];
     let overallLatency = 0;
@@ -82,7 +82,9 @@ export class HealthChecker {
 
     for (const model of models.slice(0, 3)) {
       // Check up to 3 models per provider — use modelId (LiteLLM-facing name)
-      const health = await this.checkModel(model.modelId, provider);
+      const isEmbedding = model.topics?.includes('embedding') ||
+        model.modelId.includes('embed') || model.name.includes('embed');
+      const health = await this.checkModel(model.modelId, provider, isEmbedding);
       modelResults.push(health);
 
       if (health.status === 'healthy') {
@@ -124,7 +126,7 @@ export class HealthChecker {
   /**
    * Check health of a specific model
    */
-  async checkModel(modelName: string, provider?: string): Promise<ModelHealth> {
+  async checkModel(modelName: string, provider?: string, isEmbedding?: boolean): Promise<ModelHealth> {
     const cacheKey = `health:model:${modelName}`;
     const cached = await this.cache.get<ModelHealth>(cacheKey);
     if (cached) return cached;
@@ -144,19 +146,24 @@ export class HealthChecker {
     const startTime = Date.now();
 
     try {
-      // Send a minimal test request
-      await client.complete({
-        model: modelName,
-        messages: [
-          {
-            role: 'user',
-            content: 'Hi',
-            timestamp: new Date(),
-          },
-        ],
-        maxTokens: 1,
-        temperature: 0,
-      });
+      if (isEmbedding) {
+        // Embedding models use the /v1/embeddings endpoint, not /v1/completions
+        await client.embed('health check', modelName);
+      } else {
+        // Send a minimal test request
+        await client.complete({
+          model: modelName,
+          messages: [
+            {
+              role: 'user',
+              content: 'Hi',
+              timestamp: new Date(),
+            },
+          ],
+          maxTokens: 1,
+          temperature: 0,
+        });
+      }
 
       const latency = Date.now() - startTime;
 

@@ -15,9 +15,9 @@ export class GitTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'read', description: 'Read git status/log', defaultLevel: 'ALLOW' },
-        { action: 'write', description: 'Stage/commit changes', defaultLevel: 'ASK' },
-        { action: 'push', description: 'Push to remote', defaultLevel: 'ASK', dangerous: true },
+        { action: 'read', description: 'Read git repository status, commit history, diffs, and branch info', defaultLevel: 'ALLOW' },
+        { action: 'write', description: 'Stage files, create commits, switch branches, stash changes, reset HEAD, and clone repositories', defaultLevel: 'ASK' },
+        { action: 'push', description: 'Push local commits to remote repositories (e.g. GitHub, GitLab)', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [],
     };

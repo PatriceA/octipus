@@ -15,10 +15,10 @@ export class GitHubTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'read', description: 'List repos, issues, PRs, releases, workflows', defaultLevel: 'ALLOW' },
-        { action: 'write', description: 'Create issues, PRs, comments, releases', defaultLevel: 'ASK' },
-        { action: 'manage', description: 'Merge PRs, close issues, trigger workflows', defaultLevel: 'ASK' },
-        { action: 'delete', description: 'Delete repos, releases', defaultLevel: 'ASK', dangerous: true },
+        { action: 'read', description: 'List and view GitHub repos, issues, PRs, releases, and workflow runs via gh CLI', defaultLevel: 'ALLOW' },
+        { action: 'write', description: 'Create new GitHub issues, pull requests, comments, and releases via gh CLI', defaultLevel: 'ASK' },
+        { action: 'manage', description: 'Merge pull requests, close issues, and trigger GitHub Actions workflows', defaultLevel: 'ASK' },
+        { action: 'delete', description: 'Permanently delete GitHub repositories or releases — irreversible', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [],
     };

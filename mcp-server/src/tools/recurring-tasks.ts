@@ -1,5 +1,7 @@
 /**
- * Recurring task management tools — CRUD for scheduled/cron tasks.
+ * Hook management tools — CRUD for scheduled tasks & event automations.
+ * Replaces the old recurring-tasks tools. All hooks are managed through
+ * the unified hooks system (schedule, webhook, message_received, etc.).
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -7,19 +9,22 @@ import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 
 export function registerRecurringTaskTools(server: McpServer, client: AssistantClient): void {
+  // ─── List hooks ───
+
   server.tool(
     'assistant_list_recurring_tasks',
-    'List all recurring/scheduled tasks. Shows name, schedule, status, last/next run time.',
+    'List all hooks (scheduled tasks & event automations). Shows name, trigger, action, schedule, status, last/next run time.',
     {},
     async () => {
       try {
-        const tasks = await client.listRecurringTasks();
-        if (tasks.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No recurring tasks configured.' }] };
+        const hooks = await client.listHooks();
+        if (hooks.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'No hooks configured.' }] };
         }
-        const summary = tasks.map(t =>
-          `- **${t.name}** [${t.cronExpression}] — ${t.isEnabled ? 'enabled' : 'disabled'}, runs: ${t.runCount}, next: ${t.nextRunAt || 'N/A'} [id: ${t.id}]`
-        ).join('\n');
+        const summary = hooks.map(h => {
+          const cron = h.triggerConfig?.cronExpression ? ` [${h.triggerConfig.cronExpression}]` : '';
+          return `- **${h.name}** (${h.trigger}→${h.action})${cron} — ${h.isEnabled ? 'enabled' : 'disabled'}, runs: ${h.executionCount}, next: ${h.nextRunAt || 'N/A'} [id: ${h.id}]`;
+        }).join('\n');
         return { content: [{ type: 'text' as const, text: summary }] };
       } catch (error) {
         return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
@@ -27,31 +32,42 @@ export function registerRecurringTaskTools(server: McpServer, client: AssistantC
     },
   );
 
+  // ─── Create hook ───
+
   server.tool(
     'assistant_create_recurring_task',
-    'Create a new recurring/scheduled task with a cron expression.',
+    `Create a new hook (scheduled task or event automation).
+
+Triggers: schedule, webhook, message_received, agent_completed, agent_failed, tool_executed
+Actions: notify, spawn_agent, webhook, execute_tool
+
+For scheduled tasks, set trigger to "schedule" and include cronExpression in trigger_config.
+For notify actions, set notifyOwner: true in action_config to notify the user on their linked channels.`,
     {
-      name: z.string().describe('Task name'),
-      cron_expression: z.string().describe('Cron expression (e.g., "*/30 * * * *" for every 30 min)'),
-      action_type: z.string().describe('Action type: spawn_agent, execute_tool, or webhook'),
-      action_config: z.string().describe('JSON string of action configuration'),
-      description: z.string().optional().describe('Task description'),
-      timezone: z.string().optional().describe('Timezone (default: UTC)'),
+      name: z.string().describe('Hook name'),
+      trigger: z.string().describe('Trigger type: schedule, webhook, message_received, agent_completed, agent_failed, tool_executed'),
+      trigger_config: z.string().describe('JSON string of trigger config (e.g., {"cronExpression": "0 9 * * *"} for schedule)'),
+      action: z.string().describe('Action type: notify, spawn_agent, webhook, execute_tool'),
+      action_config: z.string().describe('JSON string of action config (e.g., {"notifyOwner": true, "notifyMessage": "Hello"})'),
+      description: z.string().optional().describe('Hook description'),
+      is_enabled: z.boolean().optional().describe('Enable immediately (default: true)'),
     },
-    async ({ name, cron_expression, action_type, action_config, description, timezone }) => {
+    async ({ name, trigger, trigger_config, action, action_config, description, is_enabled }) => {
       try {
-        const task = await client.createRecurringTask({
+        const hook = await client.createHook({
           name,
-          cronExpression: cron_expression,
-          actionType: action_type,
-          actionConfig: JSON.parse(action_config),
           description,
-          timezone,
+          trigger,
+          triggerConfig: JSON.parse(trigger_config),
+          action,
+          actionConfig: JSON.parse(action_config),
+          isEnabled: is_enabled ?? true,
         });
+        const nextRun = (hook as any).nextRunAt;
         return {
           content: [{
             type: 'text' as const,
-            text: `Created recurring task "${task.name}" [${task.cronExpression}]\nNext run: ${task.nextRunAt}\nID: ${task.id}`,
+            text: `Created hook "${name}" (${trigger}→${action})${nextRun ? `\nNext run: ${nextRun}` : ''}\nID: ${(hook as any).id}`,
           }],
         };
       } catch (error) {
@@ -59,25 +75,34 @@ export function registerRecurringTaskTools(server: McpServer, client: AssistantC
       }
     },
   );
+
+  // ─── Update hook ───
 
   server.tool(
     'assistant_update_recurring_task',
-    'Update a recurring task (enable/disable, change schedule, rename).',
+    'Update a hook (rename, change schedule, enable/disable, change action config).',
     {
-      task_id: z.string().describe('Task ID'),
+      hook_id: z.string().describe('Hook ID'),
       name: z.string().optional().describe('New name'),
-      cron_expression: z.string().optional().describe('New cron expression'),
-      is_enabled: z.boolean().optional().describe('Enable or disable the task'),
+      description: z.string().optional().describe('New description'),
+      trigger_config: z.string().optional().describe('JSON string of new trigger config'),
+      action_config: z.string().optional().describe('JSON string of new action config'),
+      is_enabled: z.boolean().optional().describe('Enable or disable'),
     },
-    async ({ task_id, name, cron_expression, is_enabled }) => {
+    async ({ hook_id, name, description, trigger_config, action_config, is_enabled }) => {
       try {
-        const task = await client.updateRecurringTask(task_id, {
-          name, cronExpression: cron_expression, isEnabled: is_enabled,
-        });
+        const update: Record<string, unknown> = {};
+        if (name !== undefined) update.name = name;
+        if (description !== undefined) update.description = description;
+        if (trigger_config !== undefined) update.triggerConfig = JSON.parse(trigger_config);
+        if (action_config !== undefined) update.actionConfig = JSON.parse(action_config);
+        if (is_enabled !== undefined) update.isEnabled = is_enabled;
+
+        const hook = await client.updateHook(hook_id, update);
         return {
           content: [{
             type: 'text' as const,
-            text: `Updated task "${task.name}" — ${task.isEnabled ? 'enabled' : 'disabled'} [${task.cronExpression}]`,
+            text: `Updated hook "${(hook as any).name}" — ${(hook as any).isEnabled ? 'enabled' : 'disabled'}`,
           }],
         };
       } catch (error) {
@@ -86,16 +111,37 @@ export function registerRecurringTaskTools(server: McpServer, client: AssistantC
     },
   );
 
+  // ─── Delete hook ───
+
   server.tool(
     'assistant_delete_recurring_task',
-    'Delete a recurring task by ID.',
+    'Delete a hook by ID.',
     {
-      task_id: z.string().describe('Task ID to delete'),
+      hook_id: z.string().describe('Hook ID to delete'),
     },
-    async ({ task_id }) => {
+    async ({ hook_id }) => {
       try {
-        await client.deleteRecurringTask(task_id);
-        return { content: [{ type: 'text' as const, text: `Deleted recurring task ${task_id}` }] };
+        await client.deleteHook(hook_id);
+        return { content: [{ type: 'text' as const, text: `Deleted hook ${hook_id}` }] };
+      } catch (error) {
+        return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // ─── Toggle hook ───
+
+  server.tool(
+    'assistant_toggle_hook',
+    'Enable or disable a hook.',
+    {
+      hook_id: z.string().describe('Hook ID'),
+      enabled: z.boolean().describe('true to enable, false to disable'),
+    },
+    async ({ hook_id, enabled }) => {
+      try {
+        await client.toggleHook(hook_id, enabled);
+        return { content: [{ type: 'text' as const, text: `Hook ${hook_id} ${enabled ? 'enabled' : 'disabled'}` }] };
       } catch (error) {
         return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
       }

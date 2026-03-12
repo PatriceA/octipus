@@ -295,39 +295,53 @@ export class AssistantClient {
     return this.request(`/api/skills/${id}`, { method: 'DELETE' }) as Promise<{ deleted: boolean }>;
   }
 
-  // ─── Recurring Tasks ───
+  // ─── Hooks (scheduled tasks & event automations) ───
 
-  async listRecurringTasks(): Promise<Array<{
-    id: string; name: string; cronExpression: string; isEnabled: boolean;
-    runCount: number; nextRunAt: string | null; status: string;
+  async listHooks(): Promise<Array<{
+    id: string; name: string; description: string | null;
+    trigger: string; triggerConfig: Record<string, unknown>;
+    action: string; actionConfig: Record<string, unknown>;
+    isEnabled: boolean; executionCount: number;
+    lastExecutedAt: string | null; nextRunAt: string | null;
+    lastError: string | null;
   }>> {
-    const res = await this.request<{ tasks: any[] }>('/api/recurring-tasks');
-    return res.tasks || [];
+    const res = await this.request<{ hooks: any[] }>('/api/hooks');
+    return res.hooks || [];
   }
 
-  async createRecurringTask(params: {
-    name: string; cronExpression: string; actionType: string;
-    actionConfig: Record<string, unknown>; description?: string; timezone?: string;
-  }): Promise<{ id: string; name: string; cronExpression: string; nextRunAt: string }> {
-    const res = await this.request<{ task: any }>('/api/recurring-tasks', {
+  async createHook(params: {
+    name: string; description?: string;
+    trigger: string; triggerConfig: Record<string, unknown>;
+    action: string; actionConfig: Record<string, unknown>;
+    isEnabled?: boolean; cooldownMs?: number; maxExecutions?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.request('/api/hooks', {
       method: 'POST',
       body: JSON.stringify(params),
     });
-    return res.task;
   }
 
-  async updateRecurringTask(id: string, params: {
-    name?: string; cronExpression?: string; isEnabled?: boolean;
-  }): Promise<{ id: string; name: string; cronExpression: string; isEnabled: boolean }> {
-    const res = await this.request<{ task: any }>(`/api/recurring-tasks/${id}`, {
+  async updateHook(id: string, params: {
+    name?: string; description?: string;
+    triggerConfig?: Record<string, unknown>;
+    actionConfig?: Record<string, unknown>;
+    isEnabled?: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.request(`/api/hooks/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(params),
     });
-    return res.task;
   }
 
-  async deleteRecurringTask(id: string): Promise<void> {
-    await this.request(`/api/recurring-tasks/${id}`, { method: 'DELETE' });
+  async deleteHook(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/hooks/${id}`, { method: 'DELETE' });
+  }
+
+  async toggleHook(id: string, enabled: boolean): Promise<{ success: boolean; enabled: boolean }> {
+    return this.request(`/api/hooks/${id}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   // ─── Knowledge / RAG ───

@@ -62,8 +62,8 @@ export class ShellTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'execute', description: 'Execute shell commands', defaultLevel: 'ASK' },
-        { action: 'execute_elevated', description: 'Execute elevated commands', defaultLevel: 'DENY', dangerous: true },
+        { action: 'execute', description: 'Run shell commands (npm, bun, make, curl, etc.) in the workspace directory', defaultLevel: 'ASK' },
+        { action: 'execute_elevated', description: 'Run privileged commands requiring sudo/root access (install packages, manage services, modify system config)', defaultLevel: 'DENY', dangerous: true },
       ],
       tools: [
         {

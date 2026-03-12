@@ -15,12 +15,12 @@ export class BrowserExtTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'navigate', description: 'Navigate browser tabs', defaultLevel: 'ASK' },
-        { action: 'interact', description: 'Click and fill on pages', defaultLevel: 'ASK' },
-        { action: 'screenshot', description: 'Take browser screenshots', defaultLevel: 'ALLOW' },
-        { action: 'extract', description: 'Extract page content', defaultLevel: 'ALLOW' },
-        { action: 'evaluate', description: 'Execute JavaScript in page', defaultLevel: 'ASK', dangerous: true },
-        { action: 'cookies', description: 'Read browser cookies', defaultLevel: 'ASK', dangerous: true },
+        { action: 'navigate', description: 'Navigate your real browser tabs to URLs via the Chrome extension', defaultLevel: 'ASK' },
+        { action: 'interact', description: 'Click elements and fill form fields in your real browser via the Chrome extension', defaultLevel: 'ASK' },
+        { action: 'screenshot', description: 'Capture screenshots of your real browser tabs via the Chrome extension', defaultLevel: 'ALLOW' },
+        { action: 'extract', description: 'Extract text, links, and form data from pages in your real browser', defaultLevel: 'ALLOW' },
+        { action: 'evaluate', description: 'Run arbitrary JavaScript in your real browser page context — full access to page DOM and cookies', defaultLevel: 'ASK', dangerous: true },
+        { action: 'cookies', description: 'Read authentication cookies and session tokens from your real browser', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [
         { name: 'navigate', description: 'Navigate the active tab to a URL', parameters: { url: { type: 'string', description: 'URL to navigate to', required: true } }, returns: 'Page URL and title after navigation' },

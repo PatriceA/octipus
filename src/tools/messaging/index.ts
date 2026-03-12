@@ -15,8 +15,8 @@ export class MessagingTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'send', description: 'Send messages to channels', defaultLevel: 'ASK' },
-        { action: 'list', description: 'List available channels', defaultLevel: 'ALLOW' },
+        { action: 'send', description: 'Send messages to connected channels (Telegram, Slack, Teams, WebChat) on your behalf', defaultLevel: 'ASK' },
+        { action: 'list', description: 'List connected messaging channels and their connection status', defaultLevel: 'ALLOW' },
       ],
       tools: [
         { name: 'send_message', description: 'Send a message to a specific channel', parameters: { channel_type: { type: 'string', description: 'Channel type', required: true }, channel_id: { type: 'string', description: 'Channel ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Message delivery confirmation' },

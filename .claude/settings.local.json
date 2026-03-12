@@ -8,11 +8,43 @@
       "Bash(bun:*)",
       "Bash(curl:*)",
       "Bash(docker exec:*)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__plugin_claude-mem_mcp-search__smart_outline",
+      "Bash(xargs:*)",
+      "Bash(cd:*)",
+      "mcp__plugin_claude-mem_mcp-search__smart_unfold",
+      "Bash(bunx tsc:*)",
+      "Bash(sed:*)",
+      "Bash(bun run:*)",
+      "Bash(npx next:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(read f:*)",
+      "Bash(export:*)",
+      "Bash(npm install astro @astrojs/starlight @astrojs/tailwind tailwindcss @astrojs/mdx sharp)",
+      "Bash(npx astro:*)",
+      "Bash(\"/home/patrice/docker-services/assistant-website/src/content/docs/features/voice.mdx\":*)",
+      "Bash(node:*)",
+      "Bash(gh api:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "mcp__assistant__assistant_get_agent_events",
+      "mcp__assistant__assistant_execute_skill",
+      "mcp__assistant__assistant_chat",
+      "Bash(pgrep:*)",
+      "Read(//home/patrice/.gemini/**)",
+      "Read(//home/patrice/.config/gemini/**)",
+      "Bash(docker ps:*)",
+      "Bash(openssl rand:*)",
+      "mcp__assistant__assistant_create_recurring_task",
+      "Read(//home/patrice/docker-services/**)",
+      "Bash(cloudflared tunnel:*)",
+      "mcp__assistant__assistant_update_recurring_task"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "assistant"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

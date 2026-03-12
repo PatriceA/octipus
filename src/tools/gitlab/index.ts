@@ -15,10 +15,10 @@ export class GitLabTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'read', description: 'List projects, issues, MRs, pipelines', defaultLevel: 'ALLOW' },
-        { action: 'write', description: 'Create issues, MRs, comments', defaultLevel: 'ASK' },
-        { action: 'manage', description: 'Merge MRs, close issues, trigger pipelines', defaultLevel: 'ASK' },
-        { action: 'delete', description: 'Delete projects', defaultLevel: 'ASK', dangerous: true },
+        { action: 'read', description: 'List and view GitLab projects, issues, merge requests, and CI/CD pipelines via glab CLI', defaultLevel: 'ALLOW' },
+        { action: 'write', description: 'Create new GitLab issues, merge requests, and comments via glab CLI', defaultLevel: 'ASK' },
+        { action: 'manage', description: 'Merge merge requests, close issues, and trigger CI/CD pipelines on GitLab', defaultLevel: 'ASK' },
+        { action: 'delete', description: 'Permanently delete GitLab projects — irreversible', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [],
     };

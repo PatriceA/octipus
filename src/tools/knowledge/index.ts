@@ -16,8 +16,8 @@ export class KnowledgeTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'search', description: 'Search the knowledge base', defaultLevel: 'ALLOW' },
-        { action: 'index', description: 'Index files into knowledge base', defaultLevel: 'ALLOW' },
+        { action: 'search', description: 'Search the RAG knowledge base for previously indexed documents and code snippets', defaultLevel: 'ALLOW' },
+        { action: 'index', description: 'Index workspace files and directories into the RAG knowledge base for future retrieval', defaultLevel: 'ALLOW' },
       ],
       tools: [
         { name: 'search_knowledge', description: 'Search the knowledge base for relevant information', parameters: { query: { type: 'string', description: 'Search query', required: true } }, returns: 'Matching knowledge entries with similarity scores' },

@@ -22,7 +22,7 @@ A hook has three parts:
 | `tool_executed` | A tool runs | `toolIds[]`, `toolNames[]` |
 | `permission_requested` | Tool needs user approval | — |
 | `schedule` | Cron timer fires | `cronExpression`, `timezone` |
-| `webhook` | HTTP request to `/api/webhooks/:path` | `webhookPath`, `webhookSecret` |
+| `webhook` | HTTP request to `/api/webhooks/:path` | `webhookPath`, `webhookSecret` — see [WEBHOOKS.md](WEBHOOKS.md) |
 
 ### Actions
 

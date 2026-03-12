@@ -411,7 +411,7 @@ export class OrchestratorService {
       role: 'orchestrator',
       systemPrompt,
       tools: metaTools,
-      maxIterations: 10,
+      maxIterations: 25,
       timeout: 0, // No timeout — orchestrator delegates to workers which have their own timeouts
     });
 

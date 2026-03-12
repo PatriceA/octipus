@@ -106,10 +106,10 @@ export class FilesystemTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'read', description: 'Read files', defaultLevel: 'ALLOW' },
-        { action: 'write', description: 'Write/create files', defaultLevel: 'ASK' },
-        { action: 'delete', description: 'Delete files', defaultLevel: 'ASK', dangerous: true },
-        { action: 'list', description: 'List directory contents', defaultLevel: 'ALLOW' },
+        { action: 'read', description: 'Read file contents from the workspace directory (text, code, config files)', defaultLevel: 'ALLOW' },
+        { action: 'write', description: 'Write, create, copy, or move files within the workspace directory', defaultLevel: 'ASK' },
+        { action: 'delete', description: 'Permanently delete files or directories from the workspace filesystem', defaultLevel: 'ASK', dangerous: true },
+        { action: 'list', description: 'List and search file/directory names within the workspace', defaultLevel: 'ALLOW' },
       ],
       tools: [
         {

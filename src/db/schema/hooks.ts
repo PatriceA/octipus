@@ -92,6 +92,9 @@ export interface ActionConfig {
   toolId?: string;
   toolAction?: string;
   toolParams?: Record<string, unknown>;
+  // General options
+  orchestrated?: boolean;
+  notifyOwner?: boolean;
 }
 
 export interface HookCondition {
