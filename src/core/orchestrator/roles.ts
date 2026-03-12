@@ -70,13 +70,13 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
   },
   communication: {
     role: 'communication',
-    toolIds: ['google-workspace', 'microsoft365', 'messaging'],
+    toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling'],
     defaultTopic: 'communication',
     systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, and documents via Google Workspace and Microsoft 365. Always confirm actions that send messages or modify data before executing them.`,
   },
   general: {
     role: 'general',
-    toolIds: ['browser-ext', 'messaging', 'knowledge'],
+    toolIds: ['browser-ext', 'messaging', 'knowledge', 'scheduling'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be concise and direct.
 
@@ -125,7 +125,7 @@ You have access to "browser-ext" (Browser Extension) which connects to the user'
   },
   automation: {
     role: 'automation',
-    toolIds: ['shell', 'docker', 'filesystem'],
+    toolIds: ['shell', 'docker', 'filesystem', 'scheduling'],
     defaultTopic: 'automation',
     systemPromptTemplate: `You are an automation engineer. Design and implement workflow automations, process orchestrations, and event-driven systems. Focus on reliability, error handling, and maintainability of automated processes.`,
   },
