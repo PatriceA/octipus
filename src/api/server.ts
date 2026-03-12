@@ -5,6 +5,9 @@ import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 import { getSessionManager } from '@/security/auth/session';
 import { secureCompare } from '@/utils/crypto';
+import { getDb } from '@/db/postgres';
+import { users } from '@/db/schema/users';
+import { eq } from 'drizzle-orm';
 
 // Import routes
 import { authRoutes } from './routes/auth';
@@ -118,8 +121,19 @@ export function createServer() {
         if (masterKey && secureCompare(token, masterKey)) {
           apiLogger.warn(
             { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
-            'MASTER_KEY authentication used — system user access'
+            'MASTER_KEY authentication used — admin user access'
           );
+          // Resolve to the first admin user so UUID-typed queries work
+          const db = getDb();
+          const [adminUser] = await db.select({ id: users.id, username: users.username })
+            .from(users).where(eq(users.isAdmin, true)).limit(1);
+          if (adminUser) {
+            return {
+              user: { id: adminUser.id, username: adminUser.username, isAdmin: true },
+              session: null,
+            };
+          }
+          // Fallback if no admin user exists yet
           return {
             user: { id: 'system', username: 'system', isAdmin: true },
             session: null,

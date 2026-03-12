@@ -13,6 +13,8 @@ function isPublicPath(path: string): boolean {
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
   // All health endpoints are public (used by monitoring, load balancers, k8s probes)
   if (path.startsWith('/api/health')) return true;
+  // Webhook endpoints use HMAC signature verification instead of bearer auth
+  if (path.startsWith('/api/webhooks/')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
