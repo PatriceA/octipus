@@ -204,7 +204,8 @@ export class PermissionManager {
     toolId: string,
     action: string,
     context: Record<string, unknown>,
-    sessionId?: string
+    sessionId?: string,
+    callerToolName?: string,
   ): Promise<string> {
     const requestId = generateId();
 
@@ -216,7 +217,7 @@ export class PermissionManager {
       toolId,
       action,
       context: {
-        toolName: action,
+        toolName: callerToolName || action,
         toolArguments: context,
       },
       expiresAt: new Date(Date.now() + PERMISSION_REQUEST_TTL),
@@ -233,7 +234,7 @@ export class PermissionManager {
       details: { toolId, action, agentId },
     });
 
-    securityLogger.info({ requestId, userId, toolId, action }, 'Permission requested');
+    securityLogger.info({ requestId, userId, toolId, action, callerToolName }, 'Permission requested');
 
     // Notify WebSocket listeners
     this.emitRequest({
@@ -242,7 +243,7 @@ export class PermissionManager {
       agentId,
       toolId,
       action,
-      toolName: action,
+      toolName: callerToolName || action,
       args: context,
       sessionId,
     });

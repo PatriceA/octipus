@@ -780,11 +780,22 @@ export default function ChatPage() {
         {/* Inline banners for approval/permission */}
         {pendingPermission && (
           <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-3 flex items-center justify-between">
-            <div>
+            <div className="min-w-0 flex-1 mr-3">
               <p className="text-sm font-medium text-yellow-900 dark:text-yellow-200">Permission Required</p>
               <p className="text-sm text-gray-700 dark:text-gray-300">
-                <span className="font-mono">{pendingPermission.skillId}</span> wants to execute <span className="font-mono font-medium">{pendingPermission.action}</span>
+                <span className="font-mono font-medium">{pendingPermission.skillId}</span>
+                {' '}&middot;{' '}
+                <span className="font-mono">{pendingPermission.action}</span>
               </p>
+              {pendingPermission.args && Object.keys(pendingPermission.args).length > 0 && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono truncate">
+                  {Object.entries(pendingPermission.args)
+                    .filter(([, v]) => v != null && String(v).length > 0)
+                    .slice(0, 3)
+                    .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+                    .join(' · ')}
+                </p>
+              )}
             </div>
             <div className="flex gap-2">
               <button onClick={() => handlePermissionResponse(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">

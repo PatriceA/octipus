@@ -92,7 +92,8 @@ export abstract class BaseTool {
             this.id,
             action,
             args,
-            context.sessionId
+            context.sessionId,
+            toolName,
           );
 
           toolLogger.info(
