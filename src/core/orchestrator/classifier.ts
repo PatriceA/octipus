@@ -36,9 +36,15 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'outlook', 'office 365', 'microsoft 365', 'teams',
     'compose', 'reply', 'forward', 'draft',
   ],
+  automation: [
+    'schedule', 'scheduled task', 'recurring task', 'cron', 'hook',
+    'create a task', 'create a schedule', 'every day', 'every morning',
+    'every hour', 'daily', 'weekly', 'automate', 'automation',
+    'remind me', 'notification', 'alert me', 'send me every',
+  ],
   general: [
     'run', 'execute', 'check', 'monitor', 'update', 'clean', 'organize',
-    'automate', 'schedule', 'notify', 'track', 'manage', 'generate',
+    'notify', 'track', 'manage', 'generate',
     'convert', 'transform', 'parse', 'process', 'extract', 'scrape',
   ],
 };

@@ -94,6 +94,7 @@ export class SchedulingTool extends BaseTool {
         if (action === 'spawn_agent') {
           if (args.agent_prompt) actionConfig.agentPrompt = args.agent_prompt;
           actionConfig.orchestrated = args.orchestrated !== false;
+          actionConfig.notifyOwner = true;
         }
 
         const hook = await hookManager.createHook({
