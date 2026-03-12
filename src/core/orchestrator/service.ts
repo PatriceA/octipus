@@ -1,3 +1,4 @@
+import { resolve } from 'path';
 import { getAgentManager } from '@/core/agent-manager';
 import type { AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
@@ -536,9 +537,19 @@ export class OrchestratorService {
     });
 
     try {
+      // Inject workspace context so workers know where the project files are
+      const config = getConfig();
+      const workspaceRoot = resolve(config.workspace.rootPath);
+      const additionalPaths = config.workspace.additionalPaths || [];
+      let workspaceHint = `\n\n--- Workspace ---\nProject root: ${workspaceRoot}`;
+      if (additionalPaths.length > 0) {
+        workspaceHint += `\nAdditional paths: ${additionalPaths.join(', ')}`;
+      }
+      workspaceHint += `\nWhen using filesystem tools, use the project root path above as the base directory. Do NOT use "." — always use absolute paths.`;
+
       const workerMessage = input
-        ? `${task}\n\n--- Context from previous steps ---\n${input}`
-        : task;
+        ? `${task}${workspaceHint}\n\n--- Context from previous steps ---\n${input}`
+        : `${task}${workspaceHint}`;
 
       const result = await worker.run(workerMessage);
       const durationMs = Date.now() - startTime;
@@ -636,7 +647,6 @@ export class OrchestratorService {
   private async loadProjectSummary(): Promise<string | null> {
     try {
       const config = getConfig();
-      const { resolve } = await import('path');
       const summaryPath = resolve(config.workspace?.rootPath || '.', '.assistant/project-summary.md');
       const file = Bun.file(summaryPath);
       if (await file.exists()) {

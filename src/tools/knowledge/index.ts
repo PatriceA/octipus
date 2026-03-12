@@ -75,6 +75,7 @@ export class KnowledgeTool extends BaseTool {
         );
         return { indexed: true, chunks, path: args.path };
       },
+      { permissionAction: 'index' },
     );
 
     this.registerTool(
@@ -90,6 +91,7 @@ export class KnowledgeTool extends BaseTool {
         const result = await indexer.indexDirectory(args.path as string, patterns);
         return result;
       },
+      { permissionAction: 'index' },
     );
   }
 }

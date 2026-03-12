@@ -507,10 +507,15 @@ export default function ChatPage() {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(agentId);
           if (existing) {
+            // Use server-reported durationMs to compute endTime so it freezes accurately
+            const endTime = d.durationMs != null
+              ? existing.startTime + d.durationMs
+              : Date.now();
             next.set(agentId, {
               ...existing,
               status: workerStatus,
-              endTime: Date.now(),
+              endTime,
+              durationMs: d.durationMs,
               totalTokens: d.totalTokens,
               iterations: d.iterations,
               error: d.error,

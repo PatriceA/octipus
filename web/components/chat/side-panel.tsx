@@ -27,6 +27,7 @@ interface TrackedAgent {
   toolCalls: Array<{ id: string; name: string; argsSummary?: string }>;
   startTime: number;
   endTime?: number;
+  durationMs?: number;
   totalTokens?: number;
   iterations?: number;
   error?: string;

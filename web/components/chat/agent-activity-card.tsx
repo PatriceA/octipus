@@ -18,6 +18,7 @@ export interface TrackedAgent {
   toolCalls: ToolCallInfo[];
   startTime: number;
   endTime?: number;
+  durationMs?: number;
   totalTokens?: number;
   iterations?: number;
   parentAgentId?: string;

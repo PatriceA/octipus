@@ -47,6 +47,7 @@ export interface TrackedAgent {
   toolCalls: Array<{ id: string; name: string; argsSummary?: string }>;
   startTime: number;
   endTime?: number;
+  durationMs?: number;
   totalTokens?: number;
   iterations?: number;
   error?: string;
@@ -350,7 +351,7 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
     );
 
   const durationMs =
-    agent.endTime != null ? agent.endTime - agent.startTime : undefined;
+    agent.durationMs ?? (agent.endTime != null ? agent.endTime - agent.startTime : undefined);
 
   return (
     <div
