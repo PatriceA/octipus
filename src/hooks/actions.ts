@@ -59,7 +59,11 @@ async function executeNotify(
   if (config.notifyOwner && hook?.userId) {
     const { userRepository } = await import('@/db/repositories/user-repository');
     const user = await userRepository.findById(hook.userId);
-    const bindings = (user?.channelBindings as import('@/db/schema/users').ChannelBinding[]) || [];
+    let rawBindings = user?.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
+    if (typeof rawBindings === 'string') {
+      try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
+    }
+    const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
 
     if (bindings.length === 0) {
       return { success: false, error: 'No channels linked to your account. Link a channel in Settings → Channels.' };
@@ -329,7 +333,11 @@ async function executeTool(
 async function notifyOwnerWithResult(userId: string, result: string): Promise<void> {
   const { userRepository } = await import('@/db/repositories/user-repository');
   const user = await userRepository.findById(userId);
-  const bindings = (user?.channelBindings as import('@/db/schema/users').ChannelBinding[]) || [];
+  let rawBindings = user?.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
+  if (typeof rawBindings === 'string') {
+    try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
+  }
+  const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
   const verified = bindings.filter(b => b.isVerified);
 
   if (verified.length === 0) return;

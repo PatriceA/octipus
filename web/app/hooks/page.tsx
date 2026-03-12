@@ -235,6 +235,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
       if (action === 'spawn_agent') {
         actionConfig.agentPrompt = agentPrompt;
         actionConfig.orchestrated = orchestrated;
+        actionConfig.notifyOwner = notifyOwner;
       }
       if (action === 'notify') {
         actionConfig.notifyOwner = notifyOwner;
@@ -440,6 +441,15 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 />
                 Route through orchestrator (recommended — enables multi-stage pipelines)
               </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={notifyOwner}
+                  onChange={e => setNotifyOwner(e.target.checked)}
+                  className="rounded"
+                />
+                Send result to my linked channels
+              </label>
             </>
           )}
 
@@ -610,6 +620,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
       case 'spawn_agent':
         cfg.agentPrompt = agentPrompt;
         cfg.orchestrated = orchestrated;
+        cfg.notifyOwner = notifyOwner;
         if (agentTopic) cfg.agentTopic = agentTopic;
         if (agentModel) cfg.agentModel = agentModel;
         break;
@@ -747,6 +758,10 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
               <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />
                 Route through orchestrator
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input type="checkbox" checked={notifyOwner} onChange={e => setNotifyOwner(e.target.checked)} className="rounded" />
+                Send result to my linked channels
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <div>
