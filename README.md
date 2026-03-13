@@ -16,9 +16,9 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 
 ### Intelligent Agent Orchestration
 - **16 specialist roles** — coding, research, review, QA, design, DevOps, security, data engineering, AI/ML, finance, automation, project management, technical writing, communication, and more
-- **15 pre-built expert personas** — Coder, Reviewer, UI/UX Designer, DevOps Engineer, Security Analyst, Data Engineer, AI Engineer, Financial Analyst, and others — each pre-loaded with relevant domain knowledge
+- **15 pre-built expert personas** — Coder, Reviewer, UI/UX Designer, DevOps Engineer, Security Analyst, Data Engineer, AI Engineer, Financial Analyst, and others — each pre-loaded with relevant domain knowledge. Every expert now includes **structured prompts**: critical rules (constraints), deliverable templates (expected output format), and success metrics (evaluation criteria)
 - **20 domain knowledge skills** — software architecture, test automation, security practices, cloud platforms, database design, API design, machine learning, and more — injected into agent system prompts for grounded, expert-level responses
-- **Dynamic teams and pipelines** — orchestrator spawns parallel agent teams or sequential multi-stage pipelines with approval gates
+- **Dynamic teams and pipelines** — orchestrator spawns parallel agent teams or sequential multi-stage pipelines with approval gates. Pipelines support **QA retry loops** (failed QA stages automatically retry the previous implementation stage with feedback, up to 3 retries) and **handoff context documents** (structured summaries of completed work, decisions, open questions, and artifacts passed between stages)
 
 ### Every Model Provider, One Interface
 - **Local models** via Ollama — complete privacy, zero cost
@@ -26,6 +26,7 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **CLI model access** — Claude Code, Gemini CLI, Codex CLI (free tier supported)
 - **LiteLLM proxy** — unified gateway to 100+ model providers
 - **Smart routing** — topic-based model selection, quota tracking, cost monitoring, health checks
+- **Adaptive rate limiting** — per-provider concurrency semaphores, token bucket RPM, adaptive concurrency adjustment, priority request queuing, and exponential backoff. Circuit breaker per provider (closed/open/half-open) with automatic failover to LiteLLM. Redis-backed state
 
 ### Tools That Actually Do Things
 - **Filesystem** — read, write, search, organize files and directories
@@ -46,6 +47,7 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Telegram** — full bot with slash commands and inline responses
 - **Slack** — Socket Mode with slash commands and threading
 - **Microsoft Teams** — bot mention-based interaction
+- **WhatsApp** — Meta Cloud API with webhook-based messaging, media support, HMAC signature verification, and message deduplication
 - **WebChat** — real-time WebSocket interface via the web UI
 
 ### Enterprise-Grade Security
@@ -57,8 +59,13 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Audit logging** — every action tracked with user, resource, and context
 - **Hardened defaults** — HMAC webhook verification, generic error messages, restricted health endpoints, session limits
 
+### Evaluation & Testing
+- **Agent evaluation harness** — YAML-based test runner (`bun run eval`) for evaluating routing accuracy, tool usage, and response quality. 13 assertion types including `routes_to_role`, `classification`, `response_quality` (LLM-graded), and `no_hallucination`. Supports unit and integration modes
+- **Red-team testing** — 5 attack plugins with 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift. Severity levels and defense assertions per test
+- **Eval UI** — web dashboard at `/eval` with summary cards, pass rate charts, assertion breakdowns, latency histograms, run comparison matrix with regression detection, and red-team results grouped by attack category
+
 ### Full Web UI and Terminal UI
-- **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, settings
+- **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, settings
 - **Terminal UI** (Ink) — full-featured TUI with dashboard, agents, chat, logs, models, pipelines, secrets
 - **MCP server** — expose all capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients
 
@@ -155,14 +162,14 @@ Make globally available: `bun link`
 │    REST API  ·  WebSocket  ·  Swagger  ·  Auth Guard        │
 ├─────────────────────────────────────────────────────────────┤
 │                      Core Runtime                           │
-│  Orchestrator  ·  Agent Manager  ·  Router  ·  Scheduler    │
+│  Orchestrator · Agent Manager · Router · Scheduler · Eval   │
 ├──────────┬──────────┬──────────┬──────────┬─────────────────┤
 │ Channels │  Tools   │ Security │  Models  │  Integrations   │
 │ Telegram │Filesystem│ Sessions │ Ollama   │ MCP Server      │
 │ Slack    │ Shell    │ Passkeys │ OpenAI   │ Hooks           │
 │ Teams    │ Git      │ TOTP 2FA │Anthropic │ Voice           │
-│ WebChat  │ Browser  │ Vault    │ Gemini   │ Pipelines       │
-│          │ Docker   │Permissions│LiteLLM  │ Notifications   │
+│ WhatsApp │ Browser  │ Vault    │ Gemini   │ Pipelines       │
+│ WebChat  │ Docker   │Permissions│LiteLLM  │ Notifications   │
 ├──────────┴──────────┴──────────┴──────────┴─────────────────┤
 │  PostgreSQL/PGlite + pgvector  ·  Redis/In-Memory  ·  ORM  │
 └─────────────────────────────────────────────────────────────┘
@@ -175,6 +182,7 @@ Make globally available: `bun link`
 | | |
 |---|---|
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | How tools, skills, experts, and agents work together |
+| **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat setup and configuration |
 | **[API Reference](docs/API.md)** | Complete REST API with all endpoints |
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control by AI agents |
