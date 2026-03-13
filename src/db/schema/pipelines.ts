@@ -13,7 +13,7 @@ export const stageStatusEnum = pgEnum('stage_status', [
 export const pipelines = pgTable('pipelines', {
   id: uuid('id').primaryKey().defaultRandom(),
   orchestratorAgentId: text('orchestrator_agent_id').notNull(),
-  sessionId: uuid('session_id').references(() => sessions.id).notNull(),
+  sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }).notNull(),
   userId: uuid('user_id').references(() => users.id).notNull(),
   title: text('title').notNull(),
   type: text('type').notNull(), // 'development' | 'research' | 'general'
