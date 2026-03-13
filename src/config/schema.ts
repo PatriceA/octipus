@@ -164,6 +164,22 @@ export const oauthConfigSchema = z.object({
   publicUrl: z.string().optional(),
 }).default({});
 
+// Rate limit configuration schema
+export const rateLimitConfigSchema = z.object({
+  /** Per-provider overrides */
+  providers: z.record(z.object({
+    maxConcurrency: z.number().min(1).optional(),
+    rpm: z.number().min(0).optional(),
+    tpm: z.number().min(0).optional(),
+    minDelay: z.number().min(0).optional(),
+    adaptive: z.boolean().optional(),
+  })).optional(),
+  /** Global max concurrent requests across all providers */
+  globalMaxConcurrency: z.number().min(1).default(50),
+  /** Max time (ms) a request can wait in the queue before being rejected */
+  queueTimeout: z.number().min(0).default(30000),
+}).optional();
+
 // Workspace configuration schema
 export const workspaceConfigSchema = z.object({
   rootPath: z.string().default('./workspace'),
@@ -194,6 +210,7 @@ export const configSchema = z.object({
   cliModels: cliModelsConfigSchema.default({}),
   workspace: workspaceConfigSchema.default({}),
   oauth: oauthConfigSchema,
+  rateLimit: rateLimitConfigSchema,
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -217,3 +234,4 @@ export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
 export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
+export type RateLimitConfig = z.infer<typeof rateLimitConfigSchema>;

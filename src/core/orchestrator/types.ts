@@ -8,6 +8,15 @@ export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_appro
 
 export type StageStatus = 'pending' | 'running' | 'awaiting_approval' | 'approved' | 'completed' | 'failed' | 'skipped';
 
+export type PipelineStageType = 'standard' | 'qa_validation';
+
+export interface QAValidationResult {
+  passed: boolean;
+  issues: string[];
+  feedback: string;
+  retryCount: number;
+}
+
 export interface RoleConfig {
   role: AgentRole;
   toolIds: string[];

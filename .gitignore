@@ -51,6 +51,9 @@ bun.lockb
 /*.ts
 !drizzle.config.ts
 
+# Eval results (generated)
+eval/results/*.json
+
 # Claude Code local config & skills
 .claude/settings.local.json
 .claude/skills/

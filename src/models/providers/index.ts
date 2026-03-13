@@ -8,6 +8,8 @@ import { GeminiProvider } from './gemini-provider';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
+import { getRateLimitManager, RateLimitError } from '../rate-limiter';
+import { getCircuitBreakerRegistry, CircuitOpenError } from '../circuit-breaker';
 
 export type { ModelProvider, ProviderType, ProviderHealthStatus, QuotaStatus } from './interface';
 export { LiteLLMProvider } from './litellm-provider';
@@ -18,8 +20,38 @@ export { AnthropicProvider } from './anthropic-provider';
 export { GeminiProvider } from './gemini-provider';
 
 /**
+ * Resolve the rate-limit provider key from a ModelProvider + model name.
+ * CLI providers use per-tool keys; others use the provider name.
+ */
+function resolveRateLimitKey(provider: ModelProvider, model: string): string {
+  if (provider.type === 'cli') {
+    const lower = model.toLowerCase();
+    if (lower.includes('claude')) return 'cli-claude';
+    if (lower.includes('gemini')) return 'cli-gemini';
+    if (lower.includes('codex')) return 'cli-codex';
+    return 'cli-claude'; // default CLI
+  }
+  return provider.name;
+}
+
+/** Check if an error is a 429 rate-limit response */
+function isRateLimitResponse(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as any;
+  // OpenAI SDK / LiteLLM proxy set status 429
+  if (e.status === 429 || e.statusCode === 429) return true;
+  // Some SDKs use error.code
+  if (e.code === 'rate_limit_exceeded') return true;
+  // Check message as fallback
+  const msg = e.message || '';
+  return /rate.limit|429|too.many.requests/i.test(msg);
+}
+
+/**
  * Provider router — selects the right provider based on the model name
  * and handles fallback when a provider is unhealthy or quota-exhausted.
+ *
+ * Now integrates per-provider rate limiting and circuit breaking.
  *
  * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → LiteLLM (catch-all)
  * LiteLLM is only registered if proxyUrl is configured.
@@ -29,6 +61,20 @@ export class ProviderRouter {
 
   constructor() {
     const config = getConfig();
+
+    // Apply config overrides to rate limit manager
+    if (config.rateLimit) {
+      const manager = getRateLimitManager();
+      manager.updateGlobalConfig({
+        globalMaxConcurrency: config.rateLimit.globalMaxConcurrency,
+        queueTimeout: config.rateLimit.queueTimeout,
+      });
+      if (config.rateLimit.providers) {
+        for (const [provider, overrides] of Object.entries(config.rateLimit.providers)) {
+          manager.updateProviderConfig(provider, overrides);
+        }
+      }
+    }
 
     // Register providers in priority order
     this.providers.push(new CLIProvider());
@@ -54,28 +100,115 @@ export class ProviderRouter {
     return this.providers[this.providers.length - 1];
   }
 
-  /** Complete with automatic provider selection */
+  /** Complete with automatic provider selection, rate limiting, and circuit breaking */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const provider = this.getProvider(options.model);
+    const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
     modelLogger.debug({
       model: options.model,
       provider: provider.name,
+      rateLimitKey,
     }, 'Routing completion request');
 
-    return provider.complete(options);
+    // Check circuit breaker
+    const circuitBreakers = getCircuitBreakerRegistry();
+    try {
+      circuitBreakers.checkAllowed(rateLimitKey);
+    } catch (error) {
+      if (error instanceof CircuitOpenError) {
+        // Try fallback to LiteLLM if available and it's not the same provider
+        if (provider.name !== 'litellm' && this.hasLiteLLM()) {
+          modelLogger.warn({
+            provider: provider.name,
+            model: options.model,
+          }, 'Circuit open, falling back to LiteLLM');
+          return this.completeViaFallback(options);
+        }
+      }
+      throw error;
+    }
+
+    // Acquire rate limit token
+    const rateLimiter = getRateLimitManager();
+    const token = await rateLimiter.acquire(rateLimitKey);
+
+    const startTime = Date.now();
+    try {
+      const result = await provider.complete(options);
+      const latencyMs = Date.now() - startTime;
+
+      token.reportSuccess(latencyMs, result.usage.totalTokens);
+      circuitBreakers.recordSuccess(rateLimitKey);
+
+      return result;
+    } catch (error) {
+      const isRL = isRateLimitResponse(error);
+      token.reportError(isRL);
+      circuitBreakers.recordFailure(rateLimitKey);
+
+      // On rate limit, try fallback if available
+      if (isRL && provider.name !== 'litellm' && this.hasLiteLLM()) {
+        modelLogger.warn({
+          provider: provider.name,
+          model: options.model,
+        }, 'Rate limited, falling back to LiteLLM');
+        token.release();
+        return this.completeViaFallback(options);
+      }
+
+      throw error;
+    } finally {
+      token.release();
+    }
   }
 
-  /** Stream with automatic provider selection */
+  /** Stream with automatic provider selection, rate limiting, and circuit breaking */
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const provider = this.getProvider(options.model);
+    const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
     modelLogger.debug({
       model: options.model,
       provider: provider.name,
+      rateLimitKey,
     }, 'Routing streaming request');
 
-    yield* provider.stream(options);
+    // Check circuit breaker
+    const circuitBreakers = getCircuitBreakerRegistry();
+    try {
+      circuitBreakers.checkAllowed(rateLimitKey);
+    } catch (error) {
+      if (error instanceof CircuitOpenError && provider.name !== 'litellm' && this.hasLiteLLM()) {
+        modelLogger.warn({
+          provider: provider.name,
+          model: options.model,
+        }, 'Circuit open, falling back to LiteLLM for stream');
+        yield* this.streamViaFallback(options);
+        return;
+      }
+      throw error;
+    }
+
+    // Acquire rate limit token
+    const rateLimiter = getRateLimitManager();
+    const token = await rateLimiter.acquire(rateLimitKey);
+
+    const startTime = Date.now();
+    try {
+      yield* provider.stream(options);
+
+      const latencyMs = Date.now() - startTime;
+      token.reportSuccess(latencyMs);
+      circuitBreakers.recordSuccess(rateLimitKey);
+    } catch (error) {
+      const isRL = isRateLimitResponse(error);
+      token.reportError(isRL);
+      circuitBreakers.recordFailure(rateLimitKey);
+      throw error;
+    } finally {
+      token.release();
+    }
   }
 
   /** Get all registered providers */
@@ -86,6 +219,51 @@ export class ProviderRouter {
   /** Get the CLI provider for quota management */
   getCLIProvider(): CLIProvider {
     return this.providers.find(p => p.type === 'cli') as CLIProvider;
+  }
+
+  // ── Private helpers ──
+
+  private hasLiteLLM(): boolean {
+    return this.providers.some(p => p.name === 'litellm');
+  }
+
+  private getLiteLLM(): ModelProvider {
+    return this.providers.find(p => p.name === 'litellm')!;
+  }
+
+  private async completeViaFallback(options: CompletionOptions): Promise<CompletionResult> {
+    const fallback = this.getLiteLLM();
+    const token = await getRateLimitManager().acquire('litellm');
+    const startTime = Date.now();
+    try {
+      const result = await fallback.complete(options);
+      token.reportSuccess(Date.now() - startTime, result.usage.totalTokens);
+      getCircuitBreakerRegistry().recordSuccess('litellm');
+      return result;
+    } catch (error) {
+      token.reportError(isRateLimitResponse(error));
+      getCircuitBreakerRegistry().recordFailure('litellm');
+      throw error;
+    } finally {
+      token.release();
+    }
+  }
+
+  private async *streamViaFallback(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    const fallback = this.getLiteLLM();
+    const token = await getRateLimitManager().acquire('litellm');
+    const startTime = Date.now();
+    try {
+      yield* fallback.stream(options);
+      token.reportSuccess(Date.now() - startTime);
+      getCircuitBreakerRegistry().recordSuccess('litellm');
+    } catch (error) {
+      token.reportError(isRateLimitResponse(error));
+      getCircuitBreakerRegistry().recordFailure('litellm');
+      throw error;
+    } finally {
+      token.release();
+    }
   }
 }
 

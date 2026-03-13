@@ -17,6 +17,7 @@ import {
   PanelLeftClose,
   PanelLeft,
   Clock,
+  FlaskConical,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSidebarStore } from '@/lib/sidebar-store';
@@ -48,6 +49,7 @@ const navGroups: NavGroup[] = [
       { name: 'Pipelines', href: '/pipelines', icon: GitBranch },
       { name: 'Tools', href: '/tools', icon: Wrench },
       { name: 'Skills', href: '/skills', icon: BookOpen },
+      { name: 'Evaluations', href: '/eval', icon: FlaskConical },
     ],
   },
   {

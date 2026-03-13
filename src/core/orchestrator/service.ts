@@ -548,6 +548,24 @@ export class OrchestratorService {
           expertPrompt = matchingExpert.systemPrompt || undefined;
           expertModel = matchingExpert.modelPreference || undefined;
 
+          // Inject structured prompt sections (critical rules, deliverable template, success metrics)
+          const criticalRules = (matchingExpert.criticalRules as string[]) || [];
+          if (criticalRules.length > 0) {
+            expertPrompt = (expertPrompt || '') + '\n\n# Critical Rules\nYou MUST follow these rules:\n' +
+              criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
+          }
+
+          const deliverableTemplate = matchingExpert.deliverableTemplate;
+          if (deliverableTemplate) {
+            expertPrompt = (expertPrompt || '') + '\n\n# Deliverable Template\nStructure your output as follows:\n' + deliverableTemplate;
+          }
+
+          const successMetrics = (matchingExpert.successMetrics as string[]) || [];
+          if (successMetrics.length > 0) {
+            expertPrompt = (expertPrompt || '') + '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
+              successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
+          }
+
           // Inject domain knowledge from assigned skills
           const skillIds = (matchingExpert.skillIds as string[]) || [];
           if (skillIds.length > 0) {

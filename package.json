@@ -20,6 +20,9 @@
     "tui": "bun run tui/index.tsx",
     "test": "bun test",
     "test:e2e": "bun run scripts/test-e2e.ts",
+    "eval": "bun run src/eval/cli.ts",
+    "eval:routing": "bun run src/eval/cli.ts --suite routing",
+    "eval:quality": "bun run src/eval/cli.ts --suite quality",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

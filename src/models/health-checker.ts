@@ -4,6 +4,8 @@ import { getModelRegistry } from './model-registry';
 import { RedisCache } from '@/db/redis';
 import { modelLogger } from '@/utils/logger';
 import type { HealthStatus } from '@/core/types';
+import { getRateLimitManager, type RateLimitStats } from './rate-limiter';
+import { getCircuitBreakerRegistry, type CircuitBreakerStatus } from './circuit-breaker';
 
 const HEALTH_CHECK_INTERVAL = 60000; // 1 minute
 const HEALTH_CACHE_TTL = 30; // 30 seconds
@@ -279,12 +281,28 @@ export class HealthChecker {
   }
 
   /**
+   * Get rate limit stats for all tracked providers
+   */
+  getRateLimitStats(): RateLimitStats[] {
+    return getRateLimitManager().getAllStats();
+  }
+
+  /**
+   * Get circuit breaker statuses for all tracked providers
+   */
+  getCircuitBreakerStatuses(): CircuitBreakerStatus[] {
+    return getCircuitBreakerRegistry().getAllStatuses();
+  }
+
+  /**
    * Get overall system health
    */
   async getSystemHealth(): Promise<{
     overall: 'healthy' | 'degraded' | 'unhealthy';
     services: HealthStatus[];
     providers: ProviderHealth[];
+    rateLimits: RateLimitStats[];
+    circuitBreakers: CircuitBreakerStatus[];
   }> {
     const [litellm, ollama, providers] = await Promise.all([
       this.checkLiteLLMProxy(),
@@ -293,12 +311,20 @@ export class HealthChecker {
     ]);
 
     const services = [litellm, ollama];
+    const rateLimits = this.getRateLimitStats();
+    const circuitBreakers = this.getCircuitBreakerStatuses();
 
     // Determine overall status
     const allStatuses = [
       ...services.map((s) => s.status),
       ...providers.map((p) => p.status),
     ];
+
+    // Factor in circuit breakers — open circuits degrade health
+    const openCircuits = circuitBreakers.filter(cb => cb.state === 'open');
+    if (openCircuits.length > 0) {
+      allStatuses.push('degraded');
+    }
 
     let overall: 'healthy' | 'degraded' | 'unhealthy';
     if (allStatuses.every((s) => s === 'healthy')) {
@@ -309,7 +335,7 @@ export class HealthChecker {
       overall = 'unhealthy';
     }
 
-    return { overall, services, providers };
+    return { overall, services, providers, rateLimits, circuitBreakers };
   }
 
   /**
