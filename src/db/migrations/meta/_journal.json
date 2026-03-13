@@ -85,6 +85,13 @@
       "when": 1710000000000,
       "tag": "0011_merge_tasks_into_hooks",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1710100000000,
+      "tag": "0012_expert_structured_prompts",
+      "breakpoints": true
     }
   ]
 }
