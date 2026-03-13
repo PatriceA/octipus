@@ -127,7 +127,7 @@ export function createServer() {
           // Resolve to the first admin user so UUID-typed queries work
           const db = getDb();
           const [adminUser] = await db.select({ id: users.id, username: users.username })
-            .from(users).where(eq(users.isAdmin, true)).limit(1);
+            .from(users).where(eq(users.isAdmin, true)).orderBy(users.createdAt).limit(1);
           if (adminUser) {
             return {
               user: { id: adminUser.id, username: adminUser.username, isAdmin: true },

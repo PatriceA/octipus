@@ -174,7 +174,20 @@ export class OrchestratorService {
   private async resolveSession(sessionId: string, userId: string, channel: string): Promise<string> {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidRegex.test(sessionId)) {
-      return sessionId;
+      // Verify the session exists; create it if not (e.g. hook-generated UUIDs)
+      const existing = await sessionRepository.findById(sessionId);
+      if (existing) return sessionId;
+
+      const session = await sessionRepository.create({
+        id: sessionId,
+        userId,
+        channelType: channel,
+        channelId: sessionId,
+        title: `${channel} conversation`,
+        status: 'active',
+      });
+      coreLogger.info({ sessionId: session.id, channel }, 'Created session for UUID');
+      return session.id;
     }
 
     const parts = sessionId.split('-');

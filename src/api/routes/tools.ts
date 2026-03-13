@@ -204,8 +204,8 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       }
 
       // Construct a minimal AgentContext for API-driven execution
-      // System user (master key auth) uses nil UUID since permission DB expects UUID format
-      const userId = user.id === 'system' ? '00000000-0000-0000-0000-000000000000' : user.id;
+      // Keep system user ID as-is so vault lookups (OAuth tokens) work correctly
+      const userId = user.id;
       const context: import('@/core/types').AgentContext = {
         id: `api-${Date.now().toString(36)}`,
         sessionId: 'api',
