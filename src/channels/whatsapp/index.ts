@@ -183,8 +183,22 @@ export class WhatsAppChannel extends BaseChannel {
 
     if (!content && attachments.length === 0) return;
 
-    // Handle /link command before user binding
+    // Deduplicate: ignore messages older than 60 seconds (Meta retries on previous failures)
+    const msgAge = Date.now() / 1000 - Number(msg.timestamp);
+    if (msgAge > 60) {
+      channelLogger.debug({ waUserId, msgAge: Math.round(msgAge) }, 'Ignoring old/retried WhatsApp message');
+      return;
+    }
+
+    // Find user binding first — needed for /link dedup
+    const user = await userRepository.findByChannelBinding('whatsapp', waUserId);
+
+    // Handle /link command
     if (content.startsWith('/link')) {
+      if (user) {
+        await this.sendTextMessage(waUserId, 'Your account is already linked!');
+        return;
+      }
       const code = await generateLinkCode({
         channelType: 'whatsapp',
         channelUserId: waUserId,
@@ -196,9 +210,6 @@ export class WhatsAppChannel extends BaseChannel {
       );
       return;
     }
-
-    // Find user binding
-    const user = await userRepository.findByChannelBinding('whatsapp', waUserId);
 
     if (!user) {
       channelLogger.info({ waUserId, contactName }, 'New WhatsApp user - needs linking');
