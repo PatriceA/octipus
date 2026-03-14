@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Workflow,
   Cable,
+  ChevronRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { OAuthIntegrationsSection } from './oauth-section';
@@ -276,7 +277,6 @@ function IntegrationSettingsSection() {
 
   // Split into N8N and MCP groups
   const n8nSettings = integrationSettings.filter(s => s.key.startsWith('n8n.') && !s.isSecret);
-  const mcpSettings = integrationSettings.filter(s => s.key.startsWith('mcp.') && !s.isSecret);
   const oauthSettings = integrationSettings.filter(s => s.key.startsWith('oauth.') && !s.isSecret);
   const hasSecrets = integrationSettings.some(s => s.isSecret);
 
@@ -320,27 +320,20 @@ function IntegrationSettingsSection() {
         </div>
       )}
 
-      {/* MCP Settings */}
-      {mcpSettings.length > 0 && (
-        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
-          <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
-            <Cable className="w-5 h-5 text-gray-500 dark:text-gray-400" />
-            <div>
-              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">MCP Settings</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Model Context Protocol server configuration</p>
-            </div>
-          </div>
-          <div className="px-5 py-3">
-            <SettingsGroup
-              settings={mcpSettings}
-              onSave={handleSave}
-              onReset={handleReset}
-              saving={saving}
-              saved={saved}
-            />
+      {/* MCP Servers — managed on the dedicated /mcp page */}
+      <a
+        href="/mcp"
+        className="flex items-center justify-between p-4 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl hover:bg-gray-50/50 dark:hover:bg-gray-800/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <Cable className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">MCP Servers</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Add and manage Model Context Protocol servers</p>
           </div>
         </div>
-      )}
+        <ChevronRight className="w-5 h-5 text-gray-400" />
+      </a>
 
       {/* OAuth Settings (publicUrl) */}
       {oauthSettings.length > 0 && (
