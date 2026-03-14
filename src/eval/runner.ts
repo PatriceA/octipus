@@ -15,6 +15,32 @@ import type {
 } from './types';
 import { evaluateAllAssertions, type GraderFunction } from './assertions';
 
+// ── Default model resolution ────────────────────────────────────────
+
+let _resolvedDefaultModel: string | undefined;
+
+async function getDefaultModel(): Promise<string> {
+  if (_resolvedDefaultModel) return _resolvedDefaultModel;
+  try {
+    const { getModelRegistry } = await import('@/models');
+    const registry = getModelRegistry();
+    const defaultModel = await registry.getDefaultModel();
+    if (defaultModel?.modelId) {
+      _resolvedDefaultModel = defaultModel.modelId;
+      return _resolvedDefaultModel;
+    }
+    const models = await registry.getAllModels();
+    if (models.length > 0) {
+      _resolvedDefaultModel = models[0].modelId;
+      return _resolvedDefaultModel;
+    }
+  } catch {
+    // Ignore DB failures and fall through to explicit error below.
+  }
+
+  throw new Error('No enabled models configured in the database. Register a model (and set one as default) before running evals.');
+}
+
 // ── Unit mode helpers ────────────────────────────────────────────────
 
 async function runTestUnit(
@@ -44,31 +70,56 @@ async function runTestUnit(
     metadata: { input: test.input, mode: 'unit' },
   };
 
-  // If the test needs a full response (contains, quality, etc.), try direct LLM
+  // If the test needs a full response (contains, quality, defense, etc.), try direct LLM
   const needsResponse = test.assertions.some(a =>
     ['contains', 'not_contains', 'matches_regex', 'response_quality',
-     'no_hallucination', 'follows_format'].includes(a.type),
+     'no_hallucination', 'follows_format', 'defense_held'].includes(a.type),
   );
 
   if (needsResponse && model) {
     try {
-      const { getLiteLLMClient } = await import('@/models/litellm-client');
-      const client = getLiteLLMClient();
-      const result = await client.complete({
-        model,
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant.', timestamp: new Date() },
-          { role: 'user', content: test.input, timestamp: new Date() },
-        ],
-        temperature: 0.3,
-        maxTokens: 1024,
-      });
-      ctx.response = result.content;
-      ctx.tokenCount = {
-        input: result.usage.inputTokens,
-        output: result.usage.outputTokens,
-      };
-      ctx.latencyMs = Date.now() - start;
+      // Apply the same input guard + security preamble that handleMessage() uses
+      const { guardInput, buildSecurityReminder } = await import('@/core/orchestrator/input-guard');
+      const { guardOutput } = await import('@/core/orchestrator/output-guard');
+      const { SECURITY_PREAMBLE } = await import('@/core/orchestrator/roles');
+
+      const inputGuard = guardInput(test.input);
+
+      // If input guard blocks, simulate a blocked response
+      if (inputGuard.action === 'block') {
+        ctx.response = `I can't process this request: ${inputGuard.blockReason}`;
+        ctx.latencyMs = Date.now() - start;
+      } else {
+        // Build system prompt with security preamble + per-request warning
+        let systemContent = SECURITY_PREAMBLE + 'You are a helpful assistant.';
+        if (inputGuard.action === 'warn') {
+          systemContent += buildSecurityReminder(inputGuard.flags);
+        }
+
+        const { getLiteLLMClient } = await import('@/models/litellm-client');
+        const client = getLiteLLMClient();
+        const result = await client.complete({
+          model,
+          messages: [
+            { role: 'system', content: systemContent, timestamp: new Date() },
+            { role: 'user', content: test.input, timestamp: new Date() },
+          ],
+          temperature: 0.3,
+          maxTokens: 1024,
+        });
+        ctx.response = result.content;
+        ctx.tokenCount = {
+          input: result.usage.inputTokens,
+          output: result.usage.outputTokens,
+        };
+        ctx.latencyMs = Date.now() - start;
+
+        // Apply output guard
+        const outputCheck = guardOutput(ctx.response || '', inputGuard.flags);
+        if (outputCheck.action === 'replace') {
+          ctx.response = outputCheck.response;
+        }
+      }
     } catch (err) {
       ctx.response = `[LLM_ERROR] ${(err as Error).message}`;
     }
@@ -249,10 +300,20 @@ export async function runSuite(
     }
   }
 
-  // Apply suite defaults
+  // Apply suite defaults — resolve from config if no model specified anywhere
+  const needsModel = tests.some(t =>
+    t.assertions.some(a => ['contains', 'not_contains', 'matches_regex', 'response_quality',
+      'no_hallucination', 'follows_format', 'defense_held'].includes(a.type)),
+  );
+  const explicitModel = options.model || suite.defaultModel;
+  const model = explicitModel || (needsModel ? await getDefaultModel() : undefined);
   const runOptions: EvalRunnerOptions = {
     ...options,
-    model: options.model || suite.defaultModel,
+    model,
+    // Auto-set grader to the same model if not explicitly set and suite needs LLM grading
+    graderModel: options.graderModel || (model && tests.some(t =>
+      t.assertions.some(a => ['response_quality', 'no_hallucination', 'follows_format', 'defense_held'].includes(a.type)),
+    ) ? model : undefined),
   };
 
   // Run all tests with concurrency control

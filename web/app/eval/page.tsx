@@ -37,6 +37,17 @@ export default function EvalPage() {
   const [results, setResults] = useState<EvalListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [runStatus, setRunStatus] = useState<{
+    running: boolean;
+    runId?: string;
+    type?: string;
+    suite?: string;
+    elapsedMs?: number;
+    output?: string;
+    lastRun?: { runId: string; type: string; suite: string; exitCode: number | null; output: string };
+  }>({ running: false });
+  const [showRunMenu, setShowRunMenu] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
 
   const fetchResults = useCallback(async () => {
     try {
@@ -48,6 +59,61 @@ export default function EvalPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const data = await api.get<{
+        running: boolean;
+        runId?: string;
+        type?: string;
+        suite?: string;
+        elapsedMs?: number;
+        output?: string;
+        lastRun?: { runId: string; type: string; suite: string; exitCode: number | null; output: string };
+      }>('/eval/status');
+      const wasRunning = runStatus.running;
+      setRunStatus(data);
+      if (!data.running && wasRunning) {
+        // Eval just finished — refresh results and show output if it failed
+        fetchResults();
+        if (data.lastRun?.exitCode !== 0) {
+          setShowOutput(true);
+        }
+      }
+      return data.running;
+    } catch {
+      return false;
+    }
+  }, [runStatus.running, fetchResults]);
+
+  const startEval = useCallback(async (type: 'eval' | 'red-team') => {
+    try {
+      setShowRunMenu(false);
+      const data = await api.post<{ runId: string; started: boolean; error?: string; running?: boolean }>('/eval/run', { type });
+      if (data.error) {
+        setError(data.error);
+        return;
+      }
+      setRunStatus({ running: true, runId: data.runId, type });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, []);
+
+  // Poll status while an eval is running
+  useEffect(() => {
+    if (!runStatus.running) return;
+    const interval = setInterval(async () => {
+      const stillRunning = await checkStatus();
+      if (!stillRunning) clearInterval(interval);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [runStatus.running, checkStatus]);
+
+  // Check if something is already running on mount
+  useEffect(() => {
+    checkStatus();
   }, []);
 
   useEffect(() => {
@@ -93,16 +159,47 @@ export default function EvalPage() {
           >
             <RefreshCw className="w-4 h-4" />
           </button>
-          <button
-            onClick={() => {
-              // Future: trigger eval run from UI
-              alert('Run eval via CLI: bun run src/eval/cli.ts');
-            }}
-            className="px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 flex items-center gap-2"
-          >
-            <Play className="w-4 h-4" />
-            Run Eval
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => runStatus.running ? null : setShowRunMenu(!showRunMenu)}
+              disabled={runStatus.running}
+              className={`px-4 py-2 rounded-lg flex items-center gap-2 cursor-pointer ${
+                runStatus.running
+                  ? 'bg-yellow-600 text-white'
+                  : 'bg-primary-800 text-white hover:bg-primary-900'
+              }`}
+            >
+              {runStatus.running ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Running {runStatus.type}...
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" />
+                  Run Eval
+                </>
+              )}
+            </button>
+            {showRunMenu && !runStatus.running && (
+              <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10 min-w-[160px]">
+                <button
+                  onClick={() => startEval('eval')}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-t-lg cursor-pointer"
+                >
+                  <FlaskConical className="w-4 h-4 inline mr-2" />
+                  Standard Eval
+                </button>
+                <button
+                  onClick={() => startEval('red-team')}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-b-lg cursor-pointer"
+                >
+                  <ShieldAlert className="w-4 h-4 inline mr-2" />
+                  Red Team
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -110,6 +207,51 @@ export default function EvalPage() {
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
+        </div>
+      )}
+
+      {/* Running status banner */}
+      {runStatus.running && (
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl px-4 py-3 text-yellow-700 dark:text-yellow-300 text-sm">
+          <div className="flex items-center gap-3">
+            <RefreshCw className="w-4 h-4 animate-spin flex-shrink-0" />
+            <span className="flex-1">
+              <strong>{runStatus.type === 'red-team' ? 'Red-team' : 'Evaluation'}</strong> running
+              {runStatus.suite && runStatus.suite !== 'all' && <> (suite: {runStatus.suite})</>}
+              {runStatus.elapsedMs && <> — {Math.round(runStatus.elapsedMs / 1000)}s elapsed</>}
+            </span>
+            {runStatus.output && (
+              <button onClick={() => setShowOutput(!showOutput)} className="underline text-xs cursor-pointer">
+                {showOutput ? 'hide' : 'show'} output
+              </button>
+            )}
+          </div>
+          {showOutput && runStatus.output && (
+            <pre className="mt-2 text-xs bg-black/10 dark:bg-black/30 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap font-mono">
+              {runStatus.output}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* Last run error banner */}
+      {!runStatus.running && runStatus.lastRun && runStatus.lastRun.exitCode !== 0 && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+          <div className="flex items-center gap-3">
+            <XCircle className="w-4 h-4 flex-shrink-0" />
+            <span className="flex-1">
+              <strong>{runStatus.lastRun.type === 'red-team' ? 'Red-team' : 'Evaluation'}</strong> failed
+              {runStatus.lastRun.exitCode !== null && <> (exit code {runStatus.lastRun.exitCode})</>}
+            </span>
+            <button onClick={() => setShowOutput(!showOutput)} className="underline text-xs cursor-pointer">
+              {showOutput ? 'hide' : 'show'} output
+            </button>
+          </div>
+          {showOutput && runStatus.lastRun.output && (
+            <pre className="mt-2 text-xs bg-black/10 dark:bg-black/30 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap font-mono">
+              {runStatus.lastRun.output}
+            </pre>
+          )}
         </div>
       )}
 

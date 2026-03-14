@@ -54,15 +54,20 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor, HttpOnly session cookies
 - **Rate limiting** — Redis sliding-window rate limiter with account lockout (exponential backoff)
 - **Three-tier permissions** — ALLOW / ASK / DENY per tool action with path patterns, rate limits, and time windows
+- **Prompt injection defense** — three-layer defense-in-depth against adversarial inputs:
+  - **System prompt hardening** — 8-rule security preamble prepended to every LLM system prompt (no admin modes, no credential fabrication, no destructive compliance, user messages treated as untrusted data)
+  - **Input guard** (pre-LLM) — 39 regex patterns across 6 categories (prompt extraction, mode escalation, command injection, secret fishing, harmful requests, safety override). Destructive shell injections are blocked before reaching the model; other attacks append per-request security reminders to the system prompt
+  - **Output guard** (post-LLM) — validates responses for system prompt leakage, fake admin mode activation, fabricated credentials, destructive compliance, and harmful content compliance. Compromised responses are replaced with safe canned messages
 - **Input validation** — SSRF protection, command injection prevention, ReDoS-safe regex, WebSocket content sanitization
 - **Encrypted vault** — AES-256-GCM credential storage with per-tool access control
 - **Audit logging** — every action tracked with user, resource, and context
 - **Hardened defaults** — HMAC webhook verification, generic error messages, restricted health endpoints, session limits
 
 ### Evaluation & Testing
-- **Agent evaluation harness** — YAML-based test runner (`bun run eval`) for evaluating routing accuracy, tool usage, and response quality. 13 assertion types including `routes_to_role`, `classification`, `response_quality` (LLM-graded), and `no_hallucination`. Supports unit and integration modes
-- **Red-team testing** — 5 attack plugins with 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift. Severity levels and defense assertions per test
-- **Eval UI** — web dashboard at `/eval` with summary cards, pass rate charts, assertion breakdowns, latency histograms, run comparison matrix with regression detection, and red-team results grouped by attack category
+- **Agent evaluation harness** — YAML-based test runner (`bun run eval`) for evaluating routing accuracy, tool usage, and response quality. 13 assertion types including `routes_to_role`, `classification`, `response_quality` (LLM-graded), `defense_held`, and `no_hallucination`. Supports unit and integration modes
+- **Red-team testing** — 5 attack plugins with 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift. Severity levels and defense assertions per test. The three-layer defense system (system prompt hardening + input guard + output guard) is applied during evaluation, matching the real message processing pipeline
+- **Model quality benchmarking** — results vary depending on the default orchestrator model. Use `bun run eval` and `bun run eval:red-team` to benchmark any model's quality and security resilience before deploying it. For example, `deepseek-chat` scores ~99% overall while local `qwen3.5:35b` scores ~92% — but both achieve 100% on red-team security tests thanks to the application-level defense layers
+- **Eval UI** — web dashboard at `/eval` with summary cards, pass rate charts, assertion breakdowns, latency histograms, run comparison matrix with regression detection, and red-team results grouped by attack category. Supports triggering eval runs directly from the UI
 
 ### Full Web UI and Terminal UI
 - **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, settings

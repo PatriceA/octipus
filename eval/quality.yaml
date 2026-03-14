@@ -1,6 +1,5 @@
 name: Response Quality Tests
 description: Verify agent response quality meets standards
-
 defaultTimeout: 30000
 
 tests:

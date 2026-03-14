@@ -9,8 +9,10 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { classifyMessage } from './classifier';
 import { filterPII } from './pii-filter';
+import { guardInput, buildSecurityReminder } from './input-guard';
+import { guardOutput } from './output-guard';
 import { createMetaTools } from './meta-tools';
-import { getRoleConfig, getToolsForRole } from './roles';
+import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE } from './roles';
 import { getNotificationService } from '@/core/notification-service';
 import { ApprovalManager } from './approval-manager';
 import { ModelSelector } from './model-selector';
@@ -113,9 +115,33 @@ export class OrchestratorService {
         }
       }
 
+      // ── Input guard: detect prompt injection before any LLM call ──
+      const inputGuard = guardInput(message);
+      if (inputGuard.action === 'block') {
+        coreLogger.warn({ flags: inputGuard.flags, sessionId }, 'Input guard blocked message');
+        const blockResponse = `I can't process this request: ${inputGuard.blockReason}`;
+        await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+        await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: blockResponse });
+        return {
+          response: blockResponse,
+          sessionId: resolvedSessionId,
+          classification: { type: 'casual' as const, confidence: 1, complexity: 'simple' as const },
+        };
+      }
+      if (inputGuard.action === 'warn') {
+        coreLogger.info({ flags: inputGuard.flags, sessionId }, 'Input guard flagged message');
+      }
+
       // Expert bypass: skip classification and orchestrator, spawn worker directly
       if (expertId) {
-        return this.handleExpertMessage(expertId, message, resolvedSessionId, userId);
+        const expertResult = await this.handleExpertMessage(expertId, message, resolvedSessionId, userId, inputGuard.flags);
+        // Output guard
+        const outputCheck = guardOutput(expertResult.response, inputGuard.flags);
+        if (outputCheck.action === 'replace') {
+          coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced expert response');
+          return { ...expertResult, response: outputCheck.response };
+        }
+        return expertResult;
       }
 
       const classification = classifyMessage(message);
@@ -125,13 +151,22 @@ export class OrchestratorService {
       );
 
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
-        const { response, metadata } = await this.directResponse(message, resolvedSessionId, userId, classification.complexity);
+        const { response, metadata } = await this.directResponse(
+          message, resolvedSessionId, userId, classification.complexity, inputGuard.flags,
+        );
+
+        // Output guard
+        const outputCheck = guardOutput(response, inputGuard.flags);
+        const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
+        if (outputCheck.action === 'replace') {
+          coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced casual response');
+        }
 
         this.maybeCompactSession(resolvedSessionId).catch(err =>
           coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
         );
 
-        return { response, sessionId: resolvedSessionId, classification, metadata };
+        return { response: finalResponse, sessionId: resolvedSessionId, classification, metadata };
       }
 
       if (classification.type === 'approval') {
@@ -142,10 +177,19 @@ export class OrchestratorService {
       }
 
       const startTime = Date.now();
-      const { response, agentId } = await this.runOrchestrator(resolvedSessionId, userId, message, classification);
+      const { response, agentId } = await this.runOrchestrator(
+        resolvedSessionId, userId, message, classification, inputGuard.flags,
+      );
+
+      // Output guard
+      const outputCheck = guardOutput(response, inputGuard.flags);
+      const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
+      if (outputCheck.action === 'replace') {
+        coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced orchestrator response');
+      }
 
       // Save the final response to DB (done here instead of agent-worker to use the correct worker result)
-      await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: response });
+      await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
       await sessionRepository.incrementMessageCount(resolvedSessionId);
 
       // Trigger async compaction check after response
@@ -154,7 +198,7 @@ export class OrchestratorService {
       );
 
       return {
-        response,
+        response: finalResponse,
         sessionId: resolvedSessionId,
         agentId,
         classification,
@@ -216,6 +260,7 @@ export class OrchestratorService {
     message: string,
     sessionId: string,
     userId: string,
+    guardFlags: string[] = [],
   ): Promise<{ response: string; sessionId: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     const { getDb } = await import('@/db/postgres');
     const db = getDb();
@@ -250,8 +295,11 @@ export class OrchestratorService {
     await sessionRepository.incrementMessageCount(sessionId);
 
     try {
-      // Inject domain knowledge from assigned skills
-      let expertPrompt = expert.systemPrompt || undefined;
+      // Inject security preamble + domain knowledge from assigned skills
+      let expertPrompt = SECURITY_PREAMBLE + (expert.systemPrompt || '');
+      if (guardFlags.length > 0) {
+        expertPrompt += buildSecurityReminder(guardFlags);
+      }
       const skillIds = (expert.skillIds as string[]) || [];
       if (skillIds.length > 0) {
         const { getSkillRegistry } = await import('@/skills/registry');
@@ -294,6 +342,7 @@ export class OrchestratorService {
     sessionId: string,
     userId: string,
     complexity: 'simple' | 'moderate' | 'complex' = 'moderate',
+    guardFlags: string[] = [],
   ): Promise<{ response: string; metadata: ResponseMetadata }> {
     const startTime = Date.now();
     const client = getLiteLLMClient();
@@ -334,9 +383,13 @@ export class OrchestratorService {
       // Prepend compacted summary if available
       const session = await sessionRepository.findById(sessionId);
       const summary = (session?.context as SessionContext)?.compactedSummary;
+      let basePrompt = SECURITY_PREAMBLE + 'You are a friendly development assistant. Keep casual responses brief and helpful.';
+      if (guardFlags.length > 0) {
+        basePrompt += buildSecurityReminder(guardFlags);
+      }
       const systemContent = summary
-        ? `You are a friendly development assistant. Keep casual responses brief and helpful.\n\nPrevious conversation summary:\n${summary}`
-        : 'You are a friendly development assistant. Keep casual responses brief and helpful.';
+        ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}`
+        : basePrompt;
 
       const registry = getModelRegistry();
       const resolvedModel = await registry.getModelByModelId(modelName);
@@ -394,6 +447,7 @@ export class OrchestratorService {
     userId: string,
     message: string,
     classification: MessageClassification,
+    guardFlags: string[] = [],
   ): Promise<{ response: string; agentId: string }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration();
@@ -402,6 +456,9 @@ export class OrchestratorService {
     const metaTools = createMetaTools(this);
 
     let systemPrompt = orchestratorConfig.systemPromptTemplate;
+    if (guardFlags.length > 0) {
+      systemPrompt += buildSecurityReminder(guardFlags);
+    }
 
     // Prepend compacted summary if available
     const session = await sessionRepository.findById(sessionId);

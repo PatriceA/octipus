@@ -86,8 +86,124 @@ async function getResultById(id: string): Promise<SavedEvalFile | null> {
   }
 }
 
+// Track running eval processes
+interface EvalRun {
+  process: ReturnType<typeof Bun.spawn>;
+  startedAt: Date;
+  suite?: string;
+  type: string;
+  output: string[];
+  exitCode?: number | null;
+  finished?: boolean;
+}
+const runningEvals = new Map<string, EvalRun>();
+// Keep last completed run for status reporting
+let lastCompletedRun: { runId: string; run: EvalRun } | null = null;
+
 export const evalRoutes = new Elysia({ prefix: '/eval' })
   .use(apiContext)
+
+  // Trigger an eval run
+  .post('/run', async ({ user, set, body }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Not authenticated' };
+    }
+
+    const { suite, type = 'eval' } = body as { suite?: string; type?: 'eval' | 'red-team' };
+
+    // Prevent multiple simultaneous runs
+    if (runningEvals.size > 0) {
+      const running = Array.from(runningEvals.values())[0];
+      return { error: `An eval is already running (started ${running.startedAt.toISOString()})`, running: true };
+    }
+
+    const runId = `run-${Date.now()}`;
+    const args: string[] = [];
+
+    if (type === 'red-team') {
+      args.push('run', 'src/eval/red-team/cli.ts');
+    } else {
+      args.push('run', 'src/eval/cli.ts');
+      if (suite) args.push('--suite', suite);
+    }
+
+    const proc = Bun.spawn(['bun', ...args], {
+      cwd: process.cwd(),
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env },
+    });
+
+    const run: EvalRun = { process: proc, startedAt: new Date(), suite, type, output: [] };
+    runningEvals.set(runId, run);
+
+    // Stream stdout/stderr into output buffer
+    const collectStream = async (stream: ReadableStream<Uint8Array> | null) => {
+      if (!stream) return;
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value, { stream: true });
+          run.output.push(text);
+          // Keep last 200 chunks to avoid unbounded memory
+          if (run.output.length > 200) run.output.shift();
+        }
+      } catch { /* stream closed */ }
+    };
+    collectStream(proc.stdout as ReadableStream<Uint8Array>);
+    collectStream(proc.stderr as ReadableStream<Uint8Array>);
+
+    // Track completion
+    proc.exited.then((code) => {
+      run.exitCode = code;
+      run.finished = true;
+      lastCompletedRun = { runId, run: { ...run, process: undefined as any } };
+      runningEvals.delete(runId);
+    });
+
+    return { runId, started: true, type, suite: suite || 'all' };
+  })
+
+  // Check eval run status
+  .get('/status', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Not authenticated' };
+    }
+
+    if (runningEvals.size === 0) {
+      // Return last completed run info if available
+      if (lastCompletedRun) {
+        const { runId, run } = lastCompletedRun;
+        return {
+          running: false,
+          lastRun: {
+            runId,
+            type: run.type,
+            suite: run.suite || 'all',
+            exitCode: run.exitCode,
+            output: run.output.join('').slice(-4000), // Last 4KB of output
+          },
+        };
+      }
+      return { running: false };
+    }
+
+    const [runId, info] = Array.from(runningEvals.entries())[0];
+    return {
+      running: true,
+      runId,
+      type: info.type,
+      suite: info.suite || 'all',
+      startedAt: info.startedAt.toISOString(),
+      elapsedMs: Date.now() - info.startedAt.getTime(),
+      output: info.output.join('').slice(-4000), // Last 4KB of live output
+    };
+  })
 
   // List all eval results
   .get('/results', async ({ user, set }) => {
