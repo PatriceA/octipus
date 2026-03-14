@@ -193,6 +193,7 @@ Make globally available: `bun link`
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control by AI agents |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Embeddings, auto-indexing, and semantic search |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
+| **[MCP Integration](docs/MCP-INTEGRATION.md)** | Connect external MCP servers (n8n, Brave, custom) with lazy tool discovery |
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |
 | **[Hooks & Automation](docs/HOOKS.md)** | Event hooks, webhooks, cron tasks, and execution control |
 | **[Webhooks](docs/WEBHOOKS.md)** | Receive events from GitHub, GitLab, and external services |

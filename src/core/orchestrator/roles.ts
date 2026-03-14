@@ -1,5 +1,6 @@
 import type { AgentRole, RoleConfig } from './types';
 import { getToolRegistry } from '@/tools/registry';
+import { getMCPBridge } from '@/mcp/bridge';
 import type { ToolHandler } from '@/core/agent-worker';
 
 export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = {
@@ -27,7 +28,7 @@ CRITICAL RULES:
   },
   research: {
     role: 'research',
-    toolIds: ['browser', 'browser-ext', 'websearch', 'knowledge', 'filesystem'],
+    toolIds: ['browser', 'browser-ext', 'websearch', 'knowledge', 'filesystem', 'mcp'],
     defaultTopic: 'analysis',  // shares with review
     systemPromptTemplate: `You are a research specialist. Investigate topics thoroughly using web browsing and search tools. Produce detailed findings with sources, key insights, and actionable recommendations. Always cite your sources.
 
@@ -42,7 +43,7 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
   },
   coding: {
     role: 'coding',
-    toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
+    toolIds: ['filesystem', 'shell', 'git', 'knowledge', 'mcp'],
     defaultTopic: 'coding',
     systemPromptTemplate: `You are a coding specialist. Write clean, well-documented code following project conventions.
 
@@ -78,7 +79,7 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
   },
   general: {
     role: 'general',
-    toolIds: ['browser-ext', 'messaging', 'knowledge', 'scheduling'],
+    toolIds: ['browser-ext', 'messaging', 'knowledge', 'scheduling', 'mcp'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be concise and direct.
 
@@ -97,25 +98,25 @@ You have access to "browser-ext" (Browser Extension) which connects to the user'
   },
   devops: {
     role: 'devops',
-    toolIds: ['shell', 'docker', 'git', 'filesystem'],
+    toolIds: ['shell', 'docker', 'git', 'filesystem', 'mcp'],
     defaultTopic: 'devops',
     systemPromptTemplate: `You are a DevOps engineer. Handle CI/CD pipelines, infrastructure as code, container orchestration, monitoring, and deployment automation. Focus on reliability, reproducibility, and operational excellence.`,
   },
   security: {
     role: 'security',
-    toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge'],
+    toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge', 'mcp'],
     defaultTopic: 'security',
     systemPromptTemplate: `You are a security analyst. Assess applications and infrastructure for vulnerabilities, perform threat modeling, review configurations, and recommend security hardening measures. Follow OWASP guidelines and defense-in-depth principles.`,
   },
   data: {
     role: 'data',
-    toolIds: ['shell', 'filesystem', 'knowledge'],
+    toolIds: ['shell', 'filesystem', 'knowledge', 'mcp'],
     defaultTopic: 'data',
     systemPromptTemplate: `You are a data engineer. Design database schemas, optimize queries, build data pipelines, and manage data infrastructure. Choose the right storage technology for each use case and ensure data quality.`,
   },
   ai: {
     role: 'ai',
-    toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge'],
+    toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge', 'mcp'],
     defaultTopic: 'ai',
     systemPromptTemplate: `You are an AI/ML engineer. Design model architectures, implement training pipelines, optimize inference, build RAG systems, and develop AI agents. Stay current with best practices in prompt engineering and model evaluation.`,
   },
@@ -127,7 +128,7 @@ You have access to "browser-ext" (Browser Extension) which connects to the user'
   },
   automation: {
     role: 'automation',
-    toolIds: ['shell', 'docker', 'filesystem', 'scheduling'],
+    toolIds: ['shell', 'docker', 'filesystem', 'scheduling', 'mcp'],
     defaultTopic: 'automation',
     systemPromptTemplate: `You are an automation engineer with access to the assistant's scheduling system.
 
@@ -187,12 +188,26 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
 }
 
 /**
- * Get tool handlers for a specific role from the tool registry
+ * Get tool handlers for a specific role from the tool registry.
+ * If the role includes 'mcp' in its toolIds, appends lazy MCP meta-tools
+ * (mcp_list_tools, mcp_call_tool) instead of expanding all MCP tools.
  */
 export function getToolsForRole(role: AgentRole): ToolHandler[] {
   const config = getRoleConfig(role);
   if (config.toolIds.length === 0) return [];
 
+  // Separate 'mcp' from built-in tool IDs
+  const builtinIds = config.toolIds.filter(id => id !== 'mcp');
+  const wantsMcp = config.toolIds.includes('mcp');
+
   const registry = getToolRegistry();
-  return registry.getToolHandlersForTools(config.toolIds);
+  const handlers = registry.getToolHandlersForTools(builtinIds);
+
+  // Append lazy MCP meta-tools (discover + call) instead of all MCP tool definitions
+  if (wantsMcp) {
+    const bridge = getMCPBridge();
+    handlers.push(...bridge.getLazyToolHandlers());
+  }
+
+  return handlers;
 }

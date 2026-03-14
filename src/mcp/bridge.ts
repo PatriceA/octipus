@@ -410,7 +410,10 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
-   * Convert all MCP tools into ToolHandlers usable by AgentWorker
+   * Convert all MCP tools into ToolHandlers usable by AgentWorker.
+   * WARNING: This expands every tool into a separate handler, which can flood
+   * the model context when many MCP servers are connected. Prefer
+   * getLazyToolHandlers() for agent use.
    */
   getToolHandlers(): ToolHandler[] {
     const handlers: ToolHandler[] = [];
@@ -434,6 +437,100 @@ export class MCPBridge extends EventEmitter {
     }
 
     return handlers;
+  }
+
+  /**
+   * Get two lightweight meta-tools (mcp_list_tools, mcp_call_tool) that let
+   * agents discover and invoke MCP tools on demand, without flooding the
+   * model context with every tool definition upfront.
+   */
+  getLazyToolHandlers(): ToolHandler[] {
+    const bridge = this;
+
+    // Don't add meta-tools if no MCP servers are connected
+    const hasConnected = Array.from(this.connections.values()).some(c => c.status === 'connected');
+    if (!hasConnected) return [];
+
+    return [
+      {
+        name: 'mcp_list_tools',
+        description:
+          'List available tools from connected MCP (Model Context Protocol) servers. ' +
+          'Call this to discover what external tools are available before calling mcp_call_tool. ' +
+          'Returns server names and their tools with descriptions and parameter schemas.',
+        parameters: {
+          type: 'object',
+          properties: {
+            server_id: {
+              type: 'string',
+              description: 'Optional: filter by a specific server ID. Omit to list all servers and tools.',
+            },
+          },
+        },
+        toolId: 'mcp',
+        execute: async (args) => {
+          const serverId = args.server_id as string | undefined;
+          const result: Array<{
+            server_id: string;
+            server_name: string;
+            tools: Array<{ name: string; description: string; parameters?: unknown }>;
+          }> = [];
+
+          for (const connection of bridge.connections.values()) {
+            if (connection.status !== 'connected') continue;
+            if (serverId && connection.id !== serverId) continue;
+
+            result.push({
+              server_id: connection.id,
+              server_name: connection.server.name,
+              tools: connection.tools.map(t => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.inputSchema,
+              })),
+            });
+          }
+
+          if (result.length === 0) {
+            return { message: serverId ? `MCP server '${serverId}' not found or not connected.` : 'No MCP servers connected.' };
+          }
+
+          return result;
+        },
+      },
+      {
+        name: 'mcp_call_tool',
+        description:
+          'Call a tool on a connected MCP server. Use mcp_list_tools first to discover available tools, ' +
+          'server IDs, and parameter schemas.',
+        parameters: {
+          type: 'object',
+          properties: {
+            server_id: {
+              type: 'string',
+              description: 'The MCP server ID (from mcp_list_tools)',
+            },
+            tool_name: {
+              type: 'string',
+              description: 'The tool name to call (from mcp_list_tools)',
+            },
+            arguments: {
+              type: 'object',
+              description: 'Arguments to pass to the tool (see parameter schema from mcp_list_tools)',
+            },
+          },
+          required: ['server_id', 'tool_name'],
+        },
+        toolId: 'mcp',
+        execute: async (args) => {
+          const serverId = args.server_id as string;
+          const toolName = args.tool_name as string;
+          const toolArgs = (args.arguments as Record<string, unknown>) || {};
+
+          return bridge.callTool(serverId, toolName, toolArgs);
+        },
+      },
+    ];
   }
 }
 
