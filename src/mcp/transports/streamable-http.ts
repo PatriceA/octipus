@@ -30,36 +30,11 @@ export class StreamableHTTPTransport implements MCPTransport {
   }
 
   async connect(): Promise<void> {
-    // Streamable HTTP is stateless — verify the endpoint is reachable
-    // by sending a GET request (some servers support it for SSE notifications)
-    // but the real handshake happens on the first POST (initialize).
-    // We just validate connectivity here.
-    try {
-      const response = await fetch(this.options.url, {
-        method: 'GET',
-        headers: {
-          Accept: 'text/event-stream',
-          ...this.options.headers,
-        },
-        signal: AbortSignal.timeout(10000),
-      });
-
-      // 405 Method Not Allowed is fine — it means the server is there
-      // but only accepts POST. 200 with SSE is also fine.
-      if (!response.ok && response.status !== 405) {
-        throw new Error(`MCP endpoint returned ${response.status}: ${response.statusText}`);
-      }
-
-      // If the server sends an SSE stream on GET, listen for notifications
-      if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
-        this.listenSSE(response);
-      }
-    } catch (error) {
-      if ((error as Error).name === 'TimeoutError') {
-        throw new Error(`Connection timeout reaching ${this.options.url}`);
-      }
-      throw error;
-    }
+    // Streamable HTTP is stateless — the real handshake happens on the
+    // first POST (initialize). Some servers support GET for SSE
+    // notifications, but many (like n8n) return 404 for GET.
+    // We just mark the transport as ready; the initialize request
+    // will fail fast if the endpoint is unreachable.
   }
 
   /**
