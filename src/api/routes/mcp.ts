@@ -58,7 +58,7 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
         args: body.args,
         env: body.env,
         isEnabled: body.isEnabled ?? true,
-        transport: body.transport as 'stdio' | 'sse' | undefined,
+        transport: body.transport as 'stdio' | 'sse' | 'streamable-http' | undefined,
         sseUrl: body.sseUrl,
         postUrl: body.postUrl,
         headers: body.headers,

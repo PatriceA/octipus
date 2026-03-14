@@ -267,7 +267,7 @@ export interface MCPServer {
   args?: string[];
   env?: Record<string, string>;
   isEnabled: boolean;
-  transport?: 'stdio' | 'sse';
+  transport?: 'stdio' | 'sse' | 'streamable-http';
   sseUrl?: string;
   postUrl?: string;
   headers?: Record<string, string>;

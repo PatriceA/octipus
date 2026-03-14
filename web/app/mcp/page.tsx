@@ -48,9 +48,11 @@ interface AddServerModalProps {
   onAdded: () => void;
 }
 
+type TransportType = 'streamable-http' | 'sse' | 'stdio';
+
 function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   const [name, setName] = useState('');
-  const [transport, setTransport] = useState<'stdio' | 'sse'>('sse');
+  const [transport, setTransport] = useState<TransportType>('streamable-http');
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
   const [serverUrl, setServerUrl] = useState('');
@@ -100,10 +102,16 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
           setIsSubmitting(false);
           return;
         }
-        // Auto-derive SSE and POST URLs from the base URL
-        const baseUrl = serverUrl.trim().replace(/\/sse\/?$/, '').replace(/\/$/, '');
-        body.sseUrl = `${baseUrl}/sse`;
-        body.postUrl = baseUrl;
+
+        if (transport === 'streamable-http') {
+          // Streamable HTTP — single endpoint URL
+          body.sseUrl = serverUrl.trim().replace(/\/$/, '');
+        } else {
+          // SSE — derive SSE and POST URLs from the base URL
+          const baseUrl = serverUrl.trim().replace(/\/sse\/?$/, '').replace(/\/$/, '');
+          body.sseUrl = `${baseUrl}/sse`;
+          body.postUrl = baseUrl;
+        }
 
         if (authHeader.trim()) {
           body.headers = { Authorization: authHeader.trim() };
@@ -143,32 +151,26 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Transport</label>
             <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setTransport('sse')}
-                className={cn(
-                  'flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer',
-                  transport === 'sse'
-                    ? 'bg-primary-800 text-white border-primary-800'
-                    : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:border-gray-400'
-                )}
-              >
-                SSE (Remote)
-                <span className="block text-[10px] opacity-70 mt-0.5">n8n, web services</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setTransport('stdio')}
-                className={cn(
-                  'flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer',
-                  transport === 'stdio'
-                    ? 'bg-primary-800 text-white border-primary-800'
-                    : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:border-gray-400'
-                )}
-              >
-                stdio (Local)
-                <span className="block text-[10px] opacity-70 mt-0.5">npm packages, scripts</span>
-              </button>
+              {([
+                { value: 'streamable-http' as const, label: 'HTTP', desc: 'n8n, modern MCP' },
+                { value: 'sse' as const, label: 'SSE', desc: 'legacy remote' },
+                { value: 'stdio' as const, label: 'stdio', desc: 'npm packages' },
+              ] as const).map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => setTransport(t.value)}
+                  className={cn(
+                    'flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer',
+                    transport === t.value
+                      ? 'bg-primary-800 text-white border-primary-800'
+                      : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:border-gray-400'
+                  )}
+                >
+                  {t.label}
+                  <span className="block text-[10px] opacity-70 mt-0.5">{t.desc}</span>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -184,7 +186,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
             />
           </div>
 
-          {transport === 'sse' ? (
+          {transport !== 'stdio' ? (
             <>
               {/* Server URL */}
               <div>
@@ -194,9 +196,13 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   value={serverUrl}
                   onChange={(e) => setServerUrl(e.target.value)}
                   className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
-                  placeholder="http://localhost:5678/mcp/your-path"
+                  placeholder={transport === 'streamable-http'
+                    ? 'https://n8n.example.com/mcp-server/http'
+                    : 'http://localhost:5678/mcp/your-path'}
                 />
-                <p className="mt-1 text-xs text-gray-500">/sse is appended automatically for the SSE endpoint</p>
+                {transport === 'sse' && (
+                  <p className="mt-1 text-xs text-gray-500">/sse is appended automatically for the SSE endpoint</p>
+                )}
               </div>
 
               {/* Authorization header */}

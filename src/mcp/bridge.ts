@@ -3,6 +3,7 @@ import { MCPProtocol, MCPMethods, type MCPToolDefinition, type MCPResource, type
 import type { MCPTransport } from './transports/interface';
 import { StdioTransport } from './transports/stdio';
 import { SSETransport } from './transports/sse';
+import { StreamableHTTPTransport } from './transports/streamable-http';
 import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
@@ -56,6 +57,13 @@ export class MCPBridge extends EventEmitter {
       return new SSETransport({
         sseUrl: server.sseUrl,
         postUrl: server.postUrl,
+        headers: server.headers,
+      });
+    }
+
+    if (server.transport === 'streamable-http' && server.sseUrl) {
+      return new StreamableHTTPTransport({
+        url: server.sseUrl, // sseUrl field reused for the HTTP endpoint URL
         headers: server.headers,
       });
     }
