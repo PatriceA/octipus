@@ -95,6 +95,11 @@ export class ToolExecutor {
             );
           }
         } catch (error) {
+          // If a final tool fails, propagate immediately — avoids a slow LLM round-trip
+          // just to relay the error message to the user
+          if (tool.final) {
+            throw error;
+          }
           results.push({ toolCallId: toolCall.id, result: null, error: (error as Error).message });
         }
         continue;

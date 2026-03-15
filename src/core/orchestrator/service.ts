@@ -506,7 +506,7 @@ export class OrchestratorService {
       systemPrompt,
       tools: metaTools,
       maxIterations: 25,
-      timeout: 0, // No timeout — orchestrator delegates to workers which have their own timeouts
+      timeout: 1800000, // 30 min safety net — workers have their own shorter timeouts
     });
 
     const agentId = worker.getContext().id;
@@ -785,6 +785,13 @@ export class OrchestratorService {
       timestamp: new Date(),
     });
 
+    // If ALL members failed, throw immediately instead of asking the LLM to summarize errors
+    const allFailed = results.every(r => r.error !== null);
+    if (allFailed) {
+      const errorSummary = results.map(r => `${r.role}: ${r.error}`).join('; ');
+      throw new Error(`All team members failed: ${errorSummary}`);
+    }
+
     // Merge results into a structured report
     return results.map(r =>
       `### ${r.role} Agent\n**Task:** ${r.task}\n**Result:**\n${r.error ? `ERROR: ${r.error}` : r.result}`
@@ -961,7 +968,8 @@ export class OrchestratorService {
       { workerId, role: agentRole },
     ).catch(() => {});
 
-    return `[WORKER FAILED] The "${agentRole}" worker encountered an error: ${error.message}\n\nIMPORTANT: Do NOT make up or fabricate any data. Tell the user that the task failed and explain the error. If appropriate, suggest they try again or offer alternative approaches.`;
+    // Throw instead of returning a string — avoids an expensive LLM call just to relay the error
+    throw new Error(`Worker "${agentRole}" failed: ${error.message}`);
   }
 
   // ── Pipeline (called by create_pipeline meta-tool) ───────────────

@@ -476,9 +476,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'integrations',
     valueType: 'string',
     defaultValue: '',
-    description: 'Path to MCP servers JSON config',
+    description: 'Path to MCP servers JSON config (leave empty to use database storage)',
     isSecret: false,
     envVar: 'MCP_SERVERS_CONFIG',
+  },
+  {
+    key: 'mcp.servers',
+    category: 'integrations',
+    valueType: 'json',
+    defaultValue: [],
+    description: 'MCP server configurations (stored in database)',
+    isSecret: false,
   },
   {
     key: 'mcp.autoStart',

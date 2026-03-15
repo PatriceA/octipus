@@ -5,6 +5,7 @@ import { StdioTransport } from './transports/stdio';
 import { SSETransport } from './transports/sse';
 import { StreamableHTTPTransport } from './transports/streamable-http';
 import { getConfig } from '@/config';
+import { getSettingsService } from '@/config/settings-service';
 import { coreLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
 import type { MCPServer, MCPTool } from '@/core/types';
@@ -28,24 +29,36 @@ export class MCPBridge extends EventEmitter {
   private serverConfigs: MCPServer[] = [];
 
   /**
-   * Load MCP server configurations
+   * Load MCP server configurations from JSON file (if configured) or database.
    */
   async loadConfig(): Promise<void> {
     const config = getConfig();
 
-    if (!config.mcp.serversConfigPath) {
-      coreLogger.debug('No MCP servers config path specified');
-      return;
+    // Prefer file-based config if explicitly configured
+    if (config.mcp.serversConfigPath) {
+      try {
+        const file = Bun.file(config.mcp.serversConfigPath);
+        const content = await file.json();
+        this.serverConfigs = content.servers || [];
+        coreLogger.info({ count: this.serverConfigs.length, source: 'file' }, 'MCP server configs loaded');
+        return;
+      } catch (error) {
+        coreLogger.warn({ error }, 'Failed to load MCP servers config from file');
+      }
     }
 
+    // Fall back to database storage
     try {
-      const file = Bun.file(config.mcp.serversConfigPath);
-      const content = await file.json();
-
-      this.serverConfigs = content.servers || [];
-      coreLogger.info({ count: this.serverConfigs.length }, 'MCP server configs loaded');
+      const settingsService = getSettingsService();
+      const stored = await settingsService.get('mcp.servers');
+      if (stored && Array.isArray(stored)) {
+        this.serverConfigs = stored as MCPServer[];
+        coreLogger.info({ count: this.serverConfigs.length, source: 'database' }, 'MCP server configs loaded');
+      } else {
+        coreLogger.debug('No MCP server configs found in database');
+      }
     } catch (error) {
-      coreLogger.warn({ error }, 'Failed to load MCP servers config');
+      coreLogger.warn({ error }, 'Failed to load MCP servers config from database');
     }
   }
 
@@ -407,14 +420,26 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
-   * Persist current server configs back to the JSON file
+   * Persist current server configs to JSON file (if configured) or database.
    */
   private async saveConfig(): Promise<void> {
     const config = getConfig();
-    if (!config.mcp.serversConfigPath) return;
 
-    const content = JSON.stringify({ servers: this.serverConfigs }, null, 2);
-    await Bun.write(config.mcp.serversConfigPath, content);
+    // Prefer file-based storage if explicitly configured
+    if (config.mcp.serversConfigPath) {
+      const content = JSON.stringify({ servers: this.serverConfigs }, null, 2);
+      await Bun.write(config.mcp.serversConfigPath, content);
+      return;
+    }
+
+    // Fall back to database storage
+    try {
+      const settingsService = getSettingsService();
+      await settingsService.set('mcp.servers', this.serverConfigs);
+      coreLogger.debug({ count: this.serverConfigs.length }, 'MCP server configs saved to database');
+    } catch (error) {
+      coreLogger.error({ error }, 'Failed to save MCP server configs to database');
+    }
   }
 
   /**
