@@ -208,7 +208,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       const userId = user.id;
       const context: import('@/core/types').AgentContext = {
         id: `api-${Date.now().toString(36)}`,
-        sessionId: 'api',
+        sessionId: '',
         userId,
         topic: 'api',
         model: 'api',

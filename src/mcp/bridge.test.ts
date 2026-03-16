@@ -1,5 +1,12 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { MCPBridge } from './bridge';
+import type { AgentContext } from '@/core/types';
+
+const dummyContext: AgentContext = {
+  id: 'test', sessionId: 'test', userId: 'test', topic: 'test',
+  model: 'test', role: 'general', status: 'running',
+  createdAt: new Date(), updatedAt: new Date(), metadata: {},
+};
 
 describe('MCPBridge.getLazyToolHandlers', () => {
   let bridge: MCPBridge;
@@ -57,7 +64,7 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     const handlers = bridge.getLazyToolHandlers();
     const listTool = handlers.find(h => h.name === 'mcp_list_tools')!;
 
-    const result = await listTool.execute({}) as any[];
+    const result = await listTool.execute({}, dummyContext) as any[];
     expect(result).toHaveLength(2);
     expect(result[0].server_id).toBe('server-a');
     expect(result[0].tools).toHaveLength(1);
@@ -83,7 +90,7 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     const handlers = bridge.getLazyToolHandlers();
     const listTool = handlers.find(h => h.name === 'mcp_list_tools')!;
 
-    const result = await listTool.execute({ server_id: 'server-b' }) as any[];
+    const result = await listTool.execute({ server_id: 'server-b' }, dummyContext) as any[];
     expect(result).toHaveLength(1);
     expect(result[0].server_id).toBe('server-b');
   });
@@ -100,7 +107,7 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     const handlers = bridge.getLazyToolHandlers();
     const listTool = handlers.find(h => h.name === 'mcp_list_tools')!;
 
-    const result = await listTool.execute({ server_id: 'nonexistent' }) as any;
+    const result = await listTool.execute({ server_id: 'nonexistent' }, dummyContext) as any;
     expect(result.message).toContain('not found');
   });
 
@@ -122,7 +129,7 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     const handlers = bridge.getLazyToolHandlers();
     const listTool = handlers.find(h => h.name === 'mcp_list_tools')!;
 
-    const result = await listTool.execute({}) as any[];
+    const result = await listTool.execute({}, dummyContext) as any[];
     expect(result).toHaveLength(1);
     expect(result[0].server_id).toBe('up');
   });

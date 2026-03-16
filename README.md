@@ -188,6 +188,7 @@ Make globally available: `bun link`
 |---|---|
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | How tools, skills, experts, and agents work together |
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat setup and configuration |
+| **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands available in all channels (/help, /link, /status, /clear) |
 | **[API Reference](docs/API.md)** | Complete REST API with all endpoints |
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control by AI agents |
