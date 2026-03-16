@@ -385,7 +385,7 @@ export default function ChatPage() {
             // Finalize any agents still marked as 'running' — the response
             // arriving means all work is done, so stop their timers.
             const next = new Map(prev.trackedAgents);
-            for (const [id, agent] of next) {
+            Array.from(next.entries()).forEach(([id, agent]) => {
               if (agent.status === 'running') {
                 next.set(id, {
                   ...agent,
@@ -394,7 +394,7 @@ export default function ChatPage() {
                   durationMs: agent.durationMs ?? (Date.now() - agent.startTime),
                 });
               }
-            }
+            });
             return {
               ...prev,
               trackedAgents: next,
