@@ -381,21 +381,37 @@ export default function ChatPage() {
 
         const sid = data.sessionId || activeSessionId;
         if (sid) {
-          updateSessionState(sid, (prev) => ({
-            ...prev,
-            messages: [...prev.messages, {
-              id: Date.now().toString(),
-              role: 'assistant',
-              content: data.response,
-              timestamp: new Date(),
-              agentId: data.agentId,
-              classification: data.classification?.type,
-              metadata: meta,
-            }],
-            totalTokens: data.metadata?.sessionTotalTokens != null
-              ? data.metadata.sessionTotalTokens
-              : prev.totalTokens + (meta?.tokens || 0),
-          }));
+          updateSessionState(sid, (prev) => {
+            // Finalize any agents still marked as 'running' — the response
+            // arriving means all work is done, so stop their timers.
+            const next = new Map(prev.trackedAgents);
+            for (const [id, agent] of next) {
+              if (agent.status === 'running') {
+                next.set(id, {
+                  ...agent,
+                  status: 'completed',
+                  endTime: agent.endTime ?? Date.now(),
+                  durationMs: agent.durationMs ?? (Date.now() - agent.startTime),
+                });
+              }
+            }
+            return {
+              ...prev,
+              trackedAgents: next,
+              messages: [...prev.messages, {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content: data.response,
+                timestamp: new Date(),
+                agentId: data.agentId,
+                classification: data.classification?.type,
+                metadata: meta,
+              }],
+              totalTokens: data.metadata?.sessionTotalTokens != null
+                ? data.metadata.sessionTotalTokens
+                : prev.totalTokens + (meta?.tokens || 0),
+            };
+          });
 
           if (data.sessionId) {
             setSessions(prev => {

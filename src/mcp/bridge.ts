@@ -127,7 +127,7 @@ export class MCPBridge extends EventEmitter {
       });
 
       transport.onError((error) => {
-        coreLogger.error({ error, serverId: server.id }, 'MCP transport error');
+        coreLogger.error({ err: error, serverId: server.id, errorMessage: error.message }, 'MCP transport error');
         connection.status = 'error';
         connection.error = error.message;
         this.emit('error', server.id, error);
@@ -197,7 +197,7 @@ export class MCPBridge extends EventEmitter {
     } catch (error) {
       connection.status = 'error';
       connection.error = (error as Error).message;
-      coreLogger.error({ error, serverId: server.id }, 'Failed to connect to MCP server');
+      coreLogger.error({ err: error, serverId: server.id, errorMessage: (error as Error).message }, 'Failed to connect to MCP server');
       throw error;
     }
   }

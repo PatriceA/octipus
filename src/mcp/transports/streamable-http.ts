@@ -87,19 +87,24 @@ export class StreamableHTTPTransport implements MCPTransport {
   }
 
   private async doPost(message: string): Promise<void> {
-    const response = await fetch(this.options.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...this.options.headers,
-      },
-      body: message,
-    });
+    let response: Response;
+    try {
+      response = await fetch(this.options.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...this.options.headers,
+        },
+        body: message,
+      });
+    } catch (fetchErr) {
+      throw new Error(`MCP POST to ${this.options.url} failed: ${(fetchErr as Error).message}`);
+    }
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(`MCP POST failed (${response.status}): ${body || response.statusText}`);
+      throw new Error(`MCP POST to ${this.options.url} failed (${response.status}): ${body || response.statusText}`);
     }
 
     const contentType = response.headers.get('content-type') || '';
