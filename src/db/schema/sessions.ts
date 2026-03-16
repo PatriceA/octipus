@@ -20,11 +20,22 @@ export const sessions = pgTable('sessions', {
   completedAt: timestamp('completed_at'),
 });
 
+export interface PlanningState {
+  active: boolean;
+  step: number;
+  area: string | null;
+  answers: Array<{ question: string; answer: string; step: number }>;
+  brief: string | null;
+  createdAt: string;
+}
+
 export interface SessionContext {
   workspaceId?: string;
   currentTopic?: string;
   activeAgentId?: string;
   compactedSummary?: string;
+  activeCommand?: string;
+  planningState?: PlanningState;
 }
 
 export type Session = typeof sessions.$inferSelect;

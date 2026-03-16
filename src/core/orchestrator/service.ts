@@ -18,6 +18,7 @@ import { resolveSession } from './session-resolver';
 import { directResponse } from './direct-response';
 import { maybeCompactSession } from './session-compaction';
 import { handleExpertMessage, spawnWorker, spawnTeam } from './worker-spawner';
+import { handleCommand } from '@/core/commands';
 import type { ApprovalRequest } from './approval-manager';
 import type { MessageClassification, ResponseMetadata } from './types';
 import type { SessionContext } from '@/db/schema/sessions';
@@ -139,6 +140,20 @@ export class OrchestratorService {
       }
       if (inputGuard.action === 'warn') {
         coreLogger.info({ flags: inputGuard.flags, sessionId }, 'Input guard flagged message');
+      }
+
+      // Command interception (works across all channels)
+      try {
+        const commandResponse = await handleCommand(message, resolvedSessionId, userId);
+        if (commandResponse) {
+          return {
+            response: commandResponse,
+            sessionId: resolvedSessionId,
+            classification: { type: 'casual' as const, confidence: 1 },
+          };
+        }
+      } catch (cmdErr) {
+        coreLogger.error({ err: cmdErr }, 'Command handler error');
       }
 
       // Expert bypass

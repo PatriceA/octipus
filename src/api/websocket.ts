@@ -16,74 +16,6 @@ interface WebSocketData {
 // Track active WebSocket connections per user to prevent duplicates
 const activeConnections = new Map<string, { ws: any; cleanup: () => void }>();
 
-/**
- * Handle slash commands in webchat. Returns a response string if the message
- * is a recognized command, or null to continue normal processing.
- */
-function handleChatCommand(content: string, sessionId: string): string | null {
-  if (!content.startsWith('/')) return null;
-
-  const [cmd, ...rest] = content.split(/\s+/);
-  const command = cmd.toLowerCase();
-
-  switch (command) {
-    case '/help':
-      return [
-        '**Available Commands**\n',
-        '| Command | Description |',
-        '|---------|-------------|',
-        '| `/help` | Show this list |',
-        '| `/status` | Show running agents and session info |',
-        '| `/stop` | Stop all running agents in this session |',
-        '| `/clear` | Clear conversation context |',
-        '| `/experts` | List available expert personas |',
-        '| `/models` | List available models |',
-      ].join('\n');
-
-    case '/status': {
-      const agentManager = getAgentManager();
-      const agents = agentManager.getBySession(sessionId);
-      const running = agents.filter(a => a.getStatus() === 'running');
-      const completed = agents.filter(a => a.getStatus() === 'completed');
-      const failed = agents.filter(a => a.getStatus() === 'failed');
-      return [
-        '**Session Status**\n',
-        `Session: \`${sessionId.slice(0, 8)}...\``,
-        `Agents: ${running.length} running, ${completed.length} completed, ${failed.length} failed`,
-        ...(running.length > 0
-          ? ['\n**Running:**', ...running.map(a => {
-              const ctx = a.getContext();
-              return `- ${ctx.role} (${ctx.model}) — iteration ${a.getIteration()}`;
-            })]
-          : []),
-      ].join('\n');
-    }
-
-    case '/stop': {
-      const agentManager = getAgentManager();
-      const count = agentManager.stopSession(sessionId);
-      return count > 0
-        ? `Stopped ${count} running agent${count > 1 ? 's' : ''}.`
-        : 'No running agents in this session.';
-    }
-
-    case '/clear':
-      return 'Session context cleared. Send a new message to start fresh.';
-
-    case '/experts': {
-      // Async query not possible here — return a hint
-      return 'Use the **Experts** panel in the sidebar to see all available expert personas, or send a message and the orchestrator will auto-select the best expert for your task.';
-    }
-
-    case '/models': {
-      return 'Use the **Models** page in the web UI to see all configured models, their status, and routing rules.';
-    }
-
-    default:
-      return `Unknown command: \`${command}\`. Type \`/help\` to see available commands.`;
-  }
-}
-
 export function setupWebSocket(app: Elysia): void {
   app.ws('/ws', {
     async open(ws) {
@@ -233,19 +165,7 @@ export function setupWebSocket(app: Elysia): void {
             const sessionId = parsed.sessionId || `ws-${data.connectionId}`;
             const content = (parsed.content || '').trim();
 
-            // Handle slash commands locally (no LLM call needed)
-            const commandResponse = handleChatCommand(content, sessionId);
-            if (commandResponse) {
-              ws.send(JSON.stringify({
-                type: 'chat_response',
-                response: commandResponse,
-                sessionId,
-                classification: { type: 'casual', confidence: 1 },
-              }));
-              break;
-            }
-
-            // Route chat messages through the orchestrator
+            // Route through orchestrator (commands are handled inside handleMessage)
             const orchestrator = getOrchestratorService();
             try {
               const result = await orchestrator.handleMessage(
@@ -255,7 +175,6 @@ export function setupWebSocket(app: Elysia): void {
                 'webchat',
                 parsed.expertId,
               );
-              // Use the resolved UUID sessionId from orchestrator (not the ephemeral ws- one)
               const resolvedId = result.sessionId || sessionId;
               ws.send(JSON.stringify({
                 type: 'chat_response',
