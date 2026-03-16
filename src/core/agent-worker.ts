@@ -21,6 +21,10 @@ export class AgentWorker extends BaseAgentWorker {
   private totalTokensUsed: number = 0;
   private startTime: number = 0;
   private emptyRetries: number = 0;
+  /** Track consecutive identical tool calls to detect loops */
+  private lastToolCallSignature: string = '';
+  private consecutiveRepeatCount: number = 0;
+  private static MAX_CONSECUTIVE_REPEATS = 3;
 
   /** Milliseconds since agent start */
   private elapsed(): number {
@@ -270,6 +274,32 @@ export class AgentWorker extends BaseAgentWorker {
       // Handle tool calls if present
       if (completion.toolCalls?.length && !this.toolExecutor.toolsDisabled) {
         const toolNames = completion.toolCalls.map(tc => tc.name);
+
+        // Detect repetitive tool call loops (same tool + same args N times in a row)
+        const callSignature = completion.toolCalls
+          .map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`)
+          .join('|');
+        if (callSignature === this.lastToolCallSignature) {
+          this.consecutiveRepeatCount++;
+          if (this.consecutiveRepeatCount >= AgentWorker.MAX_CONSECUTIVE_REPEATS) {
+            agentLogger.warn({
+              agentId: this.context.id, sessionId: this.context.sessionId,
+              iteration: this.iteration, tools: toolNames,
+              repeats: this.consecutiveRepeatCount,
+            }, 'Repetitive tool call loop detected, forcing completion');
+            // Inject a nudge to stop looping and return a final response
+            this.messages.push({
+              role: 'user' as const,
+              content: '[SYSTEM] You have called the same tool multiple times with identical arguments. The task appears complete. Stop calling tools and provide your final text response now.',
+              timestamp: new Date(),
+            });
+            continue;
+          }
+        } else {
+          this.lastToolCallSignature = callSignature;
+          this.consecutiveRepeatCount = 1;
+        }
+
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),

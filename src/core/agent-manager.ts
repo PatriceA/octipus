@@ -49,16 +49,10 @@ export class AgentManager {
   private agents: Map<string, AnyAgentWorker> = new Map();
   private eventHandlers: Set<(event: AgentEvent) => void> = new Set();
   private globalTools: Map<string, ToolHandler> = new Map();
-  private maxConcurrentAgents: number;
   /** Per-agent event ring buffer for polling (max 200 events per agent) */
   private eventBuffers: Map<string, BufferedEvent[]> = new Map();
   private eventSeqCounter: number = 0;
   private static MAX_BUFFERED_EVENTS = 200;
-
-  constructor() {
-    const config = getConfig();
-    this.maxConcurrentAgents = config.agent.maxConcurrentAgents;
-  }
 
   /**
    * Register a global tool available to all agents
@@ -77,8 +71,9 @@ export class AgentManager {
       (a) => a.getStatus() === 'running'
     );
 
-    if (runningAgents.length >= this.maxConcurrentAgents) {
-      throw new Error(`Maximum concurrent agents (${this.maxConcurrentAgents}) reached`);
+    const maxConcurrent = getConfig().agent.maxConcurrentAgents;
+    if (runningAgents.length >= maxConcurrent) {
+      throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
     }
 
     const config = getConfig();
