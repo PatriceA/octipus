@@ -8,44 +8,96 @@ const CASUAL_PATTERNS = [
   /^(how\s*are\s*you|what'?s\s*up|how'?s\s*it\s*going)/i,
   /^(yes|no|ok|okay|sure|nope|yep|yeah)\b/i,
   /^(help|what\s*can\s*you\s*do)\b/i,
+  /^what\s+is\s+the\s+\w+\s+of\b/i,  // "What is the capital of France?"
+  /^(can you|could you)\s+(explain|tell|clarify)/i,  // "Can you explain that?"
+  /\b(more detail|elaborate|clarify)\b/i,  // Follow-up requests
 ];
 
 const TASK_KEYWORDS: Record<string, string[]> = {
   development: [
-    'implement', 'build', 'create', 'develop', 'code', 'write', 'add',
-    'refactor', 'fix', 'debug', 'deploy', 'setup', 'configure', 'install',
-    'migrate', 'upgrade', 'integrate', 'api', 'endpoint', 'database',
-    'frontend', 'backend', 'component', 'feature', 'function', 'class',
-    'module', 'service', 'test', 'unit test', 'dockerfile', 'docker',
-    'ci/cd', 'pipeline', 'webpack', 'typescript', 'javascript', 'python',
-    'rust', 'go', 'java', 'sql', 'css', 'html', 'react', 'next.js',
-    'vue', 'angular', 'node', 'bun', 'npm', 'package',
+    'implement', 'write code', 'develop', 'program',
+    'refactor', 'fix bug', 'fix the bug', 'debug', 'add feature',
+    'api endpoint', 'frontend', 'backend', 'component',
+    'function', 'class', 'module', 'unit test', 'test suite',
+    'webpack', 'typescript', 'javascript', 'python',
+    'rust', 'java', 'css', 'html', 'react', 'next.js',
+    'vue', 'angular', 'npm', 'package.json',
+    'commit the', 'pull request', 'merge request', 'git status',
+    'git diff', 'git log', 'git push', 'git commit',
   ],
   research: [
-    'research', 'investigate', 'find out', 'look up', 'search for',
-    'compare', 'evaluate', 'analyze', 'what is', 'how does', 'why does',
-    'explain', 'summarize', 'review', 'assess', 'benchmark', 'survey',
+    'research', 'investigate', 'summary', 'find out', 'look up', 'search for',
+    'search the web', 'search online', 'web search',
+    'compare', 'evaluate', 'how does', 'why does',
+    'summarize', 'assess', 'benchmark', 'survey',
     'learn about', 'study', 'explore', 'alternatives', 'best practices',
-    'architecture', 'design pattern', 'pros and cons',
+    'design pattern', 'pros and cons',
+    'scrape', 'hacker news', 'front page', 'top stories',
+    'open github', 'open http', 'latest release', 'release notes',
+    'latest version', 'tell me about', 'features of',
+  ],
+  devops: [
+    'docker', 'dockerfile', 'container', 'kubernetes', 'k8s',
+    'ci/cd', 'pipeline', 'github actions', 'deploy', 'deployment',
+    'nginx', 'reverse proxy', 'ssl', 'tls', 'load balancer',
+    'infrastructure', 'terraform', 'ansible', 'helm',
+    'server', 'cluster', 'scaling', 'auto-scaling',
+    'monitoring', 'grafana', 'prometheus',
+  ],
+  security: [
+    'security', 'vulnerability', 'audit', 'owasp', 'penetration',
+    'threat model', 'sql injection', 'xss', 'csrf',
+    'authentication flow', 'access control', 'encryption',
+    'security review', 'cve', 'exploit', 'hardening',
+  ],
+  data: [
+    'database schema', 'data model', 'data pipeline', 'etl',
+    'sql query', 'migration', 'row-level security', 'multi-tenant',
+    'data warehouse', 'analytics', 'data engineering',
+    'postgresql', 'mysql', 'mongodb', 'redis schema',
+  ],
+  writing: [
+    'documentation', 'api documentation', 'write docs', 'readme',
+    'technical writing', 'user guide', 'tutorial',
+    'write a report', 'changelog',
+    'write comprehensive', 'write detailed', 'error codes',
+  ],
+  design: [
+    'ui design', 'ux design', 'user interface', 'user experience',
+    'accessibility', 'color contrast', 'typography', 'wireframe',
+    'mockup', 'prototype', 'landing page design', 'responsive design',
+  ],
+  finance: [
+    'cost-benefit', 'budget', 'financial analysis', 'pricing',
+    'roi', 'cost analysis', 'billing', 'invoice', 'revenue',
+    'cost comparison', 'cost optimization',
+    'analyze the cost', 'migrating from', 'migrate from',
   ],
   communication: [
     'email', 'gmail', 'inbox', 'mail', 'send email', 'read email',
-    'calendar', 'schedule', 'meeting', 'appointment', 'event',
+    'calendar', 'meeting', 'appointment', 'event',
     'contacts', 'address book',
     'drive', 'docs', 'sheets', 'slides', 'google docs',
-    'outlook', 'office 365', 'microsoft 365', 'teams',
+    'outlook', 'office 365', 'microsoft 365',
     'compose', 'reply', 'forward', 'draft',
   ],
   automation: [
     'schedule', 'scheduled task', 'recurring task', 'cron', 'hook',
     'create a task', 'create a schedule', 'every day', 'every morning',
-    'every hour', 'daily', 'weekly', 'automate', 'automation',
-    'remind me', 'notification', 'alert me', 'send me every',
+    'every hour', 'daily task', 'weekly task', 'automate', 'automation',
+    'remind me', 'alert me', 'send me every', 'cron job',
+    'when an agent', 'event-triggered', 'trigger',
   ],
   general: [
-    'run', 'execute', 'check', 'monitor', 'update', 'clean', 'organize',
+    'run', 'execute', 'check', 'update', 'clean', 'organize',
     'notify', 'track', 'manage', 'generate',
-    'convert', 'transform', 'parse', 'process', 'extract', 'scrape',
+    'convert', 'transform', 'parse', 'process', 'extract',
+    'list', 'show me', 'what are', 'what experts', 'what tools',
+    'mcp', 'available', 'connected', 'channels',
+    'upload', 'document', 'knowledge base',
+    'send a message', 'send message', 'telegram', 'slack',
+    'screenshot', 'take a screenshot', 'browser', 'my browser',
+    'tabs', 'open tabs',
   ],
 };
 
@@ -97,8 +149,12 @@ export function classifyMessage(message: string): MessageClassification {
   // "hi, give me my gmail messages" is a task with a greeting prefix.
   const wordCount = normalized.split(/\s+/).length;
   for (const pattern of CASUAL_PATTERNS) {
-    if (pattern.test(normalized) && wordCount <= 5) {
-      return { type: 'casual', confidence: 0.9, complexity: 'simple' };
+    if (pattern.test(normalized)) {
+      // Greeting-type patterns only casual if short; knowledge/follow-up patterns can be longer
+      const isGreeting = /^(hi|hello|hey|thanks|bye|yes|no|ok|help)\b/i.test(normalized);
+      if (!isGreeting || wordCount <= 5) {
+        return { type: 'casual', confidence: 0.9, complexity: 'simple' };
+      }
     }
   }
 
@@ -115,14 +171,26 @@ export function classifyMessage(message: string): MessageClassification {
   }
 
   // Score each task category
+  // Multi-word keywords get bonus weight (more specific = more reliable)
+  // Single-word keywords use word boundary matching to avoid substring false positives
   let bestCategory: string | null = null;
   let bestScore = 0;
 
   for (const [category, keywords] of Object.entries(TASK_KEYWORDS)) {
     let score = 0;
     for (const keyword of keywords) {
-      if (normalized.includes(keyword)) {
-        score++;
+      const isMultiWord = keyword.includes(' ');
+      if (isMultiWord) {
+        // Multi-word: exact substring match is fine, give bonus weight
+        if (normalized.includes(keyword)) {
+          score += 1.5;
+        }
+      } else {
+        // Single-word: use word boundary to avoid "develop" matching "developments"
+        const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+        if (regex.test(normalized)) {
+          score += 1;
+        }
       }
     }
     if (score > bestScore) {
@@ -132,7 +200,7 @@ export function classifyMessage(message: string): MessageClassification {
   }
 
   // High confidence task
-  if (bestScore >= 2 && bestCategory) {
+  if (bestScore >= 1.5 && bestCategory) {
     return {
       type: 'task',
       confidence: Math.min(bestScore / 4, 1),

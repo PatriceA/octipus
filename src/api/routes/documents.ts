@@ -66,7 +66,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       });
 
       // Enqueue for processing
-      getDocumentQueue().enqueue(doc.id);
+      getDocumentQueue().enqueue(doc.id, user.id);
 
       results.push({ id: doc.id, filename: originalName, status: 'queued' });
       logger.info({ documentId: doc.id, filename: originalName, size: file.size }, 'Document uploaded');

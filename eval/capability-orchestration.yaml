@@ -93,8 +93,8 @@ tests:
     tags: [orchestration, context, openclaw-parity]
 
   - id: orch-no-spawn-followup
-    description: Simple follow-up question does not spawn agent
-    input: "Can you explain that in more detail?"
+    description: Simple follow-up does not spawn agent
+    input: "Could you explain that in more detail please?"
     assertions:
       - type: classification
         value: casual

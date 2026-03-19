@@ -5,6 +5,7 @@ import { webChatChannel } from '@/channels/webchat';
 import { getPermissionManager } from '@/security/permissions';
 import { getOrchestratorService } from '@/core/orchestrator';
 import { getBrowserBridge } from './browser-bridge';
+import { getDocumentQueue } from '@/core/documents/queue';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 
@@ -90,6 +91,25 @@ export function setupWebSocket(app: Elysia): void {
         });
       });
 
+      // Subscribe to document processing events for this user
+      const docQueue = getDocumentQueue();
+      const docHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
+      for (const eventName of ['enqueued', 'processing', 'completed', 'failed'] as const) {
+        const handler = (documentId: string, errorOrUserId?: string, maybeUserId?: string) => {
+          const docUserId = eventName === 'failed' ? maybeUserId : errorOrUserId;
+          if (docUserId && docUserId !== session.userId) return;
+          safeSend({
+            type: 'document_event',
+            event: eventName,
+            documentId,
+            ...(eventName === 'failed' ? { error: errorOrUserId } : {}),
+            timestamp: Date.now(),
+          });
+        };
+        docQueue.on(eventName, handler);
+        docHandlers.push({ event: eventName, handler });
+      }
+
       // Subscribe to permission requests for this user
       const permissionManager = getPermissionManager();
       const unsubscribePermissions = permissionManager.onRequest?.((request: any) => {
@@ -111,6 +131,9 @@ export function setupWebSocket(app: Elysia): void {
         unsubscribe();
         unsubscribeOrchestrator();
         if (unsubscribePermissions) unsubscribePermissions();
+        for (const { event, handler } of docHandlers) {
+          docQueue.off(event, handler);
+        }
         webChatChannel.unregisterConnection(connectionId);
       };
       activeConnections.set(session.userId, { ws, cleanup });

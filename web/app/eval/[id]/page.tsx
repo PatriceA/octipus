@@ -63,7 +63,8 @@ interface EvalDetail {
     totalTests: number;
     totalPassed: number;
     totalFailed: number;
-    averageScore: number;
+    averageScore?: number;
+    passRate?: number;
   };
 }
 
@@ -194,7 +195,7 @@ export default function EvalDetailPage() {
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <ScoreBar score={data.summary.averageScore} />
+            <ScoreBar score={data.summary.passRate ?? data.summary.averageScore ?? 0} />
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Score</p>
           </CardContent>
         </Card>

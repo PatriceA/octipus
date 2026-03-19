@@ -53,7 +53,7 @@ tests:
       - type: classification
         value: task
       - type: routes_to_role
-        value: development
+        value: devops
       - type: confidence_above
         value: 0.4
     tags: [routing, devops]

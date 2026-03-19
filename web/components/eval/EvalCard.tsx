@@ -25,9 +25,14 @@ interface EvalCardProps {
     totalTests: number;
     totalPassed: number;
     totalFailed: number;
-    averageScore: number;
+    averageScore?: number;
+    passRate?: number;
   };
   suites: EvalSuiteSummary[];
+}
+
+function getScore(summary: EvalCardProps['summary']): number {
+  return summary.passRate ?? summary.averageScore ?? 0;
 }
 
 export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
@@ -59,7 +64,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
               </p>
             </div>
           </div>
-          <ScoreBar score={summary.averageScore} size="sm" />
+          <ScoreBar score={getScore(summary)} size="sm" />
         </div>
 
         <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">

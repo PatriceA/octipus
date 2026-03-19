@@ -9,7 +9,8 @@ interface ScoreBarProps {
 }
 
 export function ScoreBar({ score, size = 'md', showLabel = true }: ScoreBarProps) {
-  const pct = Math.round(score * 100);
+  const safeScore = (score != null && !isNaN(score)) ? score : 0;
+  const pct = Math.round(safeScore * 100);
   const color =
     pct >= 80 ? 'bg-green-500' :
     pct >= 50 ? 'bg-yellow-500' :

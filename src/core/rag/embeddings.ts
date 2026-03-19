@@ -298,7 +298,82 @@ export class EmbeddingService {
     }
   }
 
+  // ── Listing & Stats ──────────────────────────────────────────────
+
+  /** Paginated listing (excludes embedding vector and full content for performance) */
+  async listAll(limit = 50, offset = 0, sourceType?: string): Promise<{
+    entries: Array<{
+      id: string;
+      sourceType: string;
+      sourceId: string;
+      abstract: string | null;
+      metadata: EmbeddingMetadata;
+      createdAt: Date | null;
+    }>;
+    total: number;
+  }> {
+    const db = getDb();
+    const conditions = sourceType ? eq(embeddings.sourceType, sourceType) : undefined;
+
+    const [entries, countResult] = await Promise.all([
+      db.select({
+        id: embeddings.id,
+        sourceType: embeddings.sourceType,
+        sourceId: embeddings.sourceId,
+        abstract: embeddings.abstract,
+        metadata: embeddings.metadata,
+        createdAt: embeddings.createdAt,
+      })
+        .from(embeddings)
+        .where(conditions)
+        .orderBy(desc(embeddings.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.execute(sql`SELECT count(*)::int AS count FROM embeddings ${sourceType ? sql`WHERE source_type = ${sourceType}` : sql``}`),
+    ]);
+
+    return {
+      entries: entries.map(e => ({
+        ...e,
+        metadata: (e.metadata || {}) as EmbeddingMetadata,
+      })),
+      total: (countResult as any[])[0]?.count || 0,
+    };
+  }
+
+  /** Get stats grouped by source type */
+  async getStats(): Promise<{
+    total: number;
+    bySourceType: Record<string, number>;
+    models: string[];
+  }> {
+    const db = getDb();
+    const [typeResults, modelResults] = await Promise.all([
+      db.execute(sql`SELECT source_type, count(*)::int AS count FROM embeddings GROUP BY source_type`),
+      db.execute(sql`SELECT DISTINCT model FROM embeddings WHERE model IS NOT NULL`),
+    ]);
+
+    const bySourceType: Record<string, number> = {};
+    let total = 0;
+    for (const row of typeResults as any[]) {
+      bySourceType[row.source_type] = row.count;
+      total += row.count;
+    }
+
+    return {
+      total,
+      bySourceType,
+      models: (modelResults as any[]).map(r => r.model),
+    };
+  }
+
   // ── Deletion ──────────────────────────────────────────────────────
+
+  async deleteById(id: string): Promise<boolean> {
+    const db = getDb();
+    const result = await db.delete(embeddings).where(eq(embeddings.id, id)).returning({ id: embeddings.id });
+    return result.length > 0;
+  }
 
   async deleteBySource(sourceType: string, sourceId: string): Promise<number> {
     const db = getDb();

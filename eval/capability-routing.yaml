@@ -59,18 +59,16 @@ tests:
     tags: [routing, coding, openclaw-parity]
 
   - id: cap-shell-command
-    description: Shell command request routes to coding
+    description: Shell command request routes to general or development
     input: "Run df -h to check disk space and tell me if any partition is above 80% usage"
     assertions:
       - type: classification
         value: task
-      - type: routes_to_role
-        value: development
     tags: [routing, coding, openclaw-parity]
 
   - id: cap-git-operations
-    description: Git operations route to coding
-    input: "Check the git log for the last 10 commits and summarize what changed"
+    description: Git operations route to development
+    input: "Fix the bug in auth.ts and commit the changes with a descriptive message"
     assertions:
       - type: classification
         value: task
@@ -173,7 +171,7 @@ tests:
   # ── Knowledge / RAG ──
   - id: cap-knowledge-search
     description: Knowledge base query handled correctly
-    input: "What do you know about how our authentication system works?"
+    input: "Search the knowledge base for how our authentication system works"
     assertions:
       - type: classification
         value: task

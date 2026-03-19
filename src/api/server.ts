@@ -34,6 +34,7 @@ import { skillRoutes } from './routes/skills';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { evalRoutes } from './routes/eval';
 import { documentRoutes } from './routes/documents';
+import { knowledgeRoutes } from './routes/knowledge';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { setupWebSocket } from './websocket';
@@ -183,6 +184,7 @@ export function createServer() {
         .use(recurringTaskRoutes)
         .use(evalRoutes)
         .use(documentRoutes)
+        .use(knowledgeRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group

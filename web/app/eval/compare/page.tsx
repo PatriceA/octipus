@@ -26,7 +26,8 @@ interface EvalRunSummary {
     totalTests: number;
     totalPassed: number;
     totalFailed: number;
-    averageScore: number;
+    averageScore?: number;
+    passRate?: number;
   };
 }
 
@@ -51,7 +52,8 @@ interface EvalListItem {
     totalTests: number;
     totalPassed: number;
     totalFailed: number;
-    averageScore: number;
+    averageScore?: number;
+    passRate?: number;
   };
 }
 
@@ -175,7 +177,7 @@ export default function ComparePage() {
                   <span className="font-mono text-xs">{id.slice(5, 24)}</span>
                   {run && (
                     <span className="text-xs text-gray-500" suppressHydrationWarning>
-                      ({Math.round((run.summary.averageScore || 0) * 100)}%)
+                      ({Math.round((run.summary.passRate ?? run.summary.averageScore ?? 0) * 100)}%)
                     </span>
                   )}
                   <button
@@ -207,7 +209,7 @@ export default function ComparePage() {
                       <Plus className="w-3 h-3" />
                       <span className="font-mono">{run.id.slice(5, 24)}</span>
                       <span className="text-gray-400" suppressHydrationWarning>
-                        {Math.round((run.summary.averageScore || 0) * 100)}%
+                        {Math.round((run.summary.passRate ?? run.summary.averageScore ?? 0) * 100)}%
                       </span>
                     </button>
                   ))}
@@ -244,7 +246,7 @@ export default function ComparePage() {
                       <div className="text-[10px] text-gray-400 mt-0.5" suppressHydrationWarning>
                         {formatDate(run.timestamp)}
                       </div>
-                      <ScoreBar score={run.summary.averageScore} size="sm" />
+                      <ScoreBar score={run.summary.passRate ?? run.summary.averageScore ?? 0} size="sm" />
                     </th>
                   ))}
                 </tr>

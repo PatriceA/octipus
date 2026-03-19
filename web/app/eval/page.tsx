@@ -28,7 +28,8 @@ interface EvalListItem {
     totalTests: number;
     totalPassed: number;
     totalFailed: number;
-    averageScore: number;
+    averageScore?: number;
+    passRate?: number;
   };
   suites: EvalSuiteSummary[];
 }
@@ -126,7 +127,7 @@ export default function EvalPage() {
     ? results.reduce((s, r) => s + (r.summary.totalTests > 0 ? r.summary.totalPassed / r.summary.totalTests : 0), 0) / totalRuns
     : 0;
   const avgScore = totalRuns > 0
-    ? results.reduce((s, r) => s + r.summary.averageScore, 0) / totalRuns
+    ? results.reduce((s, r) => s + (r.summary.passRate ?? r.summary.averageScore ?? 0), 0) / totalRuns
     : 0;
   const totalTests = results.reduce((s, r) => s + r.summary.totalTests, 0);
 

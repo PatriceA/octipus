@@ -15,8 +15,10 @@ import { SettingsView } from './views/settings.js';
 import { IntegrationsView } from './views/integrations.js';
 import { TasksView } from './views/tasks.js';
 import { SkillsView } from './views/skills.js';
+import { DocumentsView } from './views/documents.js';
+import { KnowledgeView } from './views/knowledge.js';
 
-type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations' | 'tasks' | 'skills';
+type ViewType = 'dashboard' | 'agents' | 'chat' | 'logs' | 'models' | 'pipelines' | 'secrets' | 'settings' | 'integrations' | 'tasks' | 'skills' | 'documents' | 'knowledge';
 
 function App() {
   const { exit } = useApp();
@@ -40,6 +42,8 @@ function App() {
     if (input === '9') setCurrentView('settings');
     if (input === '0') setCurrentView('tasks');
     if (input === 's') setCurrentView('skills');
+    if (input === 'd') setCurrentView('documents');
+    if (input === 'k') setCurrentView('knowledge');
     if (input === 'q') exit();
   });
 
@@ -67,6 +71,10 @@ function App() {
         return <TasksView />;
       case 'skills':
         return <SkillsView />;
+      case 'documents':
+        return <DocumentsView />;
+      case 'knowledge':
+        return <KnowledgeView />;
       default:
         return <DashboardView />;
     }
@@ -96,6 +104,8 @@ function App() {
           <Text color="yellow">[8]</Text><Text color="white">Integ </Text>
           <Text color="yellow">[9]</Text><Text color="white">Settings </Text>
           <Text color="yellow">[0]</Text><Text color="white">Tasks </Text>
+          <Text color="yellow">[d]</Text><Text color="white">Docs </Text>
+          <Text color="yellow">[k]</Text><Text color="white">Know </Text>
           <Text color="red">[q]</Text><Text color="white">Quit</Text>
         </Text>
       </Box>

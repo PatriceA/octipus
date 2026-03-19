@@ -34,6 +34,7 @@ function padRight(str: string, len: number): string {
 // ── Console reporter ─────────────────────────────────────────────────
 
 function formatScore(score: number): string {
+  if (score == null || isNaN(score)) return dim('N/A');
   const pct = Math.round(score * 100);
   if (pct >= 80) return pass(`${pct}%`);
   if (pct >= 50) return warn(`${pct}%`);
@@ -41,6 +42,7 @@ function formatScore(score: number): string {
 }
 
 function formatLatency(ms: number): string {
+  if (ms == null || isNaN(ms)) return dim('N/A');
   if (ms < 100) return pass(`${ms}ms`);
   if (ms < 1000) return info(`${ms}ms`);
   if (ms < 5000) return warn(`${(ms / 1000).toFixed(1)}s`);
@@ -95,12 +97,15 @@ export function reportToConsole(results: EvalSuiteResult[]): void {
   const totalTests = results.reduce((s, r) => s + r.totalTests, 0);
   const totalPassed = results.reduce((s, r) => s + r.passed, 0);
   const totalFailed = results.reduce((s, r) => s + r.failed, 0);
-  const avgScore = results.length > 0
-    ? results.reduce((s, r) => s + r.score, 0) / results.length
-    : 0;
+  // Weight score by number of tests per suite (not simple average)
+  const totalAssertions = results.reduce((s, r) => s + r.results.reduce((as, t) => as + t.assertions.length, 0), 0);
+  const passedAssertions = results.reduce((s, r) => s + r.results.reduce((as, t) => as + t.assertions.filter(a => a.passed).length, 0), 0);
+  const passRate = totalTests > 0 ? totalPassed / totalTests : 0;
+  const assertionRate = totalAssertions > 0 ? passedAssertions / totalAssertions : 0;
 
   console.log(bold('--- Summary ---'));
-  console.log(`  Suites: ${results.length}  |  Tests: ${totalTests}  |  Passed: ${pass(String(totalPassed))}  |  Failed: ${totalFailed > 0 ? fail(String(totalFailed)) : dim('0')}  |  Score: ${formatScore(avgScore)}`);
+  console.log(`  Suites: ${results.length}  |  Tests: ${totalTests}  |  Passed: ${pass(String(totalPassed))}  |  Failed: ${totalFailed > 0 ? fail(String(totalFailed)) : dim('0')}`);
+  console.log(`  Pass rate: ${formatScore(passRate)} (${totalPassed}/${totalTests} tests)  |  Assertion rate: ${formatScore(assertionRate)} (${passedAssertions}/${totalAssertions} assertions)`);
   console.log('');
 }
 
@@ -144,15 +149,23 @@ export function toJSON(results: EvalSuiteResult[]): string {
         timestamp: r.timestamp.toISOString(),
       })),
     })),
-    summary: {
-      totalSuites: results.length,
-      totalTests: results.reduce((s, r) => s + r.totalTests, 0),
-      totalPassed: results.reduce((s, r) => s + r.passed, 0),
-      totalFailed: results.reduce((s, r) => s + r.failed, 0),
-      averageScore: results.length > 0
-        ? results.reduce((s, r) => s + r.score, 0) / results.length
-        : 0,
-    },
+    summary: (() => {
+      const totalTests = results.reduce((s, r) => s + r.totalTests, 0);
+      const totalPassed = results.reduce((s, r) => s + r.passed, 0);
+      const totalFailed = results.reduce((s, r) => s + r.failed, 0);
+      const totalAssertions = results.reduce((s, r) => s + r.results.reduce((as, t) => as + t.assertions.length, 0), 0);
+      const passedAssertions = results.reduce((s, r) => s + r.results.reduce((as, t) => as + t.assertions.filter(a => a.passed).length, 0), 0);
+      return {
+        totalSuites: results.length,
+        totalTests,
+        totalPassed,
+        totalFailed,
+        passRate: totalTests > 0 ? totalPassed / totalTests : 0,
+        assertionPassRate: totalAssertions > 0 ? passedAssertions / totalAssertions : 0,
+        totalAssertions,
+        passedAssertions,
+      };
+    })(),
   }, null, 2);
 }
 
