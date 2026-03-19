@@ -1,5 +1,7 @@
 # Browser Extension
 
+> **v2.0.0**: Extension upgraded from 8 to 24 commands. New capabilities include tab management, advanced interactions (hover, drag, scroll, key press), storage access, console/network monitoring, and dialog handling. New permissions required: `tabs`, `cookies`.
+
 Chrome extension that gives AI agents access to the user's real browser — with existing cookies, sessions, and authentication. No bot detection, no Playwright sandboxes.
 
 ## Why
@@ -69,16 +71,64 @@ Run the setup wizard (`bun run setup`). If Chromium is detected, a "Browser Exte
 
 ## Available Commands
 
+### Navigation & Tabs
+
 | Command | Description | Permission |
 |---------|-------------|------------|
 | `navigate` | Navigate active tab to a URL | ASK |
+| `new_tab` | Open a new browser tab | ASK |
+| `close_tab` | Close a tab by ID | ASK |
+| `select_tab` | Switch focus to a tab by ID | ASK |
+| `get_tabs` | List all open tabs | ALLOW |
+
+### Screenshots & Content
+
+| Command | Description | Permission |
+|---------|-------------|------------|
 | `screenshot` | Capture visible tab as base64 PNG | ALLOW |
 | `extract_content` | Extract text, links, forms from page | ALLOW |
-| `click` | Click element by CSS selector | ASK |
+
+### Interactions
+
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `click` | Click element by CSS selector; supports `doubleClick` parameter | ASK |
 | `fill` | Fill input field with value | ASK |
+| `select` | Select option in a `<select>` element | ASK |
+| `hover` | Hover over an element by CSS selector | ASK |
+| `press_key` | Press a keyboard key (e.g. Enter, Tab, Escape) | ASK |
+| `scroll` | Scroll the page or an element by pixel offset | ASK |
+| `drag` | Drag an element from one position to another | ASK |
+
+### Waiting & Debugging
+
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `wait_for` | Wait for an element or condition to appear | ALLOW |
+| `highlight` | Visually highlight an element on the page | ALLOW |
+
+### JavaScript & State
+
+| Command | Description | Permission |
+|---------|-------------|------------|
 | `evaluate` | Execute JavaScript in page context | ASK (dangerous) |
-| `get_tabs` | List all open tabs | ALLOW |
 | `get_cookies` | Get cookies for a domain | ASK (dangerous) |
+| `set_cookies` | Set cookies for a domain | ASK (dangerous) |
+| `get_storage` | Read localStorage or sessionStorage values | ASK (dangerous) |
+| `set_storage` | Write localStorage or sessionStorage values | ASK (dangerous) |
+
+### Monitoring
+
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `get_console` | Retrieve captured console log entries | ALLOW |
+| `get_network` | Retrieve captured network request/response log | ASK |
+
+### Dialogs
+
+| Command | Description | Permission |
+|---------|-------------|------------|
+| `handle_dialog` | Accept or dismiss a browser dialog (alert, confirm, prompt) | ASK |
 
 ## Agent Roles with Browser Extension
 
@@ -98,7 +148,7 @@ The `browser-ext` tool is available to these roles:
 
 ```json
 // Handshake
-{ "type": "connect", "version": "1.0.0", "tabCount": 5, "userAgent": "..." }
+{ "type": "connect", "version": "2.0.0", "tabCount": 5, "userAgent": "..." }
 
 // Command result
 { "type": "result", "id": "cmd-123", "result": { ... } }
@@ -126,9 +176,10 @@ The `browser-ext` tool is available to these roles:
 ## Security
 
 - WebSocket authenticated via master key (query parameter)
-- `evaluate` and `get_cookies` marked as dangerous — require explicit permission approval
-- Navigation and interaction require ASK-level approval
-- Screenshots and content extraction default to ALLOW
+- `evaluate`, `get_cookies`, `set_cookies`, `get_storage`, `set_storage`, and `get_network` marked as dangerous — require explicit permission approval
+- Navigation, tab management, and interaction commands require ASK-level approval
+- Screenshots, content extraction, console capture, and element highlighting default to ALLOW
+- v2.0.0 requires the `tabs` and `cookies` browser permissions
 
 ## Troubleshooting
 

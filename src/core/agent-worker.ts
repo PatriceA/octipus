@@ -4,6 +4,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
 import { agentLogger } from '@/utils/logger';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
@@ -21,6 +22,7 @@ export class AgentWorker extends BaseAgentWorker {
   private totalTokensUsed: number = 0;
   private startTime: number = 0;
   private emptyRetries: number = 0;
+  private llmRetries: number = 0;
   /** Track consecutive identical tool calls to detect loops */
   private lastToolCallSignature: string = '';
   private consecutiveRepeatCount: number = 0;
@@ -122,6 +124,14 @@ export class AgentWorker extends BaseAgentWorker {
         { durationMs, iterations: this.iteration, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
 
+      // Persist final state to DB
+      agentRepository.updateStatus(this.context.id, {
+        status: 'completed',
+        iterations: this.iteration,
+        totalTokens: this.totalTokensUsed,
+        durationMs,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
+
       // Auto-index output into knowledge base (fire-and-forget)
       autoIndexAgentOutput({
         agentId: this.context.id,
@@ -151,6 +161,15 @@ export class AgentWorker extends BaseAgentWorker {
         this.context.userId, this.context.sessionId, this.context.id,
         { error: (error as Error).message, iteration: this.iteration, elapsedMs: failDurationMs, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
+
+      // Persist final state to DB
+      agentRepository.updateStatus(this.context.id, {
+        status: 'failed',
+        iterations: this.iteration,
+        totalTokens: this.totalTokensUsed,
+        durationMs: failDurationMs,
+        error: (error as Error).message,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure'));
 
       throw error;
     }
@@ -227,13 +246,14 @@ export class AgentWorker extends BaseAgentWorker {
         }, 'Messages compacted');
       }
 
-      // Get completion from LLM
+      // Get completion from LLM (with retry for transient failures)
       const llmStart = Date.now();
       let completion: CompletionResult;
       try {
         completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
       } catch (err) {
         const errMsg = (err as Error).message || '';
+
         // Handle context window overflow — aggressively compact and retry
         if (errMsg.includes('ContextWindowExceeded') || errMsg.includes('context_length_exceeded') || errMsg.includes('maximum context length')) {
           agentLogger.warn({
@@ -241,14 +261,12 @@ export class AgentWorker extends BaseAgentWorker {
             messageCount: this.messages.length,
           }, 'Context window exceeded, compacting aggressively and retrying');
 
-          // Truncate large tool results (keep first 2000 chars each)
           for (const msg of this.messages) {
             if (msg.role === 'tool' && msg.content.length > 2000) {
               msg.content = msg.content.slice(0, 2000) + '\n\n[... truncated due to context window limit]';
             }
           }
 
-          // Force aggressive compaction with smaller window
           const { messages: compacted } = await compactMessagesWithSummary(this.messages, {
             maxTokens: Math.floor(this.config.contextWindowSize * 0.5),
             preserveSystemMessages: true,
@@ -258,8 +276,34 @@ export class AgentWorker extends BaseAgentWorker {
           this.messages = compacted;
           continue;
         }
+
+        // Retry transient LLM failures (JSON parse, rate limit, server errors)
+        const isTransient = errMsg.includes('JSON') || errMsg.includes('parse')
+          || errMsg.includes('Unterminated') || errMsg.includes('500')
+          || errMsg.includes('502') || errMsg.includes('503')
+          || errMsg.includes('rate_limit') || errMsg.includes('overloaded');
+
+        this.llmRetries = (this.llmRetries || 0) + 1;
+        if (isTransient && this.llmRetries <= 3) {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            error: errMsg, retry: this.llmRetries,
+          }, 'Transient LLM error, retrying after delay');
+
+          // Brief backoff: 2s, 4s, 8s
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, this.llmRetries)));
+
+          // Remove the last assistant message if it was malformed (caused the parse error)
+          if (this.messages.length > 0 && this.messages[this.messages.length - 1].role === 'assistant') {
+            this.messages.pop();
+          }
+          continue;
+        }
+
         throw err;
       }
+      // Reset retry counter on success
+      this.llmRetries = 0;
       this.totalTokensUsed += completion.usage.totalTokens;
 
       agentLogger.info({

@@ -7,6 +7,7 @@ import { coreLogger } from '@/utils/logger';
 export interface SearchResult {
   id: string;
   content: string;
+  abstract?: string | null;
   sourceType: string;
   sourceId: string;
   similarity: number;
@@ -40,16 +41,17 @@ export class EmbeddingService {
     content: string,
     embedding: number[],
     metadata?: EmbeddingMetadata,
-  ): Promise<void> {
+  ): Promise<string> {
     const db = getDb();
-    await db.insert(embeddings).values({
+    const result = await db.insert(embeddings).values({
       sourceType,
       sourceId,
       content,
       embedding,
       model: this.model,
       metadata: metadata || {},
-    });
+    }).returning({ id: embeddings.id });
+    return result[0].id;
   }
 
   async indexText(
@@ -60,25 +62,35 @@ export class EmbeddingService {
   ): Promise<number> {
     const chunks = this.chunkText(content);
     let stored = 0;
+    const storedIds: string[] = [];
 
     for (let i = 0; i < chunks.length; i++) {
       try {
         const embedding = await this.generateEmbedding(chunks[i]);
-        await this.store(sourceType, sourceId, chunks[i], embedding, {
+        const id = await this.store(sourceType, sourceId, chunks[i], embedding, {
           ...metadata,
           chunkIndex: i,
           totalChunks: chunks.length,
           originalLength: content.length,
         });
+        storedIds.push(id);
         stored++;
       } catch (err) {
         coreLogger.error({ err, sourceId, chunk: i }, 'Failed to index chunk');
       }
     }
 
+    // Generate abstracts for stored chunks (fire-and-forget)
+    if (storedIds.length > 0) {
+      this.generateAbstracts(storedIds, chunks.slice(0, storedIds.length)).catch(() => {});
+    }
+
     return stored;
   }
 
+  // ── Search methods ────────────────────────────────────────────────
+
+  /** Original vector-only search (kept as fallback) */
   async search(query: string, limit = 5, sourceType?: string): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
@@ -98,6 +110,7 @@ export class EmbeddingService {
       .select({
         id: embeddings.id,
         content: embeddings.content,
+        abstract: embeddings.abstract,
         sourceType: embeddings.sourceType,
         sourceId: embeddings.sourceId,
         metadata: embeddings.metadata,
@@ -111,12 +124,181 @@ export class EmbeddingService {
     return results.map(r => ({
       id: r.id,
       content: r.content,
+      abstract: r.abstract,
       sourceType: r.sourceType,
       sourceId: r.sourceId,
       similarity: Number(r.similarity) || 0,
       metadata: (r.metadata || {}) as EmbeddingMetadata,
     }));
   }
+
+  /** Full-text search only (no embedding needed) */
+  async ftsSearch(query: string, limit = 5, sourceType?: string): Promise<SearchResult[]> {
+    const db = getDb();
+    const sourceFilter = sourceType ? sql`AND source_type = ${sourceType}` : sql``;
+
+    const results = await db.execute(sql`
+      SELECT id, content, abstract, source_type, source_id, metadata,
+             ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) AS similarity
+      FROM embeddings
+      WHERE content_tsv @@ plainto_tsquery('english', ${query})
+        ${sourceFilter}
+      ORDER BY similarity DESC
+      LIMIT ${limit}
+    `);
+
+    return (results as any[]).map(r => ({
+      id: r.id,
+      content: r.content,
+      abstract: r.abstract,
+      sourceType: r.source_type,
+      sourceId: r.source_id,
+      similarity: Number(r.similarity) || 0,
+      metadata: (r.metadata || {}) as EmbeddingMetadata,
+    }));
+  }
+
+  /**
+   * Hybrid search combining BM25 full-text and vector cosine similarity.
+   * Uses Reciprocal Rank Fusion (RRF) — simple, robust, no normalization needed.
+   * alpha controls semantic weight: 0.6 = lean toward semantic, 0.4 = lean toward keyword.
+   */
+  async hybridSearch(
+    query: string,
+    limit = 5,
+    sourceType?: string,
+    alpha = 0.6,
+  ): Promise<SearchResult[]> {
+    let queryEmbedding: number[];
+    try {
+      queryEmbedding = await this.generateEmbedding(query);
+    } catch {
+      // Fall back to FTS-only if embedding unavailable
+      return this.ftsSearch(query, limit, sourceType);
+    }
+
+    const db = getDb();
+    const vecLiteral = `[${queryEmbedding.join(',')}]`;
+    const sourceFilter = sourceType ? sql`AND source_type = ${sourceType}` : sql``;
+    const k = 60; // RRF constant
+
+    const results = await db.execute(sql`
+      WITH fts AS (
+        SELECT id,
+               row_number() OVER (ORDER BY ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) DESC) AS rank_fts
+        FROM embeddings
+        WHERE content_tsv @@ plainto_tsquery('english', ${query})
+          ${sourceFilter}
+        LIMIT 50
+      ),
+      vec AS (
+        SELECT id,
+               row_number() OVER (ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector) AS rank_vec
+        FROM embeddings
+        WHERE 1=1 ${sourceFilter}
+        ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector
+        LIMIT 50
+      ),
+      combined AS (
+        SELECT
+          COALESCE(f.id, v.id) AS id,
+          COALESCE(1.0 / (${k} + f.rank_fts), 0) * ${1 - alpha} +
+          COALESCE(1.0 / (${k} + v.rank_vec), 0) * ${alpha} AS rrf_score
+        FROM fts f
+        FULL OUTER JOIN vec v ON f.id = v.id
+      )
+      SELECT c.rrf_score AS similarity, e.id, e.content, e.abstract, e.source_type, e.source_id, e.metadata
+      FROM combined c
+      JOIN embeddings e ON e.id = c.id
+      ORDER BY c.rrf_score DESC
+      LIMIT ${limit}
+    `);
+
+    return (results as any[]).map(r => ({
+      id: r.id,
+      content: r.content,
+      abstract: r.abstract,
+      sourceType: r.source_type,
+      sourceId: r.source_id,
+      similarity: Number(r.similarity) || 0,
+      metadata: (r.metadata || {}) as EmbeddingMetadata,
+    }));
+  }
+
+  // ── Read by ID ────────────────────────────────────────────────────
+
+  async readById(id: string): Promise<SearchResult | null> {
+    const db = getDb();
+    const result = await db
+      .select({
+        id: embeddings.id,
+        content: embeddings.content,
+        abstract: embeddings.abstract,
+        sourceType: embeddings.sourceType,
+        sourceId: embeddings.sourceId,
+        metadata: embeddings.metadata,
+      })
+      .from(embeddings)
+      .where(eq(embeddings.id, id))
+      .limit(1);
+
+    if (result.length === 0) return null;
+
+    const r = result[0];
+    return {
+      id: r.id,
+      content: r.content,
+      abstract: r.abstract,
+      sourceType: r.sourceType,
+      sourceId: r.sourceId,
+      similarity: 1,
+      metadata: (r.metadata || {}) as EmbeddingMetadata,
+    };
+  }
+
+  // ── Abstract generation ───────────────────────────────────────────
+
+  /** Generate L0 abstracts for recently indexed chunks (fire-and-forget) */
+  private async generateAbstracts(ids: string[], contents: string[]): Promise<void> {
+    const client = getLiteLLMClient();
+    const db = getDb();
+
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        // Skip very short content — it's its own abstract
+        if (contents[i].length < 200) {
+          await db.update(embeddings)
+            .set({ abstract: contents[i].slice(0, 150) })
+            .where(eq(embeddings.id, ids[i]));
+          continue;
+        }
+
+        const { getModelRegistry } = await import('@/models/model-registry');
+        const defaultModel = await getModelRegistry().getDefaultModel();
+        const modelName = defaultModel?.modelId || 'qwen3:14b';
+        const now = new Date();
+        const response = await client.complete({
+          model: modelName,
+          messages: [
+            { role: 'system' as const, content: 'Summarize the following text in 1-2 sentences. Be concise and factual. Output only the summary.', timestamp: now },
+            { role: 'user' as const, content: contents[i].slice(0, 2000), timestamp: now },
+          ],
+          extraBody: { think: false },
+        });
+
+        const abstract = response.content || '';
+        if (abstract) {
+          await db.update(embeddings)
+            .set({ abstract: abstract.slice(0, 500) })
+            .where(eq(embeddings.id, ids[i]));
+        }
+      } catch {
+        // Non-critical — skip silently
+      }
+    }
+  }
+
+  // ── Deletion ──────────────────────────────────────────────────────
 
   async deleteBySource(sourceType: string, sourceId: string): Promise<number> {
     const db = getDb();
@@ -126,6 +308,8 @@ export class EmbeddingService {
       .returning({ id: embeddings.id });
     return result.length;
   }
+
+  // ── Chunking ──────────────────────────────────────────────────────
 
   chunkText(text: string, maxSize = MAX_CHUNK_SIZE): string[] {
     if (text.length <= maxSize) return [text];

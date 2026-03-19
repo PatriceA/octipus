@@ -200,7 +200,7 @@ export class OrchestratorService {
 
       const startTime = Date.now();
       const { response, agentId } = await this.runOrchestrator(
-        resolvedSessionId, userId, message, classification, inputGuard.flags,
+        resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -240,6 +240,7 @@ export class OrchestratorService {
     message: string,
     classification: MessageClassification,
     guardFlags: string[] = [],
+    channel?: string,
   ): Promise<{ response: string; agentId: string }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration();
@@ -287,6 +288,9 @@ export class OrchestratorService {
       systemPrompt += `\nWORKSPACE: ${wsRoot}`;
     }
 
+    // Hook-triggered tasks get a longer timeout (45 min) since they run unattended
+    const orchestratorTimeout = channel === 'hook' ? 2700000 : 1800000;
+
     const worker = await agentManager.spawn({
       sessionId,
       userId,
@@ -296,7 +300,7 @@ export class OrchestratorService {
       systemPrompt,
       tools: metaTools,
       maxIterations: 25,
-      timeout: 1800000,
+      timeout: orchestratorTimeout,
     });
 
     const agentId = worker.getContext().id;

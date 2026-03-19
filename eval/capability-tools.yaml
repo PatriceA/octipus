@@ -1,0 +1,123 @@
+name: Tool Usage Tests (OpenClaw Parity)
+description: >
+  Tests verifying correct tool selection for various tasks.
+  Covers tool capabilities that OpenClaw provides: browser, shell,
+  knowledge search, messaging, scheduling, and document processing.
+
+tests:
+  # ── Web Search Tool ──
+  - id: tool-web-search
+    description: Web search query uses search tool
+    input: "Search the web for Bun 2.0 release notes"
+    assertions:
+      - type: uses_tool
+        value: search
+      - type: not_uses_tool
+        value: shell
+    tags: [tools, search, openclaw-parity]
+
+  # ── Browser Tool ──
+  - id: tool-browser-navigate
+    description: URL navigation uses browser tool
+    input: "Open github.com/anthropics/claude-code and tell me the latest release version"
+    assertions:
+      - type: uses_tool
+        value: navigate
+    tags: [tools, browser, openclaw-parity]
+
+  - id: tool-browser-screenshot
+    description: Screenshot request uses browser tool
+    input: "Take a screenshot of the current page in my browser"
+    assertions:
+      - type: uses_tool
+        value: screenshot
+    tags: [tools, browser, openclaw-parity]
+
+  # ── Shell / Code Execution ──
+  - id: tool-shell-execute
+    description: System command uses shell tool
+    input: "List all running Docker containers and their resource usage"
+    assertions:
+      - type: uses_tool
+        value: execute
+    tags: [tools, shell, openclaw-parity]
+
+  - id: tool-git-status
+    description: Git query uses git tool
+    input: "Show me the current git status and any uncommitted changes"
+    assertions:
+      - type: uses_tool
+        value: [git_status, execute]
+    tags: [tools, git, openclaw-parity]
+
+  # ── File System ──
+  - id: tool-read-file
+    description: File reading uses filesystem tool
+    input: "Read the contents of package.json and tell me what dependencies we have"
+    assertions:
+      - type: uses_tool
+        value: read_file
+    tags: [tools, filesystem, openclaw-parity]
+
+  - id: tool-write-file
+    description: File writing uses filesystem tool
+    input: "Create a new file called hello.py with a simple Hello World program"
+    assertions:
+      - type: uses_tool
+        value: write_file
+    tags: [tools, filesystem, openclaw-parity]
+
+  # ── Knowledge Base ──
+  - id: tool-knowledge-search
+    description: Knowledge query uses search_knowledge tool
+    input: "Search the knowledge base for information about our database schema"
+    assertions:
+      - type: uses_tool
+        value: search_knowledge
+    tags: [tools, knowledge, openclaw-parity]
+
+  # ── Messaging ──
+  - id: tool-send-message
+    description: Send message uses messaging tool
+    input: "Send a message to my Telegram chat saying the build passed"
+    assertions:
+      - type: uses_tool
+        value: send_message
+    tags: [tools, messaging, openclaw-parity]
+
+  - id: tool-list-channels
+    description: Channel listing uses messaging tool
+    input: "What messaging channels are connected?"
+    assertions:
+      - type: uses_tool
+        value: list_channels
+    tags: [tools, messaging, openclaw-parity]
+
+  # ── Scheduling ──
+  - id: tool-create-schedule
+    description: Schedule creation uses scheduling tool
+    input: "Set up a cron job that runs every morning at 8 AM to check server health"
+    assertions:
+      - type: uses_tool
+        value: create_hook
+    tags: [tools, scheduling, openclaw-parity]
+
+  # ── Document Processing ──
+  - id: tool-list-documents
+    description: Document listing uses documents tool
+    input: "Show me all documents that have been uploaded and processed"
+    assertions:
+      - type: uses_tool
+        value: list_documents
+    tags: [tools, documents, openclaw-parity]
+
+  # ── Multi-Tool Usage ──
+  - id: tool-research-and-save
+    description: Research task uses search then saves findings
+    input: "Research TypeScript 6 features and save a summary to research-notes.md"
+    assertions:
+      - type: uses_tool
+        value: search
+      - type: uses_tool
+        value: write_file
+    tags: [tools, multi-tool, openclaw-parity]

@@ -186,6 +186,10 @@ export const workspaceConfigSchema = z.object({
   additionalPaths: z.array(z.string()).default([]),
   sessionFolders: z.boolean().default(true),
   autoIndexFiles: z.boolean().default(true),
+  documentsPath: z.string().default('./workspace/documents'),
+  maxUploadSize: z.number().min(0).default(52428800), // 50MB
+  ocrModel: z.string().default('glm-ocr'),
+  ocrEndpoint: z.string().default('http://localhost:11435'),
 });
 
 // Full configuration schema

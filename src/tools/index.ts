@@ -16,6 +16,7 @@ export { KnowledgeTool, knowledgeTool } from './knowledge';
 export { MessagingTool, messagingTool } from './messaging';
 export { BrowserExtTool, browserExtTool } from './browser-ext';
 export { SchedulingTool, schedulingTool } from './scheduling';
+export { DocumentsTool, documentsTool } from './documents';
 
 import { getToolRegistry } from './registry';
 import { filesystemTool } from './filesystem';
@@ -32,6 +33,7 @@ import { knowledgeTool } from './knowledge';
 import { messagingTool } from './messaging';
 import { browserExtTool } from './browser-ext';
 import { schedulingTool } from './scheduling';
+import { documentsTool } from './documents';
 
 /**
  * Register all built-in tools
@@ -53,4 +55,5 @@ export async function registerBuiltinTools(): Promise<void> {
   await registry.register(messagingTool);
   await registry.register(browserExtTool);
   await registry.register(schedulingTool);
+  await registry.register(documentsTool);
 }

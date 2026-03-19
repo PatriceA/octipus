@@ -346,10 +346,17 @@ export class AssistantClient {
 
   // ─── Knowledge / RAG ───
 
-  async searchKnowledge(query: string, limit?: number): Promise<{ results: any[] }> {
+  async searchKnowledge(query: string, limit?: number, mode?: string): Promise<{ results: any[] }> {
     return this.request('/api/tools/knowledge/tools/search_knowledge/execute', {
       method: 'POST',
-      body: JSON.stringify({ args: { query, limit: limit || 5 } }),
+      body: JSON.stringify({ args: { query, limit: limit || 5, mode: mode || 'hybrid' } }),
+    });
+  }
+
+  async readKnowledge(id: string): Promise<any> {
+    return this.request('/api/tools/knowledge/tools/read_knowledge/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: { id } }),
     });
   }
 
@@ -357,6 +364,27 @@ export class AssistantClient {
     return this.request('/api/tools/knowledge/tools/index_file/execute', {
       method: 'POST',
       body: JSON.stringify({ args: { path, type: type || 'document' } }),
+    });
+  }
+
+  // ─── Messaging ───
+
+  async sendChannelMessage(
+    channel: string,
+    target: string,
+    message: string,
+    replyTo?: string,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    return this.request('/api/tools/messaging/tools/send_message/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: { channel, target, message, reply_to: replyTo } }),
+    });
+  }
+
+  async listChannels(): Promise<{ channels: Array<{ type: string; name: string; connected: boolean }> }> {
+    return this.request('/api/tools/messaging/tools/list_channels/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: {} }),
     });
   }
 

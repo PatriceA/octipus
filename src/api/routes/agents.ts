@@ -1,34 +1,75 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { getRouter } from '@/core/router';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { apiLogger } from '@/utils/logger';
 
 export const agentRoutes = new Elysia({ prefix: '/agents' })
   .use(apiContext)
-  // List all agents
+  // List all agents (in-memory live + DB history)
   .get(
     '/',
-    async ({ user }) => {
+    async ({ user, query }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
 
       const agentManager = getAgentManager();
-      let agents = agentManager.list();
+      let liveAgents = agentManager.list();
 
       // Non-admin users can only see their own agents
       if (!user.isAdmin) {
-        agents = agents.filter((a) => a.userId === user.id);
+        liveAgents = liveAgents.filter((a) => a.userId === user.id);
       }
 
-      return { agents };
+      // Collect IDs of agents still in memory
+      const liveIds = new Set(liveAgents.map(a => a.id));
+
+      // Fetch historical agents from DB (exclude ones still in memory)
+      try {
+        const sessionId = query?.sessionId as string | undefined;
+        const dbAgents = sessionId
+          ? await agentRepository.findBySession(sessionId)
+          : user.isAdmin
+            ? await agentRepository.listRecent()
+            : await agentRepository.findByUser(user.id);
+
+        const historical = dbAgents
+          .filter(a => !liveIds.has(a.id))
+          .map(a => ({
+            id: a.id,
+            sessionId: a.sessionId,
+            userId: a.userId,
+            topic: a.topic,
+            model: a.model,
+            role: a.role,
+            status: a.status,
+            createdAt: a.createdAt,
+            iteration: a.iterations || 0,
+            durationMs: a.durationMs,
+            totalTokens: a.totalTokens,
+            error: a.error,
+            completedAt: a.completedAt,
+          }));
+
+        return { agents: [...liveAgents, ...historical] };
+      } catch (err) {
+        // Fallback to live-only if DB query fails
+        apiLogger.error({ err }, 'Failed to fetch agent history from DB');
+        return { agents: liveAgents };
+      }
     },
-    { detail: { tags: ['agents'] } }
+    {
+      query: t.Optional(t.Object({
+        sessionId: t.Optional(t.String()),
+      })),
+      detail: { tags: ['agents'] },
+    }
   )
 
-  // Get agent details
+  // Get agent details (live or from DB history)
   .get(
     '/:id',
     async ({ user, params }) => {
@@ -39,27 +80,46 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       const agentManager = getAgentManager();
       const agent = agentManager.get(params.id);
 
-      if (!agent) {
+      if (agent) {
+        const context = agent.getContext();
+        if (!user.isAdmin && context.userId !== user.id) {
+          return { error: 'Not authorized' };
+        }
+        return {
+          id: context.id,
+          sessionId: context.sessionId,
+          userId: context.userId,
+          topic: context.topic,
+          model: context.model,
+          status: agent.getStatus(),
+          iteration: agent.getIteration(),
+          createdAt: context.createdAt,
+          metadata: context.metadata,
+        };
+      }
+
+      // Fall back to DB history
+      const dbAgent = await agentRepository.findById(params.id);
+      if (!dbAgent) {
         return { error: 'Agent not found' };
       }
-
-      const context = agent.getContext();
-
-      // Check authorization
-      if (!user.isAdmin && context.userId !== user.id) {
+      if (!user.isAdmin && dbAgent.userId !== user.id) {
         return { error: 'Not authorized' };
       }
-
       return {
-        id: context.id,
-        sessionId: context.sessionId,
-        userId: context.userId,
-        topic: context.topic,
-        model: context.model,
-        status: agent.getStatus(),
-        iteration: agent.getIteration(),
-        createdAt: context.createdAt,
-        metadata: context.metadata,
+        id: dbAgent.id,
+        sessionId: dbAgent.sessionId,
+        userId: dbAgent.userId,
+        topic: dbAgent.topic,
+        model: dbAgent.model,
+        status: dbAgent.status,
+        iteration: dbAgent.iterations || 0,
+        createdAt: dbAgent.createdAt,
+        metadata: dbAgent.metadata || {},
+        durationMs: dbAgent.durationMs,
+        totalTokens: dbAgent.totalTokens,
+        error: dbAgent.error,
+        completedAt: dbAgent.completedAt,
       };
     },
     {

@@ -131,24 +131,37 @@ async function processCronTick(): Promise<void> {
       const cronExpression = hook.triggerConfig?.cronExpression as string;
       const timezone = (hook.triggerConfig?.timezone as string) || 'UTC';
 
+      // IMPORTANT: Update nextRunAt BEFORE executing — hook execution can take minutes/hours
+      // (e.g. spawning an orchestrator + research agent). Without this, the next cron tick
+      // finds the same hook still "due" and fires it again, causing duplicate executions.
+      const nextRun = getNextCronDate(cronExpression, timezone);
+      await db
+        .update(hooks)
+        .set({
+          nextRunAt: nextRun,
+          updatedAt: now,
+        })
+        .where(eq(hooks.id, hook.id));
+
       try {
         // Execute directly via hookManager.trigger() — this handles action execution + logging
-        await hookManager.trigger(
+        // Fire-and-forget for long-running actions (spawn_agent) to avoid blocking the cron loop
+        hookManager.trigger(
           { type: 'schedule', data: { hookId: hook.id }, timestamp: now },
           { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } },
-        );
-
-        const nextRun = getNextCronDate(cronExpression, timezone);
-
-        // Update nextRunAt for the next tick
-        await db
-          .update(hooks)
-          .set({
-            nextRunAt: nextRun,
-            lastError: null,
-            updatedAt: now,
-          })
-          .where(eq(hooks.id, hook.id));
+        ).then(() => {
+          db.update(hooks)
+            .set({ lastError: null, updatedAt: new Date() })
+            .where(eq(hooks.id, hook.id))
+            .catch(() => {});
+          coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook completed');
+        }).catch(err => {
+          db.update(hooks)
+            .set({ lastError: (err as Error).message, updatedAt: new Date() })
+            .where(eq(hooks.id, hook.id))
+            .catch(() => {});
+          coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
+        });
 
         coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook triggered');
       } catch (err) {

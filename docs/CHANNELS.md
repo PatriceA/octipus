@@ -16,6 +16,15 @@ User ─── WebChat ───┘
 
 Channels are registered at startup in `src/channels/index.ts` and support **hot-reload** — change a setting in the web UI and the channel reconnects automatically.
 
+### Attachment Processing
+
+All channels support automatic file attachment processing. When a user sends a file (image, PDF, document), the UMI:
+1. Downloads the file via the channel's API
+2. Enqueues it for OCR processing (glm-ocr via Ollama)
+3. Categorizes and indexes the content into the knowledge base
+
+Supported file types: images (PNG, JPG, WEBP), PDFs, Office documents (DOCX, XLSX), and text files. Processing happens asynchronously — the user gets an immediate acknowledgment while the document pipeline runs in the background.
+
 ## Account Linking
 
 All external channels (Telegram, Slack, Teams, WhatsApp) use the same account linking flow:

@@ -16,7 +16,41 @@ import { getConfig } from '@/config';
 import { channelLogger } from '@/utils/logger';
 import { getPermissionManager } from '@/security/permissions';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { processChannelAttachments } from './attachment-handler';
 import type { UnifiedMessage, ChannelType } from '@/core/types';
+
+/**
+ * Summarize a response for external channels (Telegram, Slack, etc.).
+ * Strips code blocks, thinking sections, and long outputs — sends a concise summary.
+ */
+function summarizeForChannel(response: string): string {
+  let text = response;
+
+  // Remove <think>...</think> or <thinking>...</thinking> blocks
+  text = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+
+  // Replace code blocks with a short placeholder
+  const codeBlockCount = (text.match(/```[\s\S]*?```/g) || []).length;
+  text = text.replace(/```[\s\S]*?```/g, '');
+
+  // Remove excessive whitespace from removals
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  // If code was stripped, append a note
+  if (codeBlockCount > 0) {
+    const plural = codeBlockCount > 1 ? `${codeBlockCount} code blocks` : 'a code block';
+    text = text
+      ? `${text}\n\n_(Response included ${plural} — view full output in the web UI.)_`
+      : `_(Response contained ${plural} — view full output in the web UI.)_`;
+  }
+
+  // Truncate if still too long (keep under 3000 chars for readability)
+  if (text.length > 3000) {
+    text = text.slice(0, 2900) + '\n\n_(Truncated — view full response in the web UI.)_';
+  }
+
+  return text || '_(Response contained only code — view in the web UI.)_';
+}
 
 /**
  * Track pending permission requests per user for channel-based approval.
@@ -203,6 +237,13 @@ export async function initializeChannels(): Promise<void> {
       const consumed = await tryResolvePermissionFromChannel(message);
       if (consumed) return;
 
+      // Process file attachments → document OCR pipeline (fire-and-forget)
+      if (message.attachments?.length) {
+        processChannelAttachments(message).catch((err) => {
+          channelLogger.error({ err, channelType: message.channelType }, 'Attachment processing failed');
+        });
+      }
+
       const { getOrchestratorService } = await import('@/core/orchestrator');
       const orchestrator = getOrchestratorService();
 
@@ -276,8 +317,12 @@ export async function initializeChannels(): Promise<void> {
 
       // Send final reply back through the same channel
       if (result.response) {
+        const content = isExternalChannel
+          ? summarizeForChannel(result.response)
+          : result.response;
+
         await umi.send(message.channelType, message.channelId, {
-          content: result.response,
+          content,
           replyTo: platformMessageId,
         });
       }

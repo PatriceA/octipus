@@ -21,6 +21,7 @@ import { chatRoutes } from './routes/chat';
 import { pipelineRoutes } from './routes/pipelines';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
+import { teamsWebhookRoutes } from './routes/teams-webhook';
 import { mcpRoutes } from './routes/mcp';
 import { toolRoutes } from './routes/tools';
 import { voiceRoutes } from './routes/voice';
@@ -32,6 +33,7 @@ import { expertRoutes } from './routes/experts';
 import { skillRoutes } from './routes/skills';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { evalRoutes } from './routes/eval';
+import { documentRoutes } from './routes/documents';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { setupWebSocket } from './websocket';
@@ -180,6 +182,7 @@ export function createServer() {
         .use(skillRoutes)
         .use(recurringTaskRoutes)
         .use(evalRoutes)
+        .use(documentRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group
@@ -187,6 +190,9 @@ export function createServer() {
 
   // WhatsApp webhook — unauthenticated (Meta calls directly)
   app.group('/api', (app) => app.use(whatsappWebhookRoutes));
+
+  // Teams webhook — unauthenticated (Azure Bot Framework calls directly)
+  app.group('/api', (app) => app.use(teamsWebhookRoutes));
 
   // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
   setupWebSocket(app as any);

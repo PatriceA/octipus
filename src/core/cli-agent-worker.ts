@@ -5,6 +5,7 @@ import { getConfig } from '@/config';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { agentLogger } from '@/utils/logger';
 import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
 import { getQuotaTracker } from '@/models/quota-tracker';
@@ -81,10 +82,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result });
 
+      const durationMs = Date.now() - this.context.createdAt.getTime();
       await auditRepository.logAgentCompleted(
         this.context.userId, this.context.sessionId, this.context.id,
-        { durationMs: Date.now() - this.context.createdAt.getTime(), iterations: this.iteration, model: this.context.model, role: this.context.role },
+        { durationMs, iterations: this.iteration, model: this.context.model, role: this.context.role },
       );
+
+      agentRepository.updateStatus(this.context.id, {
+        status: 'completed',
+        iterations: this.iteration,
+        durationMs,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
 
       // Auto-index output into knowledge base (fire-and-forget)
       autoIndexAgentOutput({
@@ -102,10 +110,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
       this.emit('status_change', { status: 'failed' });
       this.emit('error', { error: (error as Error).message });
 
+      const failDurationMs = Date.now() - this.context.createdAt.getTime();
       await auditRepository.logAgentFailed(
         this.context.userId, this.context.sessionId, this.context.id,
         { error: (error as Error).message, iteration: this.iteration, model: this.context.model, role: this.context.role },
       );
+
+      agentRepository.updateStatus(this.context.id, {
+        status: 'failed',
+        iterations: this.iteration,
+        durationMs: failDurationMs,
+        error: (error as Error).message,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure'));
 
       throw error;
     }

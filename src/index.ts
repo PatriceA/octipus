@@ -48,6 +48,13 @@ async function main() {
     // Subscribe to settings changes for hot-reload
     initializeHotReload();
 
+    // Clean up any agents left "running" from a previous process
+    const { agentRepository } = await import('@/db/repositories/agent-repository');
+    const staleCount = await agentRepository.cleanupStale();
+    if (staleCount > 0) {
+      logger.info({ staleCount }, 'Cleaned up stale agent records from previous run');
+    }
+
     // Register built-in tools
     await registerBuiltinTools();
     logger.info('Tools registered');

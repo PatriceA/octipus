@@ -14,6 +14,8 @@ registerCommand({
         rows,
         '',
         'Type `/cancel` at any time to abort a multi-step command.',
+        '',
+        '_Channel-specific: `/link` (link your account), `/start` (greeting)_',
       ].join('\n'),
     };
   },

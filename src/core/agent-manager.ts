@@ -6,6 +6,7 @@ import { getScheduler } from './scheduler';
 import { getModelRegistry } from '@/models/model-registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { getConfig } from '@/config';
 import { agentLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
@@ -185,6 +186,17 @@ export class AgentManager {
       routedTopic
     );
 
+    // Persist agent snapshot to DB
+    agentRepository.create({
+      id: agentId,
+      sessionId: options.sessionId,
+      userId: options.userId,
+      role: options.role || 'general',
+      model: routedModel,
+      topic: routedTopic,
+      status: 'running',
+    }).catch(err => agentLogger.error({ err, agentId }, 'Failed to persist agent record'));
+
     agentLogger.info(
       { agentId, sessionId: options.sessionId, model: routedModel, topic: routedTopic },
       'Agent spawned'
@@ -228,7 +240,10 @@ export class AgentManager {
       agentLogger.info({ agentId }, 'Agent stopped');
       return true;
     }
-    return false;
+    // Agent not in memory — may be a zombie DB record. Mark it as stopped.
+    agentRepository.updateStatus(agentId, { status: 'stopped', error: 'Stopped manually (not in memory)' })
+      .catch(err => agentLogger.error({ err, agentId }, 'Failed to update zombie agent status'));
+    return true;
   }
 
   /**

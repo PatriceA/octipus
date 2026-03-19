@@ -32,13 +32,14 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Filesystem** — read, write, search, organize files and directories
 - **Shell** — execute commands, run scripts, manage processes
 - **Git** — full version control: commit, branch, push, pull, diff
-- **Browser** — navigate, click, type, screenshot, extract content via Playwright
+- **Browser** — navigate, click, type, hover, drag, screenshot, PDF generation via Playwright
 - **Web Search** — SearXNG meta-search with Playwright fallback
 - **Docker** — manage containers, images, exec commands
 - **Google Workspace** — Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks
 - **Microsoft 365** — Outlook, Calendar, OneDrive, To Do, Contacts
-- **Browser Extension** — control the user's real browser via Chrome extension (existing cookies/auth, no bot detection)
-- **Knowledge Base** — RAG pipeline with pgvector for semantic search
+- **Browser Extension** — control the user's real browser via Chrome extension with 24 commands: navigate, click, hover, scroll, drag, type, tabs, cookies, storage, console, network monitoring, dialog handling (existing cookies/auth, no bot detection)
+- **Knowledge Base** — hybrid search (BM25 full-text + pgvector cosine similarity + Reciprocal Rank Fusion) with tiered content loading (L0 abstract / L1 overview / L2 full)
+- **Document Processing** — upload, OCR (glm-ocr), LLM categorization, and automatic knowledge base indexing
 - **GitHub/GitLab** — repository management, issues, PRs, reviews, and webhook integration
 - **Scheduling** — create and manage cron tasks, hooks, and event automations from within agent conversations
 - **Cross-Channel Messaging** — send messages across any connected channel
@@ -68,6 +69,7 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Red-team testing** — 5 attack plugins with 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift. Severity levels and defense assertions per test. The three-layer defense system (system prompt hardening + input guard + output guard) is applied during evaluation, matching the real message processing pipeline
 - **Model quality benchmarking** — results vary depending on the default orchestrator model. Use `bun run eval` and `bun run eval:red-team` to benchmark any model's quality and security resilience before deploying it. For example, `deepseek-chat` scores ~99% overall while local `qwen3.5:35b` scores ~92% — but both achieve 100% on red-team security tests thanks to the application-level defense layers
 - **Eval UI** — web dashboard at `/eval` with summary cards, pass rate charts, assertion breakdowns, latency histograms, run comparison matrix with regression detection, and red-team results grouped by attack category. Supports triggering eval runs directly from the UI
+- **112 E2E API tests** — 22 test modules covering health, auth, models, vault, sessions, agents, tools, MCP, pipelines, hooks, settings, experts, skills, recurring tasks, chat, documents, browser extension, messaging, knowledge, and channel webhooks
 
 ### Full Web UI and Terminal UI
 - **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, settings
@@ -92,7 +94,9 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 
 **Optional:** Docker, PostgreSQL, Redis, Ollama, LiteLLM, SearXNG, Chromium, Telegram/Slack/Teams tokens, Playwright
 
-**For RAG (knowledge base):** Requires an embedding model. Pull `nomic-embed-text` on Ollama (`ollama pull nomic-embed-text`) and register it in LiteLLM with topic `embedding`. Enables semantic search across indexed documents and code via pgvector.
+**For RAG (knowledge base):** Requires an embedding model. Pull `nomic-embed-text` on Ollama (`ollama pull nomic-embed-text`) and register it in LiteLLM with topic `embedding`. Enables hybrid search (BM25 + vector) across indexed documents and code via pgvector.
+
+**For document OCR:** Pull `glm-ocr` on Ollama (`ollama pull glm-ocr`). Enables automatic text extraction from uploaded images, PDFs, and scanned documents.
 
 ### Model Recommendations by Role
 
@@ -192,7 +196,8 @@ Make globally available: `bun link`
 | **[API Reference](docs/API.md)** | Complete REST API with all endpoints |
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control by AI agents |
-| **[RAG / Knowledge Base](docs/RAG.md)** | Embeddings, auto-indexing, and semantic search |
+| **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search (BM25 + vector), tiered content, auto-indexing |
+| **[Capability Comparison](docs/CAPABILITY-COMPARISON.md)** | Feature-by-feature comparison with OpenClaw |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
 | **[MCP Integration](docs/MCP-INTEGRATION.md)** | Connect external MCP servers (n8n, Brave, custom) with lazy tool discovery |
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |

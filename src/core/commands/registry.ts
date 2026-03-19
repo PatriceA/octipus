@@ -64,8 +64,11 @@ export async function handleCommand(
       await messageRepository.create({ sessionId, role: 'user', content });
       const result = await handler.execute({ sessionId, userId, args: content });
       if (!result.continueCommand) {
+        // Re-read session to avoid overwriting state saved by the command handler
+        const freshSession = await sessionRepository.findById(sessionId);
+        const freshCtx = (freshSession?.context as SessionContext) || {};
         await sessionRepository.update(sessionId, {
-          context: { ...ctx, activeCommand: undefined },
+          context: { ...freshCtx, activeCommand: undefined },
         });
       }
       await messageRepository.create({ sessionId, role: 'assistant', content: result.response });
@@ -95,9 +98,11 @@ export async function handleCommand(
   });
 
   if (result.continueCommand) {
-    const sessionCtx = (session?.context as SessionContext) || {};
+    // Re-read session to avoid overwriting state saved by the command handler
+    const freshSession = await sessionRepository.findById(sessionId);
+    const freshCtx = (freshSession?.context as SessionContext) || {};
     await sessionRepository.update(sessionId, {
-      context: { ...sessionCtx, activeCommand: commandName },
+      context: { ...freshCtx, activeCommand: commandName },
     });
   }
 

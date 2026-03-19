@@ -99,6 +99,27 @@
       "when": 1710200000000,
       "tag": "0013_pipeline_session_cascade",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1710300000000,
+      "tag": "0014_agents_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1710400000000,
+      "tag": "0015_hybrid_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1710500000000,
+      "tag": "0016_documents",
+      "breakpoints": true
     }
   ]
 }

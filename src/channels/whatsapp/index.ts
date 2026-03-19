@@ -220,11 +220,13 @@ export class WhatsAppChannel extends BaseChannel {
       return;
     }
 
-    // Handle commands
-    if (content.startsWith('/')) {
-      await this.handleCommand(waUserId, content, user.id);
+    // Channel-specific commands handled above (/link).
+    // /start is WhatsApp-only:
+    if (content.startsWith('/start')) {
+      await this.sendTextMessage(waUserId, 'Hello! I am your AI assistant. How can I help you today?');
       return;
     }
+    // All other /commands flow through as messages to the centralized command registry
 
     // Create unified message
     const message = this.createUnifiedMessage(waUserId, user.id, content, {
@@ -239,38 +241,6 @@ export class WhatsAppChannel extends BaseChannel {
     });
 
     this.emitMessage(message);
-  }
-
-  private async handleCommand(waUserId: string, command: string, userId: string): Promise<void> {
-    const cmd = command.split(' ')[0].toLowerCase();
-
-    switch (cmd) {
-      case '/start':
-        await this.sendTextMessage(waUserId, 'Hello! I am your AI assistant. How can I help you today?');
-        break;
-
-      case '/help':
-        await this.sendTextMessage(
-          waUserId,
-          'Available commands:\n/start - Start conversation\n/help - Show this help\n/link - Get a code to link your account\n/status - Check bot status\n/clear - Clear conversation history'
-        );
-        break;
-
-      case '/status':
-        await this.sendTextMessage(waUserId, 'Bot is online and ready to assist you.');
-        break;
-
-      case '/link':
-        await this.sendTextMessage(waUserId, 'Your account is already linked!');
-        break;
-
-      case '/clear':
-        await this.sendTextMessage(waUserId, 'Conversation history cleared.');
-        break;
-
-      default:
-        await this.sendTextMessage(waUserId, `Unknown command: ${cmd}`);
-    }
   }
 
   async send(channelId: string, response: ChannelResponse): Promise<string> {

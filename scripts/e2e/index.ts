@@ -30,6 +30,11 @@ import { testChat } from './tests/chat';
 import { testExperts } from './tests/experts';
 import { testRecurringTasks } from './tests/recurring-tasks';
 import { testSkills } from './tests/skills';
+import { testDocuments } from './tests/documents';
+import { testBrowserExt } from './tests/browser-ext';
+import { testMessaging } from './tests/messaging';
+import { testKnowledge } from './tests/knowledge';
+import { testChannels } from './tests/channels';
 
 export async function run() {
   const runner = new TestRunner();
@@ -58,6 +63,11 @@ export async function run() {
     await testSkills(runner, client);
     await testRecurringTasks(runner, client);
     await testChat(runner, client);
+    await testDocuments(runner, client);
+    await testBrowserExt(runner, client);
+    await testMessaging(runner, client);
+    await testKnowledge(runner, client);
+    await testChannels(runner, client);
   } catch (err) {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);
   }

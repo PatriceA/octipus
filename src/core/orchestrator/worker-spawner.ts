@@ -363,6 +363,52 @@ async function handleWorkerFailure(
     return 'Agent was stopped by user.';
   }
 
+  // Retry transient failures (JSON parse, rate limit) with the same model
+  const isTransient = errorMsg.includes('JSON') || errorMsg.includes('parse')
+    || errorMsg.includes('Unterminated') || errorMsg.includes('rate_limit')
+    || errorMsg.includes('overloaded');
+
+  if (isTransient) {
+    coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
+    try {
+      const agentManager = getAgentManager();
+      const retryWorker = await agentManager.spawn({
+        sessionId: context.sessionId,
+        userId: context.userId,
+        topic: roleConfig.defaultTopic,
+        model: routedModel,
+        role: agentRole,
+        systemPrompt: roleConfig.systemPromptTemplate,
+        tools: roleTools,
+      });
+      const workerMessage = input
+        ? `${task}\n\n--- Context from previous steps ---\n${input}`
+        : task;
+      const retryResult = await retryWorker.run(workerMessage);
+      const retryDurationMs = Date.now() - startTime;
+      deps.emit({
+        type: 'worker_completed',
+        sessionId: context.sessionId,
+        userId: context.userId,
+        data: {
+          workerId: retryWorker.getContext().id,
+          role: agentRole,
+          result: retryResult,
+          model: routedModel,
+          iterations: retryWorker.getIteration(),
+          durationMs: retryDurationMs,
+          totalTokens: retryWorker.getTotalTokens(),
+          retryOf: workerId,
+        } as WorkerResult,
+        timestamp: new Date(),
+      });
+      deps.setLastWorkerResult(retryResult);
+      return retryResult;
+    } catch (retryError) {
+      coreLogger.error({ error: retryError, workerId, role: agentRole }, 'Retry also failed');
+    }
+  }
+
   // CLI sub-agent fallback
   const registry = getModelRegistry();
   const failedModel = await registry.getModelByModelId(routedModel);

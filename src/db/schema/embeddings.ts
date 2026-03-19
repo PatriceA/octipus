@@ -18,13 +18,25 @@ const vector = customType<{ data: number[]; driverData: string }>({
   },
 });
 
+// Read-only tsvector type (auto-generated column — never insert/update directly)
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return 'tsvector';
+  },
+});
+
 export const embeddings = pgTable('embeddings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  sourceType: text('source_type').notNull(), // message, document, code
+  sourceType: text('source_type').notNull(), // message, document, code, agent_output
   sourceId: text('source_id').notNull(),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
+  // Auto-generated tsvector for full-text search (GENERATED ALWAYS AS — read-only)
+  contentTsv: tsvector('content_tsv'),
   model: text('model').notNull(),
+  // Tiered content summaries (generated async by LLM)
+  abstract: text('abstract'),   // L0: ~1-2 sentences, ~100 tokens
+  overview: text('overview'),   // L1: ~1 paragraph, ~500 tokens
   metadata: jsonb('metadata').$type<EmbeddingMetadata>().default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => ({

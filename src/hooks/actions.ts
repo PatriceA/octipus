@@ -164,8 +164,11 @@ async function executeSpawnAgent(
     };
   }
 
-  // Direct spawn (non-orchestrated)
+  // Direct spawn (non-orchestrated) — use longer timeout for hook-triggered agents
   const agentManager = getAgentManager();
+  const { getConfig } = await import('@/config');
+  const agentConfig = getConfig().agent;
+  const hookTimeout = Math.max(agentConfig.defaultTimeout * 2, 1800000); // At least 30 min for hooks
 
   const agent = await agentManager.spawn({
     sessionId,
@@ -173,6 +176,7 @@ async function executeSpawnAgent(
     topic: config.agentTopic,
     model: config.agentModel,
     systemPrompt: prompt,
+    timeout: hookTimeout,
   });
 
   // Run the agent and optionally notify owner with the result

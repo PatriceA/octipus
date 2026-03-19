@@ -14,3 +14,5 @@ export * from './experts';
 export * from './recurring-tasks';
 export * from './skills';
 export * from './hook-executions';
+export * from './agents';
+export * from './documents';

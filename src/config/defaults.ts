@@ -73,6 +73,10 @@ export const defaultConfig: Partial<Config> = {
     additionalPaths: [],
     sessionFolders: true,
     autoIndexFiles: true,
+    documentsPath: './workspace/documents',
+    maxUploadSize: 52428800,
+    ocrModel: 'glm-ocr',
+    ocrEndpoint: 'http://localhost:11435',
   },
 };
 

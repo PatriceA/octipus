@@ -115,6 +115,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
       sessionFolders: true,
       autoIndexFiles: true,
+      documentsPath: process.env.DOCUMENTS_PATH || './workspace/documents',
+      maxUploadSize: parseInt(process.env.MAX_UPLOAD_SIZE || '52428800', 10),
+      ocrModel: process.env.OCR_MODEL || 'glm-ocr',
+      ocrEndpoint: process.env.OCR_ENDPOINT || 'http://localhost:11435',
     },
     oauth: {
       publicUrl: process.env.PUBLIC_URL,

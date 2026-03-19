@@ -296,6 +296,74 @@ export class BrowserTool extends BaseTool {
       },
       { permissionAction: 'interact' }
     );
+
+    this.registerTool(
+      'hover',
+      'Hover over an element on the page',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        selector: { type: 'string', description: 'CSS selector to hover', required: true },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        await page.hover(args.selector as string, { timeout: DEFAULT_TIMEOUT });
+        return { hovered: args.selector };
+      },
+      { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'press_key',
+      'Press a keyboard key on the page',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        key: { type: 'string', description: 'Key to press (Enter, Tab, Escape, etc.)', required: true },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        await page.keyboard.press(args.key as string);
+        return { pressed: args.key };
+      },
+      { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'drag',
+      'Drag an element to a target position',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        sourceSelector: { type: 'string', description: 'Source element selector', required: true },
+        targetSelector: { type: 'string', description: 'Target element selector', required: true },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        await page.dragAndDrop(args.sourceSelector as string, args.targetSelector as string, { timeout: DEFAULT_TIMEOUT });
+        return { dragged: args.sourceSelector, to: args.targetSelector };
+      },
+      { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'pdf',
+      'Generate a PDF of the current page',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        format: { type: 'string', description: 'Paper format (A4, Letter, etc.)', default: 'A4' },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        const buffer = await page.pdf({
+          format: (args.format as string) || 'A4',
+          printBackground: true,
+        });
+        return {
+          base64: buffer.toString('base64'),
+          size: buffer.length,
+          url: page.url(),
+        };
+      },
+      { permissionAction: 'screenshot' }
+    );
   }
 
   private async getOrCreateBrowser(): Promise<Browser> {
