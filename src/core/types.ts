@@ -184,6 +184,7 @@ export interface ActionConfig {
   agentPrompt?: string;
   agentModel?: string;
   orchestrated?: boolean;
+  orchestratorNotify?: boolean;
   // For webhook
   webhookUrl?: string;
   webhookMethod?: 'GET' | 'POST' | 'PUT';

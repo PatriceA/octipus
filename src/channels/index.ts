@@ -17,7 +17,7 @@ import { channelLogger } from '@/utils/logger';
 import { getPermissionManager } from '@/security/permissions';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { processChannelAttachments } from './attachment-handler';
-import type { UnifiedMessage, ChannelType } from '@/core/types';
+import type { UnifiedMessage, ChannelType, Attachment } from '@/core/types';
 
 /**
  * Summarize a response for external channels (Telegram, Slack, etc.).
@@ -50,6 +50,108 @@ function summarizeForChannel(response: string): string {
   }
 
   return text || '_(Response contained only code — view in the web UI.)_';
+}
+
+/** Image MIME types that vision models can analyze */
+const VISION_MIME_TYPES = new Set([
+  'image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif',
+  'image/tiff', 'image/bmp', 'image/avif',
+]);
+
+/** MIME types that need conversion before sending to vision models */
+const NEEDS_CONVERSION = new Set(['image/avif', 'image/tiff', 'image/bmp']);
+
+/**
+ * Analyze image attachments using the vision model and return descriptions.
+ * This runs inline so the orchestrator can respond about the image content.
+ */
+async function analyzeImageAttachments(
+  attachments: Attachment[],
+  channelType: string,
+): Promise<string | null> {
+  const images = attachments.filter(a => VISION_MIME_TYPES.has(a.mimeType));
+  if (images.length === 0) return null;
+
+  try {
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const { getLiteLLMClient } = await import('@/models/litellm-client');
+    const registry = getModelRegistry();
+    const visionModel = await registry.getModelForTopic('vision');
+
+    if (!visionModel) {
+      channelLogger.warn('No vision model registered (topic: vision). Cannot analyze image attachments.');
+      return null;
+    }
+
+    const client = getLiteLLMClient();
+    const results: string[] = [];
+
+    for (const img of images) {
+      try {
+        let imageBuffer: Buffer | null = null;
+
+        if (img.data) {
+          imageBuffer = Buffer.from(img.data);
+        } else if (img.url) {
+          const headers: Record<string, string> = {};
+          if (channelType === 'slack') {
+            const config = getConfig();
+            if (config.slack?.botToken) headers['Authorization'] = `Bearer ${config.slack.botToken}`;
+          }
+          if (channelType === 'whatsapp') {
+            const config = getConfig();
+            if (config.whatsapp?.accessToken) headers['Authorization'] = `Bearer ${config.whatsapp.accessToken}`;
+          }
+          const resp = await fetch(img.url, { headers });
+          if (!resp.ok) continue;
+          imageBuffer = Buffer.from(await resp.arrayBuffer());
+        }
+
+        if (!imageBuffer || imageBuffer.length === 0) continue;
+
+        // Convert unsupported formats (AVIF, TIFF, BMP) to JPEG via ImageMagick if available
+        let finalBuffer = imageBuffer;
+        let finalMime = img.mimeType;
+        if (NEEDS_CONVERSION.has(img.mimeType)) {
+          try {
+            const { execSync } = await import('child_process');
+            const tmpIn = `/tmp/vision-input-${Date.now()}`;
+            const tmpOut = `/tmp/vision-output-${Date.now()}.jpg`;
+            await Bun.write(tmpIn, imageBuffer);
+            execSync(`convert "${tmpIn}" -quality 90 "${tmpOut}"`, { timeout: 10000 });
+            const converted = Bun.file(tmpOut);
+            finalBuffer = Buffer.from(await converted.arrayBuffer());
+            finalMime = 'image/jpeg';
+            // Clean up temp files
+            execSync(`rm -f "${tmpIn}" "${tmpOut}"`, { timeout: 5000 });
+          } catch (convErr) {
+            channelLogger.warn({ err: convErr, mimeType: img.mimeType }, 'Image conversion failed, sending original format');
+          }
+        }
+
+        const base64 = finalBuffer.toString('base64');
+        const name = img.filename || 'image';
+
+        const result = await client.completeVision({
+          model: visionModel.modelId,
+          prompt: 'Describe this image in detail. If it contains text, extract and include all text content. If it is a document, receipt, or form, describe its structure and content.',
+          imageBase64: base64,
+          mimeType: finalMime,
+        });
+
+        if (result.content) {
+          results.push(`**${name}**: ${result.content}`);
+        }
+      } catch (imgErr) {
+        channelLogger.error({ err: imgErr, filename: img.filename }, 'Failed to analyze image attachment');
+      }
+    }
+
+    return results.length > 0 ? results.join('\n\n') : null;
+  } catch (err) {
+    channelLogger.error({ err }, 'Image analysis failed');
+    return null;
+  }
 }
 
 /**
@@ -247,12 +349,17 @@ export async function initializeChannels(): Promise<void> {
       const { getOrchestratorService } = await import('@/core/orchestrator');
       const orchestrator = getOrchestratorService();
 
-      const sessionId = (message.metadata?.sessionId as string) || `${message.channelType}-${message.channelId}`;
+      const channelSessionId = (message.metadata?.sessionId as string) || `${message.channelType}-${message.channelId}`;
 
       // Platform-native message ID for reply-to (e.g. Telegram message_id)
       const platformMessageId = message.metadata?.messageId != null
         ? String(message.metadata.messageId)
         : undefined;
+
+      // Resolve the actual DB session ID so we can match orchestrator events
+      // (resolveSession converts "telegram-12345" → UUID, and events use the UUID)
+      const { resolveSession } = await import('@/core/orchestrator/session-resolver');
+      const resolvedSessionId = await resolveSession(channelSessionId, message.userId, message.channelType);
 
       // Subscribe to orchestrator events for progress feedback on non-webchat channels
       const isExternalChannel = message.channelType !== 'webchat';
@@ -261,7 +368,7 @@ export async function initializeChannels(): Promise<void> {
 
       if (isExternalChannel) {
         unsubscribe = orchestrator.onEvent((event) => {
-          if (event.sessionId !== sessionId) return;
+          if (event.sessionId !== resolvedSessionId) return;
 
           let statusMsg: string | null = null;
 
@@ -305,20 +412,29 @@ export async function initializeChannels(): Promise<void> {
         });
       }
 
-      // Inject attachment context so the model knows files were sent
+      // For image attachments, analyze with vision model so the orchestrator can respond
       let messageContent = message.content;
       if (message.attachments?.length) {
-        const attachmentDescriptions = message.attachments.map(a => {
-          const name = a.filename || `${a.type} file`;
-          const size = a.size ? ` (${(a.size / 1024).toFixed(1)}KB)` : '';
-          return `- ${name} [${a.mimeType}]${size}`;
-        }).join('\n');
-        const prefix = `[The user sent ${message.attachments.length} file attachment${message.attachments.length > 1 ? 's' : ''} which ${message.attachments.length > 1 ? 'are' : 'is'} being processed by the document pipeline:\n${attachmentDescriptions}]\n\n`;
-        messageContent = prefix + (messageContent || 'What is this file?');
+        const imageAnalysis = await analyzeImageAttachments(message.attachments, message.channelType);
+
+        if (imageAnalysis) {
+          // Vision model analyzed the images — include the analysis in the message
+          const prefix = `[The user sent image attachment(s). Vision model analysis:\n${imageAnalysis}]\n\n`;
+          messageContent = prefix + (messageContent || 'The user sent this image without a caption. Respond based on the vision analysis above.');
+        } else {
+          // Non-image attachments or no vision model — just describe what was sent
+          const attachmentDescriptions = message.attachments.map(a => {
+            const name = a.filename || `${a.type} file`;
+            const size = a.size ? ` (${(a.size / 1024).toFixed(1)}KB)` : '';
+            return `- ${name} [${a.mimeType}]${size}`;
+          }).join('\n');
+          const prefix = `[The user sent ${message.attachments.length} file attachment${message.attachments.length > 1 ? 's' : ''} which ${message.attachments.length > 1 ? 'are' : 'is'} being processed by the document pipeline:\n${attachmentDescriptions}]\n\n`;
+          messageContent = prefix + (messageContent || 'What is this file?');
+        }
       }
 
       const result = await orchestrator.handleMessage(
-        sessionId,
+        resolvedSessionId,
         message.userId,
         messageContent,
         message.channelType,

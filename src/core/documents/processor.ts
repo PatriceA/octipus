@@ -145,8 +145,7 @@ export class DocumentProcessor {
    * Falls back to workspace.ocrModel config if no vision model is registered.
    */
   private async ocrImage(filePath: string): Promise<string> {
-    const fileBuffer = await readFile(filePath);
-    const base64Image = fileBuffer.toString('base64');
+    let fileBuffer = await readFile(filePath);
 
     // Determine MIME type from extension
     const ext = extname(filePath).toLowerCase();
@@ -155,7 +154,25 @@ export class DocumentProcessor {
       '.webp': 'image/webp', '.tiff': 'image/tiff', '.bmp': 'image/bmp',
       '.avif': 'image/avif',
     };
-    const mimeType = mimeMap[ext] || 'image/png';
+    let mimeType = mimeMap[ext] || 'image/png';
+
+    // Convert formats that most vision models don't support (AVIF, TIFF, BMP) to JPEG
+    const needsConversion = new Set(['.avif', '.tiff', '.bmp']);
+    if (needsConversion.has(ext)) {
+      try {
+        const { execSync } = await import('child_process');
+        const tmpOut = `/tmp/ocr-convert-${Date.now()}.jpg`;
+        execSync(`convert "${filePath}" -quality 90 "${tmpOut}"`, { timeout: 15000 });
+        fileBuffer = await readFile(tmpOut);
+        mimeType = 'image/jpeg';
+        execSync(`rm -f "${tmpOut}"`, { timeout: 5000 });
+        this.logger.info({ from: ext, filePath }, 'Converted image to JPEG for OCR');
+      } catch (convErr) {
+        this.logger.warn({ err: convErr, ext }, 'Image conversion failed, sending original format');
+      }
+    }
+
+    const base64Image = fileBuffer.toString('base64');
 
     // Resolve vision model from registry (topic: 'vision'), fall back to config
     const registry = getModelRegistry();
