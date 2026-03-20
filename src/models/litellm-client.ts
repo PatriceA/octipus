@@ -318,6 +318,56 @@ export class LiteLLMClient {
   }
 
   /**
+   * Send an image to a vision model and get a text response.
+   * Uses the OpenAI-compatible multimodal content format.
+   */
+  async completeVision(options: {
+    model: string;
+    prompt: string;
+    imageBase64: string;
+    mimeType?: string;
+    maxTokens?: number;
+  }): Promise<{ content: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number }; latencyMs: number }> {
+    const startTime = Date.now();
+    const mediaType = options.mimeType || 'image/png';
+
+    modelLogger.info({ model: options.model }, 'Vision request');
+
+    const response = await this.client.chat.completions.create({
+      model: options.model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: options.prompt },
+            { type: 'image_url', image_url: { url: `data:${mediaType};base64,${options.imageBase64}` } },
+          ],
+        },
+      ],
+      max_tokens: options.maxTokens || 4096,
+      stream: false,
+    });
+
+    const latencyMs = Date.now() - startTime;
+    let content = response.choices[0]?.message?.content || '';
+    if (content.includes('<think>')) {
+      content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    }
+
+    modelLogger.info({ model: options.model, latencyMs, tokens: response.usage?.total_tokens }, 'Vision response');
+
+    return {
+      content,
+      usage: {
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
+        totalTokens: response.usage?.total_tokens || 0,
+      },
+      latencyMs,
+    };
+  }
+
+  /**
    * Check if a specific model is available
    */
   async isModelAvailable(model: string): Promise<boolean> {

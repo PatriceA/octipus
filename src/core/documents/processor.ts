@@ -140,15 +140,45 @@ export class DocumentProcessor {
   }
 
   /**
-   * OCR an image using glm-ocr via Ollama API.
+   * OCR an image using a vision model via LiteLLM.
+   * The model is resolved from the model registry using the 'vision' topic.
+   * Falls back to workspace.ocrModel config if no vision model is registered.
    */
   private async ocrImage(filePath: string): Promise<string> {
-    const config = getConfig();
-    const ocrEndpoint = config.workspace.ocrEndpoint || 'http://localhost:11435';
-    const ocrModel = config.workspace.ocrModel || 'glm-ocr';
-
     const fileBuffer = await readFile(filePath);
     const base64Image = fileBuffer.toString('base64');
+
+    // Determine MIME type from extension
+    const ext = extname(filePath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp', '.tiff': 'image/tiff', '.bmp': 'image/bmp',
+      '.avif': 'image/avif',
+    };
+    const mimeType = mimeMap[ext] || 'image/png';
+
+    // Resolve vision model from registry (topic: 'vision'), fall back to config
+    const registry = getModelRegistry();
+    const visionModel = await registry.getModelForTopic('vision');
+    const config = getConfig();
+
+    if (visionModel) {
+      // Route through LiteLLM — supports any vision-capable model
+      this.logger.info({ model: visionModel.modelId, filePath }, 'OCR via LiteLLM vision model');
+      const client = getLiteLLMClient();
+      const result = await client.completeVision({
+        model: visionModel.modelId,
+        prompt: 'Extract all text content from this image. Return only the extracted text, preserving the original layout as much as possible.',
+        imageBase64: base64Image,
+        mimeType,
+      });
+      return result.content || '';
+    }
+
+    // Fallback: direct Ollama API (for setups without a vision model in the registry)
+    const ocrEndpoint = config.workspace.ocrEndpoint || 'http://localhost:11435';
+    const ocrModel = config.workspace.ocrModel || 'glm-ocr';
+    this.logger.warn({ ocrModel, ocrEndpoint }, 'No vision model in registry, falling back to direct Ollama endpoint. Add a model with topic "vision" for proper routing.');
 
     const response = await fetch(`${ocrEndpoint}/api/generate`, {
       method: 'POST',
