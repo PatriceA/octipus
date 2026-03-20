@@ -305,10 +305,22 @@ export async function initializeChannels(): Promise<void> {
         });
       }
 
+      // Inject attachment context so the model knows files were sent
+      let messageContent = message.content;
+      if (message.attachments?.length) {
+        const attachmentDescriptions = message.attachments.map(a => {
+          const name = a.filename || `${a.type} file`;
+          const size = a.size ? ` (${(a.size / 1024).toFixed(1)}KB)` : '';
+          return `- ${name} [${a.mimeType}]${size}`;
+        }).join('\n');
+        const prefix = `[The user sent ${message.attachments.length} file attachment${message.attachments.length > 1 ? 's' : ''} which ${message.attachments.length > 1 ? 'are' : 'is'} being processed by the document pipeline:\n${attachmentDescriptions}]\n\n`;
+        messageContent = prefix + (messageContent || 'What is this file?');
+      }
+
       const result = await orchestrator.handleMessage(
         sessionId,
         message.userId,
-        message.content,
+        messageContent,
         message.channelType,
       );
 

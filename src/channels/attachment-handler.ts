@@ -16,7 +16,7 @@ import type { Attachment, UnifiedMessage } from '@/core/types';
 /** MIME types worth processing for document extraction */
 const PROCESSABLE_MIMES = new Set([
   // Images (OCR)
-  'image/png', 'image/jpeg', 'image/jpg', 'image/tiff', 'image/bmp', 'image/webp',
+  'image/png', 'image/jpeg', 'image/jpg', 'image/tiff', 'image/bmp', 'image/webp', 'image/avif',
   // Documents
   'application/pdf',
   'application/msword',
@@ -32,7 +32,7 @@ const PROCESSABLE_MIMES = new Set([
 const PROCESSABLE_EXTENSIONS = new Set([
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.csv', '.md',
   '.json', '.xml', '.html', '.htm', '.yaml', '.yml', '.log',
-  '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp',
+  '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp', '.avif',
 ]);
 
 function isProcessable(attachment: Attachment): boolean {
@@ -150,6 +150,7 @@ function guessExtension(mimeType: string): string {
     'image/webp': '.webp',
     'image/tiff': '.tiff',
     'image/bmp': '.bmp',
+    'image/avif': '.avif',
     'application/pdf': '.pdf',
     'text/plain': '.txt',
     'text/csv': '.csv',

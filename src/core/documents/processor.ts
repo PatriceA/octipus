@@ -16,7 +16,7 @@ import type { AgentMessage } from '@/core/types';
 type ExtractionStrategy = 'text' | 'structured' | 'ocr';
 
 const IMAGE_MIME_TYPES = new Set([
-  'image/png', 'image/jpeg', 'image/jpg', 'image/tiff', 'image/bmp', 'image/webp',
+  'image/png', 'image/jpeg', 'image/jpg', 'image/tiff', 'image/bmp', 'image/webp', 'image/avif',
 ]);
 
 /** Files that can be read as plain text directly */
