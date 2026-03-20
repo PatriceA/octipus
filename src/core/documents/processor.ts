@@ -1,6 +1,6 @@
 import { readFile, mkdir, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { resolve, dirname, basename, join } from 'path';
+import { resolve, dirname, basename, join, extname } from 'path';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -9,14 +9,57 @@ import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
 import type { AgentMessage } from '@/core/types';
 
+// ── File type classification ─────────────────────────────────────────
+// Instead of sending everything through OCR, we classify files into
+// extraction strategies: direct text read, structured data parse, or OCR.
+
+type ExtractionStrategy = 'text' | 'structured' | 'ocr';
+
 const IMAGE_MIME_TYPES = new Set([
   'image/png', 'image/jpeg', 'image/jpg', 'image/tiff', 'image/bmp', 'image/webp',
 ]);
 
+/** Files that can be read as plain text directly */
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.csv', '.json', '.xml', '.yaml', '.yml', '.log', '.ini', '.conf', '.toml',
   '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh', '.bash', '.sql', '.env',
 ]);
+
+/** Structured documents where we can extract data without OCR */
+const STRUCTURED_MIME_TYPES: Record<string, string> = {
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.ms-powerpoint': 'ppt',
+};
+
+const STRUCTURED_EXTENSIONS = new Set([
+  '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
+]);
+
+/**
+ * Determine the best extraction strategy for a file.
+ */
+function classifyFile(mimeType: string, filename: string): ExtractionStrategy {
+  // Images always need OCR
+  if (IMAGE_MIME_TYPES.has(mimeType)) return 'ocr';
+
+  // Structured Office documents — extract data directly
+  if (STRUCTURED_MIME_TYPES[mimeType]) return 'structured';
+  const ext = extname(filename).toLowerCase();
+  if (STRUCTURED_EXTENSIONS.has(ext)) return 'structured';
+
+  // PDFs — try text extraction first, may fall back to OCR
+  if (mimeType === 'application/pdf') return 'ocr';
+
+  // Plain text and code files — read directly
+  if (TEXT_EXTENSIONS.has(ext)) return 'text';
+
+  // Default: try text read
+  return 'text';
+}
 
 const CATEGORIES = [
   'invoices', 'contracts', 'reports', 'correspondence', 'technical',
@@ -42,17 +85,26 @@ export class DocumentProcessor {
       // Step 1: Update status to processing
       await documentRepository.updateStatus(documentId, 'processing');
 
-      // Step 2: Extract text content
+      // Step 2: Extract text content based on file type
+      const strategy = classifyFile(doc.mimeType, doc.originalName);
+      this.logger.info({ documentId, strategy, mimeType: doc.mimeType }, 'Extraction strategy selected');
+
       let extractedText: string;
-      if (IMAGE_MIME_TYPES.has(doc.mimeType)) {
-        extractedText = await this.ocrImage(doc.storagePath);
-      } else if (doc.mimeType === 'application/pdf') {
-        extractedText = await this.extractPdfText(doc.storagePath);
-      } else if (this.isTextFile(doc.originalName)) {
-        extractedText = await this.readTextFile(doc.storagePath);
-      } else {
-        // Attempt to read as text for unknown types
-        extractedText = await this.readTextFile(doc.storagePath);
+      switch (strategy) {
+        case 'structured':
+          extractedText = await this.extractStructured(doc.storagePath, doc.originalName, doc.mimeType);
+          break;
+        case 'ocr':
+          if (doc.mimeType === 'application/pdf') {
+            extractedText = await this.extractPdfText(doc.storagePath);
+          } else {
+            extractedText = await this.ocrImage(doc.storagePath);
+          }
+          break;
+        case 'text':
+        default:
+          extractedText = await this.readTextFile(doc.storagePath);
+          break;
       }
 
       if (!extractedText || extractedText.trim().length === 0) {
@@ -145,11 +197,173 @@ export class DocumentProcessor {
   }
 
   /**
-   * Check if a file is a text file based on extension.
+   * Extract content from structured documents (Word, Excel, PowerPoint)
+   * without sending to OCR. Uses direct parsing of XML-based Office formats.
    */
-  private isTextFile(filename: string): boolean {
-    const ext = filename.toLowerCase().replace(/^.*(\.[^.]+)$/, '$1');
-    return TEXT_EXTENSIONS.has(ext);
+  private async extractStructured(filePath: string, filename: string, mimeType: string): Promise<string> {
+    const ext = extname(filename).toLowerCase();
+
+    try {
+      if (ext === '.xlsx' || ext === '.xls' || mimeType.includes('spreadsheet') || mimeType.includes('excel')) {
+        return await this.extractExcel(filePath);
+      }
+      if (ext === '.docx' || mimeType.includes('wordprocessing')) {
+        return await this.extractDocx(filePath);
+      }
+      if (ext === '.pptx' || mimeType.includes('presentation') || mimeType.includes('powerpoint')) {
+        return await this.extractPptx(filePath);
+      }
+      if (ext === '.doc' || ext === '.ppt') {
+        // Legacy binary formats — try to extract readable text
+        return await this.extractLegacyOffice(filePath, filename);
+      }
+    } catch (err) {
+      this.logger.warn({ err, filePath, ext }, 'Structured extraction failed, falling back to text read');
+    }
+
+    return this.readTextFile(filePath);
+  }
+
+  /**
+   * Extract data from Excel (.xlsx) files by parsing the XML inside the ZIP.
+   * Returns a text representation of all sheets with rows as tab-separated values.
+   */
+  private async extractExcel(filePath: string): Promise<string> {
+    const jszip = await import('jszip');
+    const JSZip = (jszip as any).default || jszip;
+    const buffer = await readFile(filePath);
+    const zip = await JSZip.loadAsync(buffer);
+
+    // Read shared strings (Excel stores text in a shared string table)
+    const sharedStrings: string[] = [];
+    const ssFile = zip.file('xl/sharedStrings.xml');
+    if (ssFile) {
+      const ssXml = await ssFile.async('text');
+      const matches = ssXml.matchAll(/<t[^>]*>([^<]*)<\/t>/g);
+      for (const m of matches) {
+        sharedStrings.push(m[1]);
+      }
+    }
+
+    const lines: string[] = [];
+
+    // Iterate over sheets
+    const sheetFiles = Object.keys(zip.files).filter(f => f.match(/^xl\/worksheets\/sheet\d+\.xml$/)).sort();
+    for (let si = 0; si < sheetFiles.length; si++) {
+      const sheetXml = await zip.file(sheetFiles[si])!.async('text');
+      lines.push(`--- Sheet ${si + 1} ---`);
+
+      // Parse rows: <row> contains <c> cells
+      const rows = sheetXml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g);
+      for (const row of rows) {
+        const cells: string[] = [];
+        const cellMatches = row[1].matchAll(/<c\s+[^>]*?(?:t="([^"]*)")?[^>]*>[\s\S]*?(?:<v>([^<]*)<\/v>)?[\s\S]*?<\/c>/g);
+        for (const cell of cellMatches) {
+          const type = cell[1];
+          const value = cell[2] || '';
+          if (type === 's' && sharedStrings[parseInt(value, 10)] !== undefined) {
+            cells.push(sharedStrings[parseInt(value, 10)]);
+          } else {
+            cells.push(value);
+          }
+        }
+        if (cells.length > 0) {
+          lines.push(cells.join('\t'));
+        }
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n') || '[Empty spreadsheet]';
+  }
+
+  /**
+   * Extract text from Word (.docx) files by parsing document.xml inside the ZIP.
+   */
+  private async extractDocx(filePath: string): Promise<string> {
+    const jszip = await import('jszip');
+    const JSZip = (jszip as any).default || jszip;
+    const buffer = await readFile(filePath);
+    const zip = await JSZip.loadAsync(buffer);
+
+    const docFile = zip.file('word/document.xml');
+    if (!docFile) {
+      return '[Could not find document.xml in DOCX]';
+    }
+
+    const xml = await docFile.async('text');
+
+    // Extract text from paragraphs: <w:t> elements contain the text
+    const paragraphs: string[] = [];
+    const paraMatches = xml.matchAll(/<w:p[\s>]([\s\S]*?)<\/w:p>/g);
+    for (const para of paraMatches) {
+      const textParts: string[] = [];
+      const textMatches = para[1].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g);
+      for (const t of textMatches) {
+        textParts.push(t[1]);
+      }
+      paragraphs.push(textParts.join(''));
+    }
+
+    return paragraphs.filter(p => p.length > 0).join('\n') || '[Empty document]';
+  }
+
+  /**
+   * Extract text from PowerPoint (.pptx) files by parsing slide XML inside the ZIP.
+   */
+  private async extractPptx(filePath: string): Promise<string> {
+    const jszip = await import('jszip');
+    const JSZip = (jszip as any).default || jszip;
+    const buffer = await readFile(filePath);
+    const zip = await JSZip.loadAsync(buffer);
+
+    const lines: string[] = [];
+    const slideFiles = Object.keys(zip.files).filter(f => f.match(/^ppt\/slides\/slide\d+\.xml$/)).sort();
+
+    for (let si = 0; si < slideFiles.length; si++) {
+      const slideXml = await zip.file(slideFiles[si])!.async('text');
+      lines.push(`--- Slide ${si + 1} ---`);
+
+      // Extract text from <a:t> elements
+      const textMatches = slideXml.matchAll(/<a:t>([^<]*)<\/a:t>/g);
+      const slideTexts: string[] = [];
+      for (const t of textMatches) {
+        if (t[1].trim()) slideTexts.push(t[1]);
+      }
+      lines.push(slideTexts.join('\n'));
+      lines.push('');
+    }
+
+    return lines.join('\n') || '[Empty presentation]';
+  }
+
+  /**
+   * Attempt to extract readable text from legacy binary Office formats (.doc, .ppt).
+   * These are binary OLE2 compound documents — we extract printable strings.
+   */
+  private async extractLegacyOffice(filePath: string, filename: string): Promise<string> {
+    const buffer = await readFile(filePath);
+    // Extract runs of printable ASCII/Unicode characters (rough but serviceable)
+    const text = buffer.toString('utf-8');
+    const runs: string[] = [];
+    let current = '';
+    for (const char of text) {
+      if (char >= ' ' && char <= '~' || char === '\n' || char === '\t') {
+        current += char;
+      } else {
+        if (current.length >= 4) {
+          runs.push(current.trim());
+        }
+        current = '';
+      }
+    }
+    if (current.length >= 4) runs.push(current.trim());
+
+    const result = runs.filter(r => r.length > 3).join(' ');
+    if (result.length < 50) {
+      return `[Could not extract meaningful text from legacy format: ${filename}]`;
+    }
+    return result;
   }
 
   /**

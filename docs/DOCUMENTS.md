@@ -14,11 +14,12 @@ Upload --> Queue --> Extract Text --> Categorize --> Move to Category Folder -->
 
 1. **Upload** -- File saved to `workspace/documents/uncategorized/` with a UUID filename
 2. **Queue** -- Document enqueued for sequential processing (concurrency=1)
-3. **Extract text** -- Images use OCR (glm-ocr via Ollama), PDFs use text extraction, text files read directly
-4. **Categorize** -- LLM analyzes content and assigns a category
-5. **Move** -- File moved from `uncategorized/` to `workspace/documents/{category}/`
-6. **Summarize** -- LLM generates a concise summary of the content
-7. **Index** -- Extracted text indexed into the knowledge base (embeddings table) for RAG search
+3. **Classify file type** -- Determine extraction strategy based on MIME type and extension (see below)
+4. **Extract text** -- Strategy-specific: direct read, structured parse, or OCR
+5. **Categorize** -- LLM analyzes extracted text and assigns a category
+6. **Move** -- File moved from `uncategorized/` to `workspace/documents/{category}/`
+7. **Summarize** -- LLM generates a concise summary of the content
+8. **Index** -- Extracted text indexed into the knowledge base (embeddings table) for RAG search
 
 ## Upload Sources
 
@@ -38,6 +39,62 @@ File attachments from Telegram, Slack, WhatsApp, and Teams are automatically dow
 
 ### Agent Tool
 Agents with the `documents` tool can list, view, and search uploaded documents.
+
+## Extraction Strategies
+
+Not every file needs OCR. The processor classifies each file and picks the most efficient extraction method:
+
+| Strategy | When Used | Method |
+|----------|-----------|--------|
+| **`text`** | Plain text, code, config, markup files | Direct file read — no model calls needed |
+| **`structured`** | Office documents (Word, Excel, PowerPoint) | Parse XML inside the ZIP archive via `jszip` |
+| **`ocr`** | Images and PDFs | Vision model (`glm-ocr`) via Ollama |
+
+### Text — Direct Read
+
+Files that are already human-readable text are read directly with no model involvement.
+
+| Extensions |
+|-----------|
+| `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.yaml`, `.yml` |
+| `.log`, `.ini`, `.conf`, `.toml`, `.env` |
+| `.html`, `.htm`, `.css`, `.js`, `.ts`, `.py`, `.sh`, `.bash`, `.sql` |
+
+### Structured — Office Document Parsing
+
+Modern Office formats (.docx, .xlsx, .pptx) are ZIP archives containing XML. The processor extracts text directly from the XML structure without sending anything to an LLM or OCR model.
+
+| Format | Extension | MIME Type | Extraction |
+|--------|-----------|-----------|------------|
+| Word | `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | Paragraphs from `word/document.xml` via `<w:t>` elements |
+| Word (legacy) | `.doc` | `application/msword` | Printable string extraction from binary OLE2 |
+| Excel | `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | Shared strings + cell values, tab-separated rows per sheet |
+| Excel (legacy) | `.xls` | `application/vnd.ms-excel` | Printable string extraction from binary OLE2 |
+| PowerPoint | `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | Text from `<a:t>` elements per slide |
+| PowerPoint (legacy) | `.ppt` | `application/vnd.ms-powerpoint` | Printable string extraction from binary OLE2 |
+
+**Excel output example:**
+```
+--- Sheet 1 ---
+Name	Department	Salary
+Alice	Engineering	95000
+Bob	Marketing	82000
+
+--- Sheet 2 ---
+Q1	Q2	Q3	Q4
+120000	135000	128000	142000
+```
+
+### OCR — Vision Model
+
+Only images and PDFs are sent to the OCR model. PDFs first attempt text extraction (checking the printable character ratio); image-heavy PDFs fall back to OCR.
+
+| Format | Extensions | MIME Types |
+|--------|-----------|-----------|
+| Images | `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.webp` | `image/png`, `image/jpeg`, `image/tiff`, `image/bmp`, `image/webp` |
+| PDF | `.pdf` | `application/pdf` |
+
+**OCR model:** `glm-ocr` via Ollama (default endpoint: `http://localhost:11435`). The image is base64-encoded and sent to the `/api/generate` endpoint with a text extraction prompt.
 
 ## Categories
 
@@ -85,11 +142,14 @@ The `DocumentQueue` processes documents sequentially (one at a time) and emits e
 
 Events are forwarded to WebSocket clients (filtered by userId) for real-time UI updates.
 
-## OCR
+## OCR Configuration
 
-Image-based documents (PNG, JPEG, TIFF, BMP, WebP) are processed using the `glm-ocr` model via Ollama. The model extracts text content from scanned documents, photos of receipts, screenshots, etc.
+The OCR model is only used for images and image-heavy PDFs. Office documents and text files are extracted directly without any model calls.
 
-PDF files use a text extraction approach first, falling back to OCR if no text content is found.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `workspace.ocrEndpoint` | `http://localhost:11435` | Ollama endpoint for OCR model |
+| `workspace.ocrModel` | `glm-ocr` | Vision model for text extraction |
 
 ## API Endpoints
 
