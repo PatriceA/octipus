@@ -52,14 +52,15 @@ function summarizeForChannel(response: string): string {
   return text || '_(Response contained only code — view in the web UI.)_';
 }
 
-/** Image MIME types that vision models can analyze */
+/** Image MIME types that vision models can analyze (after conversion if needed) */
 const VISION_MIME_TYPES = new Set([
   'image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif',
-  'image/tiff', 'image/bmp', 'image/avif',
+  'image/tiff', 'image/bmp', 'image/avif', 'image/heic', 'image/heif',
+  'image/svg+xml', 'image/x-icon',
 ]);
 
-/** MIME types that need conversion before sending to vision models */
-const NEEDS_CONVERSION = new Set(['image/avif', 'image/tiff', 'image/bmp']);
+/** MIME types natively supported by all vision models — no conversion needed */
+const NATIVE_VISION_MIMES = new Set(['image/png', 'image/jpeg', 'image/jpg']);
 
 /**
  * Analyze image attachments using the vision model and return descriptions.
@@ -109,20 +110,19 @@ async function analyzeImageAttachments(
 
         if (!imageBuffer || imageBuffer.length === 0) continue;
 
-        // Convert unsupported formats (AVIF, TIFF, BMP) to JPEG via ImageMagick if available
+        // Convert non-PNG/JPEG formats to PNG for universal vision model compatibility
         let finalBuffer = imageBuffer;
         let finalMime = img.mimeType;
-        if (NEEDS_CONVERSION.has(img.mimeType)) {
+        if (!NATIVE_VISION_MIMES.has(img.mimeType)) {
           try {
             const { execSync } = await import('child_process');
             const tmpIn = `/tmp/vision-input-${Date.now()}`;
-            const tmpOut = `/tmp/vision-output-${Date.now()}.jpg`;
+            const tmpOut = `/tmp/vision-output-${Date.now()}.png`;
             await Bun.write(tmpIn, imageBuffer);
-            execSync(`convert "${tmpIn}" -quality 90 "${tmpOut}"`, { timeout: 10000 });
+            execSync(`convert "${tmpIn}" "${tmpOut}"`, { timeout: 10000 });
             const converted = Bun.file(tmpOut);
             finalBuffer = Buffer.from(await converted.arrayBuffer());
-            finalMime = 'image/jpeg';
-            // Clean up temp files
+            finalMime = 'image/png';
             execSync(`rm -f "${tmpIn}" "${tmpOut}"`, { timeout: 5000 });
           } catch (convErr) {
             channelLogger.warn({ err: convErr, mimeType: img.mimeType }, 'Image conversion failed, sending original format');
@@ -152,6 +152,66 @@ async function analyzeImageAttachments(
     channelLogger.error({ err }, 'Image analysis failed');
     return null;
   }
+}
+
+/**
+ * Subscribe to document queue completions for a single channel message's attachments.
+ * Sends each document's summary back to the channel as it completes.
+ */
+function subscribeToDocumentResults(
+  message: UnifiedMessage,
+  umi: import('./interface').UnifiedMessageInterface,
+  replyTo?: string,
+): void {
+  const { getDocumentQueue } = require('@/core/documents/queue') as typeof import('@/core/documents/queue');
+  const queue = getDocumentQueue();
+  const expectedCount = message.attachments?.length || 0;
+  let sent = 0;
+
+  const onCompleted = async (documentId: string, userId?: string) => {
+    if (userId && userId !== message.userId) return;
+
+    try {
+      const { documentRepository } = await import('@/db/repositories/document-repository');
+      const doc = await documentRepository.findById(documentId);
+      if (doc && doc.userId === message.userId) {
+        const name = doc.originalName || 'Document';
+        const summary = doc.summary || doc.ocrText?.slice(0, 500) || 'No content extracted';
+        const category = doc.category ? ` [${doc.category}]` : '';
+        umi.send(message.channelType, message.channelId, {
+          content: `**${name}**${category}\n${summary}`,
+          replyTo,
+        }).catch(() => {});
+        sent++;
+      }
+    } catch (err) {
+      channelLogger.warn({ err, documentId }, 'Failed to fetch document result');
+    }
+
+    if (sent >= expectedCount) cleanup();
+  };
+
+  const onFailed = (documentId: string, error: string, userId?: string) => {
+    if (userId && userId !== message.userId) return;
+    sent++;
+    umi.send(message.channelType, message.channelId, {
+      content: `Document processing failed: ${error}`,
+      replyTo,
+    }).catch(() => {});
+    if (sent >= expectedCount) cleanup();
+  };
+
+  const cleanup = () => {
+    queue.removeListener('completed', onCompleted);
+    queue.removeListener('failed', onFailed);
+    clearTimeout(timeout);
+  };
+
+  queue.on('completed', onCompleted);
+  queue.on('failed', onFailed);
+
+  // Safety timeout
+  const timeout = setTimeout(cleanup, 10 * 60 * 1000);
 }
 
 /**
@@ -412,24 +472,46 @@ export async function initializeChannels(): Promise<void> {
         });
       }
 
-      // For image attachments, analyze with vision model so the orchestrator can respond
+      // Handle file attachments
       let messageContent = message.content;
       if (message.attachments?.length) {
-        const imageAnalysis = await analyzeImageAttachments(message.attachments, message.channelType);
+        const hasImages = message.attachments.some(a => VISION_MIME_TYPES.has(a.mimeType));
+        const hasNonImages = message.attachments.some(a => !VISION_MIME_TYPES.has(a.mimeType));
+        const hasCaption = messageContent && messageContent.trim().length > 0;
 
-        if (imageAnalysis) {
-          // Vision model analyzed the images — include the analysis in the message
-          const prefix = `[The user sent image attachment(s). Vision model analysis:\n${imageAnalysis}]\n\n`;
-          messageContent = prefix + (messageContent || 'The user sent this image without a caption. Respond based on the vision analysis above.');
+        // All attachments are routed through the document pipeline (fire-and-forget above).
+        // For the orchestrator, decide: should we analyze inline or just acknowledge?
+
+        if (!hasCaption) {
+          // No caption — pure document upload. Acknowledge and skip orchestrator.
+          const attachmentNames = message.attachments.map(a => a.filename || 'file').join(', ');
+          await umi.send(message.channelType, message.channelId, {
+            content: `Received ${attachmentNames}. Processing through the document pipeline — I'll send you the summary when it's done.`,
+            replyTo: platformMessageId,
+          });
+          // Subscribe to document queue completions to send summary back
+          subscribeToDocumentResults(message, umi, platformMessageId);
+          if (unsubscribe) unsubscribe();
+          return;
+        }
+
+        if (hasImages && !hasNonImages) {
+          // Only images with a caption — analyze with vision model for inline response
+          const imageAnalysis = await analyzeImageAttachments(message.attachments, message.channelType);
+          if (imageAnalysis) {
+            const prefix = `[The user sent image attachment(s). Vision model analysis:\n${imageAnalysis}]\n\n`;
+            messageContent = prefix + messageContent;
+          }
         } else {
-          // Non-image attachments or no vision model — just describe what was sent
-          const attachmentDescriptions = message.attachments.map(a => {
-            const name = a.filename || `${a.type} file`;
-            const size = a.size ? ` (${(a.size / 1024).toFixed(1)}KB)` : '';
-            return `- ${name} [${a.mimeType}]${size}`;
-          }).join('\n');
-          const prefix = `[The user sent ${message.attachments.length} file attachment${message.attachments.length > 1 ? 's' : ''} which ${message.attachments.length > 1 ? 'are' : 'is'} being processed by the document pipeline:\n${attachmentDescriptions}]\n\n`;
-          messageContent = prefix + (messageContent || 'What is this file?');
+          // Files (possibly mixed with images) + caption — acknowledge, send summaries when done
+          const attachmentNames = message.attachments.map(a => a.filename || 'file').join(', ');
+          await umi.send(message.channelType, message.channelId, {
+            content: `Received ${attachmentNames}. Processing — I'll send you the results when done.`,
+            replyTo: platformMessageId,
+          });
+          subscribeToDocumentResults(message, umi, platformMessageId);
+          if (unsubscribe) unsubscribe();
+          return;
         }
       }
 

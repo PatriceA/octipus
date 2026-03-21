@@ -24,6 +24,7 @@ export class KnowledgeTool extends BaseTool {
         { name: 'read_knowledge', description: 'Read the full content of a knowledge entry by ID', parameters: { id: { type: 'string', description: 'Entry ID from search results', required: true } }, returns: 'Full content of the knowledge entry' },
         { name: 'index_file', description: 'Index a file into the knowledge base', parameters: { path: { type: 'string', description: 'File path', required: true } }, returns: 'Number of chunks indexed' },
         { name: 'index_directory', description: 'Index all matching files in a directory', parameters: { path: { type: 'string', description: 'Directory path', required: true } }, returns: 'Index results with file and chunk counts' },
+        { name: 'cleanup_knowledge', description: 'Remove orphaned, stale, short, and duplicate entries from the knowledge base', parameters: { dry_run: { type: 'boolean', description: 'Preview only' } }, returns: 'Cleanup summary with counts' },
       ],
     };
   }
@@ -130,6 +131,31 @@ export class KnowledgeTool extends BaseTool {
         const patterns = ((args.patterns as string) || '**/*.md,**/*.txt').split(',').map(p => p.trim());
         const result = await indexer.indexDirectory(args.path as string, patterns);
         return result;
+      },
+      { permissionAction: 'index' },
+    );
+
+    this.registerTool(
+      'cleanup_knowledge',
+      'Clean up the knowledge base by removing orphaned document embeddings, stale agent outputs (older than N days), very short entries, and duplicates. Returns counts of removed entries. Use dry_run=true to preview without deleting.',
+      createParameterSchema({
+        max_age_days: { type: 'number', description: 'Max age in days for agent outputs (default: 30)', default: 30 },
+        min_content_length: { type: 'number', description: 'Minimum content length to keep (default: 50)', default: 50 },
+        dry_run: { type: 'boolean', description: 'Preview only, do not delete (default: false)', default: false },
+      }),
+      async (args) => {
+        const service = getEmbeddingService();
+        const result = await service.cleanup({
+          maxAgeDays: (args.max_age_days as number) || 30,
+          minContentLength: (args.min_content_length as number) || 50,
+          dryRun: (args.dry_run as boolean) ?? false,
+        });
+        return {
+          ...result,
+          message: result.total === 0
+            ? 'Knowledge base is clean — nothing to remove.'
+            : `${args.dry_run ? 'Would remove' : 'Removed'} ${result.total} entries: ${result.orphanedDocuments} orphaned, ${result.staleAgentOutputs} stale, ${result.shortEntries} short, ${result.duplicates} duplicates.`,
+        };
       },
       { permissionAction: 'index' },
     );

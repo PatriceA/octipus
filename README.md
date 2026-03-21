@@ -38,8 +38,8 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Google Workspace** — Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks
 - **Microsoft 365** — Outlook, Calendar, OneDrive, To Do, Contacts
 - **Browser Extension** — control the user's real browser via Chrome extension with 24 commands: navigate, click, hover, scroll, drag, type, tabs, cookies, storage, console, network monitoring, dialog handling (existing cookies/auth, no bot detection)
-- **Knowledge Base** — hybrid search (BM25 full-text + pgvector cosine similarity + Reciprocal Rank Fusion) with tiered content loading (L0 abstract / L1 overview / L2 full)
-- **Document Processing** — upload, OCR (glm-ocr), LLM categorization, and automatic knowledge base indexing
+- **Knowledge Base** — hybrid search (BM25 full-text + pgvector cosine similarity + Reciprocal Rank Fusion) with tiered content loading (L0 abstract / L1 overview / L2 full), automatic weekly cleanup of orphaned/stale/duplicate entries
+- **Document Processing** — upload, dual-model OCR + vision analysis (deepseek-ocr for text extraction, vision model for image description), PDF text extraction via poppler, LLM categorization, and automatic knowledge base indexing
 - **GitHub/GitLab** — repository management, issues, PRs, reviews, and webhook integration
 - **Scheduling** — create and manage cron tasks, hooks, and event automations from within agent conversations
 - **Cross-Channel Messaging** — send messages across any connected channel

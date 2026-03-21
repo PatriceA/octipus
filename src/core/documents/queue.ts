@@ -18,6 +18,7 @@ export class DocumentQueue extends EventEmitter {
   private queue: QueueItem[] = [];
   private processing = false;
   private processingUserId?: string;
+  private currentDocumentId?: string;
   private logger = coreLogger.child({ component: 'document-queue' });
 
   /**
@@ -31,12 +32,31 @@ export class DocumentQueue extends EventEmitter {
   }
 
   /**
+   * Remove a queued document (not yet processing). Returns true if found and removed.
+   */
+  removeFromQueue(documentId: string): boolean {
+    const idx = this.queue.findIndex(item => item.documentId === documentId);
+    if (idx === -1) return false;
+    this.queue.splice(idx, 1);
+    this.logger.info({ documentId }, 'Document removed from queue');
+    return true;
+  }
+
+  /**
+   * Check if a document is currently being processed.
+   */
+  isProcessingDocument(documentId: string): boolean {
+    return this.processing && this.currentDocumentId === documentId;
+  }
+
+  /**
    * Get current queue status.
    */
-  getStatus(): { queueLength: number; isProcessing: boolean } {
+  getStatus(): { queueLength: number; isProcessing: boolean; currentDocumentId?: string } {
     return {
       queueLength: this.queue.length,
       isProcessing: this.processing,
+      currentDocumentId: this.currentDocumentId,
     };
   }
 
@@ -52,6 +72,7 @@ export class DocumentQueue extends EventEmitter {
     const item = this.queue.shift()!;
     const { documentId, userId } = item;
     this.processingUserId = userId;
+    this.currentDocumentId = documentId;
 
     this.logger.info({ documentId, remaining: this.queue.length }, 'Processing document');
     this.emit('processing', documentId, userId);
@@ -67,6 +88,7 @@ export class DocumentQueue extends EventEmitter {
     } finally {
       this.processing = false;
       this.processingUserId = undefined;
+      this.currentDocumentId = undefined;
       // Process next item if queue is not empty
       if (this.queue.length > 0) {
         this.processNext();

@@ -384,6 +384,126 @@ export class EmbeddingService {
     return result.length;
   }
 
+  // ── Cleanup ─────────────────────────────────────────────────────
+
+  /**
+   * Clean up the knowledge base by removing:
+   * 1. Orphaned document embeddings (documents deleted from DB)
+   * 2. Old agent output embeddings (older than maxAgeDays)
+   * 3. Very short/low-quality entries (content < minContentLength chars)
+   * 4. Near-duplicate entries (same sourceId, same content hash)
+   *
+   * Returns a summary of what was removed.
+   */
+  async cleanup(options: {
+    maxAgeDays?: number;
+    minContentLength?: number;
+    dryRun?: boolean;
+  } = {}): Promise<{
+    orphanedDocuments: number;
+    staleAgentOutputs: number;
+    shortEntries: number;
+    duplicates: number;
+    total: number;
+  }> {
+    const maxAgeDays = options.maxAgeDays ?? 30;
+    const minContentLength = options.minContentLength ?? 50;
+    const dryRun = options.dryRun ?? false;
+    const db = getDb();
+
+    const results = {
+      orphanedDocuments: 0,
+      staleAgentOutputs: 0,
+      shortEntries: 0,
+      duplicates: 0,
+      total: 0,
+    };
+
+    // 1. Orphaned document embeddings — documents table record no longer exists
+    const orphaned = await db.execute(sql`
+      SELECT e.id FROM embeddings e
+      WHERE e.source_type = 'document'
+        AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = e.source_id)
+    `) as any[];
+
+    results.orphanedDocuments = orphaned.length;
+    if (!dryRun && orphaned.length > 0) {
+      const ids = orphaned.map((r: any) => r.id);
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+      }
+    }
+
+    // 2. Old agent output embeddings
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - maxAgeDays);
+
+    const stale = await db.execute(sql`
+      SELECT id FROM embeddings
+      WHERE source_type = 'agent_output'
+        AND created_at < ${cutoffDate}
+    `) as any[];
+
+    results.staleAgentOutputs = stale.length;
+    if (!dryRun && stale.length > 0) {
+      const ids = stale.map((r: any) => r.id);
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+      }
+    }
+
+    // 3. Very short/low-quality entries
+    const short = await db.execute(sql`
+      SELECT id FROM embeddings
+      WHERE length(content) < ${minContentLength}
+        AND content NOT LIKE '[%'
+    `) as any[];
+
+    results.shortEntries = short.length;
+    if (!dryRun && short.length > 0) {
+      const ids = short.map((r: any) => r.id);
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+      }
+    }
+
+    // 4. Duplicates — same source_type + source_id + content, keep newest
+    const dupes = await db.execute(sql`
+      SELECT id FROM embeddings e
+      WHERE EXISTS (
+        SELECT 1 FROM embeddings e2
+        WHERE e2.source_type = e.source_type
+          AND e2.source_id = e.source_id
+          AND e2.content = e.content
+          AND e2.id != e.id
+          AND e2.created_at > e.created_at
+      )
+    `) as any[];
+
+    results.duplicates = dupes.length;
+    if (!dryRun && dupes.length > 0) {
+      const ids = dupes.map((r: any) => r.id);
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+      }
+    }
+
+    results.total = results.orphanedDocuments + results.staleAgentOutputs + results.shortEntries + results.duplicates;
+
+    coreLogger.info({
+      ...results,
+      dryRun,
+      maxAgeDays,
+      minContentLength,
+    }, 'Knowledge base cleanup completed');
+
+    return results;
+  }
+
   // ── Chunking ──────────────────────────────────────────────────────
 
   chunkText(text: string, maxSize = MAX_CHUNK_SIZE): string[] {

@@ -69,6 +69,11 @@ export class DocumentRepository {
       .limit(limit);
   }
 
+  async delete(id: string): Promise<boolean> {
+    const result = await this.db.delete(documents).where(eq(documents.id, id)).returning();
+    return result.length > 0;
+  }
+
   async listRecent(limit = 50): Promise<DocumentRecord[]> {
     return this.db
       .select()

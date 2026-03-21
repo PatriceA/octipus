@@ -4,7 +4,7 @@ import { documentRepository } from '@/db/repositories/document-repository';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { getConfig } from '@/config';
 import { resolve, join, extname } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { apiLogger } from '@/utils/logger';
@@ -160,6 +160,88 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       createdAt: doc.createdAt,
       processedAt: doc.processedAt,
     };
+  }, {
+    params: t.Object({ id: t.String() }),
+    detail: { tags: ['documents'] },
+  })
+
+  // Delete a document
+  .delete('/:id', async ({ user, params, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+
+    const doc = await documentRepository.findById(params.id);
+    if (!doc) {
+      set.status = 404;
+      return { error: 'Document not found' };
+    }
+
+    if (doc.userId !== user.id && !user.isAdmin) {
+      set.status = 403;
+      return { error: 'Access denied' };
+    }
+
+    // Remove from queue if still queued
+    const queue = getDocumentQueue();
+    queue.removeFromQueue(params.id);
+
+    // Delete the file from disk
+    if (doc.storagePath && existsSync(doc.storagePath)) {
+      try {
+        await unlink(doc.storagePath);
+      } catch (err) {
+        logger.warn({ err, storagePath: doc.storagePath }, 'Failed to delete file from disk');
+      }
+    }
+
+    // Delete from DB
+    await documentRepository.delete(params.id);
+    logger.info({ documentId: params.id, filename: doc.originalName }, 'Document deleted');
+
+    return { success: true };
+  }, {
+    params: t.Object({ id: t.String() }),
+    detail: { tags: ['documents'] },
+  })
+
+  // Cancel processing of a document
+  .post('/:id/cancel', async ({ user, params, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+
+    const doc = await documentRepository.findById(params.id);
+    if (!doc) {
+      set.status = 404;
+      return { error: 'Document not found' };
+    }
+
+    if (doc.userId !== user.id && !user.isAdmin) {
+      set.status = 403;
+      return { error: 'Access denied' };
+    }
+
+    const queue = getDocumentQueue();
+
+    if (doc.status === 'queued') {
+      // Remove from queue and mark as failed/cancelled
+      queue.removeFromQueue(params.id);
+      await documentRepository.updateStatus(params.id, 'failed', 'Cancelled by user');
+      logger.info({ documentId: params.id }, 'Queued document cancelled');
+      return { success: true, action: 'removed_from_queue' };
+    }
+
+    if (doc.status === 'processing') {
+      // Can't abort mid-processing, but mark it so the user knows
+      await documentRepository.updateStatus(params.id, 'failed', 'Cancelled by user');
+      logger.info({ documentId: params.id }, 'Processing document marked as cancelled');
+      return { success: true, action: 'marked_cancelled' };
+    }
+
+    return { success: false, error: `Document is already ${doc.status}` };
   }, {
     params: t.Object({ id: t.String() }),
     detail: { tags: ['documents'] },

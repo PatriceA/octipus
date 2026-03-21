@@ -17,6 +17,7 @@ interface Hook {
   actionConfig: Record<string, unknown>;
   isEnabled: boolean;
   executionCount: number;
+  maxExecutions?: number | null;
   lastExecutedAt?: string;
   nextRunAt?: string;
   lastError?: string;
@@ -200,6 +201,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [notifyChannels, setNotifyChannels] = useState('');
   const [notifyMessage, setNotifyMessage] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [runOnce, setRunOnce] = useState(false);
   const [userChannels, setUserChannels] = useState<{ channelType: string; channelUserName?: string }[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -256,6 +258,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         action,
         actionConfig,
         isEnabled: true,
+        ...(runOnce ? { maxExecutions: 1 } : {}),
       });
 
       onCreated();
@@ -376,11 +379,22 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
           )}
 
           {trigger === 'schedule' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Schedule
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Schedule
+                </label>
+                <SchedulePicker value={cronExpression} onChange={setCronExpression} />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={runOnce}
+                  onChange={e => setRunOnce(e.target.checked)}
+                  className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Run once (single event, auto-disables after execution)</span>
               </label>
-              <SchedulePicker value={cronExpression} onChange={setCronExpression} />
             </div>
           )}
 
@@ -590,6 +604,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [toolId, setToolId] = useState((hook.actionConfig?.toolId as string) || '');
   const [toolAction, setToolAction] = useState((hook.actionConfig?.toolAction as string) || '');
 
+  const [runOnce, setRunOnce] = useState(hook.maxExecutions === 1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -658,6 +673,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
         description,
         triggerConfig: buildTriggerConfig(),
         actionConfig: buildActionConfig(),
+        maxExecutions: runOnce ? 1 : null,
       });
       onSaved();
       onClose();
@@ -724,9 +740,20 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
             </>
           )}
           {trigger === 'schedule' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Schedule</label>
-              <SchedulePicker value={cronExpression} onChange={setCronExpression} />
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Schedule</label>
+                <SchedulePicker value={cronExpression} onChange={setCronExpression} />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={runOnce}
+                  onChange={e => setRunOnce(e.target.checked)}
+                  className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Run once (single event, auto-disables after execution)</span>
+              </label>
             </div>
           )}
           {trigger === 'message_received' && (

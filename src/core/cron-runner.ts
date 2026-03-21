@@ -4,12 +4,15 @@ import { eq, and, lte, sql, isNotNull } from 'drizzle-orm';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
 import { getHookManager } from '@/hooks/manager';
+import { getEmbeddingService } from '@/core/rag/embeddings';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
+const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 
 let cronTimer: Timer | null = null;
 let lastSessionCleanup = 0;
+let lastKnowledgeCleanup = 0;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -103,9 +106,26 @@ async function maybeCleanupSessions(): Promise<void> {
   }
 }
 
+async function maybeCleanupKnowledge(): Promise<void> {
+  const now = Date.now();
+  if (now - lastKnowledgeCleanup < KNOWLEDGE_CLEANUP_INTERVAL_MS) return;
+  lastKnowledgeCleanup = now;
+
+  try {
+    const service = getEmbeddingService();
+    const result = await service.cleanup({ maxAgeDays: 30, minContentLength: 50 });
+    if (result.total > 0) {
+      coreLogger.info(result, 'Knowledge cleanup: removed stale entries');
+    }
+  } catch (err) {
+    coreLogger.error({ err }, 'Knowledge cleanup failed');
+  }
+}
+
 async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
+    await maybeCleanupKnowledge();
     const db = getDb();
     const now = new Date();
 

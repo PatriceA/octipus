@@ -54,6 +54,8 @@ export const AVAILABLE_TOPICS = [
   { value: 'analysis', label: 'Analysis', description: 'Research, review, code analysis' },
   { value: 'communication', label: 'Communication', description: 'Email, calendar, contacts (Google/Microsoft)' },
   { value: 'chat', label: 'Chat', description: 'Casual conversations' },
+  { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents' },
+  { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis' },
   { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
   { value: 'design', label: 'Design', description: 'UI/UX design, layout, accessibility' },
   { value: 'devops', label: 'DevOps', description: 'CI/CD, Docker, infrastructure, deployment' },

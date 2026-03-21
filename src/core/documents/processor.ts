@@ -66,6 +66,15 @@ const CATEGORIES = [
   'receipts', 'legal', 'medical', 'financial', 'other',
 ] as const;
 
+/** Strip OCR model grounding/reference tokens from output */
+function cleanOcrOutput(text: string): string {
+  return text
+    .replace(/<\|ref\|>.*?<\|\/ref\|>/g, '')
+    .replace(/<\|det\|>.*?<\|\/det\|>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export class DocumentProcessor {
   private logger = coreLogger.child({ component: 'document-processor' });
 
@@ -98,7 +107,7 @@ export class DocumentProcessor {
           if (doc.mimeType === 'application/pdf') {
             extractedText = await this.extractPdfText(doc.storagePath);
           } else {
-            extractedText = await this.ocrImage(doc.storagePath);
+            extractedText = await this.processImage(doc.storagePath);
           }
           break;
         case 'text':
@@ -140,99 +149,213 @@ export class DocumentProcessor {
   }
 
   /**
-   * OCR an image using a vision model via LiteLLM.
-   * The model is resolved from the model registry using the 'vision' topic.
-   * Falls back to workspace.ocrModel config if no vision model is registered.
+   * Prepare an image file for vision model processing: read, convert if needed, return base64 + mime.
    */
-  private async ocrImage(filePath: string): Promise<string> {
+  private async prepareImage(filePath: string): Promise<{ base64: string; mimeType: string }> {
     let fileBuffer = await readFile(filePath);
-
-    // Determine MIME type from extension
     const ext = extname(filePath).toLowerCase();
     const mimeMap: Record<string, string> = {
       '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
       '.webp': 'image/webp', '.tiff': 'image/tiff', '.bmp': 'image/bmp',
-      '.avif': 'image/avif',
+      '.avif': 'image/avif', '.heic': 'image/heic', '.heif': 'image/heif',
     };
     let mimeType = mimeMap[ext] || 'image/png';
 
-    // Convert formats that most vision models don't support (AVIF, TIFF, BMP) to JPEG
-    const needsConversion = new Set(['.avif', '.tiff', '.bmp']);
-    if (needsConversion.has(ext)) {
+    // Convert non-PNG/JPEG formats to PNG for universal vision model compatibility
+    const nativeExts = new Set(['.png', '.jpg', '.jpeg']);
+    if (!nativeExts.has(ext)) {
       try {
         const { execSync } = await import('child_process');
-        const tmpOut = `/tmp/ocr-convert-${Date.now()}.jpg`;
-        execSync(`convert "${filePath}" -quality 90 "${tmpOut}"`, { timeout: 15000 });
+        const tmpOut = `/tmp/ocr-convert-${Date.now()}.png`;
+        execSync(`convert "${filePath}" "${tmpOut}"`, { timeout: 15000 });
         fileBuffer = await readFile(tmpOut);
-        mimeType = 'image/jpeg';
+        mimeType = 'image/png';
         execSync(`rm -f "${tmpOut}"`, { timeout: 5000 });
-        this.logger.info({ from: ext, filePath }, 'Converted image to JPEG for OCR');
+        this.logger.info({ from: ext, filePath }, 'Converted image to PNG');
       } catch (convErr) {
         this.logger.warn({ err: convErr, ext }, 'Image conversion failed, sending original format');
       }
     }
 
-    const base64Image = fileBuffer.toString('base64');
-
-    // Resolve vision model from registry (topic: 'vision'), fall back to config
-    const registry = getModelRegistry();
-    const visionModel = await registry.getModelForTopic('vision');
-    const config = getConfig();
-
-    if (visionModel) {
-      // Route through LiteLLM — supports any vision-capable model
-      this.logger.info({ model: visionModel.modelId, filePath }, 'OCR via LiteLLM vision model');
-      const client = getLiteLLMClient();
-      const result = await client.completeVision({
-        model: visionModel.modelId,
-        prompt: 'Extract all text content from this image. Return only the extracted text, preserving the original layout as much as possible.',
-        imageBase64: base64Image,
-        mimeType,
-      });
-      return result.content || '';
-    }
-
-    // Fallback: direct Ollama API (for setups without a vision model in the registry)
-    const ocrEndpoint = config.workspace.ocrEndpoint || 'http://localhost:11435';
-    const ocrModel = config.workspace.ocrModel || 'glm-ocr';
-    this.logger.warn({ ocrModel, ocrEndpoint }, 'No vision model in registry, falling back to direct Ollama endpoint. Add a model with topic "vision" for proper routing.');
-
-    const response = await fetch(`${ocrEndpoint}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: ocrModel,
-        prompt: 'Extract all text content from this image. Return only the extracted text, preserving the original layout as much as possible.',
-        images: [base64Image],
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`OCR request failed: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json() as { response: string };
-    return data.response || '';
+    return { base64: fileBuffer.toString('base64'), mimeType };
   }
 
   /**
-   * Extract text from a PDF file. For now, reads raw text content.
-   * Image-based PDFs will need page extraction added later.
+   * Process an image: run OCR (text extraction) and vision analysis (image description).
+   * Uses 'ocr' topic model for text extraction, 'vision' topic model for description.
+   * Combines both results so the document has both extracted text and a visual summary.
    */
-  private async extractPdfText(filePath: string): Promise<string> {
-    // Basic text extraction — read the file and attempt to extract text content.
-    // For image-based PDFs, this won't yield much; OCR per page can be added later.
-    const buffer = await readFile(filePath);
-    const text = buffer.toString('utf-8');
+  private async processImage(filePath: string): Promise<string> {
+    const { base64, mimeType } = await this.prepareImage(filePath);
+    const registry = getModelRegistry();
+    const client = getLiteLLMClient();
+    const parts: string[] = [];
 
-    // Filter out binary noise — if it looks mostly like binary, return placeholder
-    const printableRatio = text.replace(/[^\x20-\x7E\n\r\t]/g, '').length / text.length;
-    if (printableRatio < 0.5) {
-      return '[PDF contains primarily image-based content — OCR per page not yet implemented]';
+    // 1. Try OCR (text extraction) with 'ocr' topic model
+    const ocrModel = await registry.getModelForTopic('ocr');
+    if (ocrModel) {
+      try {
+        this.logger.info({ model: ocrModel.modelId, filePath }, 'OCR text extraction');
+        const ocrResult = await client.completeVision({
+          model: ocrModel.modelId,
+          prompt: '<|grounding|>Convert the document to markdown.',
+          imageBase64: base64,
+          mimeType,
+        });
+        const ocrText = cleanOcrOutput(ocrResult.content || '');
+        if (ocrText && ocrText.length > 5) {
+          parts.push(`[Extracted Text]\n${ocrText}`);
+        }
+      } catch (err) {
+        this.logger.warn({ err, model: ocrModel.modelId }, 'OCR extraction failed');
+      }
     }
 
-    return text;
+    // 2. Vision analysis (image description) with 'vision' topic model
+    const visionModel = await registry.getModelForTopic('vision');
+    if (visionModel) {
+      try {
+        this.logger.info({ model: visionModel.modelId, filePath }, 'Vision image analysis');
+        const visionResult = await client.completeVision({
+          model: visionModel.modelId,
+          prompt: 'Describe this image in detail. What does it show? Include all visible details, objects, text, colors, and layout.',
+          imageBase64: base64,
+          mimeType,
+        });
+        const description = visionResult.content?.trim();
+        if (description) {
+          parts.push(`[Image Description]\n${description}`);
+        }
+      } catch (err) {
+        this.logger.warn({ err, model: visionModel.modelId }, 'Vision analysis failed');
+      }
+    }
+
+    // 3. If neither model is configured, try a single call with whatever is available
+    if (parts.length === 0) {
+      const fallbackModel = ocrModel || visionModel;
+      if (fallbackModel) {
+        const result = await client.completeVision({
+          model: fallbackModel.modelId,
+          prompt: 'Describe this image and extract any text content.',
+          imageBase64: base64,
+          mimeType,
+        });
+        return result.content || '';
+      }
+
+      // Last resort: direct Ollama API
+      const config = getConfig();
+      const ocrEndpoint = config.workspace.ocrEndpoint || 'http://localhost:11435';
+      const fallback = config.workspace.ocrModel || 'glm-ocr';
+      this.logger.warn({ model: fallback, ocrEndpoint }, 'No ocr/vision model in registry, falling back to direct Ollama endpoint');
+
+      const response = await fetch(`${ocrEndpoint}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: fallback,
+          prompt: '<|grounding|>Convert the document to markdown.',
+          images: [base64],
+          stream: false,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`OCR request failed: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json() as { response: string };
+      return data.response || '';
+    }
+
+    return parts.join('\n\n');
+  }
+
+  /**
+   * Extract text from a PDF using pdftotext (poppler).
+   * Falls back to page-by-page OCR via pdftoppm + vision model for image-based PDFs.
+   */
+  private async extractPdfText(filePath: string): Promise<string> {
+    const { execSync } = await import('child_process');
+
+    // 1. Try pdftotext for text-based PDFs
+    try {
+      const text = execSync(`pdftotext -layout "${filePath}" -`, {
+        timeout: 30000,
+        maxBuffer: 10 * 1024 * 1024,
+      }).toString('utf-8').trim();
+
+      if (text.length > 50) {
+        this.logger.info({ filePath, textLength: text.length }, 'PDF text extracted via pdftotext');
+        return text;
+      }
+    } catch (err) {
+      this.logger.warn({ err, filePath }, 'pdftotext failed, trying OCR');
+    }
+
+    // 2. Image-based PDF — render pages to images and OCR each
+    const registry = getModelRegistry();
+    const ocrModel = await registry.getModelForTopic('ocr');
+    const visionModel = !ocrModel ? await registry.getModelForTopic('vision') : null;
+    const model = ocrModel || visionModel;
+
+    if (!model) {
+      return '[PDF contains image-based content but no OCR/vision model is configured]';
+    }
+
+    const tmpDir = `/tmp/pdf-ocr-${Date.now()}`;
+    try {
+      execSync(`mkdir -p "${tmpDir}"`, { timeout: 5000 });
+
+      // Get page count
+      const pageCountStr = execSync(`pdfinfo "${filePath}" | grep Pages | awk '{print $2}'`, {
+        timeout: 10000,
+      }).toString().trim();
+      const pageCount = Math.min(parseInt(pageCountStr, 10) || 1, 50); // Cap at 50 pages
+
+      // Render pages to PNG
+      execSync(`pdftoppm -png -r 200 "${filePath}" "${tmpDir}/page"`, {
+        timeout: 120000,
+      });
+
+      const client = getLiteLLMClient();
+      const pageTexts: string[] = [];
+
+      // OCR each page
+      const pageFiles = execSync(`ls -1 "${tmpDir}"/page-*.png 2>/dev/null | sort`, {
+        timeout: 5000,
+      }).toString().trim().split('\n').filter(Boolean);
+
+      this.logger.info({ filePath, pages: pageFiles.length, model: model.modelId }, 'OCR-ing PDF pages');
+
+      for (const pageFile of pageFiles) {
+        try {
+          const pageBuffer = await readFile(pageFile);
+          const base64 = pageBuffer.toString('base64');
+          const result = await client.completeVision({
+            model: model.modelId,
+            prompt: '<|grounding|>Convert the document to markdown.',
+            imageBase64: base64,
+            mimeType: 'image/png',
+          });
+          const pageText = cleanOcrOutput(result.content || '');
+          if (pageText) {
+            const pageNum = pageFile.match(/page-(\d+)/)?.[1] || '?';
+            pageTexts.push(`--- Page ${parseInt(pageNum, 10)} ---\n${pageText}`);
+          }
+        } catch (pageErr) {
+          this.logger.warn({ err: pageErr, pageFile }, 'Failed to OCR PDF page');
+        }
+      }
+
+      return pageTexts.length > 0
+        ? pageTexts.join('\n\n')
+        : '[No text content could be extracted from PDF]';
+    } finally {
+      // Clean up temp files
+      try { execSync(`rm -rf "${tmpDir}"`, { timeout: 5000 }); } catch {}
+    }
   }
 
   /**

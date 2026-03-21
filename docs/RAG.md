@@ -56,6 +56,56 @@ Results include content, score, sourceType, and filePath. By default only the `a
 | pm | No | Planning-focused |
 | communication | No | Messaging-focused |
 
+## Knowledge Base Cleanup
+
+The knowledge base accumulates entries over time. A cleanup system removes low-value entries automatically and on demand.
+
+### Cleanup Strategies
+
+| Strategy | What it removes |
+|---|---|
+| **Orphaned documents** | Embeddings where the source document has been deleted from the database |
+| **Stale agent outputs** | Agent output embeddings older than a configurable threshold (default: 30 days) |
+| **Short entries** | Entries with content shorter than a minimum length (default: 50 chars), excluding structured content starting with `[` |
+| **Duplicates** | Entries with identical source_type + source_id + content, keeping only the newest |
+
+### Automatic Cleanup
+
+A weekly cleanup runs automatically via the cron runner alongside session cleanup. It uses the default settings (30-day agent output cutoff, 50-char minimum content length).
+
+### Manual Cleanup
+
+**Via API:**
+```bash
+# Dry run — preview what would be removed
+curl -X POST http://localhost:3005/api/knowledge/cleanup \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dryRun": true}'
+
+# Execute cleanup with custom settings
+curl -X POST http://localhost:3005/api/knowledge/cleanup \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"maxAgeDays": 14, "minContentLength": 100}'
+```
+
+**Via Agent Tool:**
+
+Agents with the `knowledge` tool can call `cleanup_knowledge(dry_run?, max_age_days?, min_content_length?)`. This is useful for automation workers or scheduled cleanup hooks.
+
+### Response Format
+
+```json
+{
+  "orphanedDocuments": 3,
+  "staleAgentOutputs": 12,
+  "shortEntries": 5,
+  "duplicates": 2,
+  "total": 22
+}
+```
+
 ## Schema
 
 ```sql
@@ -99,7 +149,7 @@ CREATE INDEX ON embeddings USING gin (content_tsv);                   -- full-te
 | `src/core/rag/embeddings.ts` | EmbeddingService -- generate, store, `search()` (vector), `ftsSearch()` (BM25), `hybridSearch()` (RRF) |
 | `src/core/rag/indexer.ts` | FileIndexer -- index files and directories |
 | `src/core/rag/auto-indexer.ts` | AutoIndexer -- indexes agent outputs on completion |
-| `src/tools/knowledge/index.ts` | KnowledgeTool -- search_knowledge, index_file, index_directory |
+| `src/tools/knowledge/index.ts` | KnowledgeTool -- search_knowledge, index_file, index_directory, cleanup_knowledge |
 | `src/db/schema/embeddings.ts` | Drizzle schema with pgvector custom type |
 | `src/db/migrations/0005_rag_setup.sql` | Migration for embeddings table |
 | `src/db/migrations/0015_hybrid_search.sql` | Migration adding `content_tsv`, `abstract`, `overview` columns and indexes |

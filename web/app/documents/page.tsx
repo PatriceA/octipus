@@ -15,6 +15,8 @@ import {
   HardDrive,
   Tag,
   Plus,
+  Trash2,
+  Square,
 } from 'lucide-react';
 import { api, getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -241,7 +243,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
 }
 
 // --- Detail Dialog ---
-function DetailDialog({ documentId, onClose }: { documentId: string; onClose: () => void }) {
+function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId: string; onClose: () => void; onDelete: (id: string) => void; onCancel: (id: string) => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['document', documentId],
     queryFn: async () => {
@@ -257,9 +259,27 @@ function DetailDialog({ documentId, onClose }: { documentId: string; onClose: ()
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Document Details</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {data && (data.status === 'queued' || data.status === 'processing') && (
+              <button
+                onClick={() => { onCancel(documentId); onClose(); }}
+                className="px-3 py-1.5 text-xs font-medium text-orange-700 dark:text-orange-300 bg-orange-100 dark:bg-orange-900/30 rounded-lg hover:bg-orange-200 dark:hover:bg-orange-900/50 cursor-pointer flex items-center gap-1"
+              >
+                <Square className="w-3.5 h-3.5" />
+                Cancel
+              </button>
+            )}
+            <button
+              onClick={() => { onDelete(documentId); onClose(); }}
+              className="px-3 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 cursor-pointer flex items-center gap-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete
+            </button>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="p-4 space-y-4">
@@ -358,9 +378,13 @@ function DetailDialog({ documentId, onClose }: { documentId: string; onClose: ()
 function DocumentCard({
   document,
   onViewDetail,
+  onDelete,
+  onCancel,
 }: {
   document: Document;
   onViewDetail: (id: string) => void;
+  onDelete: (id: string) => void;
+  onCancel: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -399,6 +423,18 @@ function DocumentCard({
           <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getStatusColor(document.status))}>
             {document.status}
           </span>
+          {(document.status === 'queued' || document.status === 'processing') && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancel(document.id);
+              }}
+              className="p-1 text-gray-400 hover:text-orange-600 dark:hover:text-orange-400 cursor-pointer"
+              title="Cancel processing"
+            >
+              <Square className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -408,6 +444,16 @@ function DocumentCard({
             title="View details"
           >
             <Eye className="w-4 h-4" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(document.id);
+            }}
+            className="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+            title="Delete document"
+          >
+            <Trash2 className="w-4 h-4" />
           </button>
         </div>
       </button>
@@ -462,6 +508,26 @@ export default function DocumentsPage() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [viewingDocId, setViewingDocId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this document?')) return;
+    try {
+      await api.delete(`/documents/${id}`);
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    } catch (err) {
+      console.error('Failed to delete document:', err);
+    }
+  };
+
+  const handleCancel = async (id: string) => {
+    try {
+      await api.post(`/documents/${id}/cancel`);
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    } catch (err) {
+      console.error('Failed to cancel document:', err);
+    }
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ['documents'],
@@ -589,6 +655,8 @@ export default function DocumentsPage() {
               key={doc.id}
               document={doc}
               onViewDetail={setViewingDocId}
+              onDelete={handleDelete}
+              onCancel={handleCancel}
             />
           ))}
         </div>
@@ -596,7 +664,7 @@ export default function DocumentsPage() {
 
       {/* Dialogs */}
       {showUpload && <UploadDialog onClose={() => setShowUpload(false)} />}
-      {viewingDocId && <DetailDialog documentId={viewingDocId} onClose={() => setViewingDocId(null)} />}
+      {viewingDocId && <DetailDialog documentId={viewingDocId} onClose={() => setViewingDocId(null)} onDelete={handleDelete} onCancel={handleCancel} />}
     </div>
   );
 }

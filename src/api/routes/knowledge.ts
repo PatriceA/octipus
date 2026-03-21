@@ -129,6 +129,33 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     detail: { tags: ['knowledge'] },
   })
 
+  // Cleanup stale/orphaned/duplicate entries
+  .post('/cleanup', async ({ user, body, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+
+    const { maxAgeDays, minContentLength, dryRun } = body;
+    const service = getEmbeddingService();
+
+    const result = await service.cleanup({
+      maxAgeDays: maxAgeDays ?? 30,
+      minContentLength: minContentLength ?? 50,
+      dryRun: dryRun ?? false,
+    });
+
+    logger.info({ userId: user.id, dryRun, ...result }, 'Knowledge cleanup triggered');
+    return result;
+  }, {
+    body: t.Object({
+      maxAgeDays: t.Optional(t.Number()),
+      minContentLength: t.Optional(t.Number()),
+      dryRun: t.Optional(t.Boolean()),
+    }),
+    detail: { tags: ['knowledge'] },
+  })
+
   // Index file or directory
   .post('/index', async ({ user, body, set }) => {
     if (!user) {
