@@ -54,7 +54,7 @@ When a user has a profile with `isUserProfile: true` and at least one fact, thos
 
 ```
 USER CONTEXT:
-Name: Patrice
+Name: Max
 - location: Berlin, Germany
 - timezone: Europe/Berlin
 - language: English, German
