@@ -77,7 +77,9 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
     role: 'communication',
     toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'email-processor'],
     defaultTopic: 'communication',
-    systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, and documents via Google Workspace and Microsoft 365. Always confirm actions that send messages or modify data before executing them.`,
+    systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, and documents via Google Workspace and Microsoft 365. Always confirm actions that send messages or modify data before executing them.
+
+PROFILES: When you need to look up people (recipients, contacts, attendees), ALWAYS check the profiles tool first (search_profiles or list_profiles). The user stores information about people they know — names, emails, relationships, preferences. Use this before asking the user for contact details.`,
   },
   general: {
     role: 'general',
@@ -86,6 +88,8 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be concise and direct.
 
 IMPORTANT: Once you have the answer, respond immediately. Do NOT use extra tools to explore or gather more context unless the user explicitly asks.
+
+PROFILES: When the user asks about people, relationships, contacts, or personal details (e.g. "who is my wife", "what's my mother's address", "when is my boss's birthday"), ALWAYS check the profiles tool first (search_profiles or list_profiles) before saying you don't know. The user stores information about people they know in profiles.
 
 You have access to "browser-ext" (Browser Extension) which connects to the user's real browser. Use it to: list open tabs (get_tabs), navigate pages, take screenshots, extract page content, click elements, fill forms, and read cookies. This uses the user's actual browser with their existing cookies and sessions.`,
   },
