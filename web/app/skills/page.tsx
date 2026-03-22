@@ -38,18 +38,18 @@ interface Skill {
 const CATEGORIES = ['engineering', 'design', 'security', 'devops', 'data', 'ai', 'management', 'finance', 'science', 'other'];
 
 const CATEGORY_COLORS: Record<string, string> = {
-  engineering: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
-  design: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
-  security: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
-  devops: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
-  data: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
-  ai: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
-  management: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
-  finance: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
+  engineering: 'bg-blue-900/30 text-blue-300',
+  design: 'bg-purple-900/30 text-purple-300',
+  security: 'bg-red-900/30 text-red-300',
+  devops: 'bg-orange-900/30 text-orange-300',
+  data: 'bg-green-900/30 text-green-300',
+  ai: 'bg-indigo-900/30 text-indigo-300',
+  management: 'bg-yellow-900/30 text-yellow-300',
+  finance: 'bg-emerald-900/30 text-emerald-300',
 };
 
 function getCategoryColor(category: string): string {
-  return CATEGORY_COLORS[category] || 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+  return CATEGORY_COLORS[category] || 'bg-[#262626] text-on-surface-variant';
 }
 
 // --- Array field input component ---
@@ -76,7 +76,7 @@ function ArrayFieldInput({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
+      <label className="block text-sm font-medium text-white/80 mb-1">{label}</label>
       <div className="flex gap-2 mb-2">
         <input
           type="text"
@@ -89,12 +89,12 @@ function ArrayFieldInput({
             }
           }}
           placeholder={`Add ${label.toLowerCase()}...`}
-          className="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+          className="flex-1 px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
         />
         <button
           type="button"
           onClick={handleAdd}
-          className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+          className="px-3 py-2 bg-[#262626] text-white/80 rounded-lg text-sm hover:bg-[#20201f] cursor-pointer"
         >
           Add
         </button>
@@ -102,12 +102,12 @@ function ArrayFieldInput({
       {items.length > 0 && (
         <div className="space-y-1">
           {items.map((item, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-lg px-3 py-1.5">
+            <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-[#131313] rounded-lg px-3 py-1.5">
               <span className="flex-1">{item}</span>
               <button
                 type="button"
                 onClick={() => onRemove(i)}
-                className="text-gray-400 hover:text-red-500 cursor-pointer"
+                className="text-on-surface-variant hover:text-red-500 cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -122,13 +122,13 @@ function ArrayFieldInput({
 // --- Mode toggle for Markdown vs Structured ---
 function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onChange: (m: 'markdown' | 'structured') => void }) {
   return (
-    <div className="flex rounded-lg bg-gray-100 dark:bg-gray-700 p-0.5">
+    <div className="flex rounded-lg bg-[#262626] p-0.5">
       <button
         type="button"
         onClick={() => onChange('markdown')}
         className={cn(
           'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
-          mode === 'markdown' ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm' : 'text-gray-500 dark:text-gray-400'
+          mode === 'markdown' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
         )}
       >
         <FileText className="w-3.5 h-3.5" /> Markdown
@@ -138,7 +138,7 @@ function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onCha
         onClick={() => onChange('structured')}
         className={cn(
           'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
-          mode === 'structured' ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm' : 'text-gray-500 dark:text-gray-400'
+          mode === 'structured' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
         )}
       >
         <List className="w-3.5 h-3.5" /> Structured
@@ -198,14 +198,14 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Create Skill</h2>
+        <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
+          <h2 className="text-lg font-semibold text-white">Create Skill</h2>
           <div className="flex items-center gap-3">
             <ModeToggle mode={mode} onChange={setMode} />
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+            <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -213,28 +213,28 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+              <label className="block text-sm font-medium text-white/80 mb-1">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Skill name"
-                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+              <label className="block text-sm font-medium text-white/80 mb-1">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
               >
                 {CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
@@ -244,28 +244,28 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+            <label className="block text-sm font-medium text-white/80 mb-1">Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={mode === 'markdown' ? 'Short description (auto-generated from content if empty)' : 'Skill description'}
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+              className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
             />
           </div>
 
           {mode === 'markdown' ? (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-white/80 mb-1">
                 Markdown Content
-                <span className="ml-2 text-xs font-normal text-gray-400">Paste a Claude Code skill (.md) or write your own</span>
+                <span className="ml-2 text-xs font-normal text-on-surface-variant">Paste a Claude Code skill (.md) or write your own</span>
               </label>
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={"# My Skill\n\nInstructions for the AI agent...\n\n## Guidelines\n- Do this\n- Don't do that\n\n## Examples\n..."}
                 rows={16}
-                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-y font-mono"
+                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white resize-y font-mono"
               />
             </div>
           ) : (
@@ -301,7 +301,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
             >
               Cancel
             </button>
@@ -367,14 +367,14 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Edit Skill</h2>
+        <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
+          <h2 className="text-lg font-semibold text-white">Edit Skill</h2>
           <div className="flex items-center gap-3">
             <ModeToggle mode={mode} onChange={setMode} />
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+            <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -382,28 +382,28 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+              <label className="block text-sm font-medium text-white/80 mb-1">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Skill name"
-                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
+              <label className="block text-sm font-medium text-white/80 mb-1">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
               >
                 {CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
@@ -413,28 +413,28 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+            <label className="block text-sm font-medium text-white/80 mb-1">Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Skill description"
-              className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+              className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
             />
           </div>
 
           {mode === 'markdown' ? (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-white/80 mb-1">
                 Markdown Content
-                <span className="ml-2 text-xs font-normal text-gray-400">Paste a Claude Code skill (.md) or write your own</span>
+                <span className="ml-2 text-xs font-normal text-on-surface-variant">Paste a Claude Code skill (.md) or write your own</span>
               </label>
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={"# My Skill\n\nInstructions for the AI agent...\n\n## Guidelines\n- Do this\n- Don't do that"}
                 rows={16}
-                className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100 resize-y font-mono"
+                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white resize-y font-mono"
               />
             </div>
           ) : (
@@ -470,7 +470,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
             >
               Cancel
             </button>
@@ -511,31 +511,31 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md mx-4"
+        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-md mx-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Delete Skill</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer">
+        <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
+          <h2 className="text-lg font-semibold text-white">Delete Skill</h2>
+          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <div className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
 
-          <p className="text-sm text-gray-700 dark:text-gray-300">
+          <p className="text-sm text-white/80">
             Are you sure you want to delete <strong>{skill.name}</strong>? This action cannot be undone.
           </p>
 
           <div className="flex justify-end gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
             >
               Cancel
             </button>
@@ -566,19 +566,19 @@ function SkillCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
+    <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
       >
         <div className="flex items-center gap-3">
-          <div className="text-gray-500">
+          <div className="text-on-surface-variant">
             {expanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
           </div>
-          <BookOpen className="w-5 h-5 text-primary-500" />
+          <BookOpen className="w-5 h-5 text-primary" />
           <div>
-            <h3 className="font-medium text-gray-900 dark:text-gray-100">{skill.name}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">{skill.description}</p>
+            <h3 className="font-medium text-white">{skill.name}</h3>
+            <p className="text-xs text-on-surface-variant mt-0.5">{skill.description}</p>
           </div>
         </div>
 
@@ -587,12 +587,12 @@ function SkillCard({
             {skill.category}
           </span>
           {skill.content?.trim() && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">
+            <span className="px-2 py-0.5 text-xs rounded-full bg-violet-900/20 text-violet-300">
               md
             </span>
           )}
           {skill.isSystem && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+            <span className="px-2 py-0.5 text-xs rounded-full bg-[#262626] text-on-surface-variant">
               system
             </span>
           )}
@@ -601,7 +601,7 @@ function SkillCard({
               e.stopPropagation();
               onEdit(skill);
             }}
-            className="p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+            className="p-1 text-on-surface-variant hover:text-primary cursor-pointer"
             title="Edit skill"
           >
             <Pencil className="w-4 h-4" />
@@ -613,7 +613,7 @@ function SkillCard({
                   e.stopPropagation();
                   onDelete(skill);
                 }}
-                className="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+                className="p-1 text-on-surface-variant hover:text-[#ff716c] cursor-pointer"
                 title="Delete skill"
               >
                 <Trash2 className="w-4 h-4" />
@@ -624,14 +624,14 @@ function SkillCard({
       </button>
 
       {expanded && (
-        <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-4">
+        <div className="border-t border-outline-variant/10 p-4 space-y-4">
           {skill.content?.trim() ? (
             <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-primary-500" />
+              <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-primary" />
                 Markdown Content
               </h4>
-              <pre className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
+              <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
                 {skill.content}
               </pre>
             </div>
@@ -639,13 +639,13 @@ function SkillCard({
             <>
               {skill.principles.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
                     <Lightbulb className="w-4 h-4 text-yellow-500" />
                     Principles
                   </h4>
                   <ul className="space-y-1">
                     {skill.principles.map((p, i) => (
-                      <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-yellow-400">
+                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-yellow-400">
                         {p}
                       </li>
                     ))}
@@ -655,13 +655,13 @@ function SkillCard({
 
               {skill.bestPractices.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
                     <ThumbsUp className="w-4 h-4 text-green-500" />
                     Best Practices
                   </h4>
                   <ul className="space-y-1">
                     {skill.bestPractices.map((p, i) => (
-                      <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-green-400">
+                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-green-400">
                         {p}
                       </li>
                     ))}
@@ -671,13 +671,13 @@ function SkillCard({
 
               {skill.antiPatterns.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
                     <AlertTriangle className="w-4 h-4 text-red-500" />
                     Anti-Patterns
                   </h4>
                   <ul className="space-y-1">
                     {skill.antiPatterns.map((p, i) => (
-                      <li key={i} className="text-sm text-gray-600 dark:text-gray-400 pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-red-400">
+                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-red-400">
                         {p}
                       </li>
                     ))}
@@ -687,13 +687,13 @@ function SkillCard({
 
               {skill.frameworks.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
                     <Layers className="w-4 h-4 text-blue-500" />
                     Frameworks
                   </h4>
                   <div className="flex flex-wrap gap-1.5">
                     {skill.frameworks.map((f, i) => (
-                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-900/20 text-blue-300">
                         {f}
                       </span>
                     ))}
@@ -747,12 +747,12 @@ export default function SkillsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-          <BookOpen className="w-5 h-5 text-primary-700 dark:text-primary-400" />
+        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+          <BookOpen className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Skills</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
+          <h1 className="text-2xl font-bold text-white">Skills</h1>
+          <p className="text-sm text-on-surface-variant">
             {skills.length} domain knowledge skills across {categories.length} categories
           </p>
         </div>
@@ -765,20 +765,20 @@ export default function SkillsPage() {
         </button>
       </div>
 
-      <p className="text-sm text-gray-600 dark:text-gray-400">
+      <p className="text-sm text-on-surface-variant">
         Skills are domain expertise sets — principles, best practices, and anti-patterns — that get injected into expert agent prompts for grounded, specialist-level responses.
       </p>
 
       {/* Search + Category filter */}
       <div className="flex gap-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search skills, principles, frameworks..."
-            className="w-full pl-10 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 dark:text-gray-100"
+            className="w-full pl-10 pr-4 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
           />
         </div>
         <div className="flex gap-1.5 flex-wrap">
@@ -788,7 +788,7 @@ export default function SkillsPage() {
               'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
               !categoryFilter
                 ? 'bg-primary-800 text-white'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
             )}
           >
             All
@@ -801,7 +801,7 @@ export default function SkillsPage() {
                 'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
                 categoryFilter === cat
                   ? 'bg-primary-800 text-white'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
               )}
             >
               {cat}
@@ -812,14 +812,14 @@ export default function SkillsPage() {
 
       {/* Skills list */}
       {isLoading ? (
-        <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center text-gray-500">
+        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8 text-center">
-          <BookOpen className="w-8 h-8 text-gray-500 mx-auto mb-2" />
-          <p className="text-gray-500">No skills found</p>
+        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+          <BookOpen className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
+          <p className="text-on-surface-variant">No skills found</p>
         </div>
       ) : (
         <div className="space-y-3">

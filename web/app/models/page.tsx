@@ -104,7 +104,7 @@ export default function ModelsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 animate-spin text-gray-500" />
+        <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -113,25 +113,25 @@ export default function ModelsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-            <Cpu className="w-5 h-5 text-primary-700 dark:text-primary-400" />
+          <div className="w-10 h-10 rounded-[1rem] bg-primary/10 flex items-center justify-center">
+            <Cpu className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Models</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Configure LLM models, providers, and CLI tools</p>
+            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Models</h1>
+            <p className="text-sm text-on-surface-variant">Configure LLM models, providers, and CLI tools</p>
           </div>
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => { fetchModels(); fetchCLIStatus(); }}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+            className="px-3 py-2 border border-outline-variant/10 text-on-surface-variant rounded-full hover:bg-surface-container-high cursor-pointer"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
           <button
             onClick={() => setIsModalOpen(true)}
-            className="px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 flex items-center gap-2"
+            className="px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
           >
             <Plus className="w-4 h-4" />
             Add Model
@@ -140,7 +140,7 @@ export default function ModelsPage() {
       </div>
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+        <div className="bg-error/10 border border-error/20 rounded-[1rem] px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>
@@ -150,8 +150,8 @@ export default function ModelsPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {models.length === 0 ? (
-          <div className="col-span-full text-center py-8 text-gray-500">
-            <Cpu className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+          <div className="col-span-full text-center py-8 text-on-surface-variant">
+            <Cpu className="w-12 h-12 mx-auto mb-3 text-outline-variant" />
             <p>No models configured</p>
             <p className="text-sm mt-1">Click &quot;Add Model&quot; to configure your first model</p>
           </div>

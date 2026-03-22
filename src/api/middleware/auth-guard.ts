@@ -15,6 +15,8 @@ function isPublicPath(path: string): boolean {
   if (path.startsWith('/api/health')) return true;
   // Webhook endpoints use HMAC signature verification instead of bearer auth
   if (path.startsWith('/api/webhooks/')) return true;
+  // Incoming webhooks use per-hook webhookSecret for authentication
+  if (path.startsWith('/api/hooks/incoming/')) return true;
   // WhatsApp webhook — Meta calls directly with signature verification
   if (path.startsWith('/api/channels/whatsapp/webhook')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));

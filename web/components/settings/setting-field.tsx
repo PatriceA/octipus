@@ -85,26 +85,26 @@ export function SettingField({
     if (e.key === 'Enter') onSave();
   };
 
-  const inputClasses = 'w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
+  const inputClasses = 'w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary';
 
   return (
-    <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
+    <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-[#20201f] transition-colors">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{shortKey}</label>
+          <label className="text-xs font-bold text-on-surface-variant uppercase">{shortKey}</label>
           {setting.isSecret && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-900/30 text-amber-300">
               secret
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-500 mb-2">{setting.description}</p>
+        <p className="text-xs text-on-surface-variant mb-2">{setting.description}</p>
 
         {setting.valueType === 'boolean' ? (
           <button
             onClick={() => { onChange(!(value as boolean)); setTimeout(onSave, 0); }}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              value ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'
+              value ? 'bg-primary' : 'bg-[#484847]'
             }`}
           >
             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -124,7 +124,7 @@ export function SettingField({
               />
               <button
                 onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-white"
               >
                 {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
@@ -163,7 +163,7 @@ export function SettingField({
           <button
             onClick={onSave}
             disabled={isSaving}
-            className="p-1.5 text-gray-400 hover:text-primary-600 disabled:opacity-50"
+            className="p-1.5 text-on-surface-variant hover:text-primary disabled:opacity-50"
             title="Save"
           >
             {isSaving ? (
@@ -178,7 +178,7 @@ export function SettingField({
         <button
           onClick={onReset}
           disabled={isSaving}
-          className="p-1.5 text-gray-400 hover:text-amber-600 disabled:opacity-50"
+          className="p-1.5 text-on-surface-variant hover:text-amber-400 disabled:opacity-50"
           title="Reset to default"
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -240,10 +240,10 @@ export function SecretsRedirectBanner() {
   return (
     <Link
       href="/secrets"
-      className="flex items-center gap-2 p-3 text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg hover:bg-amber-100/80 dark:hover:bg-amber-900/30 transition-colors"
+      className="flex items-center gap-2 p-3 text-sm bg-amber-900/20 border border-amber-800/30 rounded-lg hover:bg-amber-900/30 transition-colors"
     >
-      <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-      <span className="text-amber-800 dark:text-amber-300">
+      <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
+      <span className="text-amber-300">
         API keys and secrets are managed in <span className="font-medium underline">Secrets & Credentials</span>
       </span>
     </Link>

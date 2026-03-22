@@ -250,12 +250,12 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
     });
   };
 
-  const inputCls = 'px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200';
+  const inputCls = 'bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary';
   const tabCls = (active: boolean) => cn(
     'px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer',
     active
-      ? 'bg-primary-100 text-primary-800 dark:bg-primary-900/40 dark:text-primary-300'
-      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/50',
+      ? 'bg-primary/10 text-primary'
+      : 'text-on-surface-variant hover:text-white hover:bg-[#20201f]',
   );
 
   const description = describeCron(value);
@@ -263,7 +263,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
   return (
     <div className={cn('space-y-3', className)}>
       {/* Mode tabs */}
-      <div className="flex items-center gap-1 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+      <div className="flex items-center gap-1 p-1 bg-[#131313] rounded-lg">
         <button type="button" className={tabCls(mode === 'preset')} onClick={() => setMode('preset')}>
           <Clock className="w-3.5 h-3.5 inline mr-1" />Presets
         </button>
@@ -292,12 +292,12 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
               className={cn(
                 'text-left px-3 py-2 rounded-lg border text-sm transition-colors cursor-pointer',
                 value === preset.cron
-                  ? 'border-primary-400 bg-primary-50 dark:bg-primary-950/30 dark:border-primary-600'
-                  : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800',
+                  ? 'border-primary bg-primary/10'
+                  : 'border-outline-variant/10 hover:border-on-surface-variant/20 hover:bg-[#20201f]',
               )}
             >
-              <div className="font-medium text-gray-900 dark:text-gray-100">{preset.label}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{preset.description}</div>
+              <div className="font-medium text-white">{preset.label}</div>
+              <div className="text-xs text-on-surface-variant mt-0.5">{preset.description}</div>
             </button>
           ))}
         </div>
@@ -306,7 +306,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
       {/* Interval mode */}
       {mode === 'interval' && (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-600 dark:text-gray-400">Every</span>
+          <span className="text-sm text-on-surface-variant">Every</span>
           <input
             type="number"
             min={1}
@@ -329,7 +329,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
       {/* Daily mode */}
       {mode === 'daily' && (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-600 dark:text-gray-400">Every day at</span>
+          <span className="text-sm text-on-surface-variant">Every day at</span>
           <input
             type="number"
             min={0}
@@ -338,7 +338,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
             onChange={e => handleHourChange(Math.min(23, Math.max(0, parseInt(e.target.value) || 0)))}
             className={cn(inputCls, 'w-16 text-center')}
           />
-          <span className="text-gray-400">:</span>
+          <span className="text-on-surface-variant">:</span>
           <input
             type="number"
             min={0}
@@ -354,7 +354,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
       {mode === 'weekly' && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600 dark:text-gray-400">At</span>
+            <span className="text-sm text-on-surface-variant">At</span>
             <input
               type="number"
               min={0}
@@ -363,7 +363,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
               onChange={e => handleHourChange(Math.min(23, Math.max(0, parseInt(e.target.value) || 0)))}
               className={cn(inputCls, 'w-16 text-center')}
             />
-            <span className="text-gray-400">:</span>
+            <span className="text-on-surface-variant">:</span>
             <input
               type="number"
               min={0}
@@ -372,7 +372,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
               onChange={e => handleMinuteChange(Math.min(59, Math.max(0, parseInt(e.target.value) || 0)))}
               className={cn(inputCls, 'w-16 text-center')}
             />
-            <span className="text-sm text-gray-600 dark:text-gray-400">on</span>
+            <span className="text-sm text-on-surface-variant">on</span>
           </div>
           <div className="flex gap-1.5">
             {DAYS_OF_WEEK.map((day) => (
@@ -383,8 +383,8 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
                 className={cn(
                   'w-10 h-10 rounded-lg text-xs font-medium transition-colors cursor-pointer',
                   days.includes(day.value)
-                    ? 'bg-primary-500 text-white shadow-sm'
-                    : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700',
+                    ? 'bg-primary text-[#0e0e0e] shadow-sm'
+                    : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]',
                 )}
                 title={day.label}
               >
@@ -405,7 +405,7 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
             className={cn(inputCls, 'w-full font-mono')}
             placeholder="* * * * *"
           />
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-xs text-on-surface-variant mt-1">
             Format: minute hour day-of-month month day-of-week
           </p>
         </div>
@@ -413,11 +413,11 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
 
       {/* Preview */}
       {value && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-primary-50/50 dark:bg-primary-950/20 border border-primary-200/50 dark:border-primary-800/40 rounded-lg">
-          <Clock className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400 shrink-0" />
-          <span className="text-sm text-primary-800 dark:text-primary-300 font-medium">{description}</span>
+        <div className="flex items-center gap-2 px-3 py-2 bg-primary/10 border border-primary/20 rounded-lg">
+          <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
+          <span className="text-sm text-primary font-medium">{description}</span>
           {mode !== 'cron' && (
-            <span className="text-xs text-primary-600/60 dark:text-primary-400/60 font-mono ml-auto">{value}</span>
+            <span className="text-xs text-primary/60 font-mono ml-auto">{value}</span>
           )}
         </div>
       )}

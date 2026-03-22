@@ -130,16 +130,15 @@ export function SessionList({
   };
 
   return (
-    <div className="flex h-full flex-col bg-white dark:bg-gray-900">
+    <div className="flex h-full flex-col bg-surface-container-low">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-gray-200 px-3 py-3 dark:border-gray-700/60">
-        <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Sessions</h2>
+      <div className="flex items-center justify-between border-b border-outline-variant/10 px-3 py-3">
+        <h2 className="text-sm font-extrabold tracking-tighter text-white">Sessions</h2>
         <button
           onClick={onCreate}
           className={cn(
             'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium',
-            'bg-primary/10 text-primary hover:bg-primary/20',
-            'dark:bg-primary/20 dark:hover:bg-primary/30',
+            'bg-primary/20 text-primary hover:bg-primary/30',
             'transition-colors'
           )}
         >
@@ -151,7 +150,7 @@ export function SessionList({
       {/* Search */}
       <div className="px-3 py-2">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-on-surface-variant" />
           <input
             type="text"
             value={search}
@@ -159,10 +158,10 @@ export function SessionList({
             placeholder="Search sessions..."
             className={cn(
               'w-full rounded-md py-1.5 pl-8 pr-3 text-xs',
-              'bg-gray-50 dark:bg-gray-800',
-              'text-gray-700 dark:text-gray-300',
-              'placeholder:text-gray-400 dark:placeholder:text-gray-500',
-              'ring-1 ring-gray-200/60 dark:ring-gray-700/60',
+              'bg-surface-container-highest',
+              'text-white',
+              'placeholder:text-on-surface-variant',
+              'ring-1 ring-outline-variant/10',
               'focus:outline-none focus:ring-2 focus:ring-primary/40',
               'transition-shadow'
             )}
@@ -173,14 +172,14 @@ export function SessionList({
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {Object.keys(grouped).length === 0 && (
-          <div className="px-3 py-8 text-center text-xs text-gray-400 dark:text-gray-500">
+          <div className="px-3 py-8 text-center text-xs text-on-surface-variant">
             No sessions found
           </div>
         )}
 
         {GROUP_ORDER.filter((g) => grouped[g]).map((group) => (
           <div key={group} className="mt-2 first:mt-0">
-            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant">
               {group}
             </div>
 
@@ -195,8 +194,8 @@ export function SessionList({
                     className={cn(
                       'group relative rounded-lg px-3 py-2 cursor-pointer transition-colors',
                       isActive
-                        ? 'border-l-2 border-l-primary bg-primary/5 dark:bg-primary/10'
-                        : 'border-l-2 border-l-transparent hover:bg-gray-50 dark:hover:bg-gray-800/60'
+                        ? 'border-l-2 border-l-primary bg-surface-container'
+                        : 'border-l-2 border-l-transparent hover:bg-surface-container-high/60'
                     )}
                     onClick={() => {
                       if (!isRenaming) onSelect(session.id);
@@ -222,8 +221,8 @@ export function SessionList({
                             onClick={(e) => e.stopPropagation()}
                             className={cn(
                               'w-full rounded px-1.5 py-0.5 text-sm',
-                              'bg-white dark:bg-gray-700',
-                              'text-gray-800 dark:text-gray-200',
+                              'bg-surface-container-highest',
+                              'text-white',
                               'ring-1 ring-primary/50',
                               'focus:outline-none focus:ring-2 focus:ring-primary/60'
                             )}
@@ -233,8 +232,8 @@ export function SessionList({
                             className={cn(
                               'truncate text-sm',
                               isActive
-                                ? 'font-medium text-gray-900 dark:text-gray-100'
-                                : 'text-gray-700 dark:text-gray-300'
+                                ? 'font-medium text-white'
+                                : 'text-on-surface-variant'
                             )}
                           >
                             {session.title}
@@ -242,11 +241,11 @@ export function SessionList({
                         )}
 
                         <div className="mt-0.5 flex items-center gap-2">
-                          <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-500">
+                          <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant">
                             <MessageSquare className="h-2.5 w-2.5" />
                             {session.messageCount}
                           </span>
-                          <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                          <span className="text-[10px] text-on-surface-variant">
                             {timeAgo(session.updatedAt)}
                           </span>
                         </div>
@@ -261,9 +260,8 @@ export function SessionList({
                             setConfirmDeleteId(null);
                           }}
                           className={cn(
-                            'mt-0.5 rounded p-0.5 text-gray-400 transition-opacity',
-                            'hover:bg-gray-200/60 hover:text-gray-600',
-                            'dark:hover:bg-gray-700/60 dark:hover:text-gray-300',
+                            'mt-0.5 rounded p-0.5 text-on-surface-variant transition-opacity',
+                            'hover:bg-surface-container-highest hover:text-white',
                             menuOpenId === session.id
                               ? 'opacity-100'
                               : 'opacity-0 group-hover:opacity-100'
@@ -280,8 +278,8 @@ export function SessionList({
                         ref={menuRef}
                         className={cn(
                           'absolute right-2 top-9 z-10 min-w-[120px] rounded-md py-1 shadow-lg',
-                          'bg-white dark:bg-gray-800',
-                          'ring-1 ring-gray-200/60 dark:ring-gray-700/60'
+                          'bg-surface-container-highest',
+                          'ring-1 ring-outline-variant/10'
                         )}
                       >
                         <button
@@ -291,8 +289,8 @@ export function SessionList({
                           }}
                           className={cn(
                             'flex w-full items-center gap-2 px-3 py-1.5 text-xs',
-                            'text-gray-700 dark:text-gray-300',
-                            'hover:bg-gray-50 dark:hover:bg-gray-700/60'
+                            'text-on-surface-variant',
+                            'hover:bg-surface-container-high'
                           )}
                         >
                           <Pencil className="h-3 w-3" />
@@ -306,9 +304,9 @@ export function SessionList({
                           className={cn(
                             'flex w-full items-center gap-2 px-3 py-1.5 text-xs',
                             confirmDeleteId === session.id
-                              ? 'text-red-600 dark:text-red-400 font-medium'
-                              : 'text-gray-700 dark:text-gray-300',
-                            'hover:bg-gray-50 dark:hover:bg-gray-700/60'
+                              ? 'text-error font-medium'
+                              : 'text-on-surface-variant',
+                            'hover:bg-surface-container-high'
                           )}
                         >
                           <Trash2 className="h-3 w-3" />

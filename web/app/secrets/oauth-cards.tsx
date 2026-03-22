@@ -35,10 +35,10 @@ const SETUP_GUIDES: Record<string, { url: string; steps: string[] }> = {
 export function OAuthCards({ statuses, onStatusChange }: OAuthCardsProps) {
   return (
     <div>
-      <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-base font-extrabold tracking-tighter text-white mb-1">
         OAuth Credentials
       </h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-on-surface-variant mb-4">
         Configure OAuth client credentials for third-party integrations.
       </p>
       <div className="space-y-3">
@@ -104,22 +104,22 @@ function OAuthGroupCard({
   };
 
   return (
-    <div className="p-4 bg-white dark:bg-gray-800/90 rounded-xl ring-1 ring-gray-200/60 dark:ring-gray-700/60">
+    <div className="p-4 bg-[#1a1a1a] rounded-[1rem]">
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{group.title}</span>
+          <span className="font-medium text-sm text-white">{group.title}</span>
           <span
-            className={`w-2 h-2 rounded-full ${allSaved ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+            className={`w-2 h-2 rounded-full ${allSaved ? 'bg-green-500' : 'bg-[#484847]'}`}
             title={allSaved ? 'All configured' : 'Setup required'}
           />
         </div>
       </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{group.description}</p>
+      <p className="text-xs text-on-surface-variant mb-3">{group.description}</p>
 
       <div className="space-y-2">
         {group.keys.map((k) => (
           <div key={k.vaultName} className="flex items-center gap-2">
-            <label className="w-24 text-xs font-medium text-gray-600 dark:text-gray-400 shrink-0">
+            <label className="w-24 text-xs font-bold text-on-surface-variant uppercase shrink-0">
               {k.label}
             </label>
             <input
@@ -127,7 +127,7 @@ function OAuthGroupCard({
               value={values[k.vaultName] || ''}
               onChange={(e) => setValues((prev) => ({ ...prev, [k.vaultName]: e.target.value }))}
               placeholder={statuses[k.vaultName] ? 'Saved (enter new to replace)' : k.placeholder || 'Enter value...'}
-              className="flex-1 px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-200 placeholder-gray-500 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400"
+              className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
             />
           </div>
         ))}
@@ -138,7 +138,7 @@ function OAuthGroupCard({
           <button
             onClick={handleSaveAll}
             disabled={saving || group.keys.every((k) => !values[k.vaultName])}
-            className="px-3 py-1.5 text-xs font-medium bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 text-xs font-medium bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
           >
             {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
             Save
@@ -146,7 +146,7 @@ function OAuthGroupCard({
 
           {feedback && (
             <span className={`flex items-center gap-1 text-xs ${
-              feedback.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+              feedback.type === 'success' ? 'text-green-400' : 'text-error'
             }`}>
               {feedback.type === 'success'
                 ? <CheckCircle className="w-3 h-3" />
@@ -160,7 +160,7 @@ function OAuthGroupCard({
         {guide && (
           <button
             onClick={() => setShowGuide(!showGuide)}
-            className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+            className="flex items-center gap-1 text-xs text-on-surface-variant hover:text-primary cursor-pointer"
           >
             Setup guide
             <ChevronDown className={`w-3 h-3 transition-transform ${showGuide ? 'rotate-180' : ''}`} />
@@ -169,7 +169,7 @@ function OAuthGroupCard({
       </div>
 
       {showGuide && guide && (
-        <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg text-xs text-gray-600 dark:text-gray-400 space-y-1.5">
+        <div className="mt-3 p-3 bg-[#131313] rounded-lg text-xs text-on-surface-variant space-y-1.5">
           <ol className="list-decimal list-inside space-y-1">
             {guide.steps.map((step, i) => (
               <li key={i}>{step}</li>
@@ -179,7 +179,7 @@ function OAuthGroupCard({
             href={guide.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-primary-700 dark:text-primary-400 hover:underline mt-1"
+            className="inline-flex items-center gap-1 text-primary hover:underline mt-1"
           >
             Open developer console <ExternalLink className="w-3 h-3" />
           </a>

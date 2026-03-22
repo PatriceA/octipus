@@ -57,7 +57,9 @@ export async function directResponse(
 
     const session = await sessionRepository.findById(sessionId);
     const summary = (session?.context as SessionContext)?.compactedSummary;
-    let basePrompt = SECURITY_PREAMBLE + 'You are a friendly development assistant. Keep casual responses brief and helpful.';
+    const now = new Date();
+    const dateContext = `\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
+    let basePrompt = SECURITY_PREAMBLE + 'You are a friendly development assistant. Keep casual responses brief and helpful.' + dateContext;
     if (guardFlags.length > 0) {
       basePrompt += buildSecurityReminder(guardFlags);
     }

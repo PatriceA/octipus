@@ -6,7 +6,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = {
   orchestrator: {
     role: 'orchestrator',
-    toolIds: [],
+    toolIds: ['profiles'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a task orchestrator that delegates work to specialist workers.
 
@@ -30,7 +30,7 @@ CRITICAL RULES:
   },
   research: {
     role: 'research',
-    toolIds: ['browser', 'browser-ext', 'websearch', 'knowledge', 'filesystem', 'mcp'],
+    toolIds: ['browser', 'browser-ext', 'websearch', 'knowledge', 'filesystem', 'profiles', 'mcp'],
     defaultTopic: 'analysis',  // shares with review
     systemPromptTemplate: `You are a research specialist. Investigate topics thoroughly using web browsing and search tools. Produce detailed findings with sources, key insights, and actionable recommendations. Always cite your sources.
 
@@ -75,13 +75,13 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
   },
   communication: {
     role: 'communication',
-    toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling'],
+    toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'email-processor'],
     defaultTopic: 'communication',
     systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, and documents via Google Workspace and Microsoft 365. Always confirm actions that send messages or modify data before executing them.`,
   },
   general: {
     role: 'general',
-    toolIds: ['browser-ext', 'messaging', 'knowledge', 'scheduling', 'mcp'],
+    toolIds: ['browser-ext', 'messaging', 'knowledge', 'scheduling', 'profiles', 'email-processor', 'mcp'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be concise and direct.
 

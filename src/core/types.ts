@@ -197,6 +197,9 @@ export interface ActionConfig {
   toolId?: string;
   toolAction?: string;
   toolParams?: Record<string, unknown>;
+  // For incoming webhook response delivery
+  channelType?: string;
+  channelId?: string;
 }
 
 export interface HookCondition {

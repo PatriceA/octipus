@@ -39,12 +39,12 @@ interface ResultsTableProps {
 function ExpandedRow({ result }: { result: EvalResult }) {
   return (
     <tr>
-      <td colSpan={6} className="px-4 py-3 bg-gray-50/50 dark:bg-gray-800/30">
+      <td colSpan={6} className="px-4 py-3 bg-[#131313]">
         <div className="space-y-3">
           {/* Input */}
           <div>
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Input</p>
-            <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap bg-white dark:bg-gray-900 rounded-lg p-3 border border-gray-200 dark:border-gray-700 max-h-40 overflow-y-auto">
+            <p className="text-xs font-medium text-on-surface-variant mb-1">Input</p>
+            <pre className="text-sm text-white/80 whitespace-pre-wrap bg-[#0e0e0e] rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
               {result.input}
             </pre>
           </div>
@@ -52,8 +52,8 @@ function ExpandedRow({ result }: { result: EvalResult }) {
           {/* Output */}
           {result.output && (
             <div>
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Output</p>
-              <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap bg-white dark:bg-gray-900 rounded-lg p-3 border border-gray-200 dark:border-gray-700 max-h-40 overflow-y-auto">
+              <p className="text-xs font-medium text-on-surface-variant mb-1">Output</p>
+              <pre className="text-sm text-white/80 whitespace-pre-wrap bg-[#0e0e0e] rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
                 {result.output}
               </pre>
             </div>
@@ -61,7 +61,7 @@ function ExpandedRow({ result }: { result: EvalResult }) {
 
           {/* Token count */}
           {result.tokenCount && (
-            <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400">
+            <div className="flex gap-4 text-xs text-on-surface-variant">
               <span>Input tokens: <span className="font-mono">{result.tokenCount.input}</span></span>
               <span>Output tokens: <span className="font-mono">{result.tokenCount.output}</span></span>
             </div>
@@ -69,7 +69,7 @@ function ExpandedRow({ result }: { result: EvalResult }) {
 
           {/* Assertions */}
           <div>
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Assertions</p>
+            <p className="text-xs font-medium text-on-surface-variant mb-2">Assertions</p>
             <div className="space-y-1.5">
               {result.assertions.map((a, i) => (
                 <div
@@ -77,8 +77,8 @@ function ExpandedRow({ result }: { result: EvalResult }) {
                   className={cn(
                     'flex items-start gap-3 px-3 py-2 rounded-lg text-sm',
                     a.passed
-                      ? 'bg-green-50/50 dark:bg-green-950/20'
-                      : 'bg-red-50/50 dark:bg-red-950/20'
+                      ? 'bg-green-950/20'
+                      : 'bg-red-950/20'
                   )}
                 >
                   {a.passed ? (
@@ -89,14 +89,14 @@ function ExpandedRow({ result }: { result: EvalResult }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <AssertionBadge type={a.type} passed={a.passed} compact />
-                      <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                      <span className="text-xs text-on-surface-variant font-mono">
                         score: {(a.score * 100).toFixed(0)}%
                       </span>
                     </div>
                     {a.message && (
-                      <p className="text-xs text-gray-600 dark:text-gray-400">{a.message}</p>
+                      <p className="text-xs text-on-surface-variant">{a.message}</p>
                     )}
-                    <div className="flex gap-4 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    <div className="flex gap-4 mt-1 text-xs text-on-surface-variant">
                       <span>Expected: <code className="font-mono">{JSON.stringify(a.expected)}</code></span>
                       <span>Actual: <code className="font-mono">{JSON.stringify(a.actual)}</code></span>
                     </div>
@@ -133,23 +133,23 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
   }
 
   return (
-    <div className="bg-white dark:bg-[#131C2E] rounded-xl shadow-sm ring-1 ring-primary-100 dark:ring-[#1E2D45] overflow-hidden">
+    <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-gray-200 dark:border-gray-700">
+            <tr className="border-b border-outline-variant/10">
               <th className="w-8 px-3 py-3" />
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Test ID</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Input</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Status</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Score</th>
-              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Latency</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant">Test ID</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant">Input</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant">Status</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant">Score</th>
+              <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant">Latency</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
+                <td colSpan={6} className="px-4 py-8 text-center text-on-surface-variant">
                   No results match the current filter.
                 </td>
               </tr>
@@ -161,27 +161,27 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
                     <tr
                       key={result.testId}
                       onClick={() => toggleExpand(result.testId)}
-                      className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer"
+                      className="border-b border-outline-variant/10 hover:bg-[#20201f] cursor-pointer"
                     >
                       <td className="px-3 py-3">
                         {isExpanded ? (
-                          <ChevronDown className="w-4 h-4 text-gray-400" />
+                          <ChevronDown className="w-4 h-4 text-on-surface-variant" />
                         ) : (
-                          <ChevronRight className="w-4 h-4 text-gray-400" />
+                          <ChevronRight className="w-4 h-4 text-on-surface-variant" />
                         )}
                       </td>
-                      <td className="px-4 py-3 text-sm font-mono text-gray-900 dark:text-gray-100">
+                      <td className="px-4 py-3 text-sm font-mono text-white">
                         {result.testId}
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-xs truncate">
+                      <td className="px-4 py-3 text-sm text-on-surface-variant max-w-xs truncate">
                         {truncate(result.input, 80)}
                       </td>
                       <td className="px-4 py-3">
                         <span className={cn(
                           'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
                           result.passed
-                            ? 'bg-green-100 text-green-800 dark:bg-green-950/30 dark:text-green-400'
-                            : 'bg-red-100 text-red-800 dark:bg-red-950/30 dark:text-red-400'
+                            ? 'bg-green-950/30 text-green-400'
+                            : 'bg-red-950/30 text-red-400'
                         )}>
                           {result.passed ? (
                             <><CheckCircle className="w-3 h-3" /> Pass</>
@@ -193,7 +193,7 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
                       <td className="px-4 py-3">
                         <ScoreBar score={result.score} size="sm" />
                       </td>
-                      <td className="px-4 py-3 text-sm font-mono text-gray-600 dark:text-gray-300">
+                      <td className="px-4 py-3 text-sm font-mono text-on-surface-variant">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           {result.latencyMs > 1000

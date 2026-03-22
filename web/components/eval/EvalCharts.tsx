@@ -73,8 +73,8 @@ export function PassRateDonut({ passed, failed }: PassRateDonutProps) {
           </ResponsiveContainer>
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{pct}%</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{passed}/{total}</p>
+              <p className="text-2xl font-bold text-white">{pct}%</p>
+              <p className="text-xs text-on-surface-variant">{passed}/{total}</p>
             </div>
           </div>
         </div>

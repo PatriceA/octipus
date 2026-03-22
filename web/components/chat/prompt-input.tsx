@@ -317,10 +317,10 @@ export default function PromptInput({
     <div
       ref={containerRef}
       className={cn(
-        'relative rounded-xl ring-1 bg-white dark:bg-gray-800 p-3 transition-colors',
+        'relative rounded-xl ring-1 bg-surface-container-highest p-3 transition-colors',
         browsingHistory
-          ? 'ring-blue-400 dark:ring-blue-500'
-          : 'ring-gray-200 dark:ring-gray-700',
+          ? 'ring-primary'
+          : 'ring-outline-variant/10',
         disabled && 'opacity-60 pointer-events-none'
       )}
       onDragEnter={handleDragEnter}
@@ -330,8 +330,8 @@ export default function PromptInput({
     >
       {/* Drop zone overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-blue-500 bg-blue-50/80 dark:bg-blue-900/40">
-          <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10">
+          <p className="text-sm font-medium text-primary">
             Drop files here
           </p>
         </div>
@@ -345,7 +345,7 @@ export default function PromptInput({
             return (
               <div
                 key={attachment.id}
-                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-100 px-2 py-1 text-xs dark:bg-gray-700"
+                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-surface-container-high px-2 py-1 text-xs"
               >
                 {attachment.type === 'image' && attachment.preview ? (
                   <img
@@ -354,15 +354,15 @@ export default function PromptInput({
                     className="h-10 w-10 rounded object-cover"
                   />
                 ) : (
-                  <Icon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+                  <Icon className="h-4 w-4 text-on-surface-variant" />
                 )}
-                <span className="max-w-[120px] truncate text-gray-700 dark:text-gray-300">
+                <span className="max-w-[120px] truncate text-on-surface-variant">
                   {truncateFilename(attachment.file.name)}
                 </span>
                 <button
                   type="button"
                   onClick={() => removeAttachment(attachment.id)}
-                  className="rounded p-0.5 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-600 dark:hover:text-gray-200"
+                  className="rounded p-0.5 text-on-surface-variant hover:bg-surface-container-highest hover:text-white"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -388,7 +388,7 @@ export default function PromptInput({
           onPaste={handlePaste}
           placeholder={placeholder}
           rows={1}
-          className="flex-1 resize-none bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
+          className="flex-1 resize-none bg-transparent text-sm text-white outline-none placeholder:text-on-surface-variant"
           style={{ overflowY: 'hidden' }}
           disabled={disabled}
         />
@@ -412,7 +412,7 @@ export default function PromptInput({
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+          className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-white"
           title="Attach files"
         >
           <Paperclip className="h-4 w-4" />
@@ -425,15 +425,15 @@ export default function PromptInput({
           className={cn(
             'relative rounded-lg p-2 transition-colors',
             isListening
-              ? 'text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30'
-              : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300'
+              ? 'text-error hover:bg-error/10'
+              : 'text-on-surface-variant hover:bg-surface-container-high hover:text-white'
           )}
           title={isListening ? 'Stop listening' : 'Voice input'}
         >
           {isListening ? (
             <>
               <MicOff className="h-4 w-4" />
-              <span className="absolute inset-0 animate-ping rounded-lg border border-red-400 opacity-30" />
+              <span className="absolute inset-0 animate-ping rounded-lg border border-error opacity-30" />
             </>
           ) : (
             <Mic className="h-4 w-4" />
@@ -448,8 +448,8 @@ export default function PromptInput({
           className={cn(
             'rounded-lg p-2 transition-colors',
             canSend
-              ? 'bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600'
-              : 'bg-gray-100 text-gray-300 dark:bg-gray-700 dark:text-gray-500'
+              ? 'bg-primary text-[#002a6d] hover:bg-primary-container'
+              : 'bg-surface-container-high text-on-surface-variant'
           )}
           title="Send message"
         >

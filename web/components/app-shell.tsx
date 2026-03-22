@@ -28,23 +28,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isLoading || !isAuthenticated) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div className="flex h-screen items-center justify-center bg-[#0e0e0e]">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-          <span className="text-sm text-gray-500 dark:text-gray-400">Loading...</span>
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <span className="text-sm text-on-surface-variant">Loading...</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen bg-[#0e0e0e] text-white overflow-hidden">
       <Sidebar />
-      <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="flex flex-col flex-1 min-w-0">
         <Header />
         <main className={cn(
           'flex-1 overflow-hidden',
-          pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-6'
+          pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
         )}>{children}</main>
       </div>
     </div>

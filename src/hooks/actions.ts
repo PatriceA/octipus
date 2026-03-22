@@ -50,7 +50,16 @@ async function executeNotify(
   context: TriggerContext,
   hook?: Hook,
 ): Promise<ActionResult> {
-  const message = interpolateTemplate(config.notifyMessage || 'Hook triggered', context);
+  // Use rendered message from incoming webhook template if no explicit notifyMessage
+  let messageTemplate = config.notifyMessage || 'Hook triggered';
+  if (!config.notifyMessage && context.webhook) {
+    const webhookBody = context.webhook.body as Record<string, unknown> | undefined;
+    const renderedMessage = webhookBody?._renderedMessage as string | undefined;
+    if (renderedMessage) {
+      messageTemplate = renderedMessage;
+    }
+  }
+  const message = interpolateTemplate(messageTemplate, context);
 
   // Resolve target channels
   const resolvedChannels: { type: string; id: string; label: string }[] = [];
@@ -89,6 +98,15 @@ async function executeNotify(
         resolvedChannels.push({ type: channelType, id: channelId, label: String(channelSpec) });
       }
     }
+  }
+
+  // Support simple channelType + channelId pair (e.g. from incoming webhook hooks)
+  if (config.channelType && config.channelId) {
+    resolvedChannels.push({
+      type: config.channelType,
+      id: config.channelId,
+      label: `${config.channelType}:${config.channelId}`,
+    });
   }
 
   if (resolvedChannels.length === 0) {
@@ -133,7 +151,14 @@ async function executeSpawnAgent(
 
   // Embed trigger context (webhook payload, tool result, etc.) into the prompt
   if (context.webhook) {
-    prompt += `\n\n--- Webhook Payload ---\n${JSON.stringify(context.webhook.body, null, 2)}`;
+    // If a rendered message template is available (from incoming webhook), use it
+    const webhookBody = context.webhook.body as Record<string, unknown> | undefined;
+    const renderedMessage = webhookBody?._renderedMessage as string | undefined;
+    if (renderedMessage) {
+      prompt += `\n\n${renderedMessage}`;
+    } else {
+      prompt += `\n\n--- Webhook Payload ---\n${JSON.stringify(context.webhook.body, null, 2)}`;
+    }
     if (context.webhook.headers) {
       const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';
       if (eventType) prompt += `\nEvent type: ${eventType}`;

@@ -1,4 +1,5 @@
 import { resolve } from 'path';
+import type { ProfileFact } from '@/db/schema/profiles';
 import { getAgentManager } from '@/core/agent-manager';
 import type { AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
@@ -184,11 +185,28 @@ export async function spawnWorker(
   const startTime = Date.now();
 
   let systemPrompt = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
+
+  // Inject current date/time context so agents know "today"
+  const now = new Date();
+  systemPrompt += `\n\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
   if (agentRole === 'coding') {
     const projectSummary = await loadProjectSummary();
     if (projectSummary) {
       systemPrompt += `\n\n--- Existing Project Summary ---\n${projectSummary}`;
     }
+  }
+
+  // Inject user profile context
+  if (context.userId) {
+    try {
+      const { ProfileRepository } = await import('@/db/repositories/profile-repository');
+      const profileRepo = new ProfileRepository();
+      const userProfile = await profileRepo.findUserProfile(context.userId);
+      if (userProfile && (userProfile.facts as ProfileFact[])?.length > 0) {
+        const facts = (userProfile.facts as ProfileFact[]).map(f => `- ${f.key}: ${f.value}`).join('\n');
+        systemPrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
+      }
+    } catch {}
   }
 
   // Inject workspace context

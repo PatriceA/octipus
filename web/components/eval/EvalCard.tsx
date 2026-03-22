@@ -46,20 +46,20 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
             <div className={cn(
               'w-8 h-8 rounded-lg flex items-center justify-center',
               allPassed
-                ? 'bg-green-100 dark:bg-green-950/30'
-                : 'bg-red-100 dark:bg-red-950/30'
+                ? 'bg-green-950/30'
+                : 'bg-red-950/30'
             )}>
               {allPassed ? (
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                <CheckCircle className="w-4 h-4 text-green-400" />
               ) : (
-                <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                <XCircle className="w-4 h-4 text-[#ff716c]" />
               )}
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              <p className="text-sm font-medium text-white">
                 {suites.length === 1 ? suites[0].suite : `${suites.length} suites`}
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400" suppressHydrationWarning>
+              <p className="text-xs text-on-surface-variant" suppressHydrationWarning>
                 {formatDate(timestamp)}
               </p>
             </div>
@@ -67,17 +67,17 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
           <ScoreBar score={getScore(summary)} size="sm" />
         </div>
 
-        <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+        <div className="flex items-center gap-4 text-xs text-on-surface-variant">
           <span className="flex items-center gap-1">
             <FlaskConical className="w-3 h-3" />
             {summary.totalTests} tests
           </span>
-          <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+          <span className="flex items-center gap-1 text-green-400">
             <CheckCircle className="w-3 h-3" />
             {summary.totalPassed}
           </span>
           {summary.totalFailed > 0 && (
-            <span className="flex items-center gap-1 text-red-600 dark:text-red-400">
+            <span className="flex items-center gap-1 text-[#ff716c]">
               <XCircle className="w-3 h-3" />
               {summary.totalFailed}
             </span>

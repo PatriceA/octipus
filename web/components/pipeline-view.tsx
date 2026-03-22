@@ -24,13 +24,13 @@ const STATUS_CONFIG: Record<string, {
   bgColor: string;
   ringColor: string;
 }> = {
-  pending: { icon: Clock, color: 'text-gray-500', bgColor: 'bg-gray-100 dark:bg-gray-700', ringColor: 'ring-gray-300' },
-  running: { icon: Loader2, color: 'text-blue-500', bgColor: 'bg-blue-100 dark:bg-blue-900/30', ringColor: 'ring-blue-400' },
-  awaiting_approval: { icon: Shield, color: 'text-orange-500', bgColor: 'bg-orange-100 dark:bg-orange-900/30', ringColor: 'ring-orange-400' },
-  approved: { icon: CheckCircle, color: 'text-green-500', bgColor: 'bg-green-100 dark:bg-green-900/30', ringColor: 'ring-green-400' },
-  completed: { icon: CheckCircle, color: 'text-green-600', bgColor: 'bg-green-100 dark:bg-green-900/30', ringColor: 'ring-green-500' },
-  failed: { icon: XCircle, color: 'text-red-500', bgColor: 'bg-red-100 dark:bg-red-900/30', ringColor: 'ring-red-400' },
-  skipped: { icon: SkipForward, color: 'text-gray-500', bgColor: 'bg-gray-50 dark:bg-gray-800', ringColor: 'ring-gray-300' },
+  pending: { icon: Clock, color: 'text-on-surface-variant', bgColor: 'bg-surface-container-high', ringColor: 'ring-outline-variant' },
+  running: { icon: Loader2, color: 'text-primary', bgColor: 'bg-primary/10', ringColor: 'ring-primary' },
+  awaiting_approval: { icon: Shield, color: 'text-orange-400', bgColor: 'bg-orange-500/10', ringColor: 'ring-orange-400' },
+  approved: { icon: CheckCircle, color: 'text-emerald-400', bgColor: 'bg-emerald-500/10', ringColor: 'ring-emerald-400' },
+  completed: { icon: CheckCircle, color: 'text-emerald-400', bgColor: 'bg-emerald-500/10', ringColor: 'ring-emerald-500' },
+  failed: { icon: XCircle, color: 'text-error', bgColor: 'bg-error/10', ringColor: 'ring-error' },
+  skipped: { icon: SkipForward, color: 'text-on-surface-variant', bgColor: 'bg-surface-container', ringColor: 'ring-outline-variant' },
 };
 
 export function PipelineView({ stages, currentStageIndex, onApprove, className }: PipelineViewProps) {
@@ -57,11 +57,11 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
               </div>
               <span className={cn(
                 'mt-1 text-xs font-medium whitespace-nowrap',
-                isActive ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'
+                isActive ? 'text-primary' : 'text-on-surface-variant'
               )}>
                 {stage.name}
               </span>
-              <span className="text-[10px] text-gray-500">{stage.role}</span>
+              <span className="text-[10px] text-on-surface-variant">{stage.role}</span>
               {stage.status === 'awaiting_approval' && onApprove && (
                 <button
                   onClick={() => onApprove(stage.id)}
@@ -77,8 +77,8 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
               <div className={cn(
                 'w-8 h-0.5 mx-1',
                 stages[i + 1]?.status !== 'pending'
-                  ? 'bg-green-400'
-                  : 'bg-gray-300 dark:bg-gray-600'
+                  ? 'bg-emerald-400'
+                  : 'bg-outline-variant'
               )} />
             )}
           </div>

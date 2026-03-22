@@ -35,18 +35,18 @@ export function ChatMessage({ message }: ChatMessageProps) {
       )}
     >
       {message.role !== 'user' && (
-        <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center flex-shrink-0">
-          <Bot className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-primary-container flex items-center justify-center flex-shrink-0">
+          <Bot className="w-5 h-5 text-[#002a6d]" />
         </div>
       )}
       <div
         className={cn(
-          'max-w-[70%] px-4 py-2 rounded-lg',
+          'max-w-[70%] px-4 py-2',
           message.role === 'user'
-            ? 'bg-primary-800 text-white'
+            ? 'bg-gradient-to-r from-primary to-primary-container text-[#002a6d] rounded-2xl rounded-br-md'
             : message.role === 'system'
-            ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 italic'
-            : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
+            ? 'bg-surface-container text-on-surface-variant italic rounded-2xl'
+            : 'bg-surface-container border border-outline-variant/10 text-white rounded-2xl rounded-tl-md'
         )}
       >
         <p className="whitespace-pre-wrap">{message.content}</p>
@@ -71,8 +71,8 @@ export function ChatMessage({ message }: ChatMessageProps) {
         </div>
       </div>
       {message.role === 'user' && (
-        <div className="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center flex-shrink-0">
-          <User className="w-5 h-5 text-white" />
+        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+          <User className="w-5 h-5 text-[#002a6d]" />
         </div>
       )}
     </div>

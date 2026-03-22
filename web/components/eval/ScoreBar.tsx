@@ -17,9 +17,9 @@ export function ScoreBar({ score, size = 'md', showLabel = true }: ScoreBarProps
     'bg-red-500';
 
   const trackColor =
-    pct >= 80 ? 'bg-green-100 dark:bg-green-950/30' :
-    pct >= 50 ? 'bg-yellow-100 dark:bg-yellow-950/30' :
-    'bg-red-100 dark:bg-red-950/30';
+    pct >= 80 ? 'bg-green-950/30' :
+    pct >= 50 ? 'bg-yellow-950/30' :
+    'bg-red-950/30';
 
   return (
     <div className="flex items-center gap-2">
@@ -37,9 +37,9 @@ export function ScoreBar({ score, size = 'md', showLabel = true }: ScoreBarProps
         <span className={cn(
           'font-mono font-medium',
           size === 'sm' ? 'text-xs' : 'text-sm',
-          pct >= 80 ? 'text-green-600 dark:text-green-400' :
-          pct >= 50 ? 'text-yellow-600 dark:text-yellow-400' :
-          'text-red-600 dark:text-red-400'
+          pct >= 80 ? 'text-green-400' :
+          pct >= 50 ? 'text-yellow-400' :
+          'text-[#ff716c]'
         )}>
           {pct}%
         </span>

@@ -32,54 +32,60 @@ export function RecentSessions() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recent Sessions</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle>Recent Sessions</CardTitle>
+          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+            {sessions.length} sessions
+          </span>
+        </div>
       </CardHeader>
       <CardContent>
         {sessions.length === 0 ? (
-          <p className="text-center text-gray-500 dark:text-gray-400 py-8">
-            No sessions yet
-          </p>
+          <div className="flex flex-col items-center justify-center py-10 text-on-surface-variant">
+            <MessageSquare className="w-8 h-8 mb-2 opacity-40" />
+            <p className="text-sm">No sessions yet</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="text-left text-sm text-gray-500 dark:text-gray-400">
-                  <th className="pb-3 font-medium">Session</th>
-                  <th className="pb-3 font-medium">Channel</th>
-                  <th className="pb-3 font-medium">Messages</th>
-                  <th className="pb-3 font-medium">Status</th>
-                  <th className="pb-3 font-medium">Updated</th>
+                <tr className="text-left">
+                  <th className="pb-3 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Session</th>
+                  <th className="pb-3 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Channel</th>
+                  <th className="pb-3 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Messages</th>
+                  <th className="pb-3 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Status</th>
+                  <th className="pb-3 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Updated</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              <tbody className="divide-y divide-outline-variant/5">
                 {sessions.map((session) => (
-                  <tr key={session.id} className="text-sm">
+                  <tr key={session.id} className="text-sm hover:bg-surface-container-high/50 transition-colors">
                     <td className="py-3">
                       <div className="flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-gray-500" />
-                        <span className="font-medium text-gray-900 dark:text-gray-100">
+                        <MessageSquare className="w-4 h-4 text-on-surface-variant" />
+                        <span className="font-medium text-white">
                           {session.title || 'Untitled'}
                         </span>
                       </div>
                     </td>
-                    <td className="py-3 text-gray-600 dark:text-gray-400">
+                    <td className="py-3 text-on-surface-variant">
                       {session.channelType}
                     </td>
-                    <td className="py-3 text-gray-600 dark:text-gray-400">
+                    <td className="py-3 text-on-surface-variant">
                       {session.messageCount}
                     </td>
                     <td className="py-3">
                       <span
-                        className={`px-2 py-1 rounded text-xs font-medium ${
+                        className={`px-2.5 py-1 rounded-full text-[10px] uppercase tracking-widest font-bold ${
                           session.status === 'active'
-                            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                            : 'bg-gray-100 text-gray-800 dark:bg-gray-600 dark:text-gray-300'
+                            ? 'bg-emerald-500/10 text-emerald-400'
+                            : 'bg-surface-container-high text-on-surface-variant'
                         }`}
                       >
                         {session.status}
                       </span>
                     </td>
-                    <td className="py-3 text-gray-600 dark:text-gray-400">
+                    <td className="py-3 text-on-surface-variant">
                       <div className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {formatDate(session.updatedAt)}

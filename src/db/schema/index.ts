@@ -16,3 +16,4 @@ export * from './skills';
 export * from './hook-executions';
 export * from './agents';
 export * from './documents';
+export * from './profiles';

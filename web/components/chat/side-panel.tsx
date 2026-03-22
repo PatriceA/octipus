@@ -84,22 +84,22 @@ const ROLE_COLORS: Record<string, string> = {
 function getRoleBadgeClasses(role: string): string {
   const color = ROLE_COLORS[role] ?? 'gray';
   const map: Record<string, string> = {
-    purple: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
-    blue: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-    green: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
-    yellow: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
-    orange: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-    pink: 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300',
-    gray: 'bg-gray-100 text-gray-700 dark:bg-gray-700/40 dark:text-gray-300',
-    indigo: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300',
-    cyan: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
-    red: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
-    emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
-    violet: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
-    amber: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-    teal: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
-    rose: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
-    slate: 'bg-slate-100 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300',
+    purple: 'bg-purple-900/40 text-purple-300',
+    blue: 'bg-blue-900/40 text-blue-300',
+    green: 'bg-green-900/40 text-green-300',
+    yellow: 'bg-yellow-900/40 text-yellow-300',
+    orange: 'bg-orange-900/40 text-orange-300',
+    pink: 'bg-pink-900/40 text-pink-300',
+    gray: 'bg-surface-container-highest text-on-surface-variant',
+    indigo: 'bg-indigo-900/40 text-indigo-300',
+    cyan: 'bg-cyan-900/40 text-cyan-300',
+    red: 'bg-red-900/40 text-red-300',
+    emerald: 'bg-emerald-900/40 text-emerald-300',
+    violet: 'bg-violet-900/40 text-violet-300',
+    amber: 'bg-amber-900/40 text-amber-300',
+    teal: 'bg-teal-900/40 text-teal-300',
+    rose: 'bg-rose-900/40 text-rose-300',
+    slate: 'bg-slate-700/40 text-slate-300',
   };
   return map[color] ?? map.gray;
 }
@@ -130,7 +130,7 @@ function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: num
   }, [endTime]);
 
   const elapsed = (endTime ?? now) - startTime;
-  return <span className="tabular-nums text-xs text-gray-500 dark:text-gray-400">{formatDuration(elapsed)}</span>;
+  return <span className="tabular-nums text-xs text-on-surface-variant">{formatDuration(elapsed)}</span>;
 }
 
 function StatusIcon({ status }: { status: TrackedAgent['status'] }) {
@@ -160,20 +160,20 @@ function CollapsibleSection({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="border-b border-gray-200 dark:border-gray-700 last:border-b-0">
+    <div className="border-b border-outline-variant/10 last:border-b-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+        className="flex w-full items-center justify-between px-3 py-2 hover:bg-surface-container-high/40"
       >
-        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
           <Icon className="h-3.5 w-3.5" />
           {title}
         </span>
         {open ? (
-          <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
+          <ChevronUp className="h-3.5 w-3.5 text-on-surface-variant" />
         ) : (
-          <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+          <ChevronDown className="h-3.5 w-3.5 text-on-surface-variant" />
         )}
       </button>
       {open && <div className="px-3 pb-3">{children}</div>}
@@ -185,7 +185,7 @@ function AgentCard({ agent }: { agent: TrackedAgent }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
   return (
-    <div className="rounded-md bg-white p-2 shadow-sm dark:bg-gray-800/90">
+    <div className="rounded-md bg-surface-container-highest p-2 shadow-sm">
       <div className="flex items-center gap-1.5">
         <StatusIcon status={agent.status} />
         <span
@@ -196,10 +196,10 @@ function AgentCard({ agent }: { agent: TrackedAgent }) {
         >
           {agent.role}
         </span>
-        <span className="ml-auto text-[10px] text-gray-400 dark:text-gray-500">{agent.model}</span>
+        <span className="ml-auto text-[10px] text-on-surface-variant">{agent.model}</span>
       </div>
 
-      <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+      <div className="mt-1 flex items-center gap-2 text-xs text-on-surface-variant">
         <ElapsedTimer startTime={agent.startTime} endTime={agent.endTime} />
         {agent.totalTokens != null && (
           <span className="flex items-center gap-0.5">
@@ -223,7 +223,7 @@ function AgentCard({ agent }: { agent: TrackedAgent }) {
           <button
             type="button"
             onClick={() => setToolsOpen((v) => !v)}
-            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-white"
           >
             <Wrench className="h-3 w-3" />
             {agent.toolCalls.length} tool call{agent.toolCalls.length !== 1 ? 's' : ''}
@@ -232,10 +232,10 @@ function AgentCard({ agent }: { agent: TrackedAgent }) {
           {toolsOpen && (
             <ul className="mt-1 space-y-0.5 pl-3">
               {agent.toolCalls.map((tc) => (
-                <li key={tc.id} className="text-[10px] text-gray-500 dark:text-gray-400">
+                <li key={tc.id} className="text-[10px] text-on-surface-variant">
                   <span className="font-mono">{tc.name}</span>
                   {tc.argsSummary && (
-                    <span className="ml-1 text-gray-400 dark:text-gray-500">({tc.argsSummary})</span>
+                    <span className="ml-1 text-on-surface-variant/60">({tc.argsSummary})</span>
                   )}
                 </li>
               ))}
@@ -299,27 +299,27 @@ export default function SidePanel({
     : undefined;
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-gray-50 dark:bg-gray-900">
+    <div className="flex h-full flex-col overflow-y-auto bg-surface-container">
       {/* Section 1: Connection & Model */}
       <CollapsibleSection title="Connection & Model" icon={Settings2}>
         <div className="space-y-3">
           {/* Connection status */}
           <div className="flex items-center gap-2">
             <span className={cn('h-2 w-2 rounded-full', connectionDot[connectionStatus])} />
-            <span className="text-xs text-gray-600 dark:text-gray-300">
+            <span className="text-xs text-on-surface-variant">
               {connectionLabel[connectionStatus]}
             </span>
           </div>
 
           {/* Model selector */}
           <div>
-            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-on-surface-variant">
               Model
             </label>
             <select
               value={selectedModel}
               onChange={(e) => onModelChange(e.target.value)}
-              className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              className="w-full rounded-md border border-outline-variant/10 bg-surface-container-highest px-2 py-1 text-xs text-white shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             >
               {models.map((m) => (
                 <option key={m.name} value={m.name}>
@@ -332,7 +332,7 @@ export default function SidePanel({
 
           {/* Expert / Preset pills */}
           <div>
-            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-on-surface-variant">
               Expert
             </label>
             <div className="flex flex-wrap gap-1">
@@ -342,8 +342,8 @@ export default function SidePanel({
                 className={cn(
                   'rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors',
                   selectedPresetId === null
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600',
+                    ? 'bg-primary text-[#002a6d]'
+                    : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high',
                 )}
               >
                 None
@@ -357,8 +357,8 @@ export default function SidePanel({
                   className={cn(
                     'rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors',
                     selectedPresetId === p.id
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600',
+                      ? 'bg-primary text-[#002a6d]'
+                      : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high',
                   )}
                 >
                   {p.name}
@@ -375,23 +375,23 @@ export default function SidePanel({
           {/* Token usage */}
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+              <span className="flex items-center gap-1 text-xs text-on-surface-variant">
                 <Coins className="h-3 w-3" />
                 Tokens
               </span>
-              <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400">
+              <span className="text-xs tabular-nums text-on-surface-variant">
                 {formatTokens(totalTokens)}{isUnlimited ? '' : ` / ${formatTokens(maxTokenBudget)}`}
               </span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-container-highest">
               <div
                 className={cn(
                   'h-full rounded-full transition-all',
                   tokenPercent > 90
-                    ? 'bg-red-500'
+                    ? 'bg-error'
                     : tokenPercent > 70
                       ? 'bg-yellow-500'
-                      : 'bg-blue-500',
+                      : 'bg-primary',
                 )}
                 style={{ width: `${tokenPercent}%` }}
               />
@@ -400,11 +400,11 @@ export default function SidePanel({
 
           {/* Active agents */}
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+            <span className="flex items-center gap-1 text-xs text-on-surface-variant">
               <Bot className="h-3 w-3" />
               Active Agents
             </span>
-            <span className="text-xs font-medium tabular-nums text-gray-700 dark:text-gray-200">
+            <span className="text-xs font-medium tabular-nums text-white">
               {runningAgents.length}
             </span>
           </div>
@@ -412,13 +412,17 @@ export default function SidePanel({
           {/* Session duration */}
           {firstStartTime && (
             <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+              <span className="flex items-center gap-1 text-xs text-on-surface-variant">
                 <Clock className="h-3 w-3" />
                 Session Duration
               </span>
               <ElapsedTimer
                 startTime={firstStartTime}
-                endTime={runningAgents.length === 0 ? Date.now() : undefined}
+                endTime={
+                  runningAgents.length === 0 && agentArray.length > 0
+                    ? Math.max(...agentArray.map((a) => a.endTime ?? a.startTime))
+                    : undefined
+                }
               />
             </div>
           )}
@@ -429,7 +433,7 @@ export default function SidePanel({
       <CollapsibleSection title="Agent Activity" icon={Bot} defaultOpen={true}>
         <div className="max-h-[60vh] space-y-2 overflow-y-auto">
           {sortedAgents.length === 0 && (
-            <p className="py-4 text-center text-xs text-gray-400 dark:text-gray-500">
+            <p className="py-4 text-center text-xs text-on-surface-variant">
               No agent activity yet
             </p>
           )}
@@ -450,25 +454,25 @@ export default function SidePanel({
             return (
               <div
                 key={team.id}
-                className="rounded-lg border border-gray-200 bg-gray-100/50 p-2 dark:border-gray-700 dark:bg-gray-800/50"
+                className="rounded-lg border border-outline-variant/10 bg-surface-container-high/50 p-2"
               >
                 <div className="mb-1.5 flex items-center gap-1.5">
-                  <Users className="h-3 w-3 text-gray-500" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  <Users className="h-3 w-3 text-on-surface-variant" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant">
                     Team
                   </span>
                   <span
                     className={cn(
                       'ml-auto inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none',
                       team.status === 'running'
-                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-                        : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+                        ? 'bg-blue-900/40 text-blue-300'
+                        : 'bg-green-900/40 text-green-300',
                     )}
                   >
                     {team.status}
                   </span>
                   {team.durationMs != null && (
-                    <span className="text-[10px] tabular-nums text-gray-400">
+                    <span className="text-[10px] tabular-nums text-on-surface-variant">
                       {formatDuration(team.durationMs)}
                     </span>
                   )}

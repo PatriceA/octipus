@@ -62,6 +62,7 @@ export interface TriggerConfig {
   // For webhook
   webhookPath?: string;
   webhookSecret?: string;
+  messageTemplate?: string; // Mustache-style template for transforming incoming payloads into agent prompts
   // For tool_executed
   toolIds?: string[];
   toolNames?: string[];
@@ -94,7 +95,11 @@ export interface ActionConfig {
   toolParams?: Record<string, unknown>;
   // General options
   orchestrated?: boolean;
+  orchestratorNotify?: boolean;
   notifyOwner?: boolean;
+  // For incoming webhook response delivery
+  channelType?: string;
+  channelId?: string;
 }
 
 export interface HookCondition {

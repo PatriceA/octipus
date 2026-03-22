@@ -102,7 +102,7 @@ export default function AgentDetailPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+        <Loader2 className="w-6 h-6 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -112,12 +112,12 @@ export default function AgentDetailPage() {
       <div className="space-y-4">
         <button
           onClick={() => router.push('/agents')}
-          className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+          className="flex items-center gap-2 text-sm text-on-surface-variant hover:text-white"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Agents
         </button>
-        <div className="text-center py-12 text-gray-500">Agent not found</div>
+        <div className="text-center py-12 text-on-surface-variant">Agent not found</div>
       </div>
     );
   }
@@ -131,16 +131,16 @@ export default function AgentDetailPage() {
         <div>
           <button
             onClick={() => router.push('/agents')}
-            className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mb-2"
+            className="flex items-center gap-2 text-sm text-on-surface-variant hover:text-white mb-2"
           >
             <ArrowLeft className="w-4 h-4" />
             Back to Agents
           </button>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-3">
+          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white flex items-center gap-3">
             <Bot className="w-6 h-6" />
             Agent {agentId.slice(0, 8)}
           </h1>
-          <div className="flex items-center gap-4 mt-2 text-sm text-gray-600 dark:text-gray-400">
+          <div className="flex items-center gap-4 mt-2 text-sm text-on-surface-variant">
             <span className="flex items-center gap-1">
               <Cpu className="w-4 h-4" />
               {agent.model}
@@ -154,16 +154,16 @@ export default function AgentDetailPage() {
               {new Date(agent.createdAt).toLocaleString()}
             </span>
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-              isRunning ? 'bg-green-100 text-green-800' :
-              agent.status === 'completed' ? 'bg-blue-100 text-blue-800' :
-              agent.status === 'failed' ? 'bg-red-100 text-red-800' :
-              'bg-gray-100 text-gray-800'
+              isRunning ? 'bg-emerald-500/10 text-emerald-400' :
+              agent.status === 'completed' ? 'bg-primary/10 text-primary' :
+              agent.status === 'failed' ? 'bg-error/10 text-error' :
+              'bg-on-surface-variant/10 text-on-surface-variant'
             }`}>
               {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
               {agent.status}
             </span>
             {events.length > 0 && (
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-on-surface-variant">
                 {events.length} events
               </span>
             )}
@@ -172,7 +172,7 @@ export default function AgentDetailPage() {
         {isRunning ? (
           <button
             onClick={handleStop}
-            className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm cursor-pointer"
+            className="flex items-center gap-2 px-3 py-2 bg-error text-white rounded-full hover:bg-error-dim text-sm cursor-pointer font-medium"
           >
             <Square className="w-4 h-4" />
             Stop
@@ -180,7 +180,7 @@ export default function AgentDetailPage() {
         ) : (
           <button
             onClick={handleRemove}
-            className="flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm cursor-pointer"
+            className="flex items-center gap-2 px-3 py-2 text-error hover:bg-error/10 rounded-full text-sm cursor-pointer"
           >
             <Trash2 className="w-4 h-4" />
             Remove
@@ -190,10 +190,10 @@ export default function AgentDetailPage() {
 
       {/* Pipeline stepper (if applicable) */}
       {pipelineData?.pipeline && pipelineData.stages && (
-        <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-4">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+        <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10 p-4">
+          <h2 className="text-sm font-semibold text-on-surface-variant mb-3">
             Pipeline: {pipelineData.pipeline.title}
-            <span className="ml-2 text-xs text-gray-500">({pipelineData.pipeline.type})</span>
+            <span className="ml-2 text-xs text-on-surface-variant">({pipelineData.pipeline.type})</span>
           </h2>
           <PipelineView
             stages={pipelineData.stages.map(s => ({
@@ -209,11 +209,11 @@ export default function AgentDetailPage() {
       )}
 
       {/* Event Timeline */}
-      <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+      <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10">
+        <div className="px-4 py-3 border-b border-outline-variant/10">
+          <h2 className="text-sm font-semibold text-on-surface-variant">
             Event Timeline
-            <span className="ml-2 text-xs text-gray-500 font-normal">
+            <span className="ml-2 text-xs text-on-surface-variant font-normal">
               {events.length} events
             </span>
           </h2>

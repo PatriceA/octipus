@@ -2,75 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #f0f9ff;
-  --foreground: #0c1829;
-  --surface-card: #ffffff;
-  --surface-hover: #e0f2fe;
-  --border-subtle: #bae6fd;
-}
-
-.dark {
-  --background: #0B1120;
-  --foreground: #e2e8f0;
-  --surface-card: #131C2E;
-  --surface-hover: #1A2540;
-  --border-subtle: #1E2D45;
-}
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700;800&display=swap');
 
 body {
-  color: var(--foreground);
-  background: var(--background);
+  font-family: 'Manrope', system-ui, sans-serif;
+  color: #ffffff;
+  background: #0e0e0e;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Glass effect utility */
-.glass {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
 
-.dark .glass {
-  background: rgba(11, 17, 32, 0.85);
+::-webkit-scrollbar-track {
+  background: #0e0e0e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #484847;
 }
 
 /* Smooth transitions for interactive elements */
 button,
-a,
-input,
-select {
+a {
   transition: all 0.15s ease;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #0891b2;
-  border-radius: 3px;
-  opacity: 0.5;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #06b6d4;
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: #164e63;
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: #0e7490;
-}
-
-/* Focus ring utility */
+/* Focus ring */
 .focus-ring {
-  @apply focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:ring-offset-1 focus:ring-offset-transparent;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-1 focus:ring-offset-transparent;
+}
+
+/* Selection */
+::selection {
+  background: #8cacff;
+  color: #002a6d;
 }

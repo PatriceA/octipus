@@ -68,18 +68,18 @@ interface EvalListItem {
 }
 
 const CATEGORY_CONFIG: Record<AttackCategory, { label: string; icon: typeof Shield; color: string }> = {
-  injection: { label: 'Prompt Injection', icon: ShieldAlert, color: 'text-red-600 dark:text-red-400' },
-  confusion: { label: 'Role Confusion', icon: AlertTriangle, color: 'text-orange-600 dark:text-orange-400' },
-  misuse: { label: 'Tool Misuse', icon: ShieldAlert, color: 'text-yellow-600 dark:text-yellow-400' },
-  leakage: { label: 'Data Leakage', icon: Shield, color: 'text-purple-600 dark:text-purple-400' },
-  drift: { label: 'Off-Topic Drift', icon: AlertTriangle, color: 'text-blue-600 dark:text-blue-400' },
+  injection: { label: 'Prompt Injection', icon: ShieldAlert, color: 'text-red-400' },
+  confusion: { label: 'Role Confusion', icon: AlertTriangle, color: 'text-orange-400' },
+  misuse: { label: 'Tool Misuse', icon: ShieldAlert, color: 'text-yellow-400' },
+  leakage: { label: 'Data Leakage', icon: Shield, color: 'text-purple-400' },
+  drift: { label: 'Off-Topic Drift', icon: AlertTriangle, color: 'text-blue-400' },
 };
 
 const SEVERITY_CONFIG: Record<Severity, { label: string; color: string; bg: string }> = {
-  critical: { label: 'Critical', color: 'text-red-700 dark:text-red-400', bg: 'bg-red-100 dark:bg-red-950/30' },
-  high: { label: 'High', color: 'text-orange-700 dark:text-orange-400', bg: 'bg-orange-100 dark:bg-orange-950/30' },
-  medium: { label: 'Medium', color: 'text-yellow-700 dark:text-yellow-400', bg: 'bg-yellow-100 dark:bg-yellow-950/30' },
-  low: { label: 'Low', color: 'text-blue-700 dark:text-blue-400', bg: 'bg-blue-100 dark:bg-blue-950/30' },
+  critical: { label: 'Critical', color: 'text-red-400', bg: 'bg-red-950/30' },
+  high: { label: 'High', color: 'text-orange-400', bg: 'bg-orange-950/30' },
+  medium: { label: 'Medium', color: 'text-yellow-400', bg: 'bg-yellow-950/30' },
+  low: { label: 'Low', color: 'text-blue-400', bg: 'bg-blue-950/30' },
 };
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -177,7 +177,7 @@ export default function RedTeamPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 animate-spin text-gray-500" />
+        <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -188,25 +188,25 @@ export default function RedTeamPage() {
       <div>
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 mb-3"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white mb-3"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
         </Link>
 
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-950/40 flex items-center justify-center">
-            <ShieldAlert className="w-5 h-5 text-red-700 dark:text-red-400" />
+          <div className="w-10 h-10 rounded-xl bg-red-950/40 flex items-center justify-center">
+            <ShieldAlert className="w-5 h-5 text-red-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Red Team Results</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Security and safety evaluation results</p>
+            <h1 className="text-2xl font-bold text-white">Red Team Results</h1>
+            <p className="text-sm text-on-surface-variant">Security and safety evaluation results</p>
           </div>
         </div>
       </div>
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
           {error}
         </div>
       )}
@@ -214,17 +214,17 @@ export default function RedTeamPage() {
       {redTeamData.length === 0 && !redTeamLoading ? (
         <Card>
           <CardContent className="text-center py-12">
-            <ShieldAlert className="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-            <p className="text-gray-500 dark:text-gray-400">No red-team results found</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-              Run red-team eval: <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-xs">bun run src/eval/red-team/cli.ts</code>
+            <ShieldAlert className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
+            <p className="text-on-surface-variant">No red-team results found</p>
+            <p className="text-sm text-on-surface-variant mt-1">
+              Run red-team eval: <code className="bg-[#262626] px-1.5 py-0.5 rounded text-xs">bun run src/eval/red-team/cli.ts</code>
             </p>
           </CardContent>
         </Card>
       ) : redTeamLoading ? (
         <div className="flex items-center justify-center py-12">
-          <RefreshCw className="w-5 h-5 animate-spin text-gray-500 mr-2" />
-          <span className="text-gray-500">Loading red-team results...</span>
+          <RefreshCw className="w-5 h-5 animate-spin text-on-surface-variant mr-2" />
+          <span className="text-on-surface-variant">Loading red-team results...</span>
         </div>
       ) : (
         <>
@@ -237,13 +237,13 @@ export default function RedTeamPage() {
                 <Card key={stat.category}>
                   <CardContent className="py-4">
                     <div className="flex items-center gap-2 mb-2">
-                      <Icon className={cn('w-4 h-4', config?.color || 'text-gray-500')} />
-                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100 capitalize">
+                      <Icon className={cn('w-4 h-4', config?.color || 'text-on-surface-variant')} />
+                      <span className="text-sm font-medium text-white capitalize">
                         {config?.label || stat.category}
                       </span>
                     </div>
                     <ScoreBar score={stat.rate} />
-                    <div className="flex justify-between mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    <div className="flex justify-between mt-2 text-xs text-on-surface-variant">
                       <span className="flex items-center gap-1">
                         <ShieldCheck className="w-3 h-3 text-green-500" />
                         {stat.defended} defended
@@ -267,11 +267,11 @@ export default function RedTeamPage() {
             return (
               <div key={category}>
                 <div className="flex items-center gap-2 mb-3">
-                  <Icon className={cn('w-5 h-5', config?.color || 'text-gray-500')} />
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 capitalize">
+                  <Icon className={cn('w-5 h-5', config?.color || 'text-on-surface-variant')} />
+                  <h2 className="text-lg font-semibold text-white capitalize">
                     {config?.label || category}
                   </h2>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                  <span className="text-sm text-on-surface-variant">
                     ({tests.filter(t => t.passed).length}/{tests.length} defended)
                   </span>
                 </div>
@@ -284,11 +284,11 @@ export default function RedTeamPage() {
                     return (
                       <div
                         key={test.testId}
-                        className="bg-white dark:bg-[#131C2E] rounded-xl ring-1 ring-primary-100 dark:ring-[#1E2D45] overflow-hidden"
+                        className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 overflow-hidden"
                       >
                         <button
                           onClick={() => setExpandedTest(isExpanded ? null : test.testId)}
-                          className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800/30 cursor-pointer"
+                          className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-[#20201f] cursor-pointer"
                         >
                           {test.passed ? (
                             <ShieldCheck className="w-5 h-5 text-green-500 shrink-0" />
@@ -297,17 +297,17 @@ export default function RedTeamPage() {
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-mono text-gray-900 dark:text-gray-100">
+                              <span className="text-sm font-mono text-white">
                                 {test.testId}
                               </span>
                               <SeverityBadge severity={severity} />
                               {test.metadata?.plugin && (
-                                <span className="text-xs text-gray-400 dark:text-gray-500">
+                                <span className="text-xs text-on-surface-variant">
                                   {test.metadata.plugin as string}
                                 </span>
                               )}
                             </div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                            <p className="text-xs text-on-surface-variant mt-0.5 truncate">
                               {truncate(test.input, 120)}
                             </p>
                           </div>
@@ -315,11 +315,11 @@ export default function RedTeamPage() {
                         </button>
 
                         {isExpanded && (
-                          <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800 space-y-3">
+                          <div className="px-4 py-3 border-t border-outline-variant/10 space-y-3">
                             {/* Attack prompt */}
                             <div>
-                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Attack Prompt</p>
-                              <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap bg-red-50/50 dark:bg-red-950/10 rounded-lg p-3 border border-red-100 dark:border-red-900/30 max-h-40 overflow-y-auto">
+                              <p className="text-xs font-medium text-on-surface-variant mb-1">Attack Prompt</p>
+                              <pre className="text-sm text-white/80 whitespace-pre-wrap bg-red-950/10 rounded-lg p-3 border border-red-900/30 max-h-40 overflow-y-auto">
                                 {test.input}
                               </pre>
                             </div>
@@ -327,8 +327,8 @@ export default function RedTeamPage() {
                             {/* System response */}
                             {test.output && (
                               <div>
-                                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">System Response</p>
-                                <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap bg-gray-50 dark:bg-gray-900 rounded-lg p-3 border border-gray-200 dark:border-gray-700 max-h-40 overflow-y-auto">
+                                <p className="text-xs font-medium text-on-surface-variant mb-1">System Response</p>
+                                <pre className="text-sm text-white/80 whitespace-pre-wrap bg-[#131313] rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
                                   {test.output}
                                 </pre>
                               </div>
@@ -337,8 +337,8 @@ export default function RedTeamPage() {
                             {/* Expected defense */}
                             {test.metadata?.expectedDefense && (
                               <div>
-                                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Expected Defense</p>
-                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                <p className="text-xs font-medium text-on-surface-variant mb-1">Expected Defense</p>
+                                <p className="text-sm text-on-surface-variant">
                                   {test.metadata.expectedDefense as string}
                                 </p>
                               </div>
@@ -346,7 +346,7 @@ export default function RedTeamPage() {
 
                             {/* Assertions */}
                             <div>
-                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Assertions</p>
+                              <p className="text-xs font-medium text-on-surface-variant mb-1">Assertions</p>
                               <div className="flex flex-wrap gap-1.5">
                                 {test.assertions.map((a, i) => (
                                   <AssertionBadge key={i} type={a.type} passed={a.passed} />

@@ -8,6 +8,8 @@ Your own autonomous AI workforce. An orchestration platform that deploys special
 
 Built for developers who want full control. Runs locally. No vendor lock-in. Every model provider, every channel, every skill — yours to configure.
 
+**Website:** [https://the-assistant.io](https://the-assistant.io)
+
 ## What It Does
 
 **You send a message. The system figures out the rest.**
@@ -35,11 +37,13 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Browser** — navigate, click, type, hover, drag, screenshot, PDF generation via Playwright
 - **Web Search** — SearXNG meta-search with Playwright fallback
 - **Docker** — manage containers, images, exec commands
-- **Google Workspace** — Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks
-- **Microsoft 365** — Outlook, Calendar, OneDrive, To Do, Contacts
+- **Google Workspace** — Gmail (with pagination and batch processing), Calendar, Drive, Docs, Sheets, Contacts, Tasks
+- **Microsoft 365** — Outlook Mail (with pagination and batch processing), Calendar, OneDrive, To Do, Contacts
+- **Email Processor** — provider-agnostic batch email processing: iterate emails one-by-one with per-email classification and actions, pagination with continuation tokens, works with both Gmail and Outlook
 - **Browser Extension** — control the user's real browser via Chrome extension with 24 commands: navigate, click, hover, scroll, drag, type, tabs, cookies, storage, console, network monitoring, dialog handling (existing cookies/auth, no bot detection)
 - **Knowledge Base** — hybrid search (BM25 full-text + pgvector cosine similarity + Reciprocal Rank Fusion) with tiered content loading (L0 abstract / L1 overview / L2 full), automatic weekly cleanup of orphaned/stale/duplicate entries
 - **Document Processing** — upload, dual-model OCR + vision analysis (deepseek-ocr for text extraction, vision model for image description), PDF text extraction via poppler, LLM categorization, and automatic knowledge base indexing
+- **People & Profiles** — store and recall information about people, organizations, and relationships. Facts accumulate over time (location, birthday, preferences). User's own profile is automatically injected into agent system prompts for personalized responses
 - **GitHub/GitLab** — repository management, issues, PRs, reviews, and webhook integration
 - **Scheduling** — create and manage cron tasks, hooks, and event automations from within agent conversations
 - **Cross-Channel Messaging** — send messages across any connected channel
@@ -78,8 +82,10 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 
 ### Automation and Extensibility
 - **Event hooks** — trigger actions on messages, agent events, tool calls, schedules, and incoming webhooks with HMAC verification
+- **Inbound webhooks** — external services POST to `/api/hooks/incoming/:hookId` with Bearer token or `X-Webhook-Secret` auth. Mustache-style payload templating (`{{body.repository.name}}`). Reuses the full hook pipeline (cooldown, max-execution, condition checks, execution logging). Connect GitHub pushes, Stripe events, smart home sensors, n8n workflows
 - **Recurring tasks** — cron-based scheduling with full CRUD management
-- **Webhook receiver** — accept events from GitHub, GitLab, Stripe, and any HMAC-signed service with auto-notification to channels
+- **Plugin system** — drop TypeScript/JS plugins into `extensions/` directory. Each plugin declares tools via `plugin.json` manifest and gets hot-loaded at startup. Plugin tools are registered with the tool registry and available to agents. API for listing and reloading plugins at runtime (`GET /api/plugins`, `POST /api/plugins/:name/reload`)
+- **Skill sharing** — export skills as JSON or markdown (with YAML frontmatter), import with validation and conflict handling. `GET /api/skills/export`, `POST /api/skills/import`
 - **Channel progress feedback** — real-time status updates ("Got it, working on it", "Started coding agent") sent to Telegram/Slack/Teams during long-running tasks
 - **N8N integration** — connect to workflow automation
 - **Custom skills and experts** — create your own domain knowledge and expert personas via API

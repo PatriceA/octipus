@@ -106,33 +106,33 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-accent-50 dark:from-[#0B1120] dark:to-[#0E1726] flex items-center justify-center p-4">
+    <div className="min-h-screen bg-[#0e0e0e] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
           <img src="/logo.png" alt="Assistant" className="w-16 h-16 rounded-2xl mb-4 inline-block object-cover" />
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Assistant</h1>
-          <p className="text-gray-600 dark:text-gray-400">Autonomous Development Assistant</p>
+          <h1 className="text-2xl font-bold text-white">Assistant</h1>
+          <p className="text-on-surface-variant">Autonomous Development Assistant</p>
         </div>
 
         {/* TOTP Verification */}
         {totpRequired ? (
-          <div className="bg-white dark:bg-[#131C2E] rounded-xl shadow-lg p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Two-Factor Authentication</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Enter the 6-digit code from your authenticator app.</p>
+          <div className="bg-[#1a1a1a] rounded-xl shadow-lg p-6">
+            <h2 className="text-lg font-semibold text-white mb-4">Two-Factor Authentication</h2>
+            <p className="text-sm text-on-surface-variant mb-4">Enter the 6-digit code from your authenticator app.</p>
             <form onSubmit={handleTotpVerify} className="space-y-4">
               <input
                 type="text"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
-                className="w-full px-4 py-3 text-center text-2xl tracking-widest border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500"
+                className="w-full px-4 py-3 text-center text-2xl tracking-widest border border-outline-variant/10 rounded-lg bg-[#131313] text-white focus:ring-2 focus:ring-primary"
                 autoFocus
                 required
               />
               {error && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                  <p className="text-sm text-[#ff716c]">{error}</p>
                 </div>
               )}
               <button
@@ -145,7 +145,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setTotpRequired(false); setTotpCode(''); setError(''); }}
-                className="w-full py-2 text-sm text-gray-500 hover:text-gray-700"
+                className="w-full py-2 text-sm text-on-surface-variant hover:text-white"
               >
                 Back to login
               </button>
@@ -154,14 +154,14 @@ export default function LoginPage() {
         ) : (
 
         /* Form */
-        <div className="bg-white dark:bg-[#131C2E] rounded-xl shadow-lg p-6">
+        <div className="bg-[#1a1a1a] rounded-xl shadow-lg p-6">
           <div className="flex mb-6">
             <button
               onClick={() => setIsLogin(true)}
               className={`flex-1 py-2 text-center font-medium rounded-lg transition-colors ${
                 isLogin
                   ? 'bg-primary-800 text-white'
-                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  : 'text-on-surface-variant hover:bg-[#1a1a1a]'
               }`}
             >
               Sign In
@@ -171,7 +171,7 @@ export default function LoginPage() {
               className={`flex-1 py-2 text-center font-medium rounded-lg transition-colors ${
                 !isLogin
                   ? 'bg-primary-800 text-white'
-                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  : 'text-on-surface-variant hover:bg-[#1a1a1a]'
               }`}
             >
               Register
@@ -180,7 +180,7 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-white/80 mb-1">
                 Username
               </label>
               <input
@@ -188,14 +188,14 @@ export default function LoginPage() {
                 value={formData.username}
                 onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                 placeholder="Enter your username"
-                className="w-full px-4 py-2 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full px-4 py-2 border border-outline-variant/10 rounded-lg bg-[#131313] text-white focus:ring-2 focus:ring-primary focus:border-transparent"
                 required
               />
             </div>
 
             {!isLogin && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-white/80 mb-1">
                   Email
                 </label>
                 <input
@@ -203,14 +203,14 @@ export default function LoginPage() {
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   placeholder="Enter your email"
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className="w-full px-4 py-2 border border-outline-variant/10 rounded-lg bg-[#131313] text-white focus:ring-2 focus:ring-primary focus:border-transparent"
                   required={!isLogin}
                 />
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-white/80 mb-1">
                 Password
               </label>
               <div className="relative">
@@ -219,13 +219,13 @@ export default function LoginPage() {
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   placeholder="Enter your password"
-                  className="w-full px-4 py-2 pr-10 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className="w-full px-4 py-2 pr-10 border border-outline-variant/10 rounded-lg bg-[#131313] text-white focus:ring-2 focus:ring-primary focus:border-transparent"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-600"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-white"
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -234,7 +234,7 @@ export default function LoginPage() {
 
             {!isLogin && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-white/80 mb-1">
                   Confirm Password
                 </label>
                 <input
@@ -242,15 +242,15 @@ export default function LoginPage() {
                   value={formData.confirmPassword}
                   onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                   placeholder="Confirm your password"
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-[#1E2D45] rounded-lg bg-white dark:bg-[#0E1726] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className="w-full px-4 py-2 border border-outline-variant/10 rounded-lg bg-[#131313] text-white focus:ring-2 focus:ring-primary focus:border-transparent"
                   required={!isLogin}
                 />
               </div>
             )}
 
             {error && (
-              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+              <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                <p className="text-sm text-[#ff716c]">{error}</p>
               </div>
             )}
 
@@ -272,7 +272,7 @@ export default function LoginPage() {
 
           {isLogin && (
             <div className="mt-4 text-center">
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-on-surface-variant">
                 Don't have an account? Switch to Register above.
               </p>
             </div>
@@ -281,7 +281,7 @@ export default function LoginPage() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-6">
+        <p className="text-center text-sm text-on-surface-variant mt-6">
           Powered by Ollama + Local LLMs
         </p>
       </div>

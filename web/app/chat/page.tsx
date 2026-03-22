@@ -160,7 +160,7 @@ export default function ChatPage() {
       // Restore agent activity for this session
       let restoredAgents = new Map<string, TrackedAgent>();
       try {
-        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; iteration: number }> }>('/agents');
+        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>('/agents');
         const sessionAgents = (agentData?.agents || []).filter(a => a.sessionId === sessionId);
         for (const a of sessionAgents) {
           let toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
@@ -176,14 +176,20 @@ export default function ChatPage() {
               }
             }
           } catch {}
+          const startTime = new Date(a.createdAt).getTime();
+          const isFinished = a.status !== 'running' && a.status !== 'idle';
+          const endTime = isFinished
+            ? (a.completedAt ? new Date(a.completedAt).getTime() : (a.durationMs != null ? startTime + a.durationMs : startTime))
+            : undefined;
           restoredAgents.set(a.id, {
             id: a.id,
             role: a.role,
             model: a.model,
-            status: (a.status === 'running' || a.status === 'idle' ? 'running' : a.status === 'failed' ? 'failed' : 'completed') as TrackedAgent['status'],
+            status: (isFinished ? (a.status === 'failed' ? 'failed' : 'completed') : 'running') as TrackedAgent['status'],
             toolCalls,
-            startTime: new Date(a.createdAt).getTime(),
-            endTime: a.status !== 'running' && a.status !== 'idle' ? Date.now() : undefined,
+            startTime,
+            endTime,
+            durationMs: a.durationMs ?? (endTime != null ? endTime - startTime : undefined),
             iterations: a.iteration,
           });
         }
@@ -780,7 +786,7 @@ export default function ChatPage() {
   return (
     <div className="h-full flex">
       {/* Left panel — Session list */}
-      <div className="w-64 border-r border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
+      <div className="w-64 border-r border-outline-variant/10 flex-shrink-0 bg-surface-container-low">
         <SessionList
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -795,16 +801,16 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Inline banners for approval/permission */}
         {pendingPermission && (
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-3 flex items-center justify-between">
+          <div className="bg-yellow-900/20 border-b border-yellow-800/40 px-4 py-3 flex items-center justify-between">
             <div className="min-w-0 flex-1 mr-3">
-              <p className="text-sm font-medium text-yellow-900 dark:text-yellow-200">Permission Required</p>
-              <p className="text-sm text-gray-700 dark:text-gray-300">
+              <p className="text-sm font-medium text-yellow-200">Permission Required</p>
+              <p className="text-sm text-on-surface-variant">
                 <span className="font-mono font-medium">{pendingPermission.skillId}</span>
                 {' '}&middot;{' '}
                 <span className="font-mono">{pendingPermission.action}</span>
               </p>
               {pendingPermission.args && Object.keys(pendingPermission.args).length > 0 && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono truncate">
+                <p className="text-xs text-on-surface-variant mt-1 font-mono truncate">
                   {Object.entries(pendingPermission.args)
                     .filter(([, v]) => v != null && String(v).length > 0)
                     .slice(0, 3)
@@ -817,7 +823,7 @@ export default function ChatPage() {
               <button onClick={() => handlePermissionResponse(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
                 <CheckCircle className="w-4 h-4" /> Allow
               </button>
-              <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
+              <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-error text-white rounded-lg hover:bg-error/80 cursor-pointer">
                 <XCircle className="w-4 h-4" /> Deny
               </button>
             </div>
@@ -825,21 +831,21 @@ export default function ChatPage() {
         )}
 
         {pendingApproval && (
-          <div className="bg-orange-50 dark:bg-orange-900/20 border-b border-orange-200 dark:border-orange-800 px-4 py-3 flex items-center justify-between">
+          <div className="bg-orange-900/20 border-b border-orange-800/40 px-4 py-3 flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-orange-900 dark:text-orange-200">Approval Required</p>
-              <p className="text-sm text-gray-700 dark:text-gray-300">{pendingApproval.summary}</p>
-              <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mt-0.5">{pendingApproval.question}</p>
+              <p className="text-sm font-medium text-orange-200">Approval Required</p>
+              <p className="text-sm text-on-surface-variant">{pendingApproval.summary}</p>
+              <p className="text-sm font-medium text-white mt-0.5">{pendingApproval.question}</p>
             </div>
             <div className="flex gap-2 flex-wrap">
               {pendingApproval.options?.length ? (
                 <>
                   {pendingApproval.options.map((option, i) => (
-                    <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer">
+                    <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-surface-container-highest border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-white cursor-pointer">
                       {option}
                     </button>
                   ))}
-                  <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-100 text-red-700 dark:text-red-400 cursor-pointer">
+                  <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-error/20 border border-error/30 rounded-lg hover:bg-error/30 text-error cursor-pointer">
                     Deny
                   </button>
                 </>
@@ -848,7 +854,7 @@ export default function ChatPage() {
                   <button onClick={() => handleApproval(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
                     <CheckCircle className="w-4 h-4" /> Approve
                   </button>
-                  <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
+                  <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-error text-white rounded-lg hover:bg-error/80 cursor-pointer">
                     <XCircle className="w-4 h-4" /> Deny
                   </button>
                 </>
@@ -867,7 +873,7 @@ export default function ChatPage() {
         />
 
         {/* Prompt input */}
-        <div className="border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
+        <div className="border-t border-outline-variant/10 bg-surface-container p-3">
           <PromptInput
             onSend={sendMessage}
             disabled={isLoading}
@@ -878,7 +884,7 @@ export default function ChatPage() {
 
       {/* Right panel — Side panel */}
       {showSidePanel && (
-        <div className="w-72 border-l border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
+        <div className="w-72 border-l border-outline-variant/10 flex-shrink-0 bg-surface-container">
           <SidePanel
             totalTokens={sessionTotalTokens}
             maxTokenBudget={maxTokenBudget}
@@ -898,7 +904,7 @@ export default function ChatPage() {
       {/* Side panel toggle */}
       <button
         onClick={() => setShowSidePanel(!showSidePanel)}
-        className="absolute top-20 right-2 p-1.5 rounded-lg bg-white dark:bg-gray-800 shadow-sm ring-1 ring-gray-200 dark:ring-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 z-10 cursor-pointer"
+        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-sm ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-white z-10 cursor-pointer"
         title={showSidePanel ? 'Hide panel' : 'Show panel'}
       >
         {showSidePanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}

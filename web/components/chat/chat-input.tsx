@@ -56,7 +56,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   };
 
   return (
-    <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+    <div className="border-t border-outline-variant/10 p-4">
       <div className="flex gap-2">
         <input
           type="text"
@@ -65,8 +65,8 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
           placeholder={isListening ? 'Listening...' : 'Send a message...'}
           className={cn(
-            'flex-1 px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200',
-            isListening && 'ring-2 ring-red-400'
+            'flex-1 px-4 py-2 bg-surface-container-highest border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white placeholder:text-on-surface-variant',
+            isListening && 'ring-2 ring-error'
           )}
           disabled={disabled}
         />
@@ -77,8 +77,8 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             className={cn(
               'px-3 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed',
               isListening
-                ? 'bg-red-600 text-white hover:bg-red-700'
-                : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
+                ? 'bg-error text-white hover:bg-error/80'
+                : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high'
             )}
             title={isListening ? 'Stop listening' : 'Voice input'}
           >
@@ -88,7 +88,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         <button
           onClick={handleSend}
           disabled={disabled || !input.trim()}
-          className="px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-4 py-2 bg-primary text-[#002a6d] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Send className="w-5 h-5" />
         </button>

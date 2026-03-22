@@ -1,8 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bot, LayoutDashboard, MessageSquare, Zap } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { HealthStatus } from '@/components/dashboard/health-status';
 import { UsageChart } from '@/components/dashboard/usage-chart';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
@@ -64,58 +63,62 @@ export default function DashboardPage() {
       name: 'Active Agents',
       value: health?.agents?.running || 0,
       icon: Bot,
-      color: 'text-primary-500',
+      iconBg: 'bg-primary/10',
+      iconColor: 'text-primary',
+      trend: null,
     },
     {
       name: 'Total Sessions',
       value: health?.agents?.total || 0,
       icon: MessageSquare,
-      color: 'text-accent-500',
+      iconBg: 'bg-emerald-500/10',
+      iconColor: 'text-emerald-400',
+      trend: null,
     },
     {
       name: 'API Requests',
       value: usage?.stats?.requestCount || 0,
       icon: Activity,
-      color: 'text-primary-400',
+      iconBg: 'bg-primary/10',
+      iconColor: 'text-primary',
+      trend: null,
     },
     {
       name: 'Total Cost',
       value: `$${(usage?.stats?.totalCost || 0).toFixed(2)}`,
       icon: Zap,
-      color: 'text-accent-400',
+      iconBg: 'bg-amber-500/10',
+      iconColor: 'text-amber-400',
+      trend: null,
     },
   ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-          <LayoutDashboard className="w-5 h-5 text-primary-700 dark:text-primary-400" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Overview of your assistant&apos;s activity</p>
-        </div>
+    <div className="space-y-8">
+      {/* Page Header */}
+      <div>
+        <h1 className="text-4xl font-extrabold tracking-tighter text-white">Dashboard</h1>
+        <p className="mt-1 text-sm text-on-surface-variant">Overview of your assistant&apos;s activity</p>
       </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <Card key={stat.name} className="p-5">
-            <div className="flex items-center gap-4">
-              <div className={`p-3 rounded-xl bg-gray-50 dark:bg-gray-800/60 ${stat.color}`}>
-                <stat.icon className="w-6 h-6" />
-              </div>
+          <div key={stat.name} className="bg-surface-container rounded-[1rem] p-6 ring-1 ring-outline-variant/10">
+            <div className="flex items-start justify-between">
               <div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
                   {stat.name}
                 </p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+                <p className="mt-2 text-4xl font-extrabold tracking-tight text-white">
                   {stat.value}
                 </p>
               </div>
+              <div className={`p-3 rounded-full ${stat.iconBg}`}>
+                <stat.icon className={`w-5 h-5 ${stat.iconColor}`} />
+              </div>
             </div>
-          </Card>
+          </div>
         ))}
       </div>
 

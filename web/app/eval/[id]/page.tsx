@@ -104,7 +104,7 @@ export default function EvalDetailPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 animate-spin text-gray-500" />
+        <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -114,12 +114,12 @@ export default function EvalDetailPage() {
       <div className="space-y-4">
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
         </Link>
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
           {error || 'Eval result not found'}
         </div>
       </div>
@@ -143,7 +143,7 @@ export default function EvalDetailPage() {
       <div>
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 mb-3"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white mb-3"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
@@ -151,21 +151,21 @@ export default function EvalDetailPage() {
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-              <FlaskConical className="w-5 h-5 text-primary-700 dark:text-primary-400" />
+            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+              <FlaskConical className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              <h1 className="text-2xl font-bold text-white">
                 {data.suites.length === 1 ? data.suites[0].suite : `Eval Run`}
               </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400" suppressHydrationWarning>
+              <p className="text-sm text-on-surface-variant" suppressHydrationWarning>
                 {formatDate(data.timestamp)}
               </p>
             </div>
           </div>
           <Link
             href={`/eval/compare?ids=${id}`}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2 text-sm"
+            className="px-3 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] flex items-center gap-2 text-sm"
           >
             <GitCompare className="w-4 h-4" />
             Compare
@@ -177,36 +177,36 @@ export default function EvalDetailPage() {
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{data.summary.totalTests}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Tests</p>
+            <p className="text-2xl font-bold text-white">{data.summary.totalTests}</p>
+            <p className="text-xs text-on-surface-variant">Tests</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-green-600 dark:text-green-400">{data.summary.totalPassed}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Passed</p>
+            <p className="text-2xl font-bold text-green-400">{data.summary.totalPassed}</p>
+            <p className="text-xs text-on-surface-variant">Passed</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-red-600 dark:text-red-400">{data.summary.totalFailed}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Failed</p>
+            <p className="text-2xl font-bold text-[#ff716c]">{data.summary.totalFailed}</p>
+            <p className="text-xs text-on-surface-variant">Failed</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
             <ScoreBar score={data.summary.passRate ?? data.summary.averageScore ?? 0} />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Score</p>
+            <p className="text-xs text-on-surface-variant mt-1">Score</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <p className="text-2xl font-bold text-white">
               {data.suites.reduce((s, suite) => s + (suite.duration || 0), 0) > 1000
                 ? `${(data.suites.reduce((s, suite) => s + (suite.duration || 0), 0) / 1000).toFixed(1)}s`
                 : `${data.suites.reduce((s, suite) => s + (suite.duration || 0), 0)}ms`}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Duration</p>
+            <p className="text-xs text-on-surface-variant">Duration</p>
           </CardContent>
         </Card>
       </div>
@@ -222,7 +222,7 @@ export default function EvalDetailPage() {
 
       {/* Suite tabs (if multiple) */}
       {data.suites.length > 1 && (
-        <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex gap-1 border-b border-outline-variant/10">
           {data.suites.map(suite => (
             <button
               key={suite.suite}
@@ -230,16 +230,16 @@ export default function EvalDetailPage() {
               className={cn(
                 'px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer',
                 activeSuite === suite.suite
-                  ? 'border-primary-500 text-primary-700 dark:text-primary-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-on-surface-variant hover:text-white'
               )}
             >
               {suite.suite}
               <span className={cn(
                 'ml-2 text-xs px-1.5 py-0.5 rounded-full',
                 suite.failed > 0
-                  ? 'bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400'
-                  : 'bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400'
+                  ? 'bg-red-950/30 text-red-400'
+                  : 'bg-green-950/30 text-green-400'
               )}>
                 {suite.passed}/{suite.totalTests}
               </span>
@@ -250,7 +250,7 @@ export default function EvalDetailPage() {
 
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+        <div className="flex items-center gap-1 bg-[#262626] rounded-lg p-1">
           {(['all', 'passed', 'failed'] as FilterType[]).map(f => (
             <button
               key={f}
@@ -258,8 +258,8 @@ export default function EvalDetailPage() {
               className={cn(
                 'px-3 py-1.5 text-sm rounded-md transition-colors capitalize cursor-pointer',
                 filter === f
-                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                  ? 'bg-[#20201f] text-white shadow-sm'
+                  : 'text-on-surface-variant hover:text-white'
               )}
             >
               {f === 'all' && 'All'}
@@ -277,7 +277,7 @@ export default function EvalDetailPage() {
           <select
             value={assertionTypeFilter}
             onChange={e => setAssertionTypeFilter(e.target.value)}
-            className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-800 border-0 rounded-lg text-gray-700 dark:text-gray-300"
+            className="px-3 py-1.5 text-sm bg-[#262626] border-0 rounded-lg text-white/80"
           >
             <option value="">All assertion types</option>
             {Array.from(assertionTypes).map(type => (

@@ -22,13 +22,13 @@ A hook has three parts:
 | `tool_executed` | A tool runs | `toolIds[]`, `toolNames[]` |
 | `permission_requested` | Tool needs user approval | — |
 | `schedule` | Cron timer fires | `cronExpression`, `timezone` |
-| `webhook` | HTTP request to `/api/webhooks/:path` | `webhookPath`, `webhookSecret` — see [WEBHOOKS.md](WEBHOOKS.md) |
+| `webhook` | Inbound HTTP POST to `/api/hooks/incoming/:hookId` | `webhookSecret`, `messageTemplate` |
 
 ### Actions
 
 | Action | What it does | Config fields |
 |--------|-------------|---------------|
-| `notify` | Send message to channel(s) | `notifyChannels[]`, `notifyMessage` |
+| `notify` | Send message to channel(s) | `notifyChannels[]`, `notifyMessage`, `channelType`, `channelId` |
 | `spawn_agent` | Start an AI agent | `agentPrompt`, `agentTopic`, `agentModel`, `orchestrated` |
 | `webhook` | Send outgoing HTTP request | `webhookUrl`, `webhookMethod`, `webhookHeaders`, `webhookBody` |
 | `n8n_workflow` | Trigger N8N workflow | `workflowId`, `workflowData` |
@@ -95,16 +95,19 @@ Operators: `equals`, `contains`, `matches` (regex), `gt`, `lt`, `in` (array).
 
 ### Example Configurations
 
-**GitHub PR review via webhook:**
+**GitHub push handler via inbound webhook:**
 ```json
 {
-  "name": "Review PRs",
+  "name": "GitHub Push Handler",
   "trigger": "webhook",
-  "triggerConfig": { "webhookPath": "github", "webhookSecret": "my-secret" },
-  "action": "spawn_agent",
+  "triggerConfig": {
+    "webhookSecret": "my-secret-123",
+    "messageTemplate": "New push to {{body.repository.name}} by {{body.pusher.name}}: {{body.head_commit.message}}"
+  },
+  "action": "notify",
   "actionConfig": {
-    "agentPrompt": "Review the PR: {{webhook.body.pull_request.html_url}}",
-    "orchestrated": true
+    "channelType": "telegram",
+    "channelId": "123456789"
   }
 }
 ```
@@ -135,6 +138,66 @@ Operators: `equals`, `contains`, `matches` (regex), `gt`, `lt`, `in` (array).
     "orchestrated": true
   }
 }
+```
+
+## Inbound Webhooks
+
+External services can trigger hooks by POSTing to `/api/hooks/incoming/:hookId`. This enables GitHub, Stripe, smart home sensors, n8n, and any HTTP-capable service to drive agent actions.
+
+### Setup
+
+1. Create a hook with `trigger: "webhook"` via the API or UI
+2. Set `triggerConfig.webhookSecret` for authentication
+3. Optionally set `triggerConfig.messageTemplate` for payload transformation
+4. Configure the external service to POST to `https://your-host/api/hooks/incoming/<hook-uuid>`
+
+### Authentication
+
+Every request must include the webhook secret via one of:
+- `Authorization: Bearer <secret>` header
+- `X-Webhook-Secret: <secret>` header
+
+Requests without valid secrets are rejected with 401.
+
+### Payload Templating
+
+Use Mustache-style `{{path.to.value}}` syntax to transform incoming JSON payloads into agent prompts:
+
+```json
+{
+  "messageTemplate": "Push to {{body.repository.name}} by {{body.pusher.name}}: {{body.head_commit.message}}"
+}
+```
+
+If no template is provided, the raw JSON payload is forwarded to the agent.
+
+### Delivery
+
+Results can be routed to a channel via `actionConfig`:
+- `channelType` + `channelId` — direct delivery (e.g., `telegram` + `123456789`)
+- `notifyChannels[]` — standard multi-channel delivery
+
+### Example: GitHub → Telegram
+
+```bash
+# 1. Create the webhook hook
+curl -X POST https://your-host/api/hooks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "GitHub Push Alert",
+    "trigger": "webhook",
+    "triggerConfig": {
+      "webhookSecret": "gh-secret-123",
+      "messageTemplate": "Push to {{body.repository.name}} by {{body.pusher.name}}"
+    },
+    "action": "notify",
+    "actionConfig": { "channelType": "telegram", "channelId": "123456789" }
+  }'
+
+# 2. Configure GitHub webhook to POST to:
+# https://your-host/api/hooks/incoming/<returned-hook-uuid>
+# with secret: gh-secret-123
 ```
 
 ## Scheduled Tasks

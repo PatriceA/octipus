@@ -134,7 +134,7 @@ export default function EvalPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 animate-spin text-gray-500" />
+        <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -144,18 +144,18 @@ export default function EvalPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-            <FlaskConical className="w-5 h-5 text-primary-700 dark:text-primary-400" />
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+            <FlaskConical className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Evaluations</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Agent evaluation results and analysis</p>
+            <h1 className="text-2xl font-bold text-white">Evaluations</h1>
+            <p className="text-sm text-on-surface-variant">Agent evaluation results and analysis</p>
           </div>
         </div>
         <div className="flex gap-2">
           <button
             onClick={fetchResults}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+            className="px-3 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] cursor-pointer"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -183,17 +183,17 @@ export default function EvalPage() {
               )}
             </button>
             {showRunMenu && !runStatus.running && (
-              <div className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10 min-w-[160px]">
+              <div className="absolute right-0 top-full mt-1 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg shadow-lg z-10 min-w-[160px]">
                 <button
                   onClick={() => startEval('eval')}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-t-lg cursor-pointer"
+                  className="w-full px-4 py-2 text-left text-sm text-white/80 hover:bg-[#1a1a1a] rounded-t-lg cursor-pointer"
                 >
                   <FlaskConical className="w-4 h-4 inline mr-2" />
                   Standard Eval
                 </button>
                 <button
                   onClick={() => startEval('red-team')}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-b-lg cursor-pointer"
+                  className="w-full px-4 py-2 text-left text-sm text-white/80 hover:bg-[#1a1a1a] rounded-b-lg cursor-pointer"
                 >
                   <ShieldAlert className="w-4 h-4 inline mr-2" />
                   Red Team
@@ -205,7 +205,7 @@ export default function EvalPage() {
       </div>
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
@@ -213,7 +213,7 @@ export default function EvalPage() {
 
       {/* Running status banner */}
       {runStatus.running && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl px-4 py-3 text-yellow-700 dark:text-yellow-300 text-sm">
+        <div className="bg-yellow-900/20 border border-yellow-800 rounded-xl px-4 py-3 text-yellow-300 text-sm">
           <div className="flex items-center gap-3">
             <RefreshCw className="w-4 h-4 animate-spin flex-shrink-0" />
             <span className="flex-1">
@@ -228,7 +228,7 @@ export default function EvalPage() {
             )}
           </div>
           {showOutput && runStatus.output && (
-            <pre className="mt-2 text-xs bg-black/10 dark:bg-black/30 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap font-mono">
+            <pre className="mt-2 text-xs bg-black/30 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap font-mono">
               {runStatus.output}
             </pre>
           )}
@@ -237,7 +237,7 @@ export default function EvalPage() {
 
       {/* Last run error banner */}
       {!runStatus.running && runStatus.lastRun && runStatus.lastRun.exitCode !== 0 && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-4 py-3 text-red-700 dark:text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
           <div className="flex items-center gap-3">
             <XCircle className="w-4 h-4 flex-shrink-0" />
             <span className="flex-1">
@@ -249,7 +249,7 @@ export default function EvalPage() {
             </button>
           </div>
           {showOutput && runStatus.lastRun.output && (
-            <pre className="mt-2 text-xs bg-black/10 dark:bg-black/30 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap font-mono">
+            <pre className="mt-2 text-xs bg-black/30 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap font-mono">
               {runStatus.lastRun.output}
             </pre>
           )}
@@ -260,52 +260,52 @@ export default function EvalPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-950/30 flex items-center justify-center">
-              <BarChart3 className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <div className="w-10 h-10 rounded-lg bg-blue-950/30 flex items-center justify-center">
+              <BarChart3 className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{totalRuns}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Total Runs</p>
+              <p className="text-2xl font-bold text-white">{totalRuns}</p>
+              <p className="text-xs text-on-surface-variant">Total Runs</p>
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <div className="w-10 h-10 rounded-lg bg-green-100 dark:bg-green-950/30 flex items-center justify-center">
-              <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
+            <div className="w-10 h-10 rounded-lg bg-green-950/30 flex items-center justify-center">
+              <CheckCircle className="w-5 h-5 text-green-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              <p className="text-2xl font-bold text-white">
                 {Math.round(avgPassRate * 100)}%
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Avg Pass Rate</p>
+              <p className="text-xs text-on-surface-variant">Avg Pass Rate</p>
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <div className="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-950/30 flex items-center justify-center">
-              <FlaskConical className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <div className="w-10 h-10 rounded-lg bg-purple-950/30 flex items-center justify-center">
+              <FlaskConical className="w-5 h-5 text-purple-400" />
             </div>
             <div>
               <ScoreBar score={avgScore} />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Avg Score</p>
+              <p className="text-xs text-on-surface-variant mt-1">Avg Score</p>
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardContent className="flex items-center gap-3 py-4">
-            <div className="w-10 h-10 rounded-lg bg-orange-100 dark:bg-orange-950/30 flex items-center justify-center">
-              <Hash className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+            <div className="w-10 h-10 rounded-lg bg-orange-950/30 flex items-center justify-center">
+              <Hash className="w-5 h-5 text-orange-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              <p className="text-2xl font-bold text-white">
                 {formatNumber(totalTests)}
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Total Tests</p>
+              <p className="text-xs text-on-surface-variant">Total Tests</p>
             </div>
           </CardContent>
         </Card>
@@ -315,14 +315,14 @@ export default function EvalPage() {
       <div className="flex gap-3">
         <Link
           href="/eval/compare"
-          className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 border border-outline-variant/10 rounded-lg text-sm text-on-surface-variant hover:bg-[#1a1a1a] transition-colors"
         >
           <GitCompare className="w-4 h-4" />
           Compare Runs
         </Link>
         <Link
           href="/eval/red-team"
-          className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 border border-outline-variant/10 rounded-lg text-sm text-on-surface-variant hover:bg-[#1a1a1a] transition-colors"
         >
           <ShieldAlert className="w-4 h-4" />
           Red Team
@@ -331,14 +331,14 @@ export default function EvalPage() {
 
       {/* Results List */}
       <div>
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Recent Results</h2>
+        <h2 className="text-lg font-semibold text-white mb-3">Recent Results</h2>
         {results.length === 0 ? (
           <Card>
             <CardContent className="text-center py-12">
-              <FlaskConical className="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-              <p className="text-gray-500 dark:text-gray-400">No evaluation results yet</p>
-              <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-                Run an eval suite: <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
+              <FlaskConical className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
+              <p className="text-on-surface-variant">No evaluation results yet</p>
+              <p className="text-sm text-on-surface-variant mt-1">
+                Run an eval suite: <code className="bg-[#262626] px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
               </p>
             </CardContent>
           </Card>

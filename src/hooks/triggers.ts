@@ -51,8 +51,14 @@ export function matchesTrigger(hook: Hook, event: TriggerEvent, context: Trigger
     case 'tool_executed':
       return matchesToolTrigger(config, context.tool);
 
-    case 'webhook':
+    case 'webhook': {
+      // If hookId is specified in event data, only match that specific hook
+      const webhookData = event.data as { hookId?: string } | undefined;
+      if (webhookData?.hookId) {
+        return hook.id === webhookData.hookId;
+      }
       return matchesWebhookTrigger(config, context.webhook);
+    }
 
     case 'schedule': {
       // Only match the specific hook targeted by the cron-runner

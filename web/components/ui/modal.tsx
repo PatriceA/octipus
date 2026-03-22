@@ -34,29 +34,29 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
       <div
         className={cn(
-          'relative w-full mx-4 bg-white dark:bg-gray-800 rounded-xl shadow-2xl ring-1 ring-gray-200/60 dark:ring-gray-700/60',
+          'relative w-full mx-4 bg-surface-container rounded-[1rem] shadow-2xl ring-1 ring-outline-variant/20',
           'animate-in fade-in zoom-in-95 duration-200',
           maxWidthMap[maxWidth],
           className
         )}
       >
         {title && (
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-700/60">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
+          <div className="flex items-center justify-between px-6 py-5 border-b border-outline-variant/10">
+            <h3 className="text-lg font-extrabold tracking-tighter text-white">{title}</h3>
             <button
               onClick={onClose}
-              className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer"
+              className="p-1.5 text-on-surface-variant hover:text-white rounded-full hover:bg-surface-container-high cursor-pointer transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
         )}
-        <div className="p-5">
+        <div className="p-6">
           {children}
         </div>
       </div>
