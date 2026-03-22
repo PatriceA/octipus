@@ -63,6 +63,22 @@ export async function directResponse(
     if (guardFlags.length > 0) {
       basePrompt += buildSecurityReminder(guardFlags);
     }
+
+    // Inject user profile context for personalized responses
+    if (userId) {
+      try {
+        const { ProfileRepository } = await import('@/db/repositories/profile-repository');
+        const profileRepo = new ProfileRepository();
+        const userProfile = await profileRepo.findUserProfile(userId);
+        if (userProfile && (userProfile.facts as import('@/db/schema/profiles').ProfileFact[])?.length > 0) {
+          const facts = (userProfile.facts as import('@/db/schema/profiles').ProfileFact[]).map(f => `- ${f.key}: ${f.value}`).join('\n');
+          basePrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
+        } else if (userProfile) {
+          basePrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}`;
+        }
+      } catch {}
+    }
+
     const systemContent = summary
       ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}`
       : basePrompt;

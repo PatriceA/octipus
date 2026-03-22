@@ -11,6 +11,9 @@ const CASUAL_PATTERNS = [
   /^what\s+is\s+the\s+\w+\s+of\b/i,  // "What is the capital of France?"
   /^(can you|could you)\s+(explain|tell|clarify)/i,  // "Can you explain that?"
   /\b(more detail|elaborate|clarify)\b/i,  // Follow-up requests
+  /^who\s+(am\s+i|are\s+you)\b/i,  // Identity questions
+  /^what\s+(do\s+you\s+know\s+about\s+me|is\s+my\s+name)\b/i,  // Self-knowledge questions
+  /^(what\s+time|what\s+day|what\s+date|what'?s\s+the\s+(time|date|day))\b/i,  // Time/date questions
 ];
 
 const TASK_KEYWORDS: Record<string, string[]> = {
