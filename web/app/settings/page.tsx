@@ -36,7 +36,7 @@ export default function SettingsPage() {
         </div>
         <div>
           <h1 className="text-4xl font-extrabold tracking-tighter text-white">Settings</h1>
-          <p className="text-sm text-on-surface-variant">Configure your assistant</p>
+          <p className="text-on-surface-variant">System configuration — workspace paths, model routing, channel integrations, security, and notifications.</p>
         </div>
       </div>
 

@@ -148,8 +148,8 @@ export default function EvalPage() {
             <FlaskConical className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">Evaluations</h1>
-            <p className="text-sm text-on-surface-variant">Agent evaluation results and analysis</p>
+            <h1 className="text-4xl font-extrabold tracking-tighter text-white">Evaluations</h1>
+            <p className="text-on-surface-variant">Test agent routing accuracy, tool usage, and response quality. Run evaluation suites and compare results across models.</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -338,7 +338,7 @@ export default function EvalPage() {
               <FlaskConical className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
               <p className="text-on-surface-variant">No evaluation results yet</p>
               <p className="text-sm text-on-surface-variant mt-1">
-                Run an eval suite: <code className="bg-[#262626] px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
+                Click &quot;Run Eval&quot; above or run from CLI: <code className="bg-[#262626] px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
               </p>
             </CardContent>
           </Card>

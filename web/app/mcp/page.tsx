@@ -424,9 +424,9 @@ export default function MCPPage() {
             <Cable className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">MCP Servers</h1>
-            <p className="text-sm text-on-surface-variant">
-              Connect external tools via Model Context Protocol. Agents discover tools on demand.
+            <h1 className="text-4xl font-extrabold tracking-tighter text-white">MCP Servers</h1>
+            <p className="text-on-surface-variant">
+              Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients.
             </p>
           </div>
         </div>
@@ -450,7 +450,7 @@ export default function MCPPage() {
             <Cable className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
             <p className="text-on-surface-variant">No MCP servers configured</p>
             <p className="text-sm text-on-surface-variant mt-1">
-              Add servers like n8n, Brave Search, or any MCP-compatible service
+              Click &quot;Add Server&quot; to connect an MCP-compatible service like n8n, Brave Search, or any custom MCP server.
             </p>
           </div>
         ) : (

@@ -19,6 +19,7 @@ import {
   FlaskConical,
   FileText,
   Brain,
+  Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSidebarStore } from '@/lib/sidebar-store';
@@ -41,6 +42,7 @@ const navGroups: NavGroup[] = [
       { name: 'Dashboard', href: '/', icon: LayoutDashboard },
       { name: 'Chat', href: '/chat', icon: MessageSquare },
       { name: 'Documents', href: '/documents', icon: FileText },
+      { name: 'Profiles', href: '/profiles', icon: Users },
     ],
   },
   {

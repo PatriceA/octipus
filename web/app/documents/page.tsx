@@ -561,8 +561,11 @@ export default function DocumentsPage() {
           <FileText className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-white">Documents</h1>
-          <p className="text-sm text-on-surface-variant">
+          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Documents</h1>
+          <p className="text-on-surface-variant">
+            Upload and manage documents. Files are processed with OCR, categorized by AI, and indexed into the knowledge base for retrieval.
+          </p>
+          <p className="text-sm text-on-surface-variant mt-1">
             {documents.length} document{documents.length !== 1 ? 's' : ''}
           </p>
         </div>
@@ -647,6 +650,7 @@ export default function DocumentsPage() {
         <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
           <FileText className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No documents found</p>
+          <p className="text-sm text-on-surface-variant mt-1">Click &quot;Upload&quot; to add files. They will be processed with OCR and indexed automatically.</p>
         </div>
       ) : (
         <div className="space-y-3">

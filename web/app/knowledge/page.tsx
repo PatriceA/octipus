@@ -530,8 +530,11 @@ export default function KnowledgePage() {
           <Brain className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-white">Knowledge Base</h1>
-          <p className="text-sm text-on-surface-variant">
+          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Knowledge Base</h1>
+          <p className="text-on-surface-variant">
+            RAG knowledge base powered by pgvector. Search indexed documents, code, and agent outputs using hybrid semantic + keyword search.
+          </p>
+          <p className="text-sm text-on-surface-variant mt-1">
             {stats?.total ?? 0} entries indexed across {Object.keys(stats?.bySourceType || {}).length} source types
           </p>
         </div>
@@ -699,7 +702,7 @@ export default function KnowledgePage() {
             <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
               <Brain className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
               <p className="text-on-surface-variant">No knowledge entries found</p>
-              <p className="text-xs text-on-surface-variant mt-1">Index some files to get started</p>
+              <p className="text-xs text-on-surface-variant mt-1">Click &quot;Index Files&quot; to add documents or code to the knowledge base for semantic retrieval.</p>
             </div>
           ) : (
             <>

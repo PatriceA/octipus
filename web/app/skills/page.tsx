@@ -751,9 +751,12 @@ export default function SkillsPage() {
           <BookOpen className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-white">Skills</h1>
-          <p className="text-sm text-on-surface-variant">
-            {skills.length} domain knowledge skills across {categories.length} categories
+          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Skills</h1>
+          <p className="text-on-surface-variant">
+            Domain knowledge injected into agent prompts. Skills provide expertise in areas like software architecture, security practices, and API design.
+          </p>
+          <p className="text-sm text-on-surface-variant mt-1">
+            {skills.length} skills across {categories.length} categories
           </p>
         </div>
         <button
@@ -765,9 +768,7 @@ export default function SkillsPage() {
         </button>
       </div>
 
-      <p className="text-sm text-on-surface-variant">
-        Skills are domain expertise sets — principles, best practices, and anti-patterns — that get injected into expert agent prompts for grounded, specialist-level responses.
-      </p>
+      {/* description already in header */}
 
       {/* Search + Category filter */}
       <div className="flex gap-3">
@@ -820,6 +821,7 @@ export default function SkillsPage() {
         <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
           <BookOpen className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No skills found</p>
+          <p className="text-sm text-on-surface-variant mt-1">Click &quot;Create Skill&quot; to add domain knowledge that agents can use during conversations.</p>
         </div>
       ) : (
         <div className="space-y-3">

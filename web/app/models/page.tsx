@@ -118,7 +118,7 @@ export default function ModelsPage() {
           </div>
           <div>
             <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Models</h1>
-            <p className="text-sm text-on-surface-variant">Configure LLM models, providers, and CLI tools</p>
+            <p className="text-on-surface-variant">Configure AI model providers and routing. Each model can be assigned to specific topics like coding, research, or orchestration.</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -153,7 +153,7 @@ export default function ModelsPage() {
           <div className="col-span-full text-center py-8 text-on-surface-variant">
             <Cpu className="w-12 h-12 mx-auto mb-3 text-outline-variant" />
             <p>No models configured</p>
-            <p className="text-sm mt-1">Click &quot;Add Model&quot; to configure your first model</p>
+            <p className="text-sm mt-1">Click &quot;Add Model&quot; to register an LLM provider and assign it to topics for automatic routing.</p>
           </div>
         ) : (
           models.map((model) => (

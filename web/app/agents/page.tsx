@@ -205,7 +205,7 @@ export default function AgentsPage() {
           </div>
           <div>
             <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Agents</h1>
-            <p className="text-sm text-on-surface-variant">Manage running and completed agents</p>
+            <p className="text-on-surface-variant">Monitor and manage running AI agents. View their status, tool calls, iterations, and results.</p>
           </div>
         </div>
         <button
@@ -242,7 +242,7 @@ export default function AgentsPage() {
               ) : agents.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-on-surface-variant">
-                    No agents running. Click "New Agent" to start one.
+                    No agents running. Click &quot;New Agent&quot; to spawn an AI agent with a specific task and role.
                   </td>
                 </tr>
               ) : (

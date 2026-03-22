@@ -121,7 +121,7 @@ export default function PipelinesPage() {
           </div>
           <div>
             <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Pipelines</h1>
-            <p className="text-sm text-on-surface-variant">Create multi-step pipeline templates for complex workflows</p>
+            <p className="text-on-surface-variant">Multi-stage agent workflows. Chain specialist agents in sequence with approval gates and automatic QA retries.</p>
           </div>
         </div>
         <button
@@ -139,7 +139,7 @@ export default function PipelinesPage() {
           <GitBranch className="w-12 h-12 mx-auto text-on-surface-variant mb-4" />
           <h3 className="text-lg font-medium text-white mb-2">No pipeline templates</h3>
           <p className="text-sm text-on-surface-variant mb-4">
-            Create a template to define reusable multi-step workflows.
+            Create a template to chain multiple specialist agents in sequence. Each step can have its own topic, prompt, and approval gate.
           </p>
           <button
             onClick={handleCreate}

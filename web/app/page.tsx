@@ -98,7 +98,7 @@ export default function DashboardPage() {
       {/* Page Header */}
       <div>
         <h1 className="text-4xl font-extrabold tracking-tighter text-white">Dashboard</h1>
-        <p className="mt-1 text-sm text-on-surface-variant">Overview of your assistant&apos;s activity</p>
+        <p className="mt-2 text-on-surface-variant">Live overview of your AI infrastructure — active agents, sessions, token usage, and system health.</p>
       </div>
 
       {/* Stats Grid */}

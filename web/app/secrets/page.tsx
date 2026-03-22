@@ -60,8 +60,8 @@ export default function SecretsPage() {
           <h1 className="text-4xl font-extrabold tracking-tighter text-white">
             Secrets & Credentials
           </h1>
-          <p className="text-sm text-on-surface-variant">
-            Manage API keys, OAuth credentials, and other secrets in one place.
+          <p className="text-on-surface-variant">
+            Manage API keys and provider credentials. All secrets are stored with AES-256-GCM encryption.
           </p>
         </div>
       </div>

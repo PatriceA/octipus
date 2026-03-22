@@ -967,7 +967,7 @@ export default function HooksPage() {
           </div>
           <div>
             <h1 className="text-4xl font-extrabold tracking-tighter text-white">Hooks & Tasks</h1>
-            <p className="text-sm text-on-surface-variant">Automate actions with events and schedules</p>
+            <p className="text-on-surface-variant">Event-driven automation. Create hooks that trigger on messages, agent events, schedules, or incoming webhooks.</p>
           </div>
         </div>
         <button

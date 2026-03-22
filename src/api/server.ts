@@ -37,6 +37,7 @@ import { evalRoutes } from './routes/eval';
 import { documentRoutes } from './routes/documents';
 import { knowledgeRoutes } from './routes/knowledge';
 import { pluginRoutes } from './routes/plugins';
+import { searchRoutes } from './routes/search';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { setupWebSocket } from './websocket';
@@ -188,6 +189,7 @@ export function createServer() {
         .use(documentRoutes)
         .use(knowledgeRoutes)
         .use(pluginRoutes)
+        .use(searchRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group

@@ -23,7 +23,7 @@ const SYSTEM_EXPERTS: Array<{
     description: 'Writes, refactors, and debugs code with architectural awareness.',
     icon: 'code',
     role: 'coding',
-    skillIds: ['software-architecture', 'data-structures', 'database-design', 'api-design'],
+    skillIds: ['software-architecture', 'data-structures', 'database-design', 'api-design', 'plugin-development'],
     criticalRules: [
       'All code must include error handling — never let exceptions propagate silently',
       'Follow existing patterns and conventions in the codebase before introducing new ones',
@@ -363,8 +363,9 @@ export async function seedExperts(): Promise<void> {
       .limit(1);
 
     if (existing.length > 0) {
-      // Update existing experts with new structured prompt fields
+      // Update existing experts with new structured prompt fields and skills
       await db.update(experts).set({
+        skillIds: expert.skillIds ?? [],
         criticalRules: expert.criticalRules ?? [],
         deliverableTemplate: expert.deliverableTemplate ?? null,
         successMetrics: expert.successMetrics ?? [],
