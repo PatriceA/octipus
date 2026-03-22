@@ -388,6 +388,26 @@ export class AssistantClient {
     });
   }
 
+  // ─── Plugins ───
+
+  async listPlugins(): Promise<Array<{
+    name: string; version: string; description: string; author?: string;
+    directory: string;
+    tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+  }>> {
+    const res = await this.request<{ plugins: any[] }>('/api/plugins');
+    return res.plugins || [];
+  }
+
+  async reloadPlugin(name: string): Promise<{
+    message: string; name: string; version: string; tools: number;
+    error?: string;
+  }> {
+    return this.request(`/api/plugins/${encodeURIComponent(name)}/reload`, {
+      method: 'POST',
+    });
+  }
+
   // ─── Health ───
 
   async getHealth(): Promise<Record<string, unknown>> {
