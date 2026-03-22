@@ -388,16 +388,30 @@ export default function ChatPage() {
         const sid = data.sessionId || activeSessionId;
         if (sid) {
           updateSessionState(sid, (prev) => {
-            // Finalize any agents still marked as 'running' — the response
-            // arriving means all work is done, so stop their timers.
+            // Mark any agents still 'running' as completed.
+            // worker_completed events set accurate durationMs from the server,
+            // but due to React state batching they may not be committed yet.
+            // Use elapsed time from startTime as fallback only if durationMs is missing.
             const next = new Map(prev.trackedAgents);
             Array.from(next.entries()).forEach(([id, agent]) => {
-              if (agent.status === 'running') {
+              if (agent.status === 'running' && !agent.durationMs) {
+                const elapsed = Date.now() - agent.startTime;
+                // Skip finalization if elapsed < 100ms — likely a batching artifact
+                // where worker_completed hasn't been committed yet
+                if (elapsed > 100) {
+                  next.set(id, {
+                    ...agent,
+                    status: 'completed',
+                    endTime: agent.startTime + elapsed,
+                    durationMs: elapsed,
+                  });
+                }
+              } else if (agent.status === 'running' && agent.durationMs) {
+                // worker_completed set durationMs but status wasn't updated due to batching
                 next.set(id, {
                   ...agent,
                   status: 'completed',
-                  endTime: agent.endTime ?? Date.now(),
-                  durationMs: agent.durationMs ?? (Date.now() - agent.startTime),
+                  endTime: agent.endTime ?? (agent.startTime + agent.durationMs),
                 });
               }
             });
