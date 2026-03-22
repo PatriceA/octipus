@@ -923,7 +923,7 @@ export default function HooksPage() {
     queryKey: ['hook-suggestions'],
     queryFn: async () => {
       try {
-        const res = await api.get<{ suggestions: Array<{ id: string; name: string; description: string; integration: string }> }>('/hooks/suggestions');
+        const res = await api.get<{ suggestions: Array<{ id: string; name: string; description: string; category: string; integration: string }> }>('/hooks/suggestions');
         return res?.suggestions || [];
       } catch {
         return [];
@@ -1120,35 +1120,58 @@ export default function HooksPage() {
       )}
 
       {activeTab === 'hooks' && <>
-      {/* Suggested hooks */}
-      {suggestions.length > 0 && (
-        <div className="bg-primary/10 rounded-[1rem] p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Lightbulb className="w-4 h-4 text-primary" />
-            <span className="text-sm font-medium text-primary">Suggested Hooks</span>
-            <span className="text-xs text-on-surface-variant">Based on your configured integrations</span>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {suggestions.map((s) => (
-              <div key={s.id} className="bg-[#1a1a1a] rounded-lg p-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-white">{s.name}</p>
-                    <p className="text-xs text-on-surface-variant mt-0.5">{s.description}</p>
-                    <span className="inline-block mt-1 text-xs px-1.5 py-0.5 rounded bg-[#262626] text-on-surface-variant">{s.integration}</span>
-                  </div>
-                  <button
-                    onClick={() => applySuggestion(s.id)}
-                    className="text-xs px-2 py-1 bg-primary text-[#0e0e0e] rounded hover:bg-primary-container flex-shrink-0"
-                  >
-                    Add
-                  </button>
+      {/* Suggested automations */}
+      {suggestions.length > 0 && (() => {
+        const categoryLabels: Record<string, string> = {
+          'daily-briefing': 'Daily Briefings',
+          'email': 'Email Management',
+          'calendar': 'Calendar',
+          'developer': 'Developer Workflows',
+          'monitoring': 'System Monitoring',
+          'productivity': 'Productivity',
+        };
+        const categoryOrder = ['daily-briefing', 'email', 'calendar', 'developer', 'monitoring', 'productivity'];
+        const grouped = suggestions.reduce<Record<string, typeof suggestions>>((acc, s) => {
+          const cat = (s as any).category || 'productivity';
+          if (!acc[cat]) acc[cat] = [];
+          acc[cat].push(s);
+          return acc;
+        }, {});
+
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Lightbulb className="w-5 h-5 text-primary" />
+              <span className="text-lg font-bold text-white">Ready-to-Use Automations</span>
+              <span className="text-xs text-on-surface-variant">One click to add. Enable when ready.</span>
+            </div>
+            {categoryOrder.filter(cat => grouped[cat]?.length).map(cat => (
+              <div key={cat}>
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2 px-1">{categoryLabels[cat] || cat}</h3>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {grouped[cat].map((s) => (
+                    <div key={s.id} className="bg-[#1a1a1a] rounded-lg p-3 border border-outline-variant/10 hover:border-primary/20 transition-colors">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white">{s.name}</p>
+                          <p className="text-xs text-on-surface-variant mt-0.5 line-clamp-2">{s.description}</p>
+                          <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-[#262626] text-on-surface-variant">{s.integration}</span>
+                        </div>
+                        <button
+                          onClick={() => applySuggestion(s.id)}
+                          className="text-xs px-3 py-1 bg-primary text-[#0e0e0e] rounded-full font-bold hover:bg-primary-container flex-shrink-0 cursor-pointer transition-colors"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       <div className="bg-[#1a1a1a] rounded-[1rem]">
         <div className="overflow-x-auto">
