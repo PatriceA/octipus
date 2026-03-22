@@ -89,7 +89,7 @@ function getRelationshipColor(relationship: string): string {
 // --- API helpers ---
 
 async function toolExec<T>(toolName: string, params: Record<string, unknown> = {}): Promise<T> {
-  const res = await api.post<ToolResult<T>>(`/tools/profiles/tools/${toolName}/execute`, params);
+  const res = await api.post<ToolResult<T>>(`/tools/profiles/tools/${toolName}/execute`, { args: params });
   return res.result;
 }
 
