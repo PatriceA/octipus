@@ -12,8 +12,7 @@ const loadedPlugins: Map<string, LoadedPlugin> = new Map();
  * Resolve the root extensions/ directory (project root)
  */
 function getExtensionsDir(): string {
-  // Walk up from src/plugins/ to project root, then into extensions/
-  return resolve(import.meta.dir, '..', '..', 'extensions');
+  return resolve(process.cwd(), 'extensions');
 }
 
 /**
