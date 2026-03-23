@@ -83,6 +83,13 @@ export async function handleCommand(
   const commandName = cmd.toLowerCase().slice(1); // remove /
   const handler = getCommand(commandName);
 
+  // /cancel outside an active command — acknowledge gracefully
+  if (commandName === 'cancel') {
+    const response = 'Nothing to cancel.';
+    await persistCommandExchange(sessionId, userId, content, response);
+    return response;
+  }
+
   if (!handler) {
     // Unknown command
     const response = `Unknown command: \`${cmd}\`. Type \`/help\` to see available commands.`;
