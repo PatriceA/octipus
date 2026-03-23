@@ -110,11 +110,11 @@ export default function ChatPage() {
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
     try {
-      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string }>; maxTokenBudget?: number }>('/sessions');
+      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string }>; maxTokenBudget?: number }>('/sessions');
       if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
-          .filter(s => s.status === 'active')
+          .filter(s => s.status === 'active' && (!s.channelType || s.channelType === 'webchat' || s.channelType === 'api'))
           .slice(0, 50)
           .map(s => ({
             id: s.id,
