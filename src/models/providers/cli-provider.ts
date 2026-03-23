@@ -345,8 +345,9 @@ export class CLIProvider implements ModelProvider {
   }
 
   private async checkToolAvailable(tool: CLIToolConfig): Promise<boolean> {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
     try {
-      await this.execCli('which', [tool.binaryPath]);
+      await this.execCli(cmd, [tool.binaryPath]);
       return true;
     } catch {
       return false;

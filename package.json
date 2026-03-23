@@ -4,7 +4,7 @@
   "description": "Autonomous development assistant with multi-channel support",
   "type": "module",
   "bin": {
-    "assistant": "./bin/assistant"
+    "assistant": "./bin/assistant.mjs"
   },
   "scripts": {
     "dev": "bun run --watch src/index.ts",

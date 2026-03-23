@@ -5,8 +5,9 @@
  * via the web UI at http://localhost:3007/setup after first boot.
  */
 
-import { existsSync } from 'fs';
-import { homedir } from 'os';
+import { existsSync, readFileSync, appendFileSync } from 'fs';
+import { homedir, platform } from 'os';
+import { resolve, join } from 'path';
 import { input, select, confirm, checkbox } from '@inquirer/prompts';
 
 // ── Helpers ──
@@ -43,17 +44,183 @@ async function checkHttp(url: string, timeoutMs = 3000): Promise<boolean> {
 }
 
 async function detectChromium(): Promise<string | null> {
-  for (const bin of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) {
+  const os = platform();
+
+  if (os === 'win32') {
+    // Check common Windows install paths
+    const winPaths = [
+      process.env['PROGRAMFILES'] + '\\Google\\Chrome\\Application\\chrome.exe',
+      process.env['PROGRAMFILES(X86)'] + '\\Google\\Chrome\\Application\\chrome.exe',
+      process.env['LOCALAPPDATA'] + '\\Google\\Chrome\\Application\\chrome.exe',
+      process.env['PROGRAMFILES'] + '\\Chromium\\Application\\chrome.exe',
+      process.env['LOCALAPPDATA'] + '\\Chromium\\Application\\chrome.exe',
+      process.env['PROGRAMFILES(X86)'] + '\\Microsoft\\Edge\\Application\\msedge.exe',
+      process.env['PROGRAMFILES'] + '\\Microsoft\\Edge\\Application\\msedge.exe',
+    ];
+    for (const p of winPaths) {
+      if (p && existsSync(p)) return p;
+    }
+    // Try where command
     try {
-      const proc = Bun.spawn(['which', bin], { stdout: 'pipe', stderr: 'pipe' });
-      const code = await proc.exited;
-      if (code === 0) {
-        const path = (await new Response(proc.stdout).text()).trim();
-        return path || bin;
+      const proc = Bun.spawn(['where', 'chrome'], { stdout: 'pipe', stderr: 'pipe' });
+      if (await proc.exited === 0) {
+        const path = (await new Response(proc.stdout).text()).trim().split('\n')[0];
+        if (path) return path;
       }
     } catch {}
+  } else {
+    // Unix: use which
+    for (const bin of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) {
+      try {
+        const proc = Bun.spawn(['which', bin], { stdout: 'pipe', stderr: 'pipe' });
+        if (await proc.exited === 0) {
+          const path = (await new Response(proc.stdout).text()).trim();
+          return path || bin;
+        }
+      } catch {}
+    }
   }
   return null;
+}
+
+// ── CLI Registration ──
+
+async function registerCli(binDir: string): Promise<boolean> {
+  console.log('\n\x1b[1m── CLI Registration ──\x1b[0m');
+
+  const os = platform();
+
+  // Check if "assistant" command already works
+  try {
+    const check = Bun.spawn(['assistant', '--help'], { stdout: 'pipe', stderr: 'pipe' });
+    if (await check.exited === 0) {
+      console.log('\x1b[32m✓ "assistant" command is already available\x1b[0m');
+      return true;
+    }
+  } catch {}
+
+  const doRegister = await confirm({
+    message: 'Register "assistant" command globally?',
+    default: true,
+  });
+
+  if (!doRegister) {
+    printManualCliInstructions(binDir, os);
+    return false;
+  }
+
+  // Try bun link first (works cross-platform)
+  const projectDir = resolve(binDir, '..');
+  try {
+    console.log('Running bun link...');
+    const proc = Bun.spawn(['bun', 'link'], {
+      cwd: projectDir,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const code = await proc.exited;
+    if (code === 0) {
+      console.log('\x1b[32m✓ "assistant" command registered via bun link\x1b[0m');
+      console.log('\x1b[33m  Note: Restart your terminal if the command is not recognized.\x1b[0m');
+      return true;
+    }
+    const stderr = await new Response(proc.stderr).text();
+    console.log(`\x1b[33m⚠ bun link failed (exit ${code}): ${stderr.trim()}\x1b[0m`);
+  } catch (err) {
+    console.log(`\x1b[33m⚠ bun link failed: ${(err as Error).message}\x1b[0m`);
+  }
+
+  // Fallback: add bin/ to PATH
+  console.log('Falling back to PATH registration...');
+  if (os === 'win32') {
+    return await registerCliWindows(binDir);
+  } else {
+    return await registerCliUnix(binDir, os);
+  }
+}
+
+async function registerCliWindows(binDir: string): Promise<boolean> {
+  try {
+    // Add to user PATH via PowerShell
+    const psCommand = `$p = [Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike '*${binDir.replace(/'/g, "''")}*') { [Environment]::SetEnvironmentVariable('Path', "$p;${binDir.replace(/'/g, "''")}", 'User') }`;
+    const proc = Bun.spawn(['powershell', '-NoProfile', '-Command', psCommand], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const code = await proc.exited;
+    if (code === 0) {
+      console.log('\x1b[32m✓ Added to user PATH\x1b[0m');
+      console.log('\x1b[33m  Note: Restart your terminal for the change to take effect.\x1b[0m');
+      return true;
+    }
+  } catch {}
+  console.log('\x1b[33m⚠ Could not update PATH automatically.\x1b[0m');
+  printManualCliInstructions(binDir, 'win32');
+  return false;
+}
+
+async function registerCliUnix(binDir: string, os: string): Promise<boolean> {
+  // Determine shell profile
+  const shell = process.env.SHELL || '/bin/bash';
+  let profileFile: string;
+  if (shell.includes('zsh')) {
+    profileFile = join(homedir(), '.zshrc');
+  } else if (shell.includes('fish')) {
+    profileFile = join(homedir(), '.config', 'fish', 'config.fish');
+  } else {
+    profileFile = join(homedir(), '.bashrc');
+  }
+
+  const exportLine = shell.includes('fish')
+    ? `\n# Assistant CLI\nset -gx PATH $PATH "${binDir}"\n`
+    : `\n# Assistant CLI\nexport PATH="$PATH:${binDir}"\n`;
+
+  try {
+    // Check if already present in profile
+    if (existsSync(profileFile)) {
+      const content = readFileSync(profileFile, 'utf-8');
+      if (content.includes(binDir)) {
+        console.log(`\x1b[32m✓ PATH entry already in ${profileFile}\x1b[0m`);
+        return true;
+      }
+    }
+
+    appendFileSync(profileFile, exportLine, 'utf-8');
+    console.log(`\x1b[32m✓ Added to ${profileFile}\x1b[0m`);
+    console.log(`\x1b[33m  Note: Run \x1b[0msource ${profileFile}\x1b[33m or restart your terminal.\x1b[0m`);
+    return true;
+  } catch (err) {
+    console.log(`\x1b[33m⚠ Could not write to ${profileFile}: ${(err as Error).message}\x1b[0m`);
+    printManualCliInstructions(binDir, os);
+    return false;
+  }
+}
+
+function printManualCliInstructions(binDir: string, os: string): void {
+  const projectDir = resolve(binDir, '..');
+  console.log('\n  To register the CLI manually:\n');
+  console.log(`  \x1b[36mOption 1 — bun link (recommended, all platforms):\x1b[0m`);
+  console.log(`    cd "${projectDir}" && bun link`);
+  console.log(`    # Then restart your terminal\n`);
+  if (os === 'win32') {
+    console.log(`  \x1b[36mOption 2 — add to PATH (PowerShell, run once):\x1b[0m`);
+    console.log(`    $path = [Environment]::GetEnvironmentVariable('Path','User')`);
+    console.log(`    [Environment]::SetEnvironmentVariable('Path', "$path;${binDir}", 'User')`);
+    console.log(`    # Then restart your terminal\n`);
+  } else {
+    const shell = process.env.SHELL || '/bin/bash';
+    if (shell.includes('zsh')) {
+      console.log(`  \x1b[36mOption 2 — add to PATH (~/.zshrc):\x1b[0m`);
+      console.log(`    echo 'export PATH="$PATH:${binDir}"' >> ~/.zshrc && source ~/.zshrc\n`);
+    } else if (shell.includes('fish')) {
+      console.log(`  \x1b[36mOption 2 — add to PATH (~/.config/fish/config.fish):\x1b[0m`);
+      console.log(`    echo 'set -gx PATH $PATH "${binDir}"' >> ~/.config/fish/config.fish\n`);
+    } else {
+      console.log(`  \x1b[36mOption 2 — add to PATH (~/.bashrc):\x1b[0m`);
+      console.log(`    echo 'export PATH="$PATH:${binDir}"' >> ~/.bashrc && source ~/.bashrc\n`);
+    }
+  }
+  console.log(`  After that, you can use: assistant start, assistant stop, etc.`);
 }
 
 // ── Main ──
@@ -180,11 +347,11 @@ async function main(): Promise<void> {
         checked: false,
         disabled: ollamaAvailable ? '(already running)' : false,
       },
-      ...(chromiumPath ? [{
+      {
         value: 'browser-ext' as const,
-        name: 'Browser Extension (real browser control for AI agents)',
-        checked: false,
-      }] : []),
+        name: `Browser Extension (real browser control for AI agents)${chromiumPath ? '' : ' — no browser detected, install manually'}`,
+        checked: !!chromiumPath,
+      },
       {
         value: 'mcp',
         name: 'MCP Server (use assistant tools from Claude Code, Gemini CLI, etc.)',
@@ -343,7 +510,12 @@ async function main(): Promise<void> {
     else console.log('\x1b[33m⚠ Migration exited with code ' + code + '\x1b[0m');
   }
 
+  // ── Register CLI ──
+  const binDir = resolve(import.meta.dir, '..', 'bin');
+  const cliRegistered = await registerCli(binDir);
+
   // ── Summary ──
+  const startCmd = cliRegistered ? 'assistant start --dev' : (platform() === 'win32' ? `"${binDir}\\assistant.cmd" start --dev` : `"${binDir}/assistant" start --dev`);
   console.log(`
 \x1b[36m╔═══════════════════════════════════════════════════════════╗
 ║                    SETUP COMPLETE                         ║
@@ -354,7 +526,7 @@ async function main(): Promise<void> {
   ${storageMode === 'embedded' ? `Data dir: ${dataDir}` : `Database: ${databaseUrl.replace(/:[^:@]*@/, ':***@')}`}
 
 Next steps:
-  1. Start the assistant:  assistant start --dev
+  1. Start the assistant:  ${startCmd}
   2. Open http://localhost:3007 and register your admin account
   3. Configure LLM providers, channels, etc. via the web UI
 `);
