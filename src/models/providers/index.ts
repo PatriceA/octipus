@@ -5,6 +5,7 @@ import { OllamaProvider } from './ollama-provider';
 import { OpenAIProvider } from './openai-provider';
 import { AnthropicProvider } from './anthropic-provider';
 import { GeminiProvider } from './gemini-provider';
+import { DeepSeekProvider } from './deepseek-provider';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
@@ -18,6 +19,7 @@ export { OllamaProvider } from './ollama-provider';
 export { OpenAIProvider } from './openai-provider';
 export { AnthropicProvider } from './anthropic-provider';
 export { GeminiProvider } from './gemini-provider';
+export { DeepSeekProvider } from './deepseek-provider';
 
 /**
  * Resolve the rate-limit provider key from a ModelProvider + model name.
@@ -53,7 +55,7 @@ function isRateLimitResponse(error: unknown): boolean {
  *
  * Now integrates per-provider rate limiting and circuit breaking.
  *
- * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → LiteLLM (catch-all)
+ * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → DeepSeek → LiteLLM (catch-all)
  * LiteLLM is only registered if proxyUrl is configured.
  */
 export class ProviderRouter {
@@ -82,6 +84,7 @@ export class ProviderRouter {
     this.providers.push(new OpenAIProvider());
     this.providers.push(new AnthropicProvider());
     this.providers.push(new GeminiProvider());
+    this.providers.push(new DeepSeekProvider());
 
     // LiteLLM as catch-all fallback — only if configured
     if (config.litellm.proxyUrl) {

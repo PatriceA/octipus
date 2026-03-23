@@ -8,23 +8,28 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../litell
 import { modelLogger } from '@/utils/logger';
 import type { AgentMessage } from '@/core/types';
 
-const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
-/** Model names / prefixes supported by the OpenAI API */
-const SUPPORTED_PREFIXES = ['gpt-', 'o1-', 'o3-'];
-const SUPPORTED_EXACT = new Set(['chatgpt-4o-latest', 'dall-e-3']);
+/** Model names / prefixes supported by the DeepSeek API */
+const SUPPORTED_PREFIXES = ['deepseek-'];
 
 /**
- * OpenAI direct provider -- calls the OpenAI API without going through
- * the LiteLLM proxy. API key is retrieved from the vault at runtime.
+ * DeepSeek direct provider -- calls the DeepSeek API (OpenAI-compatible)
+ * without going through the LiteLLM proxy. API key is retrieved from the
+ * vault at runtime.
  */
-export class OpenAIProvider implements ModelProvider {
-  readonly name = 'openai';
+export class DeepSeekProvider implements ModelProvider {
+  readonly name = 'deepseek';
   readonly type = 'direct' as const;
+
+  private baseUrl: string;
+
+  constructor(baseUrl?: string) {
+    this.baseUrl = baseUrl || DEEPSEEK_BASE_URL;
+  }
 
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();
-    if (SUPPORTED_EXACT.has(lower)) return true;
     return SUPPORTED_PREFIXES.some((prefix) => lower.startsWith(prefix));
   }
 
@@ -55,7 +60,7 @@ export class OpenAIProvider implements ModelProvider {
 
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
-      'Sending completion request to OpenAI'
+      'Sending completion request to DeepSeek'
     );
 
     try {
@@ -92,12 +97,12 @@ export class OpenAIProvider implements ModelProvider {
           hasToolCalls: !!result.toolCalls?.length,
           provider: this.name,
         },
-        'OpenAI completion successful'
+        'DeepSeek completion successful'
       );
 
       return result;
     } catch (error) {
-      modelLogger.error({ error, model: params.model, provider: this.name }, 'OpenAI completion failed');
+      modelLogger.error({ error, model: params.model, provider: this.name }, 'DeepSeek completion failed');
       throw error;
     }
   }
@@ -125,7 +130,7 @@ export class OpenAIProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
-    modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via OpenAI');
+    modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via DeepSeek');
 
     const stream = await client.chat.completions.create(params);
 
@@ -170,10 +175,10 @@ export class OpenAIProvider implements ModelProvider {
     try {
       const apiKey = await this.getApiKey();
       if (!apiKey) {
-        return { healthy: false, error: 'OpenAI API key not configured' };
+        return { healthy: false, error: 'DeepSeek API key not configured' };
       }
 
-      const client = new OpenAI({ baseURL: OPENAI_BASE_URL, apiKey });
+      const client = new OpenAI({ baseURL: this.baseUrl, apiKey });
       await client.models.list();
 
       return { healthy: true, latencyMs: Date.now() - startTime };
@@ -186,15 +191,15 @@ export class OpenAIProvider implements ModelProvider {
 
   private async getApiKey(): Promise<string | null> {
     // Check environment variable first
-    if (process.env.OPENAI_API_KEY) {
-      return process.env.OPENAI_API_KEY;
+    if (process.env.DEEPSEEK_API_KEY) {
+      return process.env.DEEPSEEK_API_KEY;
     }
 
     // Fall back to vault
     try {
       const { getVault } = await import('@/security/vault');
       const vault = getVault();
-      const value = await vault.getByName('system', 'openai_api_key');
+      const value = await vault.getByName('system', 'deepseek_api_key');
       return value || null;
     } catch {
       return null;
@@ -204,11 +209,11 @@ export class OpenAIProvider implements ModelProvider {
   private async createClient(): Promise<OpenAI> {
     const apiKey = await this.getApiKey();
     if (!apiKey) {
-      throw new Error('OpenAI API key not available. Set OPENAI_API_KEY or store it in the vault.');
+      throw new Error('DeepSeek API key not available. Set DEEPSEEK_API_KEY or store it in the vault.');
     }
 
     return new OpenAI({
-      baseURL: OPENAI_BASE_URL,
+      baseURL: this.baseUrl,
       apiKey,
       timeout: 120_000,
       maxRetries: 2,

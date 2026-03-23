@@ -19,6 +19,7 @@ const CLOUD_PREFIXES = [
   'o3-',
   'claude-',
   'gemini-',
+  'deepseek-',
   'dall-e-',
   'chatgpt-',
   'cli/',
@@ -70,6 +71,11 @@ export class OllamaProvider implements ModelProvider {
     if (options.tools?.length) {
       params.tools = options.tools;
       params.tool_choice = 'auto';
+    }
+
+    // Merge extra body parameters (e.g. { think: false } for Qwen3)
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
     }
 
     modelLogger.debug(
@@ -137,6 +143,11 @@ export class OllamaProvider implements ModelProvider {
     if (options.tools?.length) {
       params.tools = options.tools;
       params.tool_choice = 'auto';
+    }
+
+    // Merge extra body parameters (e.g. { think: false } for Qwen3)
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
     }
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Ollama');

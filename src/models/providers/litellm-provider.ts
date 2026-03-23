@@ -19,12 +19,12 @@ export class LiteLLMProvider implements ModelProvider {
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const client = getLiteLLMClient();
-    return client.complete(options);
+    return client.completeViaProxy(options);
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const client = getLiteLLMClient();
-    yield* client.stream(options);
+    yield* client.streamViaProxy(options);
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

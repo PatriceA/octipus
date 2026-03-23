@@ -311,23 +311,14 @@ export default function SidePanel({
             </span>
           </div>
 
-          {/* Model selector */}
+          {/* Model (read-only — routing is handled by the orchestrator) */}
           <div>
             <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-on-surface-variant">
-              Model
+              Default Model
             </label>
-            <select
-              value={selectedModel}
-              onChange={(e) => onModelChange(e.target.value)}
-              className="w-full rounded-md border border-outline-variant/10 bg-surface-container-highest px-2 py-1 text-xs text-white shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              {models.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name}
-                  {m.isDefault ? ' (default)' : ''}
-                </option>
-              ))}
-            </select>
+            <div className="w-full rounded-md border border-outline-variant/10 bg-surface-container-highest px-2 py-1 text-xs text-white">
+              {selectedModel || 'No model configured'}
+            </div>
           </div>
 
           {/* Expert / Preset pills */}
@@ -335,6 +326,7 @@ export default function SidePanel({
             <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-on-surface-variant">
               Expert
             </label>
+            <p className="text-[10px] text-on-surface-variant mb-1.5">Chat directly with an expert.</p>
             <div className="flex flex-wrap gap-1">
               <button
                 type="button"

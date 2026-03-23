@@ -43,6 +43,11 @@ export class AnthropicProvider implements ModelProvider {
       params.tool_choice = 'auto';
     }
 
+    // Merge extra body parameters
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
+    }
+
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
       'Sending completion request to Anthropic'
@@ -108,6 +113,11 @@ export class AnthropicProvider implements ModelProvider {
     if (options.tools?.length) {
       params.tools = options.tools;
       params.tool_choice = 'auto';
+    }
+
+    // Merge extra body parameters
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
     }
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Anthropic');

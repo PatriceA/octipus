@@ -124,9 +124,36 @@ export class LiteLLMClient {
   }
 
   /**
-   * Create a chat completion
+   * Create a chat completion.
+   * Tries a direct provider (Ollama, OpenAI, Anthropic, Gemini, DeepSeek, CLI)
+   * first. Falls through to the LiteLLM proxy when no direct provider matches.
    */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
+    // Try direct provider first
+    const resolvedModel = options.model || this.defaultModel;
+    try {
+      const { getProviderRouter } = await import('@/models/providers');
+      const router = getProviderRouter();
+      const provider = router.getProvider(resolvedModel);
+      if (provider.name !== 'litellm') {
+        modelLogger.debug(
+          { model: resolvedModel, provider: provider.name },
+          'Routing completion through direct provider'
+        );
+        return await router.complete({ ...options, model: resolvedModel });
+      }
+    } catch {
+      // Fall through to LiteLLM proxy path
+    }
+
+    return this.completeViaProxy({ ...options, model: resolvedModel });
+  }
+
+  /**
+   * Create a chat completion directly via the LiteLLM proxy, bypassing
+   * the ProviderRouter. Used internally and by the LiteLLMProvider.
+   */
+  async completeViaProxy(options: CompletionOptions): Promise<CompletionResult> {
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = {
@@ -204,9 +231,36 @@ export class LiteLLMClient {
   }
 
   /**
-   * Create a streaming chat completion
+   * Create a streaming chat completion.
+   * Tries a direct provider first, falls through to LiteLLM proxy.
    */
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    // Try direct provider first
+    const resolvedModel = options.model || this.defaultModel;
+    try {
+      const { getProviderRouter } = await import('@/models/providers');
+      const router = getProviderRouter();
+      const provider = router.getProvider(resolvedModel);
+      if (provider.name !== 'litellm') {
+        modelLogger.debug(
+          { model: resolvedModel, provider: provider.name },
+          'Routing stream through direct provider'
+        );
+        yield* router.stream({ ...options, model: resolvedModel });
+        return;
+      }
+    } catch {
+      // Fall through to LiteLLM proxy path
+    }
+
+    yield* this.streamViaProxy({ ...options, model: resolvedModel });
+  }
+
+  /**
+   * Stream directly via the LiteLLM proxy, bypassing the ProviderRouter.
+   * Used internally and by the LiteLLMProvider.
+   */
+  async *streamViaProxy(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const params: ChatCompletionCreateParams = {
       model: options.model || this.defaultModel,
       messages: this.formatMessages(options.messages),
@@ -222,7 +276,12 @@ export class LiteLLMClient {
       params.tool_choice = 'auto';
     }
 
-    modelLogger.debug({ model: params.model }, 'Starting streaming completion');
+    // Merge extra body parameters (e.g. { think: false } for Ollama Qwen3)
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
+    }
+
+    modelLogger.debug({ model: params.model }, 'Starting streaming completion via LiteLLM proxy');
 
     const stream = await this.client.chat.completions.create(params);
 
