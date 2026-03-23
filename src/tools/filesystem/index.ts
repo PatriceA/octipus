@@ -180,7 +180,7 @@ export class FilesystemTool extends BaseTool {
             // Absolute path within workspace root → redirect to session dir
             const { root } = getWorkspacePaths();
             const resolved = resolve(rawPath);
-            if (resolved.startsWith(root) && !resolved.includes('/sessions/')) {
+            if (resolved.startsWith(root) && !resolved.includes('/sessions/') && !resolved.includes('/extensions/')) {
               const relFromRoot = relative(root, resolved);
               filePath = resolve(sessionDir, relFromRoot);
             } else {

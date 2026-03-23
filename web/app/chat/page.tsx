@@ -195,11 +195,24 @@ export default function ChatPage() {
         }
       } catch {}
 
-      updateSessionState(sessionId, (prev) => ({
-        ...prev,
-        messages: msgs,
-        trackedAgents: restoredAgents.size > 0 ? restoredAgents : prev.trackedAgents,
-      }));
+      updateSessionState(sessionId, (prev) => {
+        // Merge restored agents with live-tracked agents, preserving live data
+        // (WebSocket events have accurate durationMs before DB persists it)
+        let mergedAgents = prev.trackedAgents;
+        if (restoredAgents.size > 0) {
+          mergedAgents = new Map(restoredAgents);
+          // Preserve live-tracked data that may be more accurate
+          Array.from(prev.trackedAgents.entries()).forEach(([id, liveAgent]) => {
+            const restored = mergedAgents.get(id);
+            if (restored && liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)) {
+              mergedAgents.set(id, { ...restored, durationMs: liveAgent.durationMs, endTime: liveAgent.endTime });
+            } else if (!restored) {
+              mergedAgents.set(id, liveAgent);
+            }
+          });
+        }
+        return { ...prev, messages: msgs, trackedAgents: mergedAgents };
+      });
     } catch {}
   }, [updateSessionState]);
 
@@ -389,7 +402,6 @@ export default function ChatPage() {
         if (sid) {
           updateSessionState(sid, (prev) => {
             // Finalize any agents still marked as 'running'.
-            // Use elapsed time since startTime — this is the final fallback.
             const now = Date.now();
             const next = new Map(prev.trackedAgents);
             Array.from(next.entries()).forEach(([id, agent]) => {
