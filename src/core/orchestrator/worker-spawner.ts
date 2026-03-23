@@ -219,9 +219,11 @@ export async function spawnWorker(
   }
   workspaceHint += ` Focus your work within these directories. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
   // Tell agents where the assistant itself is installed (for plugins, extensions, config)
-  // Use the directory where the process was started — this is always the assistant project root
   const assistantRoot = resolve(process.cwd());
-  workspaceHint += `\nASSISTANT_HOME: ${assistantRoot} (the assistant's install directory — plugins go in ${assistantRoot}/extensions/)`;
+  if (workspaceRoot !== assistantRoot) {
+    workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
+  }
+  workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
   systemPrompt += workspaceHint;
 
   const worker = await agentManager.spawn({
