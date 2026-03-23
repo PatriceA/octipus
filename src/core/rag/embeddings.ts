@@ -420,11 +420,12 @@ export class EmbeddingService {
     };
 
     // 1. Orphaned document embeddings — documents table record no longer exists
-    const orphaned = await db.execute(sql`
+    const orphanedRes = await db.execute(sql`
       SELECT e.id FROM embeddings e
       WHERE e.source_type = 'document'
-        AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = e.source_id)
-    `) as any[];
+        AND NOT EXISTS (SELECT 1 FROM documents d WHERE CAST(d.id AS text) = e.source_id)
+    `);
+    const orphaned = Array.isArray(orphanedRes) ? orphanedRes : (orphanedRes as any).rows || [];
 
     results.orphanedDocuments = orphaned.length;
     if (!dryRun && orphaned.length > 0) {
@@ -439,11 +440,12 @@ export class EmbeddingService {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - maxAgeDays);
 
-    const stale = await db.execute(sql`
+    const staleRes = await db.execute(sql`
       SELECT id FROM embeddings
       WHERE source_type = 'agent_output'
         AND created_at < ${cutoffDate}
-    `) as any[];
+    `);
+    const stale = Array.isArray(staleRes) ? staleRes : (staleRes as any).rows || [];
 
     results.staleAgentOutputs = stale.length;
     if (!dryRun && stale.length > 0) {
@@ -455,11 +457,12 @@ export class EmbeddingService {
     }
 
     // 3. Very short/low-quality entries
-    const short = await db.execute(sql`
+    const shortRes = await db.execute(sql`
       SELECT id FROM embeddings
       WHERE length(content) < ${minContentLength}
         AND content NOT LIKE '[%'
-    `) as any[];
+    `);
+    const short = Array.isArray(shortRes) ? shortRes : (shortRes as any).rows || [];
 
     results.shortEntries = short.length;
     if (!dryRun && short.length > 0) {
@@ -471,7 +474,7 @@ export class EmbeddingService {
     }
 
     // 4. Duplicates — same source_type + source_id + content, keep newest
-    const dupes = await db.execute(sql`
+    const dupesRes = await db.execute(sql`
       SELECT id FROM embeddings e
       WHERE EXISTS (
         SELECT 1 FROM embeddings e2
@@ -481,7 +484,8 @@ export class EmbeddingService {
           AND e2.id != e.id
           AND e2.created_at > e.created_at
       )
-    `) as any[];
+    `);
+    const dupes = Array.isArray(dupesRes) ? dupesRes : (dupesRes as any).rows || [];
 
     results.duplicates = dupes.length;
     if (!dryRun && dupes.length > 0) {

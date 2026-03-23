@@ -251,13 +251,16 @@ export class AssistantClient {
   }
 
   async executeTool(toolId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
-    const res = await this.request<{ result: unknown }>(
+    const res = await this.request<{ result?: unknown; error?: string }>(
       `/api/tools/${toolId}/tools/${toolName}/execute`,
       {
         method: 'POST',
         body: JSON.stringify({ args }),
       },
     );
+    if (res.error) {
+      throw new Error(res.error);
+    }
     return res.result;
   }
 
