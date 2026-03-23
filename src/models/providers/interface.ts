@@ -17,6 +17,9 @@ export interface ModelProvider {
   /** Create a streaming chat completion */
   stream(options: CompletionOptions): AsyncGenerator<StreamChunk>;
 
+  /** Generate embeddings (optional — not all providers support it) */
+  embed?(texts: string[], model: string): Promise<number[][]>;
+
   /** Check provider health */
   checkHealth(): Promise<ProviderHealthStatus>;
 

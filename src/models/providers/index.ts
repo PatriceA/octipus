@@ -6,6 +6,7 @@ import { OpenAIProvider } from './openai-provider';
 import { AnthropicProvider } from './anthropic-provider';
 import { GeminiProvider } from './gemini-provider';
 import { DeepSeekProvider } from './deepseek-provider';
+import { VoyageProvider } from './voyage-provider';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
@@ -20,6 +21,7 @@ export { OpenAIProvider } from './openai-provider';
 export { AnthropicProvider } from './anthropic-provider';
 export { GeminiProvider } from './gemini-provider';
 export { DeepSeekProvider } from './deepseek-provider';
+export { VoyageProvider } from './voyage-provider';
 
 /**
  * Resolve the rate-limit provider key from a ModelProvider + model name.
@@ -85,6 +87,7 @@ export class ProviderRouter {
     this.providers.push(new AnthropicProvider());
     this.providers.push(new GeminiProvider());
     this.providers.push(new DeepSeekProvider());
+    this.providers.push(new VoyageProvider()); // embeddings only
 
     // LiteLLM as catch-all fallback — only if configured
     if (config.litellm.proxyUrl) {
@@ -212,6 +215,21 @@ export class ProviderRouter {
     } finally {
       token.release();
     }
+  }
+
+  /** Generate embeddings via the appropriate provider */
+  async embed(texts: string[], model: string): Promise<number[][]> {
+    const provider = this.getProvider(model);
+
+    if (provider.embed) {
+      modelLogger.debug(
+        { model, provider: provider.name },
+        'Routing embed request'
+      );
+      return provider.embed(texts, model);
+    }
+
+    throw new Error(`Provider ${provider.name} does not support embeddings`);
   }
 
   /** Get all registered providers */

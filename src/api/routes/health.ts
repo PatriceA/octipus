@@ -5,6 +5,7 @@ import { checkRedisHealth } from '@/db/redis';
 import { checkStorageHealth } from '@/db/storage';
 import { getHealthChecker } from '@/models/health-checker';
 import { getUMI } from '@/channels/interface';
+import { getModelRegistry } from '@/models/model-registry';
 
 export const healthRoutes = new Elysia({ prefix: '/health' })
   // Basic health check
@@ -155,4 +156,49 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     } catch {
       return { channels: [] };
     }
+  })
+
+  // Feature status — checks which features have models configured via topic routing
+  .get('/features', async () => {
+    const FEATURE_TOPICS = [
+      { name: 'Chat & Orchestration', topic: 'general', hint: 'Add a model and set it as default' },
+      { name: 'Code Generation', topic: 'coding', hint: "Assign a model to the 'coding' topic" },
+      { name: 'Knowledge Base (RAG)', topic: 'embedding', hint: "Pull nomic-embed-text on Ollama and assign 'embedding' topic" },
+      { name: 'Document OCR', topic: 'vision', hint: "Pull a vision model (e.g., glm-ocr) and assign 'vision' topic" },
+      { name: 'Research & Analysis', topic: 'analysis', hint: "Assign a model to the 'analysis' topic" },
+    ] as const;
+
+    const registry = getModelRegistry();
+
+    const features = await Promise.all(
+      FEATURE_TOPICS.map(async ({ name, topic, hint }) => {
+        try {
+          const model = await registry.getModelForTopic(topic);
+          // getModelForTopic falls back to default model. For specialist topics
+          // (embedding, vision) that require specific model capabilities, check
+          // whether the resolved model actually has the topic in its topics array
+          // or topicRoles — otherwise the default model can't fulfill the role.
+          const specialistTopics = ['embedding', 'vision'];
+          let isExplicit = true;
+          if (model && specialistTopics.includes(topic)) {
+            const hasTopic = model.topics?.includes(topic);
+            const hasTopicRole = model.topicRoles && topic in model.topicRoles;
+            isExplicit = !!(hasTopic || hasTopicRole);
+          }
+
+          const configured = !!(model && isExplicit);
+          return {
+            name,
+            topic,
+            configured,
+            model: configured ? model!.name : null,
+            ...(configured ? {} : { hint }),
+          };
+        } catch {
+          return { name, topic, configured: false, model: null, hint };
+        }
+      }),
+    );
+
+    return { features };
   });

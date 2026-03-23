@@ -351,13 +351,30 @@ export class LiteLLMClient {
   }
 
   /**
-   * Generate embeddings
+   * Generate embeddings.
+   * Tries a direct provider first (Ollama, OpenAI), falls through to LiteLLM proxy.
    */
   async embed(text: string | string[], model?: string): Promise<number[][]> {
     const input = Array.isArray(text) ? text : [text];
     const embeddingModel = model || 'text-embedding-3-small';
 
-    modelLogger.debug({ model: embeddingModel, inputCount: input.length }, 'Generating embeddings');
+    // Try direct provider first
+    try {
+      const { getProviderRouter } = await import('@/models/providers');
+      const router = getProviderRouter();
+      const provider = router.getProvider(embeddingModel);
+      if (provider.name !== 'litellm' && provider.embed) {
+        modelLogger.debug(
+          { model: embeddingModel, provider: provider.name, inputCount: input.length },
+          'Routing embed through direct provider'
+        );
+        return await provider.embed(input, embeddingModel);
+      }
+    } catch {
+      // Fall through to LiteLLM proxy path
+    }
+
+    modelLogger.debug({ model: embeddingModel, inputCount: input.length }, 'Generating embeddings via LiteLLM proxy');
 
     const response = await this.client.embeddings.create({
       model: embeddingModel,
@@ -379,6 +396,7 @@ export class LiteLLMClient {
   /**
    * Send an image to a vision model and get a text response.
    * Uses the OpenAI-compatible multimodal content format.
+   * Tries a direct provider first (Ollama, OpenAI), falls through to LiteLLM proxy.
    */
   async completeVision(options: {
     model: string;
@@ -387,23 +405,111 @@ export class LiteLLMClient {
     mimeType?: string;
     maxTokens?: number;
   }): Promise<{ content: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number }; latencyMs: number }> {
-    const startTime = Date.now();
     const mediaType = options.mimeType || 'image/png';
+    const maxTokens = options.maxTokens || 4096;
+    const visionMessages: ChatCompletionMessageParam[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: options.prompt },
+          { type: 'image_url', image_url: { url: `data:${mediaType};base64,${options.imageBase64}` } },
+        ],
+      },
+    ];
 
-    modelLogger.info({ model: options.model }, 'Vision request');
+    // Try direct provider first — vision is just a chat completion with image content
+    try {
+      const { getProviderRouter } = await import('@/models/providers');
+      const router = getProviderRouter();
+      const provider = router.getProvider(options.model);
+      if (provider.name !== 'litellm') {
+        modelLogger.info({ model: options.model, provider: provider.name }, 'Routing vision request through direct provider');
+        const startTime = Date.now();
+
+        // Use the provider's OpenAI-compatible endpoint directly
+        const { OllamaProvider } = await import('@/models/providers/ollama-provider');
+        const { OpenAIProvider } = await import('@/models/providers/openai-provider');
+
+        let client: OpenAI;
+        if (provider instanceof OllamaProvider) {
+          const config = getConfig();
+          client = new OpenAI({
+            baseURL: `${config.ollama.url}/v1`,
+            apiKey: 'ollama',
+            timeout: 120_000,
+            maxRetries: 2,
+          });
+        } else if (provider instanceof OpenAIProvider) {
+          const apiKey = process.env.OPENAI_API_KEY;
+          if (!apiKey) {
+            try {
+              const { getVault } = await import('@/security/vault');
+              const vault = getVault();
+              const vaultKey = await vault.getByName('system', 'openai_api_key');
+              if (vaultKey) {
+                client = new OpenAI({
+                  baseURL: 'https://api.openai.com/v1',
+                  apiKey: vaultKey,
+                  timeout: 120_000,
+                  maxRetries: 2,
+                });
+              } else {
+                throw new Error('No OpenAI API key');
+              }
+            } catch {
+              throw new Error('No OpenAI API key');
+            }
+          } else {
+            client = new OpenAI({
+              baseURL: 'https://api.openai.com/v1',
+              apiKey,
+              timeout: 120_000,
+              maxRetries: 2,
+            });
+          }
+        } else {
+          // Other direct providers — fall through to proxy
+          throw new Error('Unsupported provider for vision');
+        }
+
+        const response = await client!.chat.completions.create({
+          model: options.model,
+          messages: visionMessages,
+          max_tokens: maxTokens,
+          stream: false,
+        });
+
+        const latencyMs = Date.now() - startTime;
+        let content = response.choices[0]?.message?.content || '';
+        if (content.includes('<think>')) {
+          content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        }
+
+        modelLogger.info({ model: options.model, provider: provider.name, latencyMs, tokens: response.usage?.total_tokens }, 'Vision response (direct)');
+
+        return {
+          content,
+          usage: {
+            inputTokens: response.usage?.prompt_tokens || 0,
+            outputTokens: response.usage?.completion_tokens || 0,
+            totalTokens: response.usage?.total_tokens || 0,
+          },
+          latencyMs,
+        };
+      }
+    } catch (err) {
+      // Fall through to LiteLLM proxy path
+      modelLogger.debug({ error: (err as Error).message, model: options.model }, 'Direct vision provider failed, falling back to LiteLLM proxy');
+    }
+
+    // Fall through to LiteLLM proxy
+    const startTime = Date.now();
+    modelLogger.info({ model: options.model }, 'Vision request via LiteLLM proxy');
 
     const response = await this.client.chat.completions.create({
       model: options.model,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: options.prompt },
-            { type: 'image_url', image_url: { url: `data:${mediaType};base64,${options.imageBase64}` } },
-          ],
-        },
-      ],
-      max_tokens: options.maxTokens || 4096,
+      messages: visionMessages,
+      max_tokens: maxTokens,
       stream: false,
     });
 

@@ -189,6 +189,23 @@ export class OllamaProvider implements ModelProvider {
     }
   }
 
+  async embed(texts: string[], model: string): Promise<number[][]> {
+    const client = this.createClient();
+
+    modelLogger.debug(
+      { model, inputCount: texts.length, provider: this.name },
+      'Generating embeddings via Ollama'
+    );
+
+    const response = await client.embeddings.create({
+      model,
+      input: texts,
+      encoding_format: 'float',
+    });
+
+    return response.data.map((d) => d.embedding);
+  }
+
   async checkHealth(): Promise<ProviderHealthStatus> {
     const startTime = Date.now();
 

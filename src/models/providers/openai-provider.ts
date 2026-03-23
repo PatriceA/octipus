@@ -11,7 +11,7 @@ import type { AgentMessage } from '@/core/types';
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
 /** Model names / prefixes supported by the OpenAI API */
-const SUPPORTED_PREFIXES = ['gpt-', 'o1-', 'o3-'];
+const SUPPORTED_PREFIXES = ['gpt-', 'o1-', 'o3-', 'text-embedding-'];
 const SUPPORTED_EXACT = new Set(['chatgpt-4o-latest', 'dall-e-3']);
 
 /**
@@ -162,6 +162,23 @@ export class OpenAIProvider implements ModelProvider {
         yield { finishReason: chunk.choices[0].finish_reason };
       }
     }
+  }
+
+  async embed(texts: string[], model: string): Promise<number[][]> {
+    const client = await this.createClient();
+
+    modelLogger.debug(
+      { model, inputCount: texts.length, provider: this.name },
+      'Generating embeddings via OpenAI'
+    );
+
+    const response = await client.embeddings.create({
+      model,
+      input: texts,
+      encoding_format: 'float',
+    });
+
+    return response.data.map((d) => d.embedding);
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

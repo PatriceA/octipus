@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { HealthStatus } from '@/components/dashboard/health-status';
+import { FeatureStatus } from '@/components/dashboard/feature-status';
 import { UsageChart } from '@/components/dashboard/usage-chart';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
@@ -122,8 +123,11 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Health Status */}
-      <HealthStatus health={health?.health} isFetching={healthFetching} />
+      {/* Health & Feature Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <HealthStatus health={health?.health} isFetching={healthFetching} />
+        <FeatureStatus />
+      </div>
 
       {/* Charts and Lists */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
