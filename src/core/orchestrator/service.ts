@@ -156,6 +156,28 @@ export class OrchestratorService {
         coreLogger.error({ err: cmdErr }, 'Command handler error');
       }
 
+      // Plan execution: detect "go" after a plan was completed in this session
+      const sessionCtx = (session?.context as Record<string, any>) || {};
+      const planState = sessionCtx.planningState;
+      if (planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
+        coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via orchestrator');
+        await sessionRepository.update(resolvedSessionId, {
+          context: { ...sessionCtx, planningState: { ...planState, executed: true } },
+        });
+        await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+        await sessionRepository.incrementMessageCount(resolvedSessionId);
+        const planMessage = `Execute this project plan. Follow the brief and use the appropriate tools and agents:\n\n${planState.brief}`;
+        const classification = classifyMessage(planMessage);
+        const { response, agentId } = await this.runOrchestrator(
+          resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
+        );
+        const outputCheck = guardOutput(response, inputGuard.flags);
+        const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
+        await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
+        await sessionRepository.incrementMessageCount(resolvedSessionId);
+        return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification };
+      }
+
       // Expert bypass
       if (expertId) {
         const expertResult = await handleExpertMessage(expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags);
