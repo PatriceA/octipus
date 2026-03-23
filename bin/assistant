@@ -348,6 +348,13 @@ cmd_start() {
     log_info "Embedded mode (PGlite + in-memory cache)"
   fi
 
+  # Build MCP server (so CLI clients get latest tools)
+  if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
+    log_step "Building MCP server..."
+    cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
+    cd "$PROJECT_DIR"
+  fi
+
   # Start backend
   if [[ "$dev_mode" == true ]]; then
     log_step "Starting backend (dev mode with hot reload)..."
@@ -494,6 +501,13 @@ cmd_restart() {
     fi
   else
     log_info "Embedded mode (PGlite + in-memory cache)"
+  fi
+
+  # Build MCP server (so CLI clients get latest tools)
+  if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
+    log_step "Building MCP server..."
+    cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
+    cd "$PROJECT_DIR"
   fi
 
   # Start backend
