@@ -388,30 +388,19 @@ export default function ChatPage() {
         const sid = data.sessionId || activeSessionId;
         if (sid) {
           updateSessionState(sid, (prev) => {
-            // Mark any agents still 'running' as completed.
-            // worker_completed events set accurate durationMs from the server,
-            // but due to React state batching they may not be committed yet.
-            // Use elapsed time from startTime as fallback only if durationMs is missing.
+            // Finalize any agents still marked as 'running'.
+            // Use elapsed time since startTime — this is the final fallback.
+            const now = Date.now();
             const next = new Map(prev.trackedAgents);
             Array.from(next.entries()).forEach(([id, agent]) => {
-              if (agent.status === 'running' && !agent.durationMs) {
-                const elapsed = Date.now() - agent.startTime;
-                // Skip finalization if elapsed < 100ms — likely a batching artifact
-                // where worker_completed hasn't been committed yet
-                if (elapsed > 100) {
-                  next.set(id, {
-                    ...agent,
-                    status: 'completed',
-                    endTime: agent.startTime + elapsed,
-                    durationMs: elapsed,
-                  });
-                }
-              } else if (agent.status === 'running' && agent.durationMs) {
-                // worker_completed set durationMs but status wasn't updated due to batching
+              if (agent.status === 'running') {
+                const elapsed = now - agent.startTime;
                 next.set(id, {
                   ...agent,
                   status: 'completed',
-                  endTime: agent.endTime ?? (agent.startTime + agent.durationMs),
+                  endTime: agent.endTime ?? now,
+                  // Keep existing durationMs if already set by worker_completed
+                  durationMs: agent.durationMs || elapsed,
                 });
               }
             });
@@ -544,14 +533,31 @@ export default function ChatPage() {
           const existing = next.get(agentId);
           if (existing) {
             // Use server-reported durationMs to compute endTime so it freezes accurately
-            const endTime = d.durationMs != null
-              ? existing.startTime + d.durationMs
+            const serverDuration = typeof d.durationMs === 'number' ? d.durationMs : undefined;
+            const endTime = serverDuration != null
+              ? existing.startTime + serverDuration
               : Date.now();
             next.set(agentId, {
               ...existing,
               status: workerStatus,
               endTime,
-              durationMs: d.durationMs,
+              durationMs: serverDuration ?? (Date.now() - existing.startTime),
+              totalTokens: d.totalTokens,
+              iterations: d.iterations,
+              error: d.error,
+            });
+          } else {
+            // Agent wasn't tracked via worker_spawned (race condition or missed event)
+            // Create a completed entry so the duration is still visible
+            next.set(agentId, {
+              id: agentId,
+              role: d.role || 'unknown',
+              model: d.model || '',
+              status: workerStatus,
+              toolCalls: [],
+              startTime: d.durationMs ? Date.now() - d.durationMs : Date.now(),
+              endTime: Date.now(),
+              durationMs: d.durationMs ?? 0,
               totalTokens: d.totalTokens,
               iterations: d.iterations,
               error: d.error,
