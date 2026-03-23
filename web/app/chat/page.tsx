@@ -612,22 +612,47 @@ export default function ChatPage() {
   const handleAgentEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
     if (data.event === 'action' && data.agentId) {
-      const toolCalls: ToolCallInfo[] = ((data.data as any)?.toolCalls || []).map((tc: any) => ({
-        id: tc.id || Date.now().toString(),
-        name: tc.name,
-        argsSummary: tc.argsSummary,
-      }));
-      updateSessionState(sessionId, (prev) => {
-        const next = new Map(prev.trackedAgents);
-        const existing = next.get(data.agentId);
-        if (existing) {
-          next.set(data.agentId, {
-            ...existing,
-            toolCalls: [...existing.toolCalls, ...toolCalls],
-          });
-        }
-        return { ...prev, trackedAgents: next };
-      });
+      const d = data.data as any;
+
+      // Standard agent tool calls (array format)
+      if (d?.toolCalls) {
+        const toolCalls: ToolCallInfo[] = d.toolCalls.map((tc: any) => ({
+          id: tc.id || Date.now().toString(),
+          name: tc.name,
+          argsSummary: tc.argsSummary,
+        }));
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          if (existing) {
+            next.set(data.agentId, {
+              ...existing,
+              toolCalls: [...existing.toolCalls, ...toolCalls],
+            });
+          }
+          return { ...prev, trackedAgents: next };
+        });
+      }
+      // CLI agent tool use (single tool format from cli_tool_use events)
+      else if (d?.type === 'cli_tool_use' && d?.toolName) {
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          if (existing) {
+            // Increment iteration count for CLI agents
+            next.set(data.agentId, {
+              ...existing,
+              iterations: (existing.iterations || 0) + 1,
+              toolCalls: [...existing.toolCalls, {
+                id: Date.now().toString(),
+                name: String(d.toolName),
+                argsSummary: d.args ? JSON.stringify(d.args).slice(0, 80) : undefined,
+              }],
+            });
+          }
+          return { ...prev, trackedAgents: next };
+        });
+      }
     }
   };
 
