@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Play } from 'lucide-react';
+import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Play, Eye } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { SchedulePicker, describeCron } from '@/components/schedule-picker';
@@ -39,8 +39,157 @@ interface HookExecution {
   createdAt: string;
 }
 
+// Simple markdown-like renderer for execution results
+function FormattedResult({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const elements: React.ReactNode[] = [];
+  let inCodeBlock = false;
+  let codeLines: string[] = [];
+  let codeLang = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith('```')) {
+      if (inCodeBlock) {
+        elements.push(
+          <div key={`code-${i}`} className="my-3 rounded-lg bg-black overflow-hidden">
+            {codeLang && <div className="px-4 py-1.5 bg-[#131313] text-xs text-on-surface-variant">{codeLang}</div>}
+            <pre className="p-4 overflow-x-auto text-sm leading-relaxed text-gray-200"><code>{codeLines.join('\n')}</code></pre>
+          </div>
+        );
+        codeLines = [];
+        codeLang = '';
+        inCodeBlock = false;
+      } else {
+        inCodeBlock = true;
+        codeLang = line.slice(3).trim();
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    // Headings
+    if (line.startsWith('### ')) {
+      elements.push(<h4 key={i} className="text-sm font-bold text-white mt-4 mb-1">{line.slice(4)}</h4>);
+    } else if (line.startsWith('## ')) {
+      elements.push(<h3 key={i} className="text-base font-bold text-white mt-5 mb-2">{line.slice(3)}</h3>);
+    } else if (line.startsWith('# ')) {
+      elements.push(<h2 key={i} className="text-lg font-bold text-white mt-5 mb-2">{line.slice(2)}</h2>);
+    }
+    // Bullet points
+    else if (line.match(/^[-*] /)) {
+      elements.push(
+        <div key={i} className="flex gap-2 text-sm text-on-surface-variant pl-2">
+          <span className="text-primary mt-0.5">-</span>
+          <span>{renderInline(line.slice(2))}</span>
+        </div>
+      );
+    }
+    // Numbered lists
+    else if (line.match(/^\d+\.\s/)) {
+      const match = line.match(/^(\d+)\.\s(.*)$/);
+      if (match) {
+        elements.push(
+          <div key={i} className="flex gap-2 text-sm text-on-surface-variant pl-2">
+            <span className="text-primary font-mono text-xs mt-0.5 w-5 shrink-0">{match[1]}.</span>
+            <span>{renderInline(match[2])}</span>
+          </div>
+        );
+      }
+    }
+    // Empty lines
+    else if (line.trim() === '') {
+      elements.push(<div key={i} className="h-2" />);
+    }
+    // Normal text
+    else {
+      elements.push(<p key={i} className="text-sm text-on-surface-variant">{renderInline(line)}</p>);
+    }
+  }
+
+  return <div className="space-y-0.5">{elements}</div>;
+}
+
+// Render inline markdown: **bold**, `code`, *italic*
+function renderInline(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let remaining = text;
+  let key = 0;
+
+  while (remaining.length > 0) {
+    // Bold
+    const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
+    // Inline code
+    const codeMatch = remaining.match(/`([^`]+)`/);
+
+    const matches = [boldMatch, codeMatch].filter(Boolean).sort((a, b) => (a!.index ?? 0) - (b!.index ?? 0));
+
+    if (matches.length === 0) {
+      parts.push(remaining);
+      break;
+    }
+
+    const first = matches[0]!;
+    const idx = first.index ?? 0;
+
+    if (idx > 0) {
+      parts.push(remaining.slice(0, idx));
+    }
+
+    if (first === boldMatch) {
+      parts.push(<strong key={key++} className="text-white font-semibold">{first[1]}</strong>);
+    } else if (first === codeMatch) {
+      parts.push(<code key={key++} className="bg-[#262626] px-1 py-0.5 rounded text-xs font-mono text-primary">{first[1]}</code>);
+    }
+
+    remaining = remaining.slice(idx + first[0].length);
+  }
+
+  return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : <>{parts}</>;
+}
+
+// Dialog to show formatted execution result
+function ResultDialog({ result, hookName, onClose }: { result: Record<string, unknown>; hookName?: string; onClose: () => void }) {
+  const responseText = (result.response as string) || (result.data as any)?.response || JSON.stringify(result, null, 2);
+  const isPlainText = typeof responseText === 'string' && !responseText.startsWith('{');
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div
+        className="bg-[#1a1a1a] rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-outline-variant/10 shrink-0">
+          <div>
+            <h2 className="text-base font-bold text-white">Execution Result</h2>
+            {hookName && <p className="text-xs text-on-surface-variant mt-0.5">{hookName}</p>}
+          </div>
+          <button onClick={onClose} className="p-1.5 text-on-surface-variant hover:text-white cursor-pointer rounded-lg hover:bg-[#262626]">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {isPlainText ? (
+            <FormattedResult text={responseText} />
+          ) : (
+            <pre className="text-sm text-on-surface-variant font-mono whitespace-pre-wrap">{
+              typeof responseText === 'string' ? responseText : JSON.stringify(result, null, 2)
+            }</pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExecutionLog({ hookId }: { hookId?: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [viewingResult, setViewingResult] = useState<{ result: Record<string, unknown>; hookName?: string } | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['hook-executions', hookId || 'all'],
@@ -121,6 +270,20 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
             <span className="text-xs text-on-surface-variant flex-shrink-0">
               {new Date(exec.createdAt).toLocaleString()}
             </span>
+            {exec.status === 'success' && exec.result && ((exec.result as any)?.response || (exec.result as any)?.data?.response) && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const name = exec.hookName || String((exec.triggerContext as Record<string, unknown>)?.hookName || '');
+                  setViewingResult({ result: exec.result!, hookName: name || undefined });
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-primary bg-primary/10 rounded-full hover:bg-primary/20 cursor-pointer flex-shrink-0 transition-colors"
+                title="View formatted result"
+              >
+                <Eye className="w-3 h-3" />
+                Result
+              </button>
+            )}
             {expanded === exec.id ? (
               <ChevronUp className="w-4 h-4 text-on-surface-variant flex-shrink-0" />
             ) : (
@@ -137,10 +300,27 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
               )}
               {exec.result && (
                 <div>
-                  <p className="text-xs font-medium text-on-surface-variant">Result</p>
-                  <pre className="text-xs text-on-surface-variant font-mono whitespace-pre-wrap overflow-x-auto max-h-40 overflow-y-auto">
-                    {JSON.stringify(exec.result, null, 2)}
-                  </pre>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-on-surface-variant">Result</p>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const name = exec.hookName || String((exec.triggerContext as Record<string, unknown>)?.hookName || '');
+                        setViewingResult({ result: exec.result!, hookName: name || undefined });
+                      }}
+                      className="flex items-center gap-1 text-xs text-primary hover:underline cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      View formatted
+                    </button>
+                  </div>
+                  <p className="text-xs text-on-surface-variant font-mono truncate mt-1">
+                    {(() => {
+                      const resp = (exec.result as any)?.response || (exec.result as any)?.data?.response;
+                      if (typeof resp === 'string') return resp.slice(0, 200) + (resp.length > 200 ? '...' : '');
+                      return JSON.stringify(exec.result).slice(0, 200) + '...';
+                    })()}
+                  </p>
                 </div>
               )}
               {exec.triggerContext && (
@@ -159,6 +339,14 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
         <p className="text-xs text-center text-on-surface-variant py-1">
           Showing {executions.length} of {data?.total} executions
         </p>
+      )}
+
+      {viewingResult && (
+        <ResultDialog
+          result={viewingResult.result}
+          hookName={viewingResult.hookName}
+          onClose={() => setViewingResult(null)}
+        />
       )}
     </div>
   );
