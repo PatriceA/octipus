@@ -1,33 +1,33 @@
 {
   "name": "weather",
   "version": "1.0.0",
-  "description": "Fetches current weather and multi-day forecasts from wttr.in",
-  "author": "patrice",
+  "description": "Get current weather and forecasts from wttr.in API",
+  "author": "Assistant Plugin System",
   "main": "index.ts",
   "tools": [
     {
       "name": "get_weather",
-      "description": "Get the current weather for a city, including temperature, condition, humidity, and wind speed",
+      "description": "Get current weather data for a city",
       "parameters": {
         "city": {
           "type": "string",
-          "description": "The city name to get weather for (e.g. 'London', 'New York')",
+          "description": "City name (e.g., 'London', 'New York')",
           "required": true
         }
       }
     },
     {
       "name": "get_forecast",
-      "description": "Get a multi-day weather forecast for a city",
+      "description": "Get multi-day weather forecast for a city",
       "parameters": {
         "city": {
           "type": "string",
-          "description": "The city name to get the forecast for",
+          "description": "City name (e.g., 'London', 'New York')",
           "required": true
         },
         "days": {
           "type": "number",
-          "description": "Number of forecast days (1-3)",
+          "description": "Number of forecast days (default: 3)",
           "required": false,
           "default": 3
         }
