@@ -317,6 +317,8 @@ export class CLIProvider implements ModelProvider {
         env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout,
+        // On Windows, CLI tools are .cmd wrappers — shell: true is required to resolve them
+        shell: process.platform === 'win32',
       });
 
       let stdout = '';

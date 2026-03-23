@@ -88,9 +88,7 @@ exit /b 0
 :: Kill all processes listening on a given port
 :: Usage: call :kill_port 3005
 set "_PORT=%~1"
-for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":%_PORT% " ^| findstr "LISTENING"') do (
-    taskkill /f /pid %%a >nul 2>&1
-)
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort %_PORT% -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 exit /b 0
 
 :check_port
