@@ -176,11 +176,10 @@ async function executeSpawnAgent(
 
     const result = await orchestrator.handleMessage(sessionId, userId, message, 'hook');
 
-    // For orchestrated hooks, the worker typically handles delivery itself
-    // (e.g. research worker sends results via notification/communication tools).
-    // Only notify the owner if notifyOwner is set AND orchestratorNotify is explicitly enabled,
-    // to avoid sending a redundant meta-summary alongside the worker's direct delivery.
-    if (config.notifyOwner && config.orchestratorNotify && userId && result.response) {
+    // For orchestrated hooks, notify the owner with the result if either:
+    // - orchestratorNotify is true (scheduled tasks that should deliver results)
+    // - notifyOwner is true (explicit owner notification)
+    if ((config.orchestratorNotify || config.notifyOwner) && userId && result.response) {
       notifyOwnerWithResult(userId, result.response).catch((err) => {
         coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
       });
