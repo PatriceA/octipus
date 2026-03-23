@@ -165,12 +165,13 @@ export class DocumentProcessor {
     const nativeExts = new Set(['.png', '.jpg', '.jpeg']);
     if (!nativeExts.has(ext)) {
       try {
-        const { execSync } = await import('child_process');
+        const { spawnSync } = await import('child_process');
+        const { unlinkSync } = await import('fs');
         const tmpOut = `/tmp/ocr-convert-${Date.now()}.png`;
-        execSync(`convert "${filePath}" "${tmpOut}"`, { timeout: 15000 });
+        spawnSync('convert', [filePath, tmpOut], { timeout: 15000 });
         fileBuffer = await readFile(tmpOut);
         mimeType = 'image/png';
-        execSync(`rm -f "${tmpOut}"`, { timeout: 5000 });
+        try { unlinkSync(tmpOut); } catch {}
         this.logger.info({ from: ext, filePath }, 'Converted image to PNG');
       } catch (convErr) {
         this.logger.warn({ err: convErr, ext }, 'Image conversion failed, sending original format');
@@ -277,14 +278,15 @@ export class DocumentProcessor {
    * Falls back to page-by-page OCR via pdftoppm + vision model for image-based PDFs.
    */
   private async extractPdfText(filePath: string): Promise<string> {
-    const { execSync } = await import('child_process');
+    const { spawnSync } = await import('child_process');
 
     // 1. Try pdftotext for text-based PDFs
     try {
-      const text = execSync(`pdftotext -layout "${filePath}" -`, {
+      const result = spawnSync('pdftotext', ['-layout', filePath, '-'], {
         timeout: 30000,
         maxBuffer: 10 * 1024 * 1024,
-      }).toString('utf-8').trim();
+      });
+      const text = (result.stdout?.toString('utf-8') || '').trim();
 
       if (text.length > 50) {
         this.logger.info({ filePath, textLength: text.length }, 'PDF text extracted via pdftotext');
@@ -306,16 +308,17 @@ export class DocumentProcessor {
 
     const tmpDir = `/tmp/pdf-ocr-${Date.now()}`;
     try {
-      execSync(`mkdir -p "${tmpDir}"`, { timeout: 5000 });
+      const { mkdirSync, readdirSync } = await import('fs');
+      mkdirSync(tmpDir, { recursive: true });
 
       // Get page count
-      const pageCountStr = execSync(`pdfinfo "${filePath}" | grep Pages | awk '{print $2}'`, {
-        timeout: 10000,
-      }).toString().trim();
-      const pageCount = Math.min(parseInt(pageCountStr, 10) || 1, 50); // Cap at 50 pages
+      const pdfInfoResult = spawnSync('pdfinfo', [filePath], { timeout: 10000 });
+      const pdfInfoText = pdfInfoResult.stdout?.toString() || '';
+      const pagesMatch = pdfInfoText.match(/Pages:\s*(\d+)/);
+      const pageCount = Math.min(parseInt(pagesMatch?.[1] || '1', 10), 50); // Cap at 50 pages
 
       // Render pages to PNG
-      execSync(`pdftoppm -png -r 200 "${filePath}" "${tmpDir}/page"`, {
+      spawnSync('pdftoppm', ['-png', '-r', '200', filePath, `${tmpDir}/page`], {
         timeout: 120000,
       });
 
@@ -323,9 +326,10 @@ export class DocumentProcessor {
       const pageTexts: string[] = [];
 
       // OCR each page
-      const pageFiles = execSync(`ls -1 "${tmpDir}"/page-*.png 2>/dev/null | sort`, {
-        timeout: 5000,
-      }).toString().trim().split('\n').filter(Boolean);
+      const pageFiles = readdirSync(tmpDir)
+        .filter(f => f.startsWith('page-') && f.endsWith('.png'))
+        .sort()
+        .map(f => `${tmpDir}/${f}`);
 
       this.logger.info({ filePath, pages: pageFiles.length, model: model.modelId }, 'OCR-ing PDF pages');
 
@@ -354,7 +358,7 @@ export class DocumentProcessor {
         : '[No text content could be extracted from PDF]';
     } finally {
       // Clean up temp files
-      try { execSync(`rm -rf "${tmpDir}"`, { timeout: 5000 }); } catch {}
+      try { const { rmSync } = await import('fs'); rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     }
   }
 
