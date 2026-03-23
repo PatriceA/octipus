@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Bell, Search, User, LogOut, Settings, KeyRound, ChevronDown, MessageSquare, Webhook, Cpu, BookOpen, Brain, Wrench, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 interface Notification {
   id: string;
@@ -40,6 +41,7 @@ export function Header() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const { logout: authLogout } = useAuth();
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -168,10 +170,8 @@ export function Header() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('assistant-user');
-    localStorage.removeItem('auth_token');
-    setUser(null);
     setIsProfileOpen(false);
+    authLogout();
   };
 
   const markRead = async (id: string) => {
