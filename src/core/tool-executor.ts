@@ -122,7 +122,7 @@ export class ToolExecutor {
         results.push({
           toolCallId: toolCall.id,
           result: null,
-          error: `Permission denied: ${permResult.reason || 'action is not allowed'}`,
+          error: `Permission denied: ${permResult.reason || 'action is not allowed'}. Do NOT retry this action — it is blocked by policy.`,
         });
 
         await auditRepository.logToolDenied(
@@ -168,7 +168,7 @@ export class ToolExecutor {
             results.push({
               toolCallId: toolCall.id,
               result: null,
-              error: 'Permission denied: user rejected the request',
+              error: 'Permission denied: the user rejected this action. Do NOT retry the same action. STOP and ask the user what they would like you to do differently.',
             });
 
             await auditRepository.logToolDenied(
