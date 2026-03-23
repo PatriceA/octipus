@@ -106,11 +106,12 @@ Rules:
 
 ## Building a Plugin Step by Step
 
-1. Create the plugin directory: \`extensions/<plugin-name>/\`
+1. Create the plugin directory: \`ASSISTANT_HOME/extensions/<plugin-name>/\`
 2. Write plugin.json with the manifest
 3. Write index.ts with tool implementations
-4. The plugin is automatically loaded on next backend restart
-5. Alternatively, call POST /api/plugins/<plugin-name>/reload to hot-reload
+4. Tell the user to restart or reload — DONE
+
+IMPORTANT: This is a 3-step task. Create directory, write plugin.json, write index.ts, then STOP and respond. Do NOT re-read files you just wrote, do NOT run shell commands to verify, do NOT rewrite files. Write them correctly the first time and finish.
 
 ## Best Practices
 

@@ -56,7 +56,9 @@ WORKFLOW:
 2. Check if .assistant/project-summary.md exists in the workspace — it has context from previous sessions.
 3. Use the filesystem to read existing code before making changes. Use shell for builds, tests, and package management. Use git for version control.
 4. Save output files with relative paths (e.g., "implementation-notes.md") — they are automatically saved to a session directory and indexed into the knowledge base.
-5. After completing your task, update (or create) .assistant/project-summary.md with any new findings.`,
+5. After completing your task, update (or create) .assistant/project-summary.md with any new findings.
+
+EFFICIENCY: Be concise with tool calls. Write files correctly the first time — do NOT re-read files you just wrote to verify them. Do NOT run unnecessary shell commands to check file existence after writing. Minimize iterations — most tasks should complete in 3-7 tool calls.`,
   },
   review: {
     role: 'review',
