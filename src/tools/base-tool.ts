@@ -75,8 +75,9 @@ export abstract class BaseTool {
   ): Promise<unknown> {
     const toolContext: ToolContext = { ...context, toolId: this.id };
 
-    // Check permissions if required
-    if (options?.requiresPermission !== false) {
+    // Check permissions if required (skip for API/MCP-bridge system users)
+    const isSystemUser = (context.metadata as Record<string, unknown>)?.isSystemUser === true;
+    if (options?.requiresPermission !== false && !isSystemUser) {
       const permissionManager = getPermissionManager();
       const action = options?.permissionAction || toolName;
 
@@ -91,7 +92,8 @@ export abstract class BaseTool {
             this.id,
             action,
             args,
-            context.sessionId
+            context.sessionId,
+            toolName,
           );
 
           toolLogger.info(

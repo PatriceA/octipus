@@ -2,74 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --surface-card: #ffffff;
-  --surface-hover: #f1f5f9;
-  --border-subtle: #e2e8f0;
-}
-
-.dark {
-  --background: #0f172a;
-  --foreground: #f1f5f9;
-  --surface-card: #1e293b;
-  --surface-hover: #334155;
-  --border-subtle: #334155;
-}
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700;800&display=swap');
 
 body {
-  color: var(--foreground);
-  background: var(--background);
+  font-family: 'Manrope', system-ui, sans-serif;
+  color: #ffffff;
+  background: #0e0e0e;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Glass effect utility */
-.glass {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
 
-.dark .glass {
-  background: rgba(15, 23, 42, 0.85);
+::-webkit-scrollbar-track {
+  background: #0e0e0e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #484847;
 }
 
 /* Smooth transitions for interactive elements */
 button,
-a,
-input,
-select {
+a {
   transition: all 0.15s ease;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #94a3b8;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: #475569;
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
-}
-
-/* Focus ring utility */
+/* Focus ring */
 .focus-ring {
-  @apply focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:ring-offset-1 focus:ring-offset-transparent;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-1 focus:ring-offset-transparent;
+}
+
+/* Selection */
+::selection {
+  background: #8cacff;
+  color: #002a6d;
 }

@@ -31,12 +31,12 @@ export class DockerTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'list', description: 'List containers', defaultLevel: 'ASK' },
-        { action: 'start', description: 'Start containers', defaultLevel: 'ASK' },
-        { action: 'stop', description: 'Stop containers', defaultLevel: 'ASK', dangerous: true },
-        { action: 'logs', description: 'View container logs', defaultLevel: 'ASK' },
-        { action: 'build', description: 'Build Docker images', defaultLevel: 'ASK' },
-        { action: 'exec', description: 'Execute commands in containers', defaultLevel: 'ASK', dangerous: true },
+        { action: 'list', description: 'List Docker containers and images on the local Docker daemon', defaultLevel: 'ASK' },
+        { action: 'start', description: 'Start stopped Docker containers on the local daemon', defaultLevel: 'ASK' },
+        { action: 'stop', description: 'Stop running Docker containers — may interrupt active services', defaultLevel: 'ASK', dangerous: true },
+        { action: 'logs', description: 'Read stdout/stderr logs from Docker containers', defaultLevel: 'ASK' },
+        { action: 'build', description: 'Build Docker images from Dockerfiles in the workspace', defaultLevel: 'ASK' },
+        { action: 'exec', description: 'Execute arbitrary commands inside running Docker containers', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [
         { name: 'list_containers', description: 'List Docker containers', parameters: { show_all: { type: 'boolean', description: 'Show all' } }, returns: 'Container list' },

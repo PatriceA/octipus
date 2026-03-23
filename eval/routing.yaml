@@ -1,0 +1,129 @@
+name: Agent Routing Tests
+description: Verify the orchestrator routes messages to correct specialist roles
+
+tests:
+  - id: route-coding-task
+    description: Code implementation request routes to coding role
+    input: "Implement a REST API endpoint for user registration with email validation"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: development
+      - type: confidence_above
+        value: 0.5
+    tags: [routing, coding]
+
+  - id: route-research-task
+    description: Research request routes to research role
+    input: "Research the best practices for implementing OAuth2 with PKCE flow"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+      - type: confidence_above
+        value: 0.4
+    tags: [routing, research]
+
+  - id: casual-greeting
+    description: Casual greeting handled without agent spawn
+    input: "Hey, how are you?"
+    assertions:
+      - type: classification
+        value: casual
+      - type: confidence_above
+        value: 0.7
+    tags: [routing, casual]
+
+  - id: casual-thanks
+    description: Thank you message classified as casual
+    input: "Thanks!"
+    assertions:
+      - type: classification
+        value: casual
+      - type: confidence_above
+        value: 0.8
+    tags: [routing, casual]
+
+  - id: route-devops-task
+    description: DevOps request routes correctly
+    input: "Set up a Docker Compose configuration for our microservices with health checks"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: devops
+      - type: confidence_above
+        value: 0.4
+    tags: [routing, devops]
+
+  - id: route-security-review
+    description: Security concern identified as task
+    input: "Audit the authentication middleware for potential vulnerabilities and review the code"
+    assertions:
+      - type: classification
+        value: task
+      - type: confidence_above
+        value: 0.4
+    tags: [routing, security]
+
+  - id: route-communication-task
+    description: Email request routes to communication
+    input: "Send an email to the team about the meeting tomorrow and check my calendar"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: communication
+      - type: confidence_above
+        value: 0.4
+    tags: [routing, communication]
+
+  - id: route-automation-task
+    description: Scheduling request routes to automation
+    input: "Create a recurring task to send me a daily summary every morning at 9am"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: automation
+      - type: confidence_above
+        value: 0.4
+    tags: [routing, automation]
+
+  - id: ambiguous-short-message
+    description: Very short ambiguous message classified appropriately
+    input: "ok"
+    assertions:
+      - type: classification
+        value: casual
+    tags: [routing, edge-case]
+
+  - id: greeting-with-task
+    description: Greeting followed by task not classified as casual
+    input: "Hi, can you implement a function to parse CSV files and convert them to JSON with proper error handling?"
+    assertions:
+      - type: classification
+        value: task
+    tags: [routing, edge-case]
+
+  - id: approval-message
+    description: Approval message classified correctly
+    input: "Yes, go ahead"
+    assertions:
+      - type: classification
+        value: approval
+      - type: confidence_above
+        value: 0.8
+    tags: [routing, approval]
+
+  - id: complex-multi-keyword
+    description: Complex message with multiple domain keywords
+    input: "Refactor the database schema, add migration scripts, and deploy to staging"
+    assertions:
+      - type: classification
+        value: task
+      - type: confidence_above
+        value: 0.5
+    tags: [routing, complex]

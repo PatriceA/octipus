@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { modelConfig, type ModelConfigEntry, type NewModelConfigEntry } from '@/db/schema/models';
 import { RedisCache } from '@/db/redis';
@@ -11,12 +11,36 @@ export class ModelRegistry {
   private db = getDb();
   private cache = new RedisCache(CACHE_TTL);
 
+  private async cacheGet<T>(key: string): Promise<T | null> {
+    try {
+      return await this.cache.get<T>(key);
+    } catch {
+      return null;
+    }
+  }
+
+  private async cacheSet(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+    try {
+      await this.cache.set(key, value, ttlSeconds);
+    } catch {
+      // Ignore cache errors (e.g., storage not initialized in CLI/unit mode).
+    }
+  }
+
+  private async cacheDelete(key: string): Promise<void> {
+    try {
+      await this.cache.delete(key);
+    } catch {
+      // Ignore cache errors.
+    }
+  }
+
   /**
    * Get model configuration by name
    */
   async getModel(name: string): Promise<ModelConfigEntry | null> {
     // Check cache first
-    const cached = await this.cache.get<ModelConfigEntry>(`model:${name}`);
+    const cached = await this.cacheGet<ModelConfigEntry>(`model:${name}`);
     if (cached) return cached;
 
     const result = await this.db
@@ -27,7 +51,7 @@ export class ModelRegistry {
 
     const model = result[0] ?? null;
     if (model) {
-      await this.cache.set(`model:${name}`, model);
+      await this.cacheSet(`model:${name}`, model);
     }
 
     return model;
@@ -37,7 +61,7 @@ export class ModelRegistry {
    * Get model configuration by modelId (the LiteLLM-facing identifier)
    */
   async getModelByModelId(modelId: string): Promise<ModelConfigEntry | null> {
-    const cached = await this.cache.get<ModelConfigEntry>(`model:mid:${modelId}`);
+    const cached = await this.cacheGet<ModelConfigEntry>(`model:mid:${modelId}`);
     if (cached) return cached;
 
     const result = await this.db
@@ -48,7 +72,7 @@ export class ModelRegistry {
 
     const model = result[0] ?? null;
     if (model) {
-      await this.cache.set(`model:mid:${modelId}`, model);
+      await this.cacheSet(`model:mid:${modelId}`, model);
     }
 
     return model;
@@ -58,7 +82,7 @@ export class ModelRegistry {
    * Get the default model
    */
   async getDefaultModel(): Promise<ModelConfigEntry | null> {
-    const cached = await this.cache.get<ModelConfigEntry>('model:default');
+    const cached = await this.cacheGet<ModelConfigEntry>('model:default');
     if (cached) return cached;
 
     const result = await this.db
@@ -69,7 +93,7 @@ export class ModelRegistry {
 
     const model = result[0] ?? null;
     if (model) {
-      await this.cache.set('model:default', model);
+      await this.cacheSet('model:default', model);
     }
 
     return model;
@@ -80,7 +104,7 @@ export class ModelRegistry {
    * Priority: topicRoles primary → topicRoles backup → legacy topics+priority → default
    */
   async getModelForTopic(topic: string): Promise<ModelConfigEntry | null> {
-    const cached = await this.cache.get<ModelConfigEntry>(`model:topic:${topic}`);
+    const cached = await this.cacheGet<ModelConfigEntry>(`model:topic:${topic}`);
     if (cached) return cached;
 
     // 1. Check topicRoles for 'primary'
@@ -112,7 +136,7 @@ export class ModelRegistry {
     }
 
     if (model) {
-      await this.cache.set(`model:topic:${topic}`, model);
+      await this.cacheSet(`model:topic:${topic}`, model);
     }
 
     return model;
@@ -122,7 +146,7 @@ export class ModelRegistry {
    * Get backup model for a topic (for fallback on rate limit/error).
    */
   async getBackupModelForTopic(topic: string): Promise<ModelConfigEntry | null> {
-    const cached = await this.cache.get<ModelConfigEntry>(`model:topic:backup:${topic}`);
+    const cached = await this.cacheGet<ModelConfigEntry>(`model:topic:backup:${topic}`);
     if (cached) return cached;
 
     const result = await this.db
@@ -137,7 +161,7 @@ export class ModelRegistry {
     const model = result[0] ?? null;
 
     if (model) {
-      await this.cache.set(`model:topic:backup:${topic}`, model);
+      await this.cacheSet(`model:topic:backup:${topic}`, model);
     }
 
     return model;
@@ -151,7 +175,14 @@ export class ModelRegistry {
       .select()
       .from(modelConfig)
       .where(eq(modelConfig.isEnabled, true))
-      .orderBy(desc(modelConfig.priority));
+      .orderBy(desc(modelConfig.priority), asc(modelConfig.name));
+  }
+
+  async getAllModelsIncludeDisabled(): Promise<ModelConfigEntry[]> {
+    return this.db
+      .select()
+      .from(modelConfig)
+      .orderBy(desc(modelConfig.isEnabled), desc(modelConfig.priority), asc(modelConfig.name));
   }
 
   /**
@@ -231,7 +262,7 @@ export class ModelRegistry {
 
     if (result.length > 0) {
       modelLogger.info({ model: name }, 'Default model changed');
-      await this.cache.delete('model:default');
+      await this.cacheDelete('model:default');
       return true;
     }
 
@@ -418,12 +449,17 @@ export class ModelRegistry {
    * Invalidate cache for a model
    */
   private async invalidateCache(name: string): Promise<void> {
-    await this.cache.delete(`model:${name}`);
-    await this.cache.delete('model:default');
+    await this.cacheDelete(`model:${name}`);
+    await this.cacheDelete('model:default');
     // Clear all topic caches (simplified - in production you'd track these)
-    const topics = ['general', 'coding', 'analysis', 'communication', 'chat', 'embedding'];
+    const topics = [
+      'general', 'coding', 'analysis', 'communication', 'chat', 'embedding',
+      'ocr', 'vision', 'data', 'design', 'devops', 'security', 'ai', 'finance',
+      'automation', 'qa', 'pm', 'writing', 'research', 'review', 'local', 'simple',
+    ];
     for (const topic of topics) {
-      await this.cache.delete(`model:topic:${topic}`);
+      await this.cacheDelete(`model:topic:${topic}`);
+      await this.cacheDelete(`model:topic:backup:${topic}`);
     }
   }
 }

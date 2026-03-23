@@ -112,7 +112,7 @@ export default function SetupPage() {
           {currentStep === 0 && (
             <div className="text-center space-y-4">
               <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-                <Sparkles className="w-8 h-8 text-primary-600 dark:text-primary-400" />
+                <Sparkles className="w-8 h-8 text-primary-700 dark:text-primary-400" />
               </div>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome to Assistant</h2>
               <p className="text-gray-500 dark:text-gray-400 max-w-sm mx-auto">
@@ -178,7 +178,7 @@ export default function SetupPage() {
             {currentStep < STEPS.length - 1 ? (
               <button
                 onClick={nextStep}
-                className="flex items-center gap-1 px-4 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                className="flex items-center gap-1 px-4 py-1.5 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900"
               >
                 Next
                 <ArrowRight className="w-4 h-4" />

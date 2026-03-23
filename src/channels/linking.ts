@@ -56,7 +56,7 @@ export async function redeemLinkCode(
 
   // Add channel binding
   await userRepository.addChannelBinding(userId, {
-    channelType: data.channelType as 'telegram' | 'teams' | 'slack' | 'webchat',
+    channelType: data.channelType as 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat',
     channelUserId: data.channelUserId,
     channelUserName: data.channelUserName,
     isVerified: true,

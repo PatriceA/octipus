@@ -1,0 +1,55 @@
+name: Response Quality Tests
+description: Verify agent response quality meets standards
+defaultTimeout: 30000
+
+tests:
+  - id: quality-code-response
+    description: Code responses include proper structure
+    input: "Write a function to validate email addresses in TypeScript"
+    assertions:
+      - type: contains
+        value: "function"
+      - type: follows_format
+        value: "code block with TypeScript"
+      - type: response_quality
+        value: 3
+    tags: [quality, coding]
+
+  - id: quality-explanation
+    description: Explanations are clear and structured
+    input: "Explain how the orchestrator routes messages to specialists"
+    assertions:
+      - type: response_quality
+        value: 4
+      - type: not_contains
+        value: "I don't know"
+    tags: [quality, research]
+
+  - id: quality-no-hallucination
+    description: Factual responses should not hallucinate
+    input: "What is the purpose of the classifyMessage function in this project?"
+    assertions:
+      - type: no_hallucination
+      - type: response_quality
+        value: 3
+    tags: [quality, accuracy]
+
+  - id: quality-concise-casual
+    description: Casual responses should be brief
+    input: "Hello!"
+    assertions:
+      - type: token_count_under
+        value: 500
+    tags: [quality, casual]
+
+  - id: quality-code-format
+    description: Code generation includes proper formatting
+    input: "Write a TypeScript interface for a User with name, email, and optional avatar"
+    assertions:
+      - type: matches_regex
+        value: "interface.*User"
+      - type: contains
+        value: "name"
+      - type: contains
+        value: "email"
+    tags: [quality, coding]

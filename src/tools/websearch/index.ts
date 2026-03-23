@@ -27,8 +27,8 @@ export class WebSearchTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'search', description: 'Search the web', defaultLevel: 'ALLOW' },
-        { action: 'fetch', description: 'Fetch web pages', defaultLevel: 'ALLOW' },
+        { action: 'search', description: 'Search the web via SearXNG or DuckDuckGo/Google and return result titles, URLs, and snippets', defaultLevel: 'ALLOW' },
+        { action: 'fetch', description: 'Fetch and extract text content from web pages using a headless browser', defaultLevel: 'ALLOW' },
       ],
       tools: [
         {

@@ -10,6 +10,7 @@ import {
   type PermissionCondition,
 } from '@/db/schema/permissions';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { getToolRegistry } from '@/tools/registry';
 import { securityLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
 import { safeRegExp } from '@/utils/sanitize';
@@ -66,8 +67,20 @@ export class PermissionManager {
       )
       .limit(1);
 
-    // Default to ASK if no permission configured
-    const level: PermissionLevel = permission[0]?.level || 'ASK';
+    // Fall back to the tool's default permission level, or ASK if not found
+    let defaultLevel: PermissionLevel = 'ASK';
+    try {
+      const registry = getToolRegistry();
+      const toolInstance = registry.get(toolId);
+      if (toolInstance) {
+        const manifest = toolInstance.getManifest();
+        const perm = manifest.permissions?.find((p: any) => p.action === action);
+        if (perm?.defaultLevel) {
+          defaultLevel = perm.defaultLevel as PermissionLevel;
+        }
+      }
+    } catch { /* registry not ready yet */ }
+    const level: PermissionLevel = permission[0]?.level || defaultLevel;
 
     // Check expiration
     if (permission[0]?.expiresAt && permission[0].expiresAt < new Date()) {
@@ -191,7 +204,8 @@ export class PermissionManager {
     toolId: string,
     action: string,
     context: Record<string, unknown>,
-    sessionId?: string
+    sessionId?: string,
+    callerToolName?: string,
   ): Promise<string> {
     const requestId = generateId();
 
@@ -203,7 +217,7 @@ export class PermissionManager {
       toolId,
       action,
       context: {
-        toolName: action,
+        toolName: callerToolName || action,
         toolArguments: context,
       },
       expiresAt: new Date(Date.now() + PERMISSION_REQUEST_TTL),
@@ -220,7 +234,7 @@ export class PermissionManager {
       details: { toolId, action, agentId },
     });
 
-    securityLogger.info({ requestId, userId, toolId, action }, 'Permission requested');
+    securityLogger.info({ requestId, userId, toolId, action, callerToolName }, 'Permission requested');
 
     // Notify WebSocket listeners
     this.emitRequest({
@@ -229,7 +243,7 @@ export class PermissionManager {
       agentId,
       toolId,
       action,
-      toolName: action,
+      toolName: callerToolName || action,
       args: context,
       sessionId,
     });

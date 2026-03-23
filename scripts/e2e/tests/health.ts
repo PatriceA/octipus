@@ -1,6 +1,7 @@
 import type { TestRunner } from '../runner';
 import { assert, assertStatus } from '../runner';
 import type { APIClient } from '../client';
+import { fixtures } from '../fixtures';
 
 export async function testHealth(runner: TestRunner, client: APIClient) {
   console.log('\n\x1b[1mHealth\x1b[0m');
@@ -17,6 +18,10 @@ export async function testHealth(runner: TestRunner, client: APIClient) {
   });
 
   await runner.test('GET /health/detailed returns services (authenticated)', async () => {
+    // This test requires auth — skip if run before auth tests
+    if (!fixtures.authToken) {
+      return;
+    }
     const { status, data } = await client.request<{ status: string; health?: unknown }>('GET', '/health/detailed');
     assertStatus(status, 200);
     assert(!!data.status, 'Missing status field');

@@ -30,13 +30,19 @@ import { testChat } from './tests/chat';
 import { testExperts } from './tests/experts';
 import { testRecurringTasks } from './tests/recurring-tasks';
 import { testSkills } from './tests/skills';
+import { testDocuments } from './tests/documents';
+import { testBrowserExt } from './tests/browser-ext';
+import { testMessaging } from './tests/messaging';
+import { testKnowledge } from './tests/knowledge';
+import { testChannels } from './tests/channels';
 
 export async function run() {
   const runner = new TestRunner();
   const client = new APIClient(BASE_URL);
 
   console.log(`\x1b[1m\x1b[36mAssistant E2E Test Suite\x1b[0m`);
-  console.log(`API: ${BASE_URL}\n`);
+  console.log(`API: ${BASE_URL}`);
+  console.log(`Auth: ${fixtures.usingMasterKey ? 'MASTER_KEY' : 'register/login'}\n`);
 
   try {
     await testHealth(runner, client);
@@ -57,8 +63,35 @@ export async function run() {
     await testSkills(runner, client);
     await testRecurringTasks(runner, client);
     await testChat(runner, client);
+    await testDocuments(runner, client);
+    await testBrowserExt(runner, client);
+    await testMessaging(runner, client);
+    await testKnowledge(runner, client);
+    await testChannels(runner, client);
   } catch (err) {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);
+  }
+
+  // Cleanup: stop and remove all agents spawned during tests
+  if (fixtures.authToken) {
+    try {
+      const { data } = await client.request<{ agents: Array<{ id: string; status: string }> }>('GET', '/agents');
+      if (data.agents?.length) {
+        for (const agent of data.agents) {
+          try {
+            if (agent.status === 'running' || agent.status === 'idle') {
+              await client.request('POST', `/agents/${agent.id}/stop`);
+            }
+            await client.request('DELETE', `/agents/${agent.id}`);
+          } catch {
+            // Ignore individual cleanup failures
+          }
+        }
+        console.log(`\n\x1b[2mCleaned up ${data.agents.length} agent(s)\x1b[0m`);
+      }
+    } catch {
+      // Ignore
+    }
   }
 
   // Cleanup: delete test user session (logout)

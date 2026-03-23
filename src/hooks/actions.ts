@@ -22,10 +22,10 @@ export async function executeAction(
   try {
     switch (hook.action) {
       case 'notify':
-        return await executeNotify(config, context);
+        return await executeNotify(config, context, hook);
 
       case 'spawn_agent':
-        return await executeSpawnAgent(config, context);
+        return await executeSpawnAgent(config, context, hook);
 
       case 'webhook':
         return await executeWebhook(config, context);
@@ -47,40 +47,126 @@ export async function executeAction(
 
 async function executeNotify(
   config: Hook['actionConfig'],
-  context: TriggerContext
+  context: TriggerContext,
+  hook?: Hook,
 ): Promise<ActionResult> {
-  const umi = getUMI();
-  const channels = config.notifyChannels || [];
-  const message = interpolateTemplate(config.notifyMessage || 'Hook triggered', context);
+  // Use rendered message from incoming webhook template if no explicit notifyMessage
+  let messageTemplate = config.notifyMessage || 'Hook triggered';
+  if (!config.notifyMessage && context.webhook) {
+    const webhookBody = context.webhook.body as Record<string, unknown> | undefined;
+    const renderedMessage = webhookBody?._renderedMessage as string | undefined;
+    if (renderedMessage) {
+      messageTemplate = renderedMessage;
+    }
+  }
+  const message = interpolateTemplate(messageTemplate, context);
 
-  const results: { channel: string; success: boolean }[] = [];
+  // Resolve target channels
+  const resolvedChannels: { type: string; id: string; label: string }[] = [];
 
-  for (const channelSpec of channels) {
-    // channelSpec format: "type:channelId" e.g., "telegram:123456"
-    const [channelType, channelId] = channelSpec.split(':');
+  // If notifyOwner is set, resolve from the hook owner's channel bindings
+  if (config.notifyOwner && hook?.userId) {
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    const user = await userRepository.findById(hook.userId);
+    let rawBindings = user?.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
+    if (typeof rawBindings === 'string') {
+      try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
+    }
+    const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
 
-    try {
-      await umi.send(channelType as any, channelId, { content: message });
-      results.push({ channel: channelSpec, success: true });
-    } catch (error) {
-      results.push({ channel: channelSpec, success: false });
+    if (bindings.length === 0) {
+      return { success: false, error: 'No channels linked to your account. Link a channel in Settings → Channels.' };
+    }
+
+    for (const binding of bindings) {
+      if (binding.isVerified) {
+        resolvedChannels.push({
+          type: binding.channelType,
+          id: binding.channelUserId,
+          label: `${binding.channelType}:${binding.channelUserName || binding.channelUserId}`,
+        });
+      }
     }
   }
 
-  return { success: results.some((r) => r.success), data: { results } };
+  // Also add explicitly configured channels (type:id format)
+  const explicitChannels = config.notifyChannels || [];
+  if (Array.isArray(explicitChannels)) {
+    for (const channelSpec of explicitChannels) {
+      const [channelType, channelId] = String(channelSpec).split(':');
+      if (channelType && channelId) {
+        resolvedChannels.push({ type: channelType, id: channelId, label: String(channelSpec) });
+      }
+    }
+  }
+
+  // Support simple channelType + channelId pair (e.g. from incoming webhook hooks)
+  if (config.channelType && config.channelId) {
+    resolvedChannels.push({
+      type: config.channelType,
+      id: config.channelId,
+      label: `${config.channelType}:${config.channelId}`,
+    });
+  }
+
+  if (resolvedChannels.length === 0) {
+    return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
+  }
+
+  const umi = getUMI();
+  const results: { channel: string; success: boolean; error?: string }[] = [];
+
+  for (const ch of resolvedChannels) {
+    try {
+      await umi.send(ch.type as any, ch.id, { content: message });
+      results.push({ channel: ch.label, success: true });
+    } catch (error) {
+      results.push({ channel: ch.label, success: false, error: (error as Error).message });
+    }
+  }
+
+  const anySuccess = results.some((r) => r.success);
+  const errorSummary = results.filter(r => !r.success).map(r => `${r.channel}: ${r.error}`).join('; ');
+
+  return {
+    success: anySuccess,
+    data: { results },
+    error: anySuccess ? undefined : errorSummary || 'All notification channels failed',
+  };
 }
 
 async function executeSpawnAgent(
   config: Hook['actionConfig'],
-  context: TriggerContext
+  context: TriggerContext,
+  hook?: Hook,
 ): Promise<ActionResult> {
-  // Get session info from context
+  // Get session info from context — generate a UUID for hook-triggered sessions
   const sessionId = (context.message?.metadata?.sessionId as string | undefined) ||
                     context.agent?.sessionId ||
-                    'hook-session';
-  const userId = context.message?.userId || context.agent?.userId || 'system';
+                    crypto.randomUUID();
+  // Use the hook owner's userId so notifications and permissions resolve correctly
+  const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
 
-  const prompt = interpolateTemplate(config.agentPrompt || '', context);
+  let prompt = interpolateTemplate(config.agentPrompt || '', context);
+
+  // Embed trigger context (webhook payload, tool result, etc.) into the prompt
+  if (context.webhook) {
+    // If a rendered message template is available (from incoming webhook), use it
+    const webhookBody = context.webhook.body as Record<string, unknown> | undefined;
+    const renderedMessage = webhookBody?._renderedMessage as string | undefined;
+    if (renderedMessage) {
+      prompt += `\n\n${renderedMessage}`;
+    } else {
+      prompt += `\n\n--- Webhook Payload ---\n${JSON.stringify(context.webhook.body, null, 2)}`;
+    }
+    if (context.webhook.headers) {
+      const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';
+      if (eventType) prompt += `\nEvent type: ${eventType}`;
+    }
+  } else if (context.tool) {
+    prompt += `\n\n--- Tool Context ---\n${JSON.stringify(context.tool, null, 2)}`;
+  }
+
   const message = context.message?.content || prompt;
 
   // If orchestrated, route through the orchestrator instead of bare spawn
@@ -90,14 +176,26 @@ async function executeSpawnAgent(
 
     const result = await orchestrator.handleMessage(sessionId, userId, message, 'hook');
 
+    // For orchestrated hooks, notify the owner with the result if either:
+    // - orchestratorNotify is true (scheduled tasks that should deliver results)
+    // - notifyOwner is true (explicit owner notification)
+    if ((config.orchestratorNotify || config.notifyOwner) && userId && result.response) {
+      notifyOwnerWithResult(userId, result.response).catch((err) => {
+        coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
+      });
+    }
+
     return {
       success: true,
       data: { agentId: result.agentId, response: result.response, orchestrated: true },
     };
   }
 
-  // Direct spawn (non-orchestrated)
+  // Direct spawn (non-orchestrated) — use longer timeout for hook-triggered agents
   const agentManager = getAgentManager();
+  const { getConfig } = await import('@/config');
+  const agentConfig = getConfig().agent;
+  const hookTimeout = Math.max(agentConfig.defaultTimeout * 2, 1800000); // At least 30 min for hooks
 
   const agent = await agentManager.spawn({
     sessionId,
@@ -105,11 +203,20 @@ async function executeSpawnAgent(
     topic: config.agentTopic,
     model: config.agentModel,
     systemPrompt: prompt,
+    timeout: hookTimeout,
   });
 
-  // Run the agent if there's a message
+  // Run the agent and optionally notify owner with the result
   if (message) {
-    agent.run(message).catch((error) => {
+    agent.run(message).then(async (result) => {
+      if (config.notifyOwner && userId && result) {
+        try {
+          await notifyOwnerWithResult(userId, result);
+        } catch (err) {
+          coreLogger.error({ error: err, agentId: agent.getContext().id }, 'Failed to notify owner with agent result');
+        }
+      }
+    }).catch((error) => {
       coreLogger.error({ error, agentId: agent.getContext().id }, 'Spawned agent failed');
     });
   }
@@ -234,8 +341,8 @@ async function executeTool(
 
   // Create a synthetic agent context
   const agentContext = context.agent || {
-    id: 'hook-agent',
-    sessionId: 'hook-session',
+    id: crypto.randomUUID(),
+    sessionId: crypto.randomUUID(),
     userId: context.message?.userId || 'system',
     topic: 'hook',
     model: 'default',
@@ -249,6 +356,34 @@ async function executeTool(
   const result = await tool.execute(params, agentContext);
 
   return { success: true, data: result };
+}
+
+/**
+ * Send agent result to the owner's linked channels (Telegram, etc.)
+ */
+async function notifyOwnerWithResult(userId: string, result: string): Promise<void> {
+  const { userRepository } = await import('@/db/repositories/user-repository');
+  const user = await userRepository.findById(userId);
+  let rawBindings = user?.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
+  if (typeof rawBindings === 'string') {
+    try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
+  }
+  const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
+  const verified = bindings.filter(b => b.isVerified);
+
+  if (verified.length === 0) return;
+
+  const umi = getUMI();
+  // Truncate very long results for messaging
+  const truncated = result.length > 3000 ? result.slice(0, 3000) + '\n\n…(truncated)' : result;
+
+  for (const binding of verified) {
+    try {
+      await umi.send(binding.channelType as any, binding.channelUserId, { content: truncated });
+    } catch (err) {
+      coreLogger.warn({ error: err, channel: binding.channelType }, 'Failed to notify owner channel');
+    }
+  }
 }
 
 /**

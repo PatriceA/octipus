@@ -1,0 +1,195 @@
+name: Capability Routing Tests (OpenClaw Parity)
+description: >
+  Tests verifying the assistant routes tasks to correct specialist roles,
+  covering all capability categories that OpenClaw supports.
+  Ensures feature parity with OpenClaw's routing and delegation model.
+
+tests:
+  # ── Web Search & Research ──
+  - id: cap-web-search
+    description: Web search request routes to research
+    input: "Search the web for the latest developments in quantum computing in 2026"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [routing, research, openclaw-parity]
+
+  - id: cap-deep-research
+    description: Multi-source research routes correctly
+    input: "Research and compare the top 5 vector databases, their performance benchmarks, and pricing"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [routing, research, openclaw-parity]
+
+  # ── Browser Automation ──
+  - id: cap-browser-real
+    description: Real browser task routes to general (has browser-ext)
+    input: "Use my browser to check what tabs I have open"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: general
+    tags: [routing, browser, openclaw-parity]
+
+  - id: cap-browser-scrape
+    description: Web scraping routes to research
+    input: "Go to the Hacker News front page and summarize the top 5 stories"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [routing, browser, openclaw-parity]
+
+  # ── Code Generation & Shell ──
+  - id: cap-code-generation
+    description: Code generation routes to coding
+    input: "Write a Python script that reads a CSV file and generates a bar chart using matplotlib"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: development
+    tags: [routing, coding, openclaw-parity]
+
+  - id: cap-shell-command
+    description: Shell command request routes to general or development
+    input: "Run df -h to check disk space and tell me if any partition is above 80% usage"
+    assertions:
+      - type: classification
+        value: task
+    tags: [routing, coding, openclaw-parity]
+
+  - id: cap-git-operations
+    description: Git operations route to development
+    input: "Fix the bug in auth.ts and commit the changes with a descriptive message"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: development
+    tags: [routing, coding, openclaw-parity]
+
+  # ── Communication ──
+  - id: cap-send-email
+    description: Email sending routes to communication
+    input: "Send an email to john@example.com about the project status update"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: communication
+    tags: [routing, communication, openclaw-parity]
+
+  - id: cap-calendar
+    description: Calendar management routes to communication
+    input: "Check my calendar for next week and find a free slot for a 1-hour meeting"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: communication
+    tags: [routing, communication, openclaw-parity]
+
+  # ── Messaging ──
+  - id: cap-send-message-telegram
+    description: Cross-channel messaging routes to general or communication
+    input: "Send a message to my Telegram saying the deployment is complete"
+    assertions:
+      - type: classification
+        value: task
+    tags: [routing, messaging, openclaw-parity]
+
+  # ── Scheduling & Automation ──
+  - id: cap-schedule-task
+    description: Scheduling request routes to automation
+    input: "Create a daily task at 9 AM that searches for AI news and sends me a summary"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: automation
+    tags: [routing, automation, openclaw-parity]
+
+  - id: cap-recurring-reminder
+    description: Recurring reminder routes to automation
+    input: "Remind me every Friday at 5 PM to submit my weekly report"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: automation
+    tags: [routing, automation, openclaw-parity]
+
+  # ── Multi-Agent Orchestration ──
+  - id: cap-multi-agent-team
+    description: Complex task requiring multiple specialists
+    input: "Research the best authentication libraries for Node.js, then implement JWT auth in our Express app, and review the code for security issues"
+    assertions:
+      - type: classification
+        value: task
+    tags: [routing, multi-agent, openclaw-parity]
+
+  # ── DevOps & Docker ──
+  - id: cap-docker-task
+    description: Docker task routes to devops
+    input: "Build and deploy a Docker container for our API service with health checks"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: devops
+    tags: [routing, devops, openclaw-parity]
+
+  - id: cap-ci-cd
+    description: CI/CD pipeline task routes to devops
+    input: "Set up a GitHub Actions workflow that runs tests, lints, and deploys on merge to main"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: devops
+    tags: [routing, devops, openclaw-parity]
+
+  # ── Security ──
+  - id: cap-security-audit
+    description: Security audit routes to security
+    input: "Audit our codebase for SQL injection vulnerabilities and OWASP top 10 issues"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: security
+    tags: [routing, security, openclaw-parity]
+
+  # ── Knowledge / RAG ──
+  - id: cap-knowledge-search
+    description: Knowledge base query handled correctly
+    input: "Search the knowledge base for how our authentication system works"
+    assertions:
+      - type: classification
+        value: task
+    tags: [routing, knowledge, openclaw-parity]
+
+  # ── Casual / Conversational ──
+  - id: cap-casual-chat
+    description: Simple chat handled without delegation
+    input: "What is the capital of France?"
+    assertions:
+      - type: classification
+        value: casual
+    tags: [routing, casual, openclaw-parity]
+
+  - id: cap-clarification
+    description: Vague request prompts clarification
+    input: "Help me with something"
+    assertions:
+      - type: classification
+        value: casual
+    tags: [routing, casual, openclaw-parity]

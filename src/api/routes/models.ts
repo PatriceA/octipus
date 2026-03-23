@@ -19,7 +19,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
 
       const registry = getModelRegistry();
-      const models = await registry.getAllModels();
+      const models = await registry.getAllModelsIncludeDisabled();
 
       return {
         models: models.map((m) => ({

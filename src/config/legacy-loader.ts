@@ -97,7 +97,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
     },
     agent: {
       maxConcurrentAgents: parseInt(process.env.MAX_CONCURRENT_AGENTS || '10', 10),
-      defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '300000', 10),
+      defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '900000', 10),
       maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '50', 10),
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
@@ -113,6 +113,12 @@ export function loadFromEnvLegacy(): Partial<Config> {
     workspace: {
       rootPath: process.env.WORKSPACE_PATH || './workspace',
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
+      sessionFolders: true,
+      autoIndexFiles: true,
+      documentsPath: process.env.DOCUMENTS_PATH || './workspace/documents',
+      maxUploadSize: parseInt(process.env.MAX_UPLOAD_SIZE || '52428800', 10),
+      ocrModel: process.env.OCR_MODEL || 'glm-ocr',
+      ocrEndpoint: process.env.OCR_ENDPOINT || 'http://localhost:11435',
     },
     oauth: {
       publicUrl: process.env.PUBLIC_URL,

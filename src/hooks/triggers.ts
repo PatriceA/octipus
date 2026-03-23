@@ -25,6 +25,7 @@ export interface TriggerContext {
   schedule?: {
     cronExpression: string;
     scheduledTime: Date;
+    hookName?: string;
   };
 }
 
@@ -50,11 +51,23 @@ export function matchesTrigger(hook: Hook, event: TriggerEvent, context: Trigger
     case 'tool_executed':
       return matchesToolTrigger(config, context.tool);
 
-    case 'webhook':
+    case 'webhook': {
+      // If hookId is specified in event data, only match that specific hook
+      const webhookData = event.data as { hookId?: string } | undefined;
+      if (webhookData?.hookId) {
+        return hook.id === webhookData.hookId;
+      }
       return matchesWebhookTrigger(config, context.webhook);
+    }
 
-    case 'schedule':
-      return true; // Schedule triggers are handled externally
+    case 'schedule': {
+      // Only match the specific hook targeted by the cron-runner
+      const scheduleData = event.data as { hookId?: string } | undefined;
+      if (scheduleData?.hookId) {
+        return hook.id === scheduleData.hookId;
+      }
+      return true;
+    }
 
     case 'permission_requested':
       return true; // All permission requests match

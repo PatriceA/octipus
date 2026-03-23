@@ -6,6 +6,7 @@ import { getScheduler } from './scheduler';
 import { getModelRegistry } from '@/models/model-registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { getConfig } from '@/config';
 import { agentLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
@@ -49,16 +50,10 @@ export class AgentManager {
   private agents: Map<string, AnyAgentWorker> = new Map();
   private eventHandlers: Set<(event: AgentEvent) => void> = new Set();
   private globalTools: Map<string, ToolHandler> = new Map();
-  private maxConcurrentAgents: number;
   /** Per-agent event ring buffer for polling (max 200 events per agent) */
   private eventBuffers: Map<string, BufferedEvent[]> = new Map();
   private eventSeqCounter: number = 0;
   private static MAX_BUFFERED_EVENTS = 200;
-
-  constructor() {
-    const config = getConfig();
-    this.maxConcurrentAgents = config.agent.maxConcurrentAgents;
-  }
 
   /**
    * Register a global tool available to all agents
@@ -77,8 +72,9 @@ export class AgentManager {
       (a) => a.getStatus() === 'running'
     );
 
-    if (runningAgents.length >= this.maxConcurrentAgents) {
-      throw new Error(`Maximum concurrent agents (${this.maxConcurrentAgents}) reached`);
+    const maxConcurrent = getConfig().agent.maxConcurrentAgents;
+    if (runningAgents.length >= maxConcurrent) {
+      throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
     }
 
     const config = getConfig();
@@ -112,10 +108,10 @@ export class AgentManager {
     };
 
     const workerConfig: AgentWorkerConfig = {
-      maxIterations: options.maxIterations || config.agent.maxIterations,
+      maxIterations: options.maxIterations ?? config.agent.maxIterations,
       contextWindowSize: config.agent.contextWindowSize,
-      timeout: options.timeout || config.agent.defaultTimeout,
-      maxTokenBudget: options.maxTokenBudget || config.agent.maxTokenBudget,
+      timeout: options.timeout ?? config.agent.defaultTimeout,
+      maxTokenBudget: options.maxTokenBudget ?? config.agent.maxTokenBudget,
     };
 
     // Determine if this is a CLI model (autonomous sub-agent)
@@ -190,6 +186,17 @@ export class AgentManager {
       routedTopic
     );
 
+    // Persist agent snapshot to DB
+    agentRepository.create({
+      id: agentId,
+      sessionId: options.sessionId,
+      userId: options.userId,
+      role: options.role || 'general',
+      model: routedModel,
+      topic: routedTopic,
+      status: 'running',
+    }).catch(err => agentLogger.error({ err, agentId }, 'Failed to persist agent record'));
+
     agentLogger.info(
       { agentId, sessionId: options.sessionId, model: routedModel, topic: routedTopic },
       'Agent spawned'
@@ -233,7 +240,10 @@ export class AgentManager {
       agentLogger.info({ agentId }, 'Agent stopped');
       return true;
     }
-    return false;
+    // Agent not in memory — may be a zombie DB record. Mark it as stopped.
+    agentRepository.updateStatus(agentId, { status: 'stopped', error: 'Stopped manually (not in memory)' })
+      .catch(err => agentLogger.error({ err, agentId }, 'Failed to update zombie agent status'));
+    return true;
   }
 
   /**
@@ -298,7 +308,7 @@ export class AgentManager {
         createdAt: context.createdAt,
         iteration: worker.getIteration(),
       };
-    });
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   /**

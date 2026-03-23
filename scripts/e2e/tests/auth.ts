@@ -6,6 +6,24 @@ import { fixtures } from '../fixtures';
 export async function testAuth(runner: TestRunner, client: APIClient) {
   console.log('\n\x1b[1mAuthentication\x1b[0m');
 
+  if (fixtures.usingMasterKey) {
+    console.log('  \x1b[33m⊘ Using MASTER_KEY auth — skipping register/login tests\x1b[0m');
+
+    await runner.test('GET /auth/me returns admin user via MASTER_KEY', async () => {
+      const { status, data } = await client.request<{ username: string; isAdmin: boolean }>('GET', '/auth/me');
+      assertStatus(status, 200);
+      assert(!!data.username, 'Expected a username');
+      assert(data.isAdmin === true, 'MASTER_KEY user should be admin');
+    });
+
+    await runner.test('Unauthenticated request to protected endpoint fails', async () => {
+      const { status, data } = await client.request<{ error?: string }>('GET', '/sessions', undefined, '');
+      assert(status === 401 || !!(data as any).error, 'Expected 401 or error for unauthenticated request');
+    });
+
+    return;
+  }
+
   await runner.test('POST /auth/register creates test user', async () => {
     const { status, data } = await client.request<{ token: string; user: { id: string } }>(
       'POST', '/auth/register', { username: fixtures.testUsername, password: fixtures.testPassword }, '',

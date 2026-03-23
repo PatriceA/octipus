@@ -74,7 +74,7 @@ export class CLIArgumentBuilder {
   }
 
   private buildCodexArgs(prompt: string): { binary: string; args: string[] } {
-    return { binary: 'codex', args: ['exec', '--json', prompt] };
+    return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', prompt] };
   }
 }
 

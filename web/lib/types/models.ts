@@ -49,12 +49,24 @@ export interface LiteLLMModel {
 
 /** Topics used by the orchestrator for role-based model routing */
 export const AVAILABLE_TOPICS = [
-  { value: 'general', label: 'General', description: 'General-purpose tasks' },
+  { value: 'general', label: 'General', description: 'General-purpose tasks, browser interaction' },
   { value: 'coding', label: 'Coding', description: 'Code generation, shell, git' },
-  { value: 'analysis', label: 'Analysis', description: 'Research, review, QA, code analysis' },
+  { value: 'analysis', label: 'Analysis', description: 'Research, review, code analysis' },
   { value: 'communication', label: 'Communication', description: 'Email, calendar, contacts (Google/Microsoft)' },
   { value: 'chat', label: 'Chat', description: 'Casual conversations' },
+  { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents' },
+  { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis' },
   { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
+  { value: 'design', label: 'Design', description: 'UI/UX design, layout, accessibility' },
+  { value: 'devops', label: 'DevOps', description: 'CI/CD, Docker, infrastructure, deployment' },
+  { value: 'security', label: 'Security', description: 'Security analysis, threat modeling, hardening' },
+  { value: 'data', label: 'Data', description: 'Databases, data pipelines, SQL' },
+  { value: 'ai', label: 'AI/ML', description: 'Machine learning, RAG, model training' },
+  { value: 'qa', label: 'QA', description: 'Testing, browser testing, bug reports' },
+  { value: 'finance', label: 'Finance', description: 'Financial analysis, market data' },
+  { value: 'automation', label: 'Automation', description: 'Workflows, process orchestration' },
+  { value: 'pm', label: 'Project Mgmt', description: 'Project planning, tracking, coordination' },
+  { value: 'writing', label: 'Writing', description: 'Documentation, technical writing' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */

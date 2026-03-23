@@ -1,0 +1,108 @@
+import { EventEmitter } from 'events';
+import { documentProcessor } from './processor';
+import { coreLogger } from '@/utils/logger';
+
+export interface QueueEvents {
+  enqueued: (documentId: string, userId?: string) => void;
+  processing: (documentId: string, userId?: string) => void;
+  completed: (documentId: string, userId?: string) => void;
+  failed: (documentId: string, error: string, userId?: string) => void;
+}
+
+interface QueueItem {
+  documentId: string;
+  userId?: string;
+}
+
+export class DocumentQueue extends EventEmitter {
+  private queue: QueueItem[] = [];
+  private processing = false;
+  private processingUserId?: string;
+  private currentDocumentId?: string;
+  private logger = coreLogger.child({ component: 'document-queue' });
+
+  /**
+   * Add a document to the processing queue.
+   */
+  enqueue(documentId: string, userId?: string): void {
+    this.queue.push({ documentId, userId });
+    this.logger.info({ documentId, queueLength: this.queue.length }, 'Document enqueued');
+    this.emit('enqueued', documentId, userId);
+    this.processNext();
+  }
+
+  /**
+   * Remove a queued document (not yet processing). Returns true if found and removed.
+   */
+  removeFromQueue(documentId: string): boolean {
+    const idx = this.queue.findIndex(item => item.documentId === documentId);
+    if (idx === -1) return false;
+    this.queue.splice(idx, 1);
+    this.logger.info({ documentId }, 'Document removed from queue');
+    return true;
+  }
+
+  /**
+   * Check if a document is currently being processed.
+   */
+  isProcessingDocument(documentId: string): boolean {
+    return this.processing && this.currentDocumentId === documentId;
+  }
+
+  /**
+   * Get current queue status.
+   */
+  getStatus(): { queueLength: number; isProcessing: boolean; currentDocumentId?: string } {
+    return {
+      queueLength: this.queue.length,
+      isProcessing: this.processing,
+      currentDocumentId: this.currentDocumentId,
+    };
+  }
+
+  /**
+   * Process the next item in the queue (concurrency=1).
+   */
+  private async processNext(): Promise<void> {
+    if (this.processing || this.queue.length === 0) {
+      return;
+    }
+
+    this.processing = true;
+    const item = this.queue.shift()!;
+    const { documentId, userId } = item;
+    this.processingUserId = userId;
+    this.currentDocumentId = documentId;
+
+    this.logger.info({ documentId, remaining: this.queue.length }, 'Processing document');
+    this.emit('processing', documentId, userId);
+
+    try {
+      await documentProcessor.process(documentId);
+      this.emit('completed', documentId, userId);
+      this.logger.info({ documentId }, 'Document processing completed');
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.emit('failed', documentId, errorMsg, userId);
+      this.logger.error({ err, documentId }, 'Document processing failed');
+    } finally {
+      this.processing = false;
+      this.processingUserId = undefined;
+      this.currentDocumentId = undefined;
+      // Process next item if queue is not empty
+      if (this.queue.length > 0) {
+        this.processNext();
+      }
+    }
+  }
+}
+
+// Singleton instance
+let documentQueue: DocumentQueue | null = null;
+
+export function getDocumentQueue(): DocumentQueue {
+  if (!documentQueue) {
+    documentQueue = new DocumentQueue();
+  }
+  return documentQueue;
+}

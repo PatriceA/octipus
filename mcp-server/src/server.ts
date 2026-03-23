@@ -13,7 +13,10 @@ import { registerToolModuleTools } from './tools/tool-modules.js';
 import { registerExpertTools } from './tools/experts.js';
 import { registerRecurringTaskTools } from './tools/recurring-tasks.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
+import { registerMessagingTools } from './tools/messaging.js';
 import { registerSkillTools } from './tools/skills.js';
+import { registerProfileTools } from './tools/profiles.js';
+import { registerPluginTools } from './tools/plugins.js';
 
 export function createServer(assistantUrl: string): McpServer {
   const server = new McpServer({
@@ -33,7 +36,10 @@ export function createServer(assistantUrl: string): McpServer {
   registerExpertTools(server, client);
   registerRecurringTaskTools(server, client);
   registerKnowledgeTools(server, client);
+  registerMessagingTools(server, client);
   registerSkillTools(server, client);
+  registerProfileTools(server, client);
+  registerPluginTools(server, client);
 
   return server;
 }

@@ -6,6 +6,8 @@ export const skills = pgTable('skills', {
   name: text('name').notNull(),
   category: text('category').notNull().default('engineering'),
   description: text('description').notNull(),
+  /** Markdown content — Claude Code-style skill definition. When set, used directly as the prompt fragment. */
+  content: text('content').default(''),
   principles: jsonb('principles').$type<string[]>().notNull().default([]),
   bestPractices: jsonb('best_practices').$type<string[]>().notNull().default([]),
   antiPatterns: jsonb('anti_patterns').$type<string[]>().notNull().default([]),

@@ -367,11 +367,27 @@ export class Vault {
 
   /**
    * Convenience method: get a system-level secret by name.
-   * System secrets are stored with userId='system'.
+   * Checks system-scoped secrets first, then falls back to any user-owned
+   * secret with the same name (e.g. secrets saved via the web UI).
    */
   async getSystemSecret(name: string): Promise<string | null> {
     try {
-      return await this.getByName('system', name);
+      // Try system-scoped first
+      const systemResult = await this.getByName('system', name);
+      if (systemResult) return systemResult;
+
+      // Fallback: find any active secret with this name (user-owned)
+      const entry = await this.db
+        .select()
+        .from(vault)
+        .where(and(eq(vault.name, name), eq(vault.isActive, true)))
+        .limit(1);
+
+      if (entry[0]) {
+        return this.get(entry[0].userId, entry[0].id);
+      }
+
+      return null;
     } catch (error) {
       securityLogger.warn({ error, name }, 'Failed to retrieve system secret');
       return null;

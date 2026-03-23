@@ -103,7 +103,7 @@ export interface ModelUsage {
 }
 
 // Channel Types
-export type ChannelType = 'telegram' | 'teams' | 'slack' | 'webchat' | 'api';
+export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat' | 'api';
 
 export interface UnifiedMessage {
   id: string;
@@ -176,6 +176,7 @@ export interface TriggerConfig {
 
 export interface ActionConfig {
   // For notify
+  notifyOwner?: boolean;
   notifyChannels?: string[];
   notifyMessage?: string;
   // For spawn_agent
@@ -183,6 +184,7 @@ export interface ActionConfig {
   agentPrompt?: string;
   agentModel?: string;
   orchestrated?: boolean;
+  orchestratorNotify?: boolean;
   // For webhook
   webhookUrl?: string;
   webhookMethod?: 'GET' | 'POST' | 'PUT';
@@ -195,6 +197,9 @@ export interface ActionConfig {
   toolId?: string;
   toolAction?: string;
   toolParams?: Record<string, unknown>;
+  // For incoming webhook response delivery
+  channelType?: string;
+  channelId?: string;
 }
 
 export interface HookCondition {
@@ -266,7 +271,7 @@ export interface MCPServer {
   args?: string[];
   env?: Record<string, string>;
   isEnabled: boolean;
-  transport?: 'stdio' | 'sse';
+  transport?: 'stdio' | 'sse' | 'streamable-http';
   sseUrl?: string;
   postUrl?: string;
   headers?: Record<string, string>;
@@ -313,7 +318,7 @@ export interface SystemEvent {
 // Health Check Types
 export interface HealthStatus {
   service: string;
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'not_configured';
   latency?: number;
   message?: string;
   lastChecked: Date;

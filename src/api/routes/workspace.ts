@@ -42,39 +42,73 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     if (!user) return { error: 'Authentication required' };
     const config = getConfig();
     const userHome = homedir();
-    const workspaceRoot = resolve(config.workspace.rootPath);
 
-    // Validate all paths exist, are directories, and are not system paths
-    for (const p of body.additionalPaths) {
-      const resolved = resolve(p);
+    // If rootPath is being changed, validate it
+    if (body.rootPath !== undefined) {
+      const resolvedRoot = resolve(body.rootPath);
 
-      // Check against denylist
-      if (isPathDenied(resolved)) {
+      if (isPathDenied(resolvedRoot)) {
         set.status = 400;
-        return { error: `Denied path: ${p} — system directories cannot be added as workspace paths` };
+        return { error: `Denied path: ${body.rootPath} — system directories cannot be used as workspace root` };
       }
 
-      // Require paths to be under workspace root or user home
-      if (!resolved.startsWith(workspaceRoot) && !resolved.startsWith(userHome)) {
+      if (!resolvedRoot.startsWith(userHome)) {
         set.status = 400;
-        return { error: `Invalid path: ${p} — must be under workspace root (${workspaceRoot}) or user home (${userHome})` };
+        return { error: `Invalid path: ${body.rootPath} — workspace root must be under user home (${userHome})` };
       }
 
-      if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+      if (!existsSync(resolvedRoot) || !statSync(resolvedRoot).isDirectory()) {
         set.status = 400;
-        return { error: `Invalid path: ${p} (does not exist or is not a directory)` };
+        return { error: `Invalid path: ${body.rootPath} (does not exist or is not a directory)` };
       }
     }
 
-    // Update config in memory
-    config.workspace.additionalPaths = body.additionalPaths;
+    const workspaceRoot = resolve(body.rootPath ?? config.workspace.rootPath);
 
+    // Validate all additional paths
+    if (body.additionalPaths) {
+      for (const p of body.additionalPaths) {
+        const resolved = resolve(p);
+
+        if (isPathDenied(resolved)) {
+          set.status = 400;
+          return { error: `Denied path: ${p} — system directories cannot be added as workspace paths` };
+        }
+
+        if (!resolved.startsWith(workspaceRoot) && !resolved.startsWith(userHome)) {
+          set.status = 400;
+          return { error: `Invalid path: ${p} — must be under workspace root (${workspaceRoot}) or user home (${userHome})` };
+        }
+
+        if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+          set.status = 400;
+          return { error: `Invalid path: ${p} (does not exist or is not a directory)` };
+        }
+      }
+    }
+
+    // Persist via settings service so hot-reload picks it up
+    const { getSettingsService } = await import('@/config/settings-service');
+    const svc = getSettingsService();
+
+    if (body.rootPath !== undefined) {
+      await svc.set('workspace.rootPath', body.rootPath, user.id);
+    }
+    if (body.additionalPaths !== undefined) {
+      await svc.set('workspace.additionalPaths', body.additionalPaths, user.id);
+    }
+
+    // Re-read config after update
+    const updated = getConfig();
     return {
-      rootPath: resolve(config.workspace.rootPath),
-      additionalPaths: config.workspace.additionalPaths.map(p => resolve(p)),
+      rootPath: resolve(updated.workspace.rootPath),
+      additionalPaths: updated.workspace.additionalPaths.map(p => resolve(p)),
     };
   }, {
-    body: t.Object({ additionalPaths: t.Array(t.String()) }),
+    body: t.Object({
+      rootPath: t.Optional(t.String()),
+      additionalPaths: t.Optional(t.Array(t.String())),
+    }),
     detail: { tags: ['workspace'] },
   })
 

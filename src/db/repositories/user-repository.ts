@@ -26,8 +26,12 @@ export class UserRepository {
 
     // Filter in application code since channelBindings is JSONB
     for (const user of result) {
-      const bindings = user.channelBindings as ChannelBinding[];
-      if (bindings?.some((b) => b.channelType === channelType && b.channelUserId === channelUserId)) {
+      let bindings = user.channelBindings as ChannelBinding[] | string;
+      // Handle double-encoded JSON strings from JSONB
+      if (typeof bindings === 'string') {
+        try { bindings = JSON.parse(bindings); } catch { continue; }
+      }
+      if (Array.isArray(bindings) && bindings.some((b) => b.channelType === channelType && b.channelUserId === channelUserId)) {
         return user;
       }
     }
@@ -64,11 +68,18 @@ export class UserRepository {
     return false;
   }
 
+  private parseBindings(raw: unknown): ChannelBinding[] {
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return []; }
+    }
+    return (raw as ChannelBinding[]) || [];
+  }
+
   async addChannelBinding(userId: string, binding: ChannelBinding): Promise<User | null> {
     const user = await this.findById(userId);
     if (!user) return null;
 
-    const bindings = [...(user.channelBindings as ChannelBinding[]), binding];
+    const bindings = [...this.parseBindings(user.channelBindings), binding];
     return this.update(userId, { channelBindings: bindings });
   }
 
@@ -76,7 +87,7 @@ export class UserRepository {
     const user = await this.findById(userId);
     if (!user) return null;
 
-    const bindings = (user.channelBindings as ChannelBinding[]).filter(
+    const bindings = this.parseBindings(user.channelBindings).filter(
       (b) => !(b.channelType === channelType && b.channelUserId === channelUserId)
     );
     return this.update(userId, { channelBindings: bindings });

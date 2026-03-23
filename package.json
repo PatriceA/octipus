@@ -17,9 +17,11 @@
     "db:studio": "drizzle-kit studio",
     "setup": "bun run scripts/setup.ts",
     "backup": "bun run scripts/backup.ts",
-    "tui": "bun run tui/index.tsx",
     "test": "bun test",
     "test:e2e": "bun run scripts/test-e2e.ts",
+    "eval": "bun run src/eval/cli.ts",
+    "eval:routing": "bun run src/eval/cli.ts --suite routing",
+    "eval:quality": "bun run src/eval/cli.ts --suite quality",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -34,6 +36,7 @@
     "grammy": "^1.21.1",
     "ink": "^4.4.1",
     "ioredis": "^5.3.2",
+    "jszip": "3.10.1",
     "openai": "^4.47.1",
     "otplib": "^12.0.1",
     "pino": "^8.20.0",

@@ -1,5 +1,6 @@
 import type { ToolHandler } from '@/core/agent-worker';
 import type { OrchestratorService } from './service';
+import { createHandoffContext, formatHandoff } from './handoff';
 
 /**
  * Create meta-tools for the orchestrator agent.
@@ -35,9 +36,9 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         properties: {
           role: {
             type: 'string',
-            enum: ['research', 'coding', 'review', 'qa', 'communication', 'general'],
+            enum: ['research', 'coding', 'review', 'qa', 'communication', 'design', 'devops', 'security', 'data', 'ai', 'finance', 'automation', 'pm', 'writing', 'general'],
             description:
-              'The specialist role. research=web browsing/search, coding=filesystem/shell/git, review=code analysis, qa=browser testing, communication=email/gmail/calendar/contacts/drive/docs, general=basic tasks',
+              'The specialist role. research=web browsing/search, coding=filesystem/shell/git, review=code analysis, qa=browser testing, communication=email/calendar/contacts, design=UI/UX, devops=CI/CD/infra/containers/docker, security=security analysis, data=databases/data engineering, ai=ML/AI tasks, finance=financial analysis, automation=workflows, pm=project management, writing=documentation, general=basic tasks including real browser interaction',
           },
           task: {
             type: 'string',
@@ -53,12 +54,26 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
       execute: async (args, context) => {
         if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
         delegationDone = true;
-        return orchestrator.spawnWorker(
+        const result = await orchestrator.spawnWorker(
           args.role as string,
           args.task as string,
           (args.input as string) || '',
           context,
         );
+
+        // Generate a brief structured handoff summary for the orchestrator
+        const resultStr = String(result || '');
+        try {
+          const handoff = await createHandoffContext({
+            from: { role: args.role as string },
+            to: { role: 'orchestrator' },
+            originalRequest: args.task as string,
+            stageOutput: resultStr,
+          });
+          return `${resultStr}\n\n---\n${formatHandoff(handoff)}`;
+        } catch {
+          return result;
+        }
       },
     },
     {
@@ -104,10 +119,25 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
       execute: async (args, context) => {
         if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
         delegationDone = true;
-        return orchestrator.spawnTeam(
+        const result = await orchestrator.spawnTeam(
           args.members as Array<{ role: string; task: string; input?: string }>,
           context,
         );
+
+        // Generate a brief structured handoff summary for the orchestrator
+        const resultStr = String(result || '');
+        try {
+          const members = args.members as Array<{ role: string; task: string }>;
+          const handoff = await createHandoffContext({
+            from: { role: members.map(m => m.role).join('+') },
+            to: { role: 'orchestrator' },
+            originalRequest: members.map(m => m.task).join('; '),
+            stageOutput: resultStr,
+          });
+          return `${resultStr}\n\n---\n${formatHandoff(handoff)}`;
+        } catch {
+          return result;
+        }
       },
     },
     {

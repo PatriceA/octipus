@@ -204,17 +204,19 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       }
 
       // Construct a minimal AgentContext for API-driven execution
+      // Keep system user ID as-is so vault lookups (OAuth tokens) work correctly
+      const userId = user.id;
       const context: import('@/core/types').AgentContext = {
         id: `api-${Date.now().toString(36)}`,
-        sessionId: 'api',
-        userId: user.id,
+        sessionId: '',
+        userId,
         topic: 'api',
         model: 'api',
         role: 'general',
         status: 'running',
         createdAt: new Date(),
         updatedAt: new Date(),
-        metadata: { source: 'mcp-bridge' },
+        metadata: { source: 'mcp-bridge', isSystemUser: user.id === 'system' },
       };
 
       try {

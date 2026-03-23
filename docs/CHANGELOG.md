@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-19
+
+### Knowledge Base Upgrade — Hybrid Search & Tiered Content
+- **Hybrid search**: Three search modes — `hybrid` (BM25 + vector with Reciprocal Rank Fusion), `fts` (BM25 full-text), `vector` (cosine similarity) — via `mode` parameter on `search_knowledge`
+- **Tiered content loading**: L0 abstract (2-3 sentence summary), L1 overview (key points), L2 full content — reduces token usage for browsing results
+- **BM25 full-text search**: PostgreSQL tsvector column with GIN index, auto-populated from content
+- **`read_knowledge` tool**: Load full L2 content for specific entries after browsing L0/L1 summaries
+
+### Document Processing & OCR
+- **Document upload API**: `POST /api/documents/upload` with multipart file upload, queue-based processing
+- **Document management**: `GET /api/documents` (list with category/status filters), `GET /api/documents/:id` (details)
+- **OCR pipeline**: Upload → glm-ocr via Ollama → LLM categorization → file organization → summary → knowledge base indexing
+- **Channel attachments**: Automatic file processing for uploads from Telegram, Slack, Teams, WhatsApp
+- **Documents schema**: New `documents` table with status tracking, categorization, OCR text, summaries
+
+### Browser Extension v2.0.0
+- **16 new commands**: Tab management (new_tab, close_tab, select_tab), interactions (hover, select, press_key, scroll, drag), waiting (wait_for, highlight), storage (set_cookies, get_storage, set_storage), monitoring (get_console, get_network), dialogs (handle_dialog)
+- **Double-click support**: `click` command now accepts `doubleClick` parameter
+- **Playwright parity**: Added hover, press_key, drag, and PDF generation to the Playwright browser tool
+- **Full OpenClaw feature parity**: Browser automation now matches OpenClaw's capabilities across both browser tools
+
+### Channel Expansion
+- **WhatsApp channel**: Meta Cloud API with webhook verification, HMAC signature validation, media support, message deduplication
+- **Teams webhook**: Azure Bot Framework webhook endpoint for production deployments
+- **Cross-channel messaging tool**: Unified `messaging` tool with `list_channels`, `list_contacts`, `send_message` for sending across all connected channels
+
+### Testing
+- **22 new E2E tests**: Documents API, browser extension v2 tools, messaging tool, knowledge hybrid search, WhatsApp/Teams webhooks
+- **112 total E2E tests** (up from 90), all passing
+- **Capability eval suites**: 5 YAML eval files covering routing, tools, quality, orchestration, and channel-specific features
+
 ## 2026-03-08
 
 ### Embedded Database Mode (Zero External Dependencies)

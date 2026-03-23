@@ -1,20 +1,23 @@
 import { getDb } from '@/db/postgres';
-import { recurringTasks } from '@/db/schema/recurring-tasks';
-import { eq, and, lte, sql } from 'drizzle-orm';
-import { getScheduler } from './scheduler';
+import { hooks } from '@/db/schema/hooks';
+import { eq, and, lte, sql, isNotNull } from 'drizzle-orm';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
+import { getHookManager } from '@/hooks/manager';
+import { getEmbeddingService } from '@/core/rag/embeddings';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
+const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 
 let cronTimer: Timer | null = null;
 let lastSessionCleanup = 0;
+let lastKnowledgeCleanup = 0;
 
 /**
  * Parse a simple cron expression and compute the next run date.
  * Supports: minute hour dayOfMonth month dayOfWeek
- * Also supports interval shorthand: *​/N (every N units)
+ * Also supports interval shorthand: star/N (every N units)
  */
 export function getNextCronDate(cronExpr: string, timezone = 'UTC'): Date {
   const now = new Date();
@@ -103,61 +106,94 @@ async function maybeCleanupSessions(): Promise<void> {
   }
 }
 
+async function maybeCleanupKnowledge(): Promise<void> {
+  const now = Date.now();
+  if (now - lastKnowledgeCleanup < KNOWLEDGE_CLEANUP_INTERVAL_MS) return;
+  lastKnowledgeCleanup = now;
+
+  try {
+    const service = getEmbeddingService();
+    const result = await service.cleanup({ maxAgeDays: 30, minContentLength: 50 });
+    if (result.total > 0) {
+      coreLogger.info(result, 'Knowledge cleanup: removed stale entries');
+    }
+  } catch (err) {
+    coreLogger.error({ err }, 'Knowledge cleanup failed');
+  }
+}
+
 async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
+    await maybeCleanupKnowledge();
     const db = getDb();
     const now = new Date();
 
-    const dueTasks = await db
+    // Find schedule-triggered hooks that are due
+    const dueHooks = await db
       .select()
-      .from(recurringTasks)
+      .from(hooks)
       .where(
         and(
-          eq(recurringTasks.isEnabled, true),
-          eq(recurringTasks.status, 'active'),
-          lte(recurringTasks.nextRunAt, now),
+          eq(hooks.trigger, 'schedule'),
+          eq(hooks.isEnabled, true),
+          isNotNull(hooks.nextRunAt),
+          lte(hooks.nextRunAt, now),
         ),
       );
 
-    if (dueTasks.length === 0) return;
+    if (dueHooks.length === 0) return;
 
-    coreLogger.info({ count: dueTasks.length }, 'Processing due recurring tasks');
-    const scheduler = getScheduler();
+    coreLogger.info({ count: dueHooks.length }, 'Processing due scheduled hooks');
+    const hookManager = getHookManager();
 
-    for (const task of dueTasks) {
+    for (const hook of dueHooks) {
+      const cronExpression = hook.triggerConfig?.cronExpression as string;
+      const timezone = (hook.triggerConfig?.timezone as string) || 'UTC';
+
+      // IMPORTANT: Update nextRunAt BEFORE executing — hook execution can take minutes/hours
+      // (e.g. spawning an orchestrator + research agent). Without this, the next cron tick
+      // finds the same hook still "due" and fires it again, causing duplicate executions.
+      const nextRun = getNextCronDate(cronExpression, timezone);
+      await db
+        .update(hooks)
+        .set({
+          nextRunAt: nextRun,
+          updatedAt: now,
+        })
+        .where(eq(hooks.id, hook.id));
+
       try {
-        // Schedule the task execution via the existing scheduler
-        await scheduler.schedule(task.userId, task.actionType, {
-          ...task.actionConfig as Record<string, unknown>,
-          recurringTaskId: task.id,
+        // Execute directly via hookManager.trigger() — this handles action execution + logging
+        // Fire-and-forget for long-running actions (spawn_agent) to avoid blocking the cron loop
+        hookManager.trigger(
+          { type: 'schedule', data: { hookId: hook.id }, timestamp: now },
+          { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } },
+        ).then(() => {
+          db.update(hooks)
+            .set({ lastError: null, updatedAt: new Date() })
+            .where(eq(hooks.id, hook.id))
+            .catch(() => {});
+          coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook completed');
+        }).catch(err => {
+          db.update(hooks)
+            .set({ lastError: (err as Error).message, updatedAt: new Date() })
+            .where(eq(hooks.id, hook.id))
+            .catch(() => {});
+          coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
         });
 
-        // Update next run
-        const nextRun = getNextCronDate(task.cronExpression, task.timezone || 'UTC');
-        await db
-          .update(recurringTasks)
-          .set({
-            lastRunAt: now,
-            nextRunAt: nextRun,
-            runCount: sql`run_count + 1`,
-            lastError: null,
-            updatedAt: now,
-          })
-          .where(eq(recurringTasks.id, task.id));
-
-        coreLogger.info({ taskId: task.id, name: task.name, nextRun }, 'Recurring task triggered');
+        coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook triggered');
       } catch (err) {
         await db
-          .update(recurringTasks)
+          .update(hooks)
           .set({
             lastError: (err as Error).message,
-            status: 'error',
             updatedAt: now,
           })
-          .where(eq(recurringTasks.id, task.id));
+          .where(eq(hooks.id, hook.id));
 
-        coreLogger.error({ err, taskId: task.id }, 'Recurring task execution failed');
+        coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
       }
     }
   } catch (err) {

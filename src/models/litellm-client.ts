@@ -66,10 +66,33 @@ export class LiteLLMClient {
   }
 
   /**
+   * Remove orphaned tool messages that have no preceding assistant message
+   * with matching tool_calls. This prevents LLM API errors.
+   */
+  private sanitizeToolMessages(messages: AgentMessage[]): AgentMessage[] {
+    // Collect all tool_call IDs from assistant messages
+    const validToolCallIds = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        for (const tc of msg.toolCalls) {
+          validToolCallIds.add(tc.id);
+        }
+      }
+    }
+
+    // Filter out tool messages whose toolCallId isn't in the set
+    return messages.filter((msg) => {
+      if (msg.role !== 'tool') return true;
+      return msg.toolCallId && validToolCallIds.has(msg.toolCallId);
+    });
+  }
+
+  /**
    * Convert internal message format to OpenAI format
    */
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    const sanitized = this.sanitizeToolMessages(messages);
+    return sanitized.map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
@@ -280,6 +303,7 @@ export class LiteLLMClient {
     const response = await this.client.embeddings.create({
       model: embeddingModel,
       input,
+      encoding_format: 'float',
     });
 
     return response.data.map((d) => d.embedding);
@@ -291,6 +315,56 @@ export class LiteLLMClient {
   async listModels(): Promise<string[]> {
     const response = await this.client.models.list();
     return response.data.map((m) => m.id);
+  }
+
+  /**
+   * Send an image to a vision model and get a text response.
+   * Uses the OpenAI-compatible multimodal content format.
+   */
+  async completeVision(options: {
+    model: string;
+    prompt: string;
+    imageBase64: string;
+    mimeType?: string;
+    maxTokens?: number;
+  }): Promise<{ content: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number }; latencyMs: number }> {
+    const startTime = Date.now();
+    const mediaType = options.mimeType || 'image/png';
+
+    modelLogger.info({ model: options.model }, 'Vision request');
+
+    const response = await this.client.chat.completions.create({
+      model: options.model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: options.prompt },
+            { type: 'image_url', image_url: { url: `data:${mediaType};base64,${options.imageBase64}` } },
+          ],
+        },
+      ],
+      max_tokens: options.maxTokens || 4096,
+      stream: false,
+    });
+
+    const latencyMs = Date.now() - startTime;
+    let content = response.choices[0]?.message?.content || '';
+    if (content.includes('<think>')) {
+      content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    }
+
+    modelLogger.info({ model: options.model, latencyMs, tokens: response.usage?.total_tokens }, 'Vision response');
+
+    return {
+      content,
+      usage: {
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
+        totalTokens: response.usage?.total_tokens || 0,
+      },
+      latencyMs,
+    };
   }
 
   /**

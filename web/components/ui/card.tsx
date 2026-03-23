@@ -11,8 +11,8 @@ export function Card({ children, className, hover }: CardProps) {
   return (
     <div
       className={cn(
-        'bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60',
-        hover && 'hover:shadow-md hover:ring-primary-200/60 dark:hover:ring-primary-800/60 transition-all cursor-pointer',
+        'bg-surface-container rounded-[1rem] ring-1 ring-outline-variant/10',
+        hover && 'hover:bg-surface-container-high hover:ring-outline-variant/20 transition-all cursor-pointer',
         className
       )}
     >
@@ -25,7 +25,7 @@ export function CardHeader({ children, className }: Omit<CardProps, 'hover'>) {
   return (
     <div
       className={cn(
-        'px-5 py-4 border-b border-gray-100 dark:border-gray-700/60',
+        'px-6 py-5 border-b border-outline-variant/10',
         className
       )}
     >
@@ -38,7 +38,7 @@ export function CardTitle({ children, className }: Omit<CardProps, 'hover'>) {
   return (
     <h3
       className={cn(
-        'text-lg font-semibold text-gray-900 dark:text-gray-100',
+        'text-sm font-extrabold tracking-tighter text-white',
         className
       )}
     >
@@ -48,5 +48,5 @@ export function CardTitle({ children, className }: Omit<CardProps, 'hover'>) {
 }
 
 export function CardContent({ children, className }: Omit<CardProps, 'hover'>) {
-  return <div className={cn('p-5', className)}>{children}</div>;
+  return <div className={cn('p-6', className)}>{children}</div>;
 }

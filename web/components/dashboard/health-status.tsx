@@ -25,33 +25,33 @@ const SERVICE_CONFIG = [
 ] as const;
 
 export function HealthStatus({ health, isFetching }: HealthStatusProps) {
-  const getStatusIcon = (status?: string) => {
+  const getStatusDot = (status?: string) => {
     if (!health) {
-      return <RefreshCw className="w-5 h-5 text-gray-500 animate-spin" />;
+      return <RefreshCw className="w-4 h-4 text-on-surface-variant animate-spin" />;
     }
     switch (status) {
       case 'healthy':
-        return <CheckCircle className="w-5 h-5 text-green-500" />;
+        return <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />;
       case 'degraded':
-        return <AlertCircle className="w-5 h-5 text-yellow-500" />;
+        return <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />;
       case 'not_configured':
-        return <AlertCircle className="w-5 h-5 text-gray-400" />;
+        return <span className="w-1.5 h-1.5 rounded-full bg-on-surface-variant" />;
       default:
-        return <XCircle className="w-5 h-5 text-red-500" />;
+        return <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse" />;
     }
   };
 
-  const getStatusColor = (status?: string) => {
-    if (!health) return 'bg-gray-50 dark:bg-gray-700/50';
+  const getStatusBg = (status?: string) => {
+    if (!health) return 'bg-surface-container-high/50';
     switch (status) {
       case 'healthy':
-        return 'bg-gray-50 dark:bg-gray-700/50';
+        return 'bg-surface-container-high/50';
       case 'degraded':
-        return 'bg-yellow-50/50 dark:bg-yellow-900/10';
+        return 'bg-amber-500/5';
       case 'not_configured':
-        return 'bg-gray-50 dark:bg-gray-700/50';
+        return 'bg-surface-container-high/50';
       default:
-        return 'bg-red-50/50 dark:bg-red-900/10';
+        return 'bg-error/5';
     }
   };
 
@@ -75,7 +75,7 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
         <div className="flex items-center justify-between">
           <CardTitle>System Health</CardTitle>
           {isFetching && health && (
-            <RefreshCw className="w-4 h-4 text-gray-500 animate-spin" />
+            <RefreshCw className="w-3.5 h-3.5 text-on-surface-variant animate-spin" />
           )}
         </div>
       </CardHeader>
@@ -86,35 +86,35 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
             return (
               <div
                 key={key}
-                className={`flex items-center gap-3 p-3 rounded-lg transition-colors duration-500 ${getStatusColor(service?.status)}`}
+                className={`flex items-center gap-3 p-4 rounded-[0.75rem] transition-colors duration-500 ${getStatusBg(service?.status)}`}
               >
-                <div className="transition-all duration-500">
-                  {getStatusIcon(service?.status)}
+                <div className="flex items-center justify-center w-8 h-8 transition-all duration-500">
+                  {getStatusDot(service?.status)}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <Icon className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-                    <span className="font-medium text-gray-900 dark:text-gray-100 text-sm">
+                    <Icon className="w-3.5 h-3.5 text-on-surface-variant shrink-0" />
+                    <span className="font-bold text-white text-sm">
                       {label}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                    <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
                       {getStatusLabel(service?.status)}
                     </span>
                     {service?.latency != null && service.latency > 0 && (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                      <span className="text-xs text-on-surface-variant">
                         {service.latency}ms
                       </span>
                     )}
                   </div>
                   {service?.status === 'unhealthy' && service.message && (
-                    <p className="text-xs text-red-500 dark:text-red-400 mt-0.5 truncate" title={service.message}>
+                    <p className="text-xs text-error mt-0.5 truncate" title={service.message}>
                       {service.message}
                     </p>
                   )}
                   {service?.status === 'not_configured' && (
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                    <p className="text-xs text-on-surface-variant mt-0.5">
                       Optional
                     </p>
                   )}

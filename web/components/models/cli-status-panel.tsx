@@ -41,12 +41,12 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd }: CLIStatusPane
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-4">
+    <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10 p-4">
       <div className="flex items-center gap-2 mb-1">
-        <Terminal className="w-5 h-5 text-violet-600" />
-        <h2 className="font-semibold text-gray-900 dark:text-gray-100">Detected CLI Tools</h2>
+        <Terminal className="w-5 h-5 text-violet-400" />
+        <h2 className="font-semibold text-white">Detected CLI Tools</h2>
       </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+      <p className="text-xs text-on-surface-variant mb-3">
         These CLI subscription tools were detected on your system. Add them to use as models.
       </p>
       <div className="space-y-2">
@@ -56,25 +56,25 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd }: CLIStatusPane
             <div key={tool.name} className="flex items-center justify-between text-sm">
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${
-                  !tool.available ? 'bg-gray-400' : registered ? 'bg-green-500' : 'bg-yellow-500'
+                  !tool.available ? 'bg-on-surface-variant' : registered ? 'bg-emerald-400' : 'bg-yellow-400'
                 }`} />
-                <span className="text-gray-900 dark:text-gray-100">{tool.name}</span>
+                <span className="text-white">{tool.name}</span>
                 {!tool.available && (
-                  <span className="text-xs text-gray-500">(not installed)</span>
+                  <span className="text-xs text-on-surface-variant">(not installed)</span>
                 )}
                 {tool.available && !registered && (
-                  <span className="text-xs text-yellow-600 dark:text-yellow-400">(detected, not registered)</span>
+                  <span className="text-xs text-yellow-400">(detected, not registered)</span>
                 )}
                 {tool.available && registered && (
-                  <span className="text-xs text-green-600 dark:text-green-400">(active)</span>
+                  <span className="text-xs text-emerald-400">(active)</span>
                 )}
               </div>
               <div className="flex items-center gap-2">
                 {tool.quota && registered && (
                   <span className={`text-xs px-2 py-0.5 rounded ${
                     tool.quota.exhausted
-                      ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-                      : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                      ? 'bg-error/10 text-error'
+                      : 'bg-emerald-500/10 text-emerald-400'
                   }`}>
                     {tool.quota.exhausted ? 'Quota Exhausted' : 'Quota OK'}
                   </span>
@@ -83,7 +83,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd }: CLIStatusPane
                   <button
                     onClick={() => handleQuickAdd(tool)}
                     disabled={adding === tool.name}
-                    className="text-xs px-2 py-1 bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1"
+                    className="text-xs px-2 py-1 bg-violet-600 text-white rounded-full hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1"
                   >
                     <Plus className="w-3 h-3" />
                     {adding === tool.name ? 'Adding...' : 'Add'}

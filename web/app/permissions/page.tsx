@@ -11,7 +11,7 @@ export default function PermissionsPage() {
   }, [router]);
 
   return (
-    <div className="flex items-center justify-center h-64 text-gray-500">
+    <div className="flex items-center justify-center h-64 text-on-surface-variant">
       Redirecting to Tools & Permissions...
     </div>
   );

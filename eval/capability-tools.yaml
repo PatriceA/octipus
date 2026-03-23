@@ -1,0 +1,131 @@
+name: Tool Usage Tests (OpenClaw Parity)
+description: >
+  Tests verifying correct routing for tool-dependent tasks.
+  In unit mode, validates classification and topic routing.
+  In integration mode (--integration), validates actual tool invocation.
+
+tests:
+  # ── Web Search Tool ──
+  - id: tool-web-search
+    description: Web search query routes to research
+    input: "Search the web for Bun 2.0 release notes"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [tools, search, openclaw-parity]
+
+  # ── Browser Tool ──
+  - id: tool-browser-navigate
+    description: URL navigation is a task
+    input: "Open github.com/anthropics/claude-code and tell me the latest release version"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [tools, browser, openclaw-parity]
+
+  - id: tool-browser-screenshot
+    description: Screenshot request routes correctly
+    input: "Take a screenshot of the current page in my browser"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, browser, openclaw-parity]
+
+  # ── Shell / Code Execution ──
+  - id: tool-shell-execute
+    description: System command routes to devops or general
+    input: "List all running Docker containers and their resource usage"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: devops
+    tags: [tools, shell, openclaw-parity]
+
+  - id: tool-git-status
+    description: Git query routes to development
+    input: "Show me the current git status and any uncommitted changes"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, git, openclaw-parity]
+
+  # ── File System ──
+  - id: tool-read-file
+    description: File reading is a task
+    input: "Read the contents of package.json and tell me what dependencies we have"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, filesystem, openclaw-parity]
+
+  - id: tool-write-file
+    description: File writing routes to development
+    input: "Create a new file called hello.py with a simple Hello World program"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: development
+    tags: [tools, filesystem, openclaw-parity]
+
+  # ── Knowledge Base ──
+  - id: tool-knowledge-search
+    description: Knowledge query is a task
+    input: "Search the knowledge base for information about our database schema"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, knowledge, openclaw-parity]
+
+  # ── Messaging ──
+  - id: tool-send-message
+    description: Send message is a task
+    input: "Send a message to my Telegram chat saying the build passed"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, messaging, openclaw-parity]
+
+  - id: tool-list-channels
+    description: Channel listing is a task
+    input: "What messaging channels are connected?"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, messaging, openclaw-parity]
+
+  # ── Scheduling ──
+  - id: tool-create-schedule
+    description: Schedule creation routes to automation
+    input: "Set up a cron job that runs every morning at 8 AM to check server health"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: automation
+    tags: [tools, scheduling, openclaw-parity]
+
+  # ── Document Processing ──
+  - id: tool-list-documents
+    description: Document listing is a task
+    input: "Show me all documents that have been uploaded and processed"
+    assertions:
+      - type: classification
+        value: task
+    tags: [tools, documents, openclaw-parity]
+
+  # ── Multi-Tool Usage ──
+  - id: tool-research-and-save
+    description: Research + save task is classified correctly
+    input: "Research TypeScript 6 features and save a summary to research-notes.md"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [tools, multi-tool, openclaw-parity]

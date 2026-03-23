@@ -13,6 +13,12 @@ function isPublicPath(path: string): boolean {
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
   // All health endpoints are public (used by monitoring, load balancers, k8s probes)
   if (path.startsWith('/api/health')) return true;
+  // Webhook endpoints use HMAC signature verification instead of bearer auth
+  if (path.startsWith('/api/webhooks/')) return true;
+  // Incoming webhooks use per-hook webhookSecret for authentication
+  if (path.startsWith('/api/hooks/incoming/')) return true;
+  // WhatsApp webhook — Meta calls directly with signature verification
+  if (path.startsWith('/api/channels/whatsapp/webhook')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
@@ -24,8 +30,8 @@ export const authGuard = new Elysia({ name: 'auth-guard' })
   .onBeforeHandle({ as: 'global' }, (ctx) => {
     const url = new URL(ctx.request.url);
 
-    // Skip guard for non-API routes and public paths
-    if (!url.pathname.startsWith('/api/') || isPublicPath(url.pathname)) {
+    // Skip guard for CORS preflight, non-API routes, and public paths
+    if (ctx.request.method === 'OPTIONS' || !url.pathname.startsWith('/api/') || isPublicPath(url.pathname)) {
       return;
     }
 

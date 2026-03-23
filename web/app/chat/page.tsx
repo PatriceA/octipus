@@ -110,11 +110,11 @@ export default function ChatPage() {
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
     try {
-      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string }>; maxTokenBudget?: number }>('/sessions');
+      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string }>; maxTokenBudget?: number }>('/sessions');
       if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
-          .filter(s => s.status === 'active')
+          .filter(s => s.status === 'active' && (!s.channelType || s.channelType === 'webchat' || s.channelType === 'api'))
           .slice(0, 50)
           .map(s => ({
             id: s.id,
@@ -148,17 +148,71 @@ export default function ChatPage() {
       const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system`
       );
-      updateSessionState(sessionId, (prev) => ({
-        ...prev,
-        messages: data?.messages?.length
-          ? data.messages.map((m) => ({
-              id: m.id,
-              role: m.role as ChatMessageData['role'],
-              content: m.content,
-              timestamp: new Date(m.createdAt),
-            }))
-          : [welcomeMessage()],
-      }));
+      const msgs = data?.messages?.length
+        ? data.messages.map((m) => ({
+            id: m.id,
+            role: m.role as ChatMessageData['role'],
+            content: m.content,
+            timestamp: new Date(m.createdAt),
+          }))
+        : [welcomeMessage()];
+
+      // Restore agent activity for this session
+      let restoredAgents = new Map<string, TrackedAgent>();
+      try {
+        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>('/agents');
+        const sessionAgents = (agentData?.agents || []).filter(a => a.sessionId === sessionId);
+        for (const a of sessionAgents) {
+          let toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
+          try {
+            const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
+            for (const ev of evData?.events || []) {
+              if (ev.type === 'action' && ev.data?.toolCalls) {
+                toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
+                  id: tc.id || Date.now().toString(),
+                  name: tc.name,
+                  argsSummary: tc.argsSummary,
+                })));
+              }
+            }
+          } catch {}
+          const startTime = new Date(a.createdAt).getTime();
+          const isFinished = a.status !== 'running' && a.status !== 'idle';
+          const endTime = isFinished
+            ? (a.completedAt ? new Date(a.completedAt).getTime() : (a.durationMs != null ? startTime + a.durationMs : startTime))
+            : undefined;
+          restoredAgents.set(a.id, {
+            id: a.id,
+            role: a.role,
+            model: a.model,
+            status: (isFinished ? (a.status === 'failed' ? 'failed' : 'completed') : 'running') as TrackedAgent['status'],
+            toolCalls,
+            startTime,
+            endTime,
+            durationMs: a.durationMs ?? (endTime != null ? endTime - startTime : undefined),
+            iterations: a.iteration,
+          });
+        }
+      } catch {}
+
+      updateSessionState(sessionId, (prev) => {
+        // Merge restored agents with live-tracked agents, preserving live data
+        // (WebSocket events have accurate durationMs before DB persists it)
+        let mergedAgents = prev.trackedAgents;
+        if (restoredAgents.size > 0) {
+          mergedAgents = new Map(restoredAgents);
+          // Preserve live-tracked data that may be more accurate
+          Array.from(prev.trackedAgents.entries()).forEach(([id, liveAgent]) => {
+            const restored = mergedAgents.get(id);
+            if (restored && liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)) {
+              mergedAgents.set(id, { ...restored, durationMs: liveAgent.durationMs, endTime: liveAgent.endTime });
+            } else if (!restored) {
+              mergedAgents.set(id, liveAgent);
+            }
+          });
+        }
+        return { ...prev, messages: msgs, trackedAgents: mergedAgents };
+      });
     } catch {}
   }, [updateSessionState]);
 
@@ -221,47 +275,109 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [activeSessionId, loadSessionMessages, loadSessions]);
 
-  // WebSocket
+  // Check for pending approvals (polling fallback when WebSocket reconnects or events are missed)
+  const checkPendingApprovals = useCallback(async () => {
+    try {
+      const res = await api.get<{ approvals: ApprovalRequest[] }>('/chat/approvals/pending');
+      if (res?.approvals?.length > 0 && !pendingApproval) {
+        const a = res.approvals[0];
+        setPendingApproval({
+          requestId: a.requestId,
+          summary: a.summary,
+          question: a.question,
+          options: a.options,
+        });
+      }
+    } catch { /* ignore */ }
+  }, [pendingApproval]);
+
+  // WebSocket with auto-reconnection
+  const reconnectDelay = useRef(1000);
+
   useEffect(() => {
     if (!mounted) return;
     const token = api.getToken();
     if (!token) return;
 
-    if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) {
-      wsRef.current = wsInstance;
-      wsInstance.onmessage = (event) => {
-        try { handleWsMessage(JSON.parse(event.data)); } catch {}
-      };
-      setConnectionStatus(wsInstance.readyState === WebSocket.OPEN ? 'connected' : 'connecting');
-      return;
-    }
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
-    let ws: WebSocket;
-    try {
-      ws = createWebSocket('/ws');
-      wsInstance = ws;
-      wsRef.current = ws;
-      ws.onopen = () => setConnectionStatus('connected');
-      ws.onmessage = (event) => {
-        try { handleWsMessage(JSON.parse(event.data)); } catch {}
-      };
-      ws.onclose = (event) => {
-        if (event.code === 4000) return;
-        if (wsInstance === ws) {
-          setConnectionStatus('disconnected');
-          wsRef.current = null;
-          wsInstance = null;
+    const connect = () => {
+      if (cancelled) return;
+
+      if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) {
+        wsRef.current = wsInstance;
+        wsInstance.onmessage = (event) => {
+          try { handleWsMessage(JSON.parse(event.data)); } catch {}
+        };
+        setConnectionStatus(wsInstance.readyState === WebSocket.OPEN ? 'connected' : 'connecting');
+        return;
+      }
+
+      let ws: WebSocket;
+      try {
+        ws = createWebSocket('/ws');
+        wsInstance = ws;
+        wsRef.current = ws;
+        ws.onopen = () => {
+          setConnectionStatus('connected');
+          reconnectDelay.current = 1000; // Reset backoff on successful connect
+          // Check for any approvals that arrived while disconnected
+          checkPendingApprovals();
+        };
+        ws.onmessage = (event) => {
+          try { handleWsMessage(JSON.parse(event.data)); } catch {}
+        };
+        ws.onclose = (event) => {
+          if (event.code === 4000) return; // Superseded by new connection
+          if (cancelled) return;
+          if (wsInstance === ws) {
+            setConnectionStatus('disconnected');
+            wsRef.current = null;
+            wsInstance = null;
+            // Auto-reconnect with exponential backoff (max 30s)
+            reconnectTimer = setTimeout(() => {
+              reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, 30000);
+              connect();
+            }, reconnectDelay.current);
+          }
+        };
+        ws.onerror = () => {
+          if (wsInstance === ws) setConnectionStatus('disconnected');
+        };
+      } catch {
+        setConnectionStatus('disconnected');
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, reconnectDelay.current);
         }
-      };
-      ws.onerror = () => {
-        if (wsInstance === ws) setConnectionStatus('disconnected');
-      };
-    } catch {
-      setConnectionStatus('disconnected');
-    }
+      }
+    };
 
-    return () => {};
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
+
+  // Periodic approval poll (every 15s) as fallback for missed WebSocket events
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(checkPendingApprovals, 15_000);
+    return () => clearInterval(interval);
+  }, [mounted, checkPendingApprovals]);
+
+  // WebSocket keepalive ping every 30s to prevent idle disconnection
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
   }, [mounted]);
 
   const handleWsMessage = (data: any) => {
@@ -284,21 +400,39 @@ export default function ChatPage() {
 
         const sid = data.sessionId || activeSessionId;
         if (sid) {
-          updateSessionState(sid, (prev) => ({
-            ...prev,
-            messages: [...prev.messages, {
-              id: Date.now().toString(),
-              role: 'assistant',
-              content: data.response,
-              timestamp: new Date(),
-              agentId: data.agentId,
-              classification: data.classification?.type,
-              metadata: meta,
-            }],
-            totalTokens: data.metadata?.sessionTotalTokens != null
-              ? data.metadata.sessionTotalTokens
-              : prev.totalTokens + (meta?.tokens || 0),
-          }));
+          updateSessionState(sid, (prev) => {
+            // Finalize any agents still marked as 'running'.
+            const now = Date.now();
+            const next = new Map(prev.trackedAgents);
+            Array.from(next.entries()).forEach(([id, agent]) => {
+              if (agent.status === 'running') {
+                const elapsed = now - agent.startTime;
+                next.set(id, {
+                  ...agent,
+                  status: 'completed',
+                  endTime: agent.endTime ?? now,
+                  // Keep existing durationMs if already set by worker_completed
+                  durationMs: agent.durationMs || elapsed,
+                });
+              }
+            });
+            return {
+              ...prev,
+              trackedAgents: next,
+              messages: [...prev.messages, {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content: data.response,
+                timestamp: new Date(),
+                agentId: data.agentId,
+                classification: data.classification?.type,
+                metadata: meta,
+              }],
+              totalTokens: data.metadata?.sessionTotalTokens != null
+                ? data.metadata.sessionTotalTokens
+                : prev.totalTokens + (meta?.tokens || 0),
+            };
+          });
 
           if (data.sessionId) {
             setSessions(prev => {
@@ -364,6 +498,25 @@ export default function ChatPage() {
         });
         break;
 
+      case 'pipeline_event': {
+        const pe = data.data as any;
+        switch (pe.event) {
+          case 'pipeline_created':
+            setStatusMessage(`Pipeline "${pe.title}" started (${pe.stageCount} stages)`);
+            break;
+          case 'stage_started':
+            setStatusMessage(`Stage ${(pe.index ?? 0) + 1}: ${pe.name}...`);
+            break;
+          case 'stage_completed':
+            setStatusMessage(`Stage "${pe.name}" completed`);
+            break;
+          case 'pipeline_completed':
+            setStatusMessage(null);
+            break;
+        }
+        break;
+      }
+
       case 'worker_spawned': {
         const d = data.data as any;
         const agentId = d.workerId || d.agentId;
@@ -391,10 +544,32 @@ export default function ChatPage() {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(agentId);
           if (existing) {
+            // Use server-reported durationMs to compute endTime so it freezes accurately
+            const serverDuration = typeof d.durationMs === 'number' ? d.durationMs : undefined;
+            const endTime = serverDuration != null
+              ? existing.startTime + serverDuration
+              : Date.now();
             next.set(agentId, {
               ...existing,
               status: workerStatus,
+              endTime,
+              durationMs: serverDuration ?? (Date.now() - existing.startTime),
+              totalTokens: d.totalTokens,
+              iterations: d.iterations,
+              error: d.error,
+            });
+          } else {
+            // Agent wasn't tracked via worker_spawned (race condition or missed event)
+            // Create a completed entry so the duration is still visible
+            next.set(agentId, {
+              id: agentId,
+              role: d.role || 'unknown',
+              model: d.model || '',
+              status: workerStatus,
+              toolCalls: [],
+              startTime: d.durationMs ? Date.now() - d.durationMs : Date.now(),
               endTime: Date.now(),
+              durationMs: d.durationMs ?? 0,
               totalTokens: d.totalTokens,
               iterations: d.iterations,
               error: d.error,
@@ -437,22 +612,47 @@ export default function ChatPage() {
   const handleAgentEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
     if (data.event === 'action' && data.agentId) {
-      const toolCalls: ToolCallInfo[] = ((data.data as any)?.toolCalls || []).map((tc: any) => ({
-        id: tc.id || Date.now().toString(),
-        name: tc.name,
-        argsSummary: tc.argsSummary,
-      }));
-      updateSessionState(sessionId, (prev) => {
-        const next = new Map(prev.trackedAgents);
-        const existing = next.get(data.agentId);
-        if (existing) {
-          next.set(data.agentId, {
-            ...existing,
-            toolCalls: [...existing.toolCalls, ...toolCalls],
-          });
-        }
-        return { ...prev, trackedAgents: next };
-      });
+      const d = data.data as any;
+
+      // Standard agent tool calls (array format)
+      if (d?.toolCalls) {
+        const toolCalls: ToolCallInfo[] = d.toolCalls.map((tc: any) => ({
+          id: tc.id || Date.now().toString(),
+          name: tc.name,
+          argsSummary: tc.argsSummary,
+        }));
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          if (existing) {
+            next.set(data.agentId, {
+              ...existing,
+              toolCalls: [...existing.toolCalls, ...toolCalls],
+            });
+          }
+          return { ...prev, trackedAgents: next };
+        });
+      }
+      // CLI agent tool use (single tool format from cli_tool_use events)
+      else if (d?.type === 'cli_tool_use' && d?.toolName) {
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          if (existing) {
+            // Increment iteration count for CLI agents
+            next.set(data.agentId, {
+              ...existing,
+              iterations: (existing.iterations || 0) + 1,
+              toolCalls: [...existing.toolCalls, {
+                id: Date.now().toString(),
+                name: String(d.toolName),
+                argsSummary: d.args ? JSON.stringify(d.args).slice(0, 80) : undefined,
+              }],
+            });
+          }
+          return { ...prev, trackedAgents: next };
+        });
+      }
     }
   };
 
@@ -643,7 +843,7 @@ export default function ChatPage() {
   return (
     <div className="h-full flex">
       {/* Left panel — Session list */}
-      <div className="w-64 border-r border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
+      <div className="w-64 border-r border-outline-variant/10 flex-shrink-0 bg-surface-container-low">
         <SessionList
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -658,18 +858,29 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Inline banners for approval/permission */}
         {pendingPermission && (
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-3 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-yellow-900 dark:text-yellow-200">Permission Required</p>
-              <p className="text-sm text-gray-700 dark:text-gray-300">
-                <span className="font-mono">{pendingPermission.skillId}</span> wants to execute <span className="font-mono font-medium">{pendingPermission.action}</span>
+          <div className="bg-yellow-900/20 border-b border-yellow-800/40 px-4 py-3 flex items-center justify-between">
+            <div className="min-w-0 flex-1 mr-3">
+              <p className="text-sm font-medium text-yellow-200">Permission Required</p>
+              <p className="text-sm text-on-surface-variant">
+                <span className="font-mono font-medium">{pendingPermission.skillId}</span>
+                {' '}&middot;{' '}
+                <span className="font-mono">{pendingPermission.action}</span>
               </p>
+              {pendingPermission.args && Object.keys(pendingPermission.args).length > 0 && (
+                <p className="text-xs text-on-surface-variant mt-1 font-mono truncate">
+                  {Object.entries(pendingPermission.args)
+                    .filter(([, v]) => v != null && String(v).length > 0)
+                    .slice(0, 3)
+                    .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+                    .join(' · ')}
+                </p>
+              )}
             </div>
             <div className="flex gap-2">
               <button onClick={() => handlePermissionResponse(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
                 <CheckCircle className="w-4 h-4" /> Allow
               </button>
-              <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
+              <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-error text-white rounded-lg hover:bg-error/80 cursor-pointer">
                 <XCircle className="w-4 h-4" /> Deny
               </button>
             </div>
@@ -677,21 +888,21 @@ export default function ChatPage() {
         )}
 
         {pendingApproval && (
-          <div className="bg-orange-50 dark:bg-orange-900/20 border-b border-orange-200 dark:border-orange-800 px-4 py-3 flex items-center justify-between">
+          <div className="bg-orange-900/20 border-b border-orange-800/40 px-4 py-3 flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-orange-900 dark:text-orange-200">Approval Required</p>
-              <p className="text-sm text-gray-700 dark:text-gray-300">{pendingApproval.summary}</p>
-              <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mt-0.5">{pendingApproval.question}</p>
+              <p className="text-sm font-medium text-orange-200">Approval Required</p>
+              <p className="text-sm text-on-surface-variant">{pendingApproval.summary}</p>
+              <p className="text-sm font-medium text-white mt-0.5">{pendingApproval.question}</p>
             </div>
             <div className="flex gap-2 flex-wrap">
               {pendingApproval.options?.length ? (
                 <>
                   {pendingApproval.options.map((option, i) => (
-                    <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer">
+                    <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-surface-container-highest border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-white cursor-pointer">
                       {option}
                     </button>
                   ))}
-                  <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-100 text-red-700 dark:text-red-400 cursor-pointer">
+                  <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-error/20 border border-error/30 rounded-lg hover:bg-error/30 text-error cursor-pointer">
                     Deny
                   </button>
                 </>
@@ -700,7 +911,7 @@ export default function ChatPage() {
                   <button onClick={() => handleApproval(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
                     <CheckCircle className="w-4 h-4" /> Approve
                   </button>
-                  <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 cursor-pointer">
+                  <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-error text-white rounded-lg hover:bg-error/80 cursor-pointer">
                     <XCircle className="w-4 h-4" /> Deny
                   </button>
                 </>
@@ -719,7 +930,7 @@ export default function ChatPage() {
         />
 
         {/* Prompt input */}
-        <div className="border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
+        <div className="border-t border-outline-variant/10 bg-surface-container p-3">
           <PromptInput
             onSend={sendMessage}
             disabled={isLoading}
@@ -730,7 +941,7 @@ export default function ChatPage() {
 
       {/* Right panel — Side panel */}
       {showSidePanel && (
-        <div className="w-72 border-l border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900">
+        <div className="w-72 border-l border-outline-variant/10 flex-shrink-0 bg-surface-container">
           <SidePanel
             totalTokens={sessionTotalTokens}
             maxTokenBudget={maxTokenBudget}
@@ -750,7 +961,7 @@ export default function ChatPage() {
       {/* Side panel toggle */}
       <button
         onClick={() => setShowSidePanel(!showSidePanel)}
-        className="absolute top-20 right-2 p-1.5 rounded-lg bg-white dark:bg-gray-800 shadow-sm ring-1 ring-gray-200 dark:ring-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 z-10 cursor-pointer"
+        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-sm ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-white z-10 cursor-pointer"
         title={showSidePanel ? 'Hide panel' : 'Show panel'}
       >
         {showSidePanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}

@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Workflow,
   Cable,
+  ChevronRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { OAuthIntegrationsSection } from './oauth-section';
@@ -29,13 +30,13 @@ interface WorkspaceConfig {
 export function IntegrationsTab() {
   return (
     <div className="space-y-8">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Integrations</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-white">Integrations</h2>
       <WorkspaceSection />
-      <hr className="border-gray-200 dark:border-gray-700" />
+      <hr className="border-outline-variant/10" />
       <CLIIntegrationsSection />
-      <hr className="border-gray-200 dark:border-gray-700" />
+      <hr className="border-outline-variant/10" />
       <OAuthIntegrationsSection />
-      <hr className="border-gray-200 dark:border-gray-700" />
+      <hr className="border-outline-variant/10" />
       <IntegrationSettingsSection />
     </div>
   );
@@ -94,19 +95,19 @@ function WorkspaceSection() {
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
-        <FolderOpen className="w-4 h-4 text-gray-500" />
-        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Workspace Paths</h3>
+        <FolderOpen className="w-4 h-4 text-on-surface-variant" />
+        <h3 className="text-xs font-bold text-on-surface-variant uppercase">Workspace Paths</h3>
       </div>
-      <p className="text-xs text-gray-500 mb-3">
+      <p className="text-xs text-on-surface-variant mb-3">
         Directories the agent can access. The root path is set via environment variable.
       </p>
 
       {/* Root path (read-only) */}
       <div className="mb-3">
-        <label className="block text-xs text-gray-500 mb-1">Root Path</label>
-        <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-300 font-mono">
+        <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Root Path</label>
+        <div className="flex items-center gap-2 bg-[#262626] border-none rounded-md py-3 px-4 text-sm text-white font-mono">
           {wsLoading ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-500" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-on-surface-variant" />
           ) : (
             workspace?.rootPath || 'Not configured'
           )}
@@ -115,18 +116,18 @@ function WorkspaceSection() {
 
       {/* Additional paths */}
       <div className="mb-3">
-        <label className="block text-xs text-gray-500 mb-1">Additional Paths</label>
+        <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Additional Paths</label>
         <div className="space-y-2">
           {workspace?.additionalPaths.length === 0 && (
-            <p className="text-xs text-gray-500 py-2">No additional paths configured.</p>
+            <p className="text-xs text-on-surface-variant py-2">No additional paths configured.</p>
           )}
           {workspace?.additionalPaths.map((path, i) => (
-            <div key={i} className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-              <span className="flex-1 text-sm font-mono text-gray-700 dark:text-gray-300">{path}</span>
+            <div key={i} className="flex items-center gap-2 bg-[#131313] rounded-lg py-3 px-4">
+              <span className="flex-1 text-sm font-mono text-white">{path}</span>
               <button
                 onClick={() => handleRemovePath(i)}
                 disabled={saving}
-                className="p-1 text-gray-500 hover:text-red-500 disabled:opacity-50"
+                className="p-1 text-on-surface-variant hover:text-error disabled:opacity-50"
                 title="Remove path"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -144,12 +145,12 @@ function WorkspaceSection() {
           onChange={(e) => setNewPath(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAddPath()}
           placeholder="/path/to/directory"
-          className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm font-mono"
+          className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm font-mono focus:ring-1 focus:ring-primary"
         />
         <button
           onClick={handleAddPath}
           disabled={!newPath.trim() || validating || saving}
-          className="px-3 py-1.5 text-xs bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1"
+          className="px-3 py-1.5 text-xs bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 flex items-center gap-1"
         >
           {validating || saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
           Add
@@ -214,43 +215,43 @@ function CLIIntegrationsSection() {
 
   return (
     <div>
-      <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">CLI Integrations</h3>
-      <p className="text-xs text-gray-500 mb-3">
+      <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-1">CLI Integrations</h3>
+      <p className="text-xs text-on-surface-variant mb-3">
         These integrations use locally installed CLI tools. Authenticate via the CLI directly.
       </p>
       <div className="space-y-3">
         {cliTools.map((tool) => (
           <div
             key={tool.name}
-            className="flex items-center justify-between p-3 ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl"
+            className="flex items-center justify-between p-3 bg-[#131313] rounded-[1rem]"
           >
             <div className="flex-1">
               <div className="flex items-center gap-2">
-                <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">{tool.name}</h4>
+                <h4 className="font-medium text-sm text-white">{tool.name}</h4>
                 {tool.loading ? (
-                  <Loader2 className="w-3 h-3 animate-spin text-gray-500" />
+                  <Loader2 className="w-3 h-3 animate-spin text-on-surface-variant" />
                 ) : (
                   <span
                     className={`px-2 py-0.5 text-xs rounded-full ${
                       tool.status?.configured
-                        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                        ? 'bg-green-900/30 text-green-300'
                         : tool.status?.available
-                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-                          : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                          ? 'bg-amber-900/30 text-amber-300'
+                          : 'bg-[#262626] text-on-surface-variant'
                     }`}
                   >
                     {tool.status?.configured ? 'Available' : tool.status?.available ? 'Detected' : 'Not found'}
                   </span>
                 )}
               </div>
-              <p className="text-xs text-gray-500 mt-0.5">{tool.description}</p>
+              <p className="text-xs text-on-surface-variant mt-0.5">{tool.description}</p>
               {!tool.status?.available && !tool.loading && (
-                <p className="text-xs text-gray-500 mt-1 font-mono">{tool.setupHint}</p>
+                <p className="text-xs text-on-surface-variant mt-1 font-mono">{tool.setupHint}</p>
               )}
             </div>
             <button
               onClick={() => tool.refetch()}
-              className="p-1.5 text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+              className="p-1.5 text-on-surface-variant hover:text-white"
               title="Refresh status"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -276,14 +277,13 @@ function IntegrationSettingsSection() {
 
   // Split into N8N and MCP groups
   const n8nSettings = integrationSettings.filter(s => s.key.startsWith('n8n.') && !s.isSecret);
-  const mcpSettings = integrationSettings.filter(s => s.key.startsWith('mcp.') && !s.isSecret);
   const oauthSettings = integrationSettings.filter(s => s.key.startsWith('oauth.') && !s.isSecret);
   const hasSecrets = integrationSettings.some(s => s.isSecret);
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+        <Loader2 className="w-5 h-5 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -291,8 +291,8 @@ function IntegrationSettingsSection() {
   return (
     <div className="space-y-6">
       {error && (
-        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        <div className="p-3 bg-error-dim/10 border border-error-dim/20 rounded-lg">
+          <p className="text-sm text-error">{error}</p>
         </div>
       )}
 
@@ -300,12 +300,12 @@ function IntegrationSettingsSection() {
 
       {/* N8N Settings */}
       {n8nSettings.length > 0 && (
-        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
-          <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
-            <Workflow className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+        <div className="bg-[#131313] rounded-[1rem] overflow-hidden">
+          <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
+            <Workflow className="w-5 h-5 text-on-surface-variant" />
             <div>
-              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">N8N Workflow Automation</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Connect to your N8N instance for workflow triggers</p>
+              <h3 className="text-base font-semibold text-white">N8N Workflow Automation</h3>
+              <p className="text-xs text-on-surface-variant">Connect to your N8N instance for workflow triggers</p>
             </div>
           </div>
           <div className="px-5 py-3">
@@ -320,33 +320,26 @@ function IntegrationSettingsSection() {
         </div>
       )}
 
-      {/* MCP Settings */}
-      {mcpSettings.length > 0 && (
-        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
-          <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
-            <Cable className="w-5 h-5 text-gray-500 dark:text-gray-400" />
-            <div>
-              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">MCP Settings</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Model Context Protocol server configuration</p>
-            </div>
-          </div>
-          <div className="px-5 py-3">
-            <SettingsGroup
-              settings={mcpSettings}
-              onSave={handleSave}
-              onReset={handleReset}
-              saving={saving}
-              saved={saved}
-            />
+      {/* MCP Servers — managed on the dedicated /mcp page */}
+      <a
+        href="/mcp"
+        className="flex items-center justify-between p-4 bg-[#131313] rounded-[1rem] hover:bg-[#20201f] transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <Cable className="w-5 h-5 text-on-surface-variant" />
+          <div>
+            <h3 className="text-base font-semibold text-white">MCP Servers</h3>
+            <p className="text-xs text-on-surface-variant">Add and manage Model Context Protocol servers</p>
           </div>
         </div>
-      )}
+        <ChevronRight className="w-5 h-5 text-on-surface-variant" />
+      </a>
 
       {/* OAuth Settings (publicUrl) */}
       {oauthSettings.length > 0 && (
-        <div className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden">
-          <div className="px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
-            <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">OAuth</h4>
+        <div className="bg-[#131313] rounded-[1rem] overflow-hidden">
+          <div className="px-5 py-4 border-b border-outline-variant/10">
+            <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">OAuth</h4>
           </div>
           <div className="px-5 py-3">
             <SettingsGroup

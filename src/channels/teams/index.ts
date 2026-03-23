@@ -54,21 +54,18 @@ export class TeamsChannel extends BaseChannel {
   }
 
   /**
-   * Process incoming activity from Teams webhook
+   * Process incoming activity from Teams webhook.
+   * Accepts the raw JSON body and auth header, creates a TurnContext manually.
    */
-  async processActivity(req: Request, res: Response): Promise<void> {
+  async processActivityFromWebhook(body: Activity, authHeader: string): Promise<void> {
     if (!this.adapter) {
       throw new Error('Teams adapter not connected');
     }
 
-    // Note: In a real implementation, you'd use the adapter's process method
-    // with the HTTP request/response objects from your web server (Elysia)
-    // This is a simplified version
-
-    // The actual processing would be done through:
-    // await this.adapter.process(req, res, async (context) => {
-    //   await this.handleActivity(context);
-    // });
+    // Use the adapter's processActivity which accepts an Activity + auth header
+    await (this.adapter as any).processActivity(authHeader, body, async (context: TurnContext) => {
+      await this.handleActivity(context);
+    });
   }
 
   /**

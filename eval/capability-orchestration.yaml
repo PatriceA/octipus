@@ -1,0 +1,111 @@
+name: Multi-Agent Orchestration Tests (OpenClaw Parity)
+description: >
+  Tests verifying multi-agent capabilities: team spawning, pipeline execution,
+  sub-agent depth control, and cross-role coordination.
+  Covers orchestration features comparable to OpenClaw.
+
+tests:
+  # ── Single Worker Delegation ──
+  - id: orch-single-worker
+    description: Simple task spawns single worker, not team
+    input: "Write a unit test for the login function"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: development
+    tags: [orchestration, single-worker, openclaw-parity]
+
+  # ── Team Spawning ──
+  - id: orch-team-spawn
+    description: Multi-faceted task could spawn team
+    input: "Research the best database options for our use case, then write a comparison document, and review it for accuracy"
+    assertions:
+      - type: classification
+        value: task
+    tags: [orchestration, team, openclaw-parity]
+
+  # ── Pipeline Tasks ──
+  - id: orch-pipeline-sequential
+    description: Explicitly sequential workflow uses pipeline
+    input: "First research React state management libraries, then implement a store using the best one, then review the implementation for best practices"
+    assertions:
+      - type: classification
+        value: task
+    tags: [orchestration, pipeline, openclaw-parity]
+
+  # ── Role Selection Accuracy ──
+  - id: orch-devops-not-coding
+    description: Infrastructure task routes to devops, not coding
+    input: "Configure nginx as a reverse proxy with SSL termination and rate limiting"
+    assertions:
+      - type: routes_to_role
+        value: devops
+    tags: [orchestration, role-selection, openclaw-parity]
+
+  - id: orch-security-not-review
+    description: Security-focused task routes to security specialist
+    input: "Perform a threat model analysis of our API authentication flow"
+    assertions:
+      - type: routes_to_role
+        value: security
+    tags: [orchestration, role-selection, openclaw-parity]
+
+  - id: orch-data-specialist
+    description: Database task routes to data specialist
+    input: "Design a database schema for a multi-tenant SaaS application with row-level security"
+    assertions:
+      - type: routes_to_role
+        value: data
+    tags: [orchestration, role-selection, openclaw-parity]
+
+  - id: orch-writing-specialist
+    description: Documentation task routes to writing
+    input: "Write comprehensive API documentation for our REST endpoints including examples and error codes"
+    assertions:
+      - type: routes_to_role
+        value: writing
+    tags: [orchestration, role-selection, openclaw-parity]
+
+  - id: orch-finance-specialist
+    description: Financial analysis routes to finance
+    input: "Analyze the cost-benefit of migrating from AWS to GCP for our infrastructure"
+    assertions:
+      - type: routes_to_role
+        value: finance
+    tags: [orchestration, role-selection, openclaw-parity]
+
+  - id: orch-design-specialist
+    description: UI/UX task routes to design
+    input: "Review the landing page design for accessibility issues and suggest improvements to the color contrast and typography"
+    assertions:
+      - type: routes_to_role
+        value: design
+    tags: [orchestration, role-selection, openclaw-parity]
+
+  # ── Conversation Context ──
+  - id: orch-no-spawn-greeting
+    description: Greeting does not spawn agent
+    input: "Hello! Good morning"
+    assertions:
+      - type: classification
+        value: casual
+    tags: [orchestration, context, openclaw-parity]
+
+  - id: orch-no-spawn-followup
+    description: Simple follow-up does not spawn agent
+    input: "Could you explain that in more detail please?"
+    assertions:
+      - type: classification
+        value: casual
+    tags: [orchestration, context, openclaw-parity]
+
+  # ── Latency ──
+  - id: orch-classification-speed
+    description: Message classification completes quickly
+    input: "Fix the login bug in auth.ts"
+    assertions:
+      - type: latency_under
+        value: 5000
+        description: Classification should complete under 5 seconds
+    tags: [orchestration, performance, openclaw-parity]

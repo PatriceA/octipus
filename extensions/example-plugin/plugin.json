@@ -1,0 +1,41 @@
+{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "description": "Example plugin demonstrating the plugin API with basic calculator and greeting tools",
+  "author": "Assistant",
+  "main": "index.ts",
+  "tools": [
+    {
+      "name": "greet",
+      "description": "Returns a greeting message for the given name",
+      "parameters": {
+        "name": {
+          "type": "string",
+          "description": "The name to greet",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "Performs basic arithmetic on two numbers",
+      "parameters": {
+        "operation": {
+          "type": "string",
+          "description": "The operation to perform: add, subtract, multiply, divide",
+          "required": true
+        },
+        "a": {
+          "type": "number",
+          "description": "First operand",
+          "required": true
+        },
+        "b": {
+          "type": "number",
+          "description": "Second operand",
+          "required": true
+        }
+      }
+    }
+  ]
+}

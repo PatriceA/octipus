@@ -2,6 +2,8 @@ import { spawn } from 'child_process';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
+import { getConfig } from '@/config';
+import { resolve } from 'path';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
@@ -60,8 +62,8 @@ export class ShellTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'execute', description: 'Execute shell commands', defaultLevel: 'ASK' },
-        { action: 'execute_elevated', description: 'Execute elevated commands', defaultLevel: 'DENY', dangerous: true },
+        { action: 'execute', description: 'Run shell commands (npm, bun, make, curl, etc.) in the workspace directory', defaultLevel: 'ASK' },
+        { action: 'execute_elevated', description: 'Run privileged commands requiring sudo/root access (install packages, manage services, modify system config)', defaultLevel: 'DENY', dangerous: true },
       ],
       tools: [
         {
@@ -90,7 +92,7 @@ export class ShellTool extends BaseTool {
       }),
       async (args) => {
         const command = args.command as string;
-        const cwd = (args.cwd as string) || process.cwd();
+        const cwd = (args.cwd as string) || this.getWorkspaceRoot();
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
         const env = args.env as Record<string, string> | undefined;
 
@@ -111,7 +113,7 @@ export class ShellTool extends BaseTool {
       }),
       async (args) => {
         const command = args.command as string;
-        const cwd = (args.cwd as string) || process.cwd();
+        const cwd = (args.cwd as string) || this.getWorkspaceRoot();
 
         this.validateCommand(command);
 
@@ -168,6 +170,14 @@ export class ShellTool extends BaseTool {
       },
       { requiresPermission: true }
     );
+  }
+
+  private getWorkspaceRoot(): string {
+    try {
+      return resolve(getConfig().workspace.rootPath);
+    } catch {
+      return process.cwd();
+    }
   }
 
   private validateCommand(command: string): void {
@@ -233,7 +243,7 @@ export class ShellTool extends BaseTool {
   ): Promise<{ stdout: string; stderr: string; exitCode: number; killed: boolean }> {
     return new Promise((resolve, reject) => {
       const child = spawn('sh', ['-c', command], {
-        cwd: options.cwd || process.cwd(),
+        cwd: options.cwd || this.getWorkspaceRoot(),
         env: { ...process.env, ...options.env },
         timeout: options.timeout,
       });

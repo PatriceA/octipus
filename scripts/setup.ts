@@ -6,6 +6,7 @@
  */
 
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { input, select, confirm, checkbox } from '@inquirer/prompts';
 
 // ── Helpers ──
@@ -41,6 +42,20 @@ async function checkHttp(url: string, timeoutMs = 3000): Promise<boolean> {
   }
 }
 
+async function detectChromium(): Promise<string | null> {
+  for (const bin of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) {
+    try {
+      const proc = Bun.spawn(['which', bin], { stdout: 'pipe', stderr: 'pipe' });
+      const code = await proc.exited;
+      if (code === 0) {
+        const path = (await new Response(proc.stdout).text()).trim();
+        return path || bin;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 // ── Main ──
 
 async function main(): Promise<void> {
@@ -72,17 +87,19 @@ async function main(): Promise<void> {
 
   // ── Auto-detect services ──
   console.log('\x1b[90mDetecting services...\x1b[0m');
-  const [pgAvailable, redisAvailable, ollamaAvailable] = await Promise.all([
+  const [pgAvailable, redisAvailable, ollamaAvailable, chromiumPath] = await Promise.all([
     checkTcpPort('localhost', 5432),
     checkTcpPort('localhost', 6379),
     checkHttp('http://localhost:11434/api/tags'),
+    detectChromium(),
   ]);
 
-  if (pgAvailable || redisAvailable || ollamaAvailable) {
+  if (pgAvailable || redisAvailable || ollamaAvailable || chromiumPath) {
     const detected: string[] = [];
     if (pgAvailable) detected.push('PostgreSQL (5432)');
     if (redisAvailable) detected.push('Redis (6379)');
     if (ollamaAvailable) detected.push('Ollama (11434)');
+    if (chromiumPath) detected.push(`Chromium (${chromiumPath})`);
     console.log(`\x1b[32m✓ Detected:\x1b[0m ${detected.join(', ')}\n`);
   } else {
     console.log('\x1b[33m✗ No external services detected\x1b[0m\n');
@@ -163,6 +180,16 @@ async function main(): Promise<void> {
         checked: false,
         disabled: ollamaAvailable ? '(already running)' : false,
       },
+      ...(chromiumPath ? [{
+        value: 'browser-ext' as const,
+        name: 'Browser Extension (real browser control for AI agents)',
+        checked: false,
+      }] : []),
+      {
+        value: 'mcp',
+        name: 'MCP Server (use assistant tools from Claude Code, Gemini CLI, etc.)',
+        checked: true,
+      },
     ],
   });
 
@@ -230,6 +257,71 @@ async function main(): Promise<void> {
           console.log('To install Ollama, run:');
           console.log('  curl -fsSL https://ollama.com/install.sh | sh');
           console.log('Then start it with: ollama serve');
+          break;
+        }
+        case 'browser-ext': {
+          const extSrc = import.meta.dir + '/../browser-extension';
+          const extDest = homedir() + '/.assistant/browser-extension';
+          console.log('Installing browser extension...');
+          try {
+            const { mkdirSync, cpSync } = await import('fs');
+            mkdirSync(extDest, { recursive: true });
+            cpSync(extSrc, extDest, { recursive: true });
+            console.log('\x1b[32m✓ Browser extension copied to ' + extDest + '\x1b[0m');
+            console.log('\n  To load the extension in Chromium:');
+            console.log('  1. Open \x1b[36mchromium://extensions\x1b[0m');
+            console.log('  2. Enable "Developer mode" (top right)');
+            console.log('  3. Click "Load unpacked" and select:');
+            console.log(`     \x1b[36m${extDest}\x1b[0m`);
+            console.log('  4. Click the extension icon and enter your API key\n');
+          } catch (err) {
+            console.log('\x1b[33m⚠ Failed to copy browser extension: ' + (err as Error).message + '\x1b[0m');
+          }
+          break;
+        }
+        case 'mcp': {
+          const mcpDir = import.meta.dir + '/../mcp-server';
+          console.log('Building MCP server...');
+          const installProc = Bun.spawn(['npm', 'install'], {
+            cwd: mcpDir,
+            stdout: 'inherit',
+            stderr: 'inherit',
+          });
+          if (await installProc.exited !== 0) {
+            console.log('\x1b[33m⚠ MCP server npm install failed\x1b[0m');
+            break;
+          }
+          const buildProc = Bun.spawn(['npm', 'run', 'build'], {
+            cwd: mcpDir,
+            stdout: 'inherit',
+            stderr: 'inherit',
+          });
+          if (await buildProc.exited !== 0) {
+            console.log('\x1b[33m⚠ MCP server build failed\x1b[0m');
+            break;
+          }
+          console.log('\x1b[32m✓ MCP server built\x1b[0m');
+
+          // Generate .mcp.json for Claude Code / Gemini CLI
+          const mcpDistPath = mcpDir + '/dist/index.js';
+          const mcpConfig = {
+            mcpServers: {
+              assistant: {
+                command: 'node',
+                args: [mcpDistPath],
+                env: {
+                  ASSISTANT_URL: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
+                  ASSISTANT_API_KEY: masterKey,
+                },
+              },
+            },
+          };
+          const mcpJsonPath = import.meta.dir + '/../.mcp.json';
+          await Bun.write(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + '\n');
+          console.log('\x1b[32m✓ .mcp.json generated\x1b[0m');
+          console.log(`\n  MCP server is ready. To use with Claude Code:`);
+          console.log(`  - The .mcp.json in the project root is auto-detected`);
+          console.log(`  - Or copy it to your home directory: cp .mcp.json ~/.mcp.json\n`);
           break;
         }
       }

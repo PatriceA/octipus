@@ -183,40 +183,40 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+      <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
           <div className="flex items-center gap-2">
             {backStep && (
-              <button onClick={() => setStep(backStep)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-500 cursor-pointer">
+              <button onClick={() => setStep(backStep)} className="p-1 hover:bg-surface-container-high rounded text-on-surface-variant cursor-pointer">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
               </button>
             )}
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{stepTitle}</h2>
+            <h2 className="text-lg font-semibold text-white">{stepTitle}</h2>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer">
-            <X className="w-5 h-5 text-gray-500" />
+          <button onClick={onClose} className="p-1 hover:bg-surface-container-high rounded cursor-pointer">
+            <X className="w-5 h-5 text-on-surface-variant" />
           </button>
         </div>
 
         {/* Step 1: Choose connection type */}
         {step === 'choose-source' && (
           <div className="p-4 space-y-3">
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-sm text-on-surface-variant mb-2">
               How should this model be connected?
             </p>
 
             <button
               type="button"
               onClick={handleChooseLiteLLM}
-              className="w-full text-left p-4 border border-gray-200 dark:border-gray-600 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 dark:hover:border-blue-500 dark:hover:bg-blue-900/10 transition-colors group"
+              className="w-full text-left p-4 border border-outline-variant/10 rounded-lg hover:border-primary/30 hover:bg-primary/5 transition-colors group"
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
-                  <Cpu className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                  <Cpu className="w-5 h-5 text-primary" />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">LiteLLM Proxy</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                  <div className="font-medium text-white">LiteLLM Proxy</div>
+                  <div className="text-xs text-on-surface-variant">
                     Select from models configured in your LiteLLM proxy. Includes Ollama, OpenAI, Anthropic, and other providers.
                   </div>
                 </div>
@@ -226,15 +226,15 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             <button
               type="button"
               onClick={handleChooseDirect}
-              className="w-full text-left p-4 border border-gray-200 dark:border-gray-600 rounded-lg hover:border-gray-400 hover:bg-gray-50 dark:hover:border-gray-500 dark:hover:bg-gray-700/50 transition-colors group"
+              className="w-full text-left p-4 border border-outline-variant/10 rounded-lg hover:border-outline-variant/30 hover:bg-surface-container-high transition-colors group"
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center shrink-0">
-                  <Pencil className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center shrink-0">
+                  <Pencil className="w-5 h-5 text-on-surface-variant" />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">Manual / Direct</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                  <div className="font-medium text-white">Manual / Direct</div>
+                  <div className="text-xs text-on-surface-variant">
                     Enter model details manually. For models not in LiteLLM, custom endpoints, or CLI subscription tools.
                   </div>
                 </div>
@@ -248,29 +248,29 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
           <div className="p-4">
             {loadingModels ? (
               <div className="flex items-center justify-center py-8">
-                <RefreshCw className="w-5 h-5 animate-spin text-gray-500" />
-                <span className="ml-2 text-sm text-gray-500">Loading models from LiteLLM...</span>
+                <RefreshCw className="w-5 h-5 animate-spin text-on-surface-variant" />
+                <span className="ml-2 text-sm text-on-surface-variant">Loading models from LiteLLM...</span>
               </div>
             ) : litellmError ? (
               <div className="space-y-3">
-                <div className="px-3 py-2 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm rounded">
+                <div className="px-3 py-2 bg-error/10 text-error text-sm rounded">
                   {litellmError}
                 </div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-on-surface-variant">
                   Make sure your LiteLLM proxy is running and configured.
                 </p>
               </div>
             ) : Object.keys(groupedModels).length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <Cpu className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+              <div className="text-center py-8 text-on-surface-variant">
+                <Cpu className="w-8 h-8 mx-auto mb-2 text-outline-variant" />
                 <p className="text-sm">No models found in LiteLLM</p>
-                <p className="text-xs text-gray-500 mt-1">Add models to your LiteLLM config.yaml and restart the proxy.</p>
+                <p className="text-xs text-on-surface-variant mt-1">Add models to your LiteLLM config.yaml and restart the proxy.</p>
               </div>
             ) : (
               <div className="space-y-4">
                 {Object.entries(groupedModels).map(([provider, models]) => (
                   <div key={provider}>
-                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    <h3 className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-2">
                       {PROVIDER_LABELS[provider] || provider}
                     </h3>
                     <div className="space-y-1">
@@ -279,10 +279,10 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                           key={m.id}
                           type="button"
                           onClick={() => handleSelectModel(m)}
-                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between group/item transition-colors"
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-surface-container-high flex items-center justify-between group/item transition-colors"
                         >
-                          <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{m.id}</span>
-                          <Plus className="w-4 h-4 text-gray-500 opacity-0 group-hover/item:opacity-100 transition-opacity" />
+                          <span className="font-mono text-sm text-white">{m.id}</span>
+                          <Plus className="w-4 h-4 text-on-surface-variant opacity-0 group-hover/item:opacity-100 transition-opacity" />
                         </button>
                       ))}
                     </div>
@@ -300,31 +300,31 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             <div className="flex items-center gap-2">
               <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
                 connectionType === 'litellm'
-                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
-                  : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                  ? 'bg-primary/10 text-primary'
+                  : 'bg-surface-container-high text-on-surface-variant'
               }`}>
                 {connectionType === 'litellm' ? 'via LiteLLM Proxy' : 'Direct Connection'}
               </span>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Display Name *</label>
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">Display Name *</label>
               <input
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g., GPT-4 Turbo"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Provider</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Provider</label>
                 <select
                   value={formData.provider}
                   onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                 >
                   {Object.entries(PROVIDER_LABELS).map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
@@ -332,55 +332,55 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model ID *</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Model ID *</label>
                 <input
                   type="text"
                   value={formData.modelId}
                   onChange={(e) => setFormData({ ...formData, modelId: e.target.value })}
                   placeholder={isCli ? 'cli/claude-code' : 'e.g., gpt-4o'}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
                 />
               </div>
             </div>
 
             {!isCli && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Endpoint URL</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Endpoint URL</label>
                 <input
                   type="text"
                   value={formData.endpoint}
                   onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
                   placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://localhost:11434'}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
                 />
               </div>
             )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Context Window</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Context Window</label>
                 <input
                   type="number"
                   value={formData.contextWindow}
                   onChange={(e) => setFormData({ ...formData, contextWindow: parseInt(e.target.value) || 4096 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Max Output Tokens</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Max Output Tokens</label>
                 <input
                   type="number"
                   value={formData.maxTokens}
                   onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                 />
-                <p className="text-xs text-gray-400 mt-0.5">Max tokens per response (check model docs)</p>
+                <p className="text-xs text-on-surface-variant mt-0.5">Max tokens per response (check model docs)</p>
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Topics</label>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Select which orchestrator roles can use this model</p>
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
+              <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
               <div className="flex flex-wrap gap-2">
                 {AVAILABLE_TOPICS.map((topic) => {
                   const selected = formData.topics.includes(topic.value);
@@ -396,8 +396,8 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                       })}
                       className={`px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ${
                         selected
-                          ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 ring-1 ring-primary-300 dark:ring-primary-700'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                          ? 'bg-primary/10 text-primary ring-1 ring-primary/30'
+                          : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
                       }`}
                       title={topic.description}
                     >
@@ -411,23 +411,23 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             {!isCli && (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cost/1M Input Tokens</label>
+                  <label className="block text-sm font-medium text-on-surface-variant mb-1">Cost/1M Input Tokens</label>
                   <input
                     type="number"
                     step="0.01"
                     value={formData.costPerInputToken}
                     onChange={(e) => setFormData({ ...formData, costPerInputToken: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cost/1M Output Tokens</label>
+                  <label className="block text-sm font-medium text-on-surface-variant mb-1">Cost/1M Output Tokens</label>
                   <input
                     type="number"
                     step="0.01"
                     value={formData.costPerOutputToken}
                     onChange={(e) => setFormData({ ...formData, costPerOutputToken: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                   />
                 </div>
               </div>
@@ -435,34 +435,34 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
 
             <div className="flex flex-wrap gap-4">
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={formData.supportsVision} onChange={(e) => setFormData({ ...formData, supportsVision: e.target.checked })} className="w-4 h-4 rounded" />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Vision</span>
+                <input type="checkbox" checked={formData.supportsVision} onChange={(e) => setFormData({ ...formData, supportsVision: e.target.checked })} className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary" />
+                <span className="text-sm text-on-surface-variant">Vision</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={formData.supportsTools} onChange={(e) => setFormData({ ...formData, supportsTools: e.target.checked })} className="w-4 h-4 rounded" />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Tools</span>
+                <input type="checkbox" checked={formData.supportsTools} onChange={(e) => setFormData({ ...formData, supportsTools: e.target.checked })} className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary" />
+                <span className="text-sm text-on-surface-variant">Tools</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={formData.supportsStreaming} onChange={(e) => setFormData({ ...formData, supportsStreaming: e.target.checked })} className="w-4 h-4 rounded" />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Streaming</span>
+                <input type="checkbox" checked={formData.supportsStreaming} onChange={(e) => setFormData({ ...formData, supportsStreaming: e.target.checked })} className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary" />
+                <span className="text-sm text-on-surface-variant">Streaming</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer" title="Disable reasoning/thinking tokens (e.g. for Qwen3, DeepSeek). Sends think:false to Ollama.">
-                <input type="checkbox" checked={formData.disableThinking} onChange={(e) => setFormData({ ...formData, disableThinking: e.target.checked })} className="w-4 h-4 rounded" />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Disable Thinking</span>
+                <input type="checkbox" checked={formData.disableThinking} onChange={(e) => setFormData({ ...formData, disableThinking: e.target.checked })} className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary" />
+                <span className="text-sm text-on-surface-variant">Disable Thinking</span>
               </label>
             </div>
 
             {/* Test Connection */}
             {formData.modelId && (
-              <div className="border border-gray-200 dark:border-gray-600 rounded-lg p-3">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              <div className="border border-outline-variant/10 rounded-lg p-3">
+                <div className="text-xs text-on-surface-variant mb-2">
                   Tests via {connectionType === 'litellm' ? 'LiteLLM proxy' : (formData.provider === 'ollama' ? 'Ollama directly' : 'LiteLLM proxy')}
                 </div>
                 <button
                   type="button"
                   onClick={handleTest}
                   disabled={testing}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 text-on-surface-variant rounded-lg hover:bg-surface-container-high disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
                 >
                   {testing ? (
                     <><RefreshCw className="w-4 h-4 animate-spin" />Testing connection...</>
@@ -473,8 +473,8 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 {testResult && (
                   <div className={`mt-2 px-3 py-2 rounded text-sm ${
                     testResult.success
-                      ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
-                      : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'bg-error/10 text-error'
                   }`}>
                     {testResult.success ? testResult.message : testResult.error}
                   </div>
@@ -483,21 +483,21 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             )}
 
             {error && (
-              <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded">{error}</p>
+              <p className="text-sm text-error bg-error/10 px-3 py-2 rounded">{error}</p>
             )}
 
             <div className="flex gap-3 pt-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                className="flex-1 px-4 py-2 border border-outline-variant/10 text-on-surface-variant rounded-full hover:bg-surface-container-high"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-1 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
               >
                 <Plus className="w-4 h-4" />
                 {loading ? 'Adding...' : 'Add Model'}

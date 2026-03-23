@@ -64,6 +64,69 @@
       "when": 1709700000000,
       "tag": "0008_skills",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1709800000000,
+      "tag": "0009_skill_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1709900000000,
+      "tag": "0010_hook_executions",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1710000000000,
+      "tag": "0011_merge_tasks_into_hooks",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1710100000000,
+      "tag": "0012_expert_structured_prompts",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1710200000000,
+      "tag": "0013_pipeline_session_cascade",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1710300000000,
+      "tag": "0014_agents_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1710400000000,
+      "tag": "0015_hybrid_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1710500000000,
+      "tag": "0016_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1710600000000,
+      "tag": "0017_profiles",
+      "breakpoints": true
     }
   ]
 }

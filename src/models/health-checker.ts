@@ -4,6 +4,8 @@ import { getModelRegistry } from './model-registry';
 import { RedisCache } from '@/db/redis';
 import { modelLogger } from '@/utils/logger';
 import type { HealthStatus } from '@/core/types';
+import { getRateLimitManager, type RateLimitStats } from './rate-limiter';
+import { getCircuitBreakerRegistry, type CircuitBreakerStatus } from './circuit-breaker';
 
 const HEALTH_CHECK_INTERVAL = 60000; // 1 minute
 const HEALTH_CACHE_TTL = 30; // 30 seconds
@@ -74,7 +76,7 @@ export class HealthChecker {
    */
   async checkProvider(
     provider: string,
-    models: { name: string; modelId: string }[]
+    models: { name: string; modelId: string; topics?: string[] | null }[]
   ): Promise<ProviderHealth> {
     const modelResults: ModelHealth[] = [];
     let overallLatency = 0;
@@ -82,7 +84,9 @@ export class HealthChecker {
 
     for (const model of models.slice(0, 3)) {
       // Check up to 3 models per provider — use modelId (LiteLLM-facing name)
-      const health = await this.checkModel(model.modelId, provider);
+      const isEmbedding = model.topics?.includes('embedding') ||
+        model.modelId.includes('embed') || model.name.includes('embed');
+      const health = await this.checkModel(model.modelId, provider, isEmbedding);
       modelResults.push(health);
 
       if (health.status === 'healthy') {
@@ -124,7 +128,7 @@ export class HealthChecker {
   /**
    * Check health of a specific model
    */
-  async checkModel(modelName: string, provider?: string): Promise<ModelHealth> {
+  async checkModel(modelName: string, provider?: string, isEmbedding?: boolean): Promise<ModelHealth> {
     const cacheKey = `health:model:${modelName}`;
     const cached = await this.cache.get<ModelHealth>(cacheKey);
     if (cached) return cached;
@@ -144,19 +148,24 @@ export class HealthChecker {
     const startTime = Date.now();
 
     try {
-      // Send a minimal test request
-      await client.complete({
-        model: modelName,
-        messages: [
-          {
-            role: 'user',
-            content: 'Hi',
-            timestamp: new Date(),
-          },
-        ],
-        maxTokens: 1,
-        temperature: 0,
-      });
+      if (isEmbedding) {
+        // Embedding models use the /v1/embeddings endpoint, not /v1/completions
+        await client.embed('health check', modelName);
+      } else {
+        // Send a minimal test request
+        await client.complete({
+          model: modelName,
+          messages: [
+            {
+              role: 'user',
+              content: 'Hi',
+              timestamp: new Date(),
+            },
+          ],
+          maxTokens: 1,
+          temperature: 0,
+        });
+      }
 
       const latency = Date.now() - startTime;
 
@@ -272,12 +281,28 @@ export class HealthChecker {
   }
 
   /**
+   * Get rate limit stats for all tracked providers
+   */
+  getRateLimitStats(): RateLimitStats[] {
+    return getRateLimitManager().getAllStats();
+  }
+
+  /**
+   * Get circuit breaker statuses for all tracked providers
+   */
+  getCircuitBreakerStatuses(): CircuitBreakerStatus[] {
+    return getCircuitBreakerRegistry().getAllStatuses();
+  }
+
+  /**
    * Get overall system health
    */
   async getSystemHealth(): Promise<{
     overall: 'healthy' | 'degraded' | 'unhealthy';
     services: HealthStatus[];
     providers: ProviderHealth[];
+    rateLimits: RateLimitStats[];
+    circuitBreakers: CircuitBreakerStatus[];
   }> {
     const [litellm, ollama, providers] = await Promise.all([
       this.checkLiteLLMProxy(),
@@ -286,12 +311,20 @@ export class HealthChecker {
     ]);
 
     const services = [litellm, ollama];
+    const rateLimits = this.getRateLimitStats();
+    const circuitBreakers = this.getCircuitBreakerStatuses();
 
     // Determine overall status
     const allStatuses = [
       ...services.map((s) => s.status),
       ...providers.map((p) => p.status),
     ];
+
+    // Factor in circuit breakers — open circuits degrade health
+    const openCircuits = circuitBreakers.filter(cb => cb.state === 'open');
+    if (openCircuits.length > 0) {
+      allStatuses.push('degraded');
+    }
 
     let overall: 'healthy' | 'degraded' | 'unhealthy';
     if (allStatuses.every((s) => s === 'healthy')) {
@@ -302,7 +335,7 @@ export class HealthChecker {
       overall = 'unhealthy';
     }
 
-    return { overall, services, providers };
+    return { overall, services, providers, rateLimits, circuitBreakers };
   }
 
   /**

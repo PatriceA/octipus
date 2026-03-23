@@ -251,13 +251,16 @@ export class AssistantClient {
   }
 
   async executeTool(toolId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
-    const res = await this.request<{ result: unknown }>(
+    const res = await this.request<{ result?: unknown; error?: string }>(
       `/api/tools/${toolId}/tools/${toolName}/execute`,
       {
         method: 'POST',
         body: JSON.stringify({ args }),
       },
     );
+    if (res.error) {
+      throw new Error(res.error);
+    }
     return res.result;
   }
 
@@ -274,47 +277,89 @@ export class AssistantClient {
     return this.request(`/api/skills/${id}`);
   }
 
-  // ─── Recurring Tasks ───
-
-  async listRecurringTasks(): Promise<Array<{
-    id: string; name: string; cronExpression: string; isEnabled: boolean;
-    runCount: number; nextRunAt: string | null; status: string;
-  }>> {
-    const res = await this.request<{ tasks: any[] }>('/api/recurring-tasks');
-    return res.tasks || [];
-  }
-
-  async createRecurringTask(params: {
-    name: string; cronExpression: string; actionType: string;
-    actionConfig: Record<string, unknown>; description?: string; timezone?: string;
-  }): Promise<{ id: string; name: string; cronExpression: string; nextRunAt: string }> {
-    const res = await this.request<{ task: any }>('/api/recurring-tasks', {
+  async createSkill(params: {
+    name: string; description: string; category?: string; content?: string;
+    principles?: string[]; bestPractices?: string[]; antiPatterns?: string[]; frameworks?: string[];
+  }): Promise<Record<string, unknown>> {
+    return this.request('/api/skills', {
       method: 'POST',
       body: JSON.stringify(params),
     });
-    return res.task;
   }
 
-  async updateRecurringTask(id: string, params: {
-    name?: string; cronExpression?: string; isEnabled?: boolean;
-  }): Promise<{ id: string; name: string; cronExpression: string; isEnabled: boolean }> {
-    const res = await this.request<{ task: any }>(`/api/recurring-tasks/${id}`, {
+  async updateSkill(id: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.request(`/api/skills/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(params),
     });
-    return res.task;
   }
 
-  async deleteRecurringTask(id: string): Promise<void> {
-    await this.request(`/api/recurring-tasks/${id}`, { method: 'DELETE' });
+  async deleteSkill(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/skills/${id}`, { method: 'DELETE' }) as Promise<{ deleted: boolean }>;
+  }
+
+  // ─── Hooks (scheduled tasks & event automations) ───
+
+  async listHooks(): Promise<Array<{
+    id: string; name: string; description: string | null;
+    trigger: string; triggerConfig: Record<string, unknown>;
+    action: string; actionConfig: Record<string, unknown>;
+    isEnabled: boolean; executionCount: number;
+    lastExecutedAt: string | null; nextRunAt: string | null;
+    lastError: string | null;
+  }>> {
+    const res = await this.request<{ hooks: any[] }>('/api/hooks');
+    return res.hooks || [];
+  }
+
+  async createHook(params: {
+    name: string; description?: string;
+    trigger: string; triggerConfig: Record<string, unknown>;
+    action: string; actionConfig: Record<string, unknown>;
+    isEnabled?: boolean; cooldownMs?: number; maxExecutions?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.request('/api/hooks', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async updateHook(id: string, params: {
+    name?: string; description?: string;
+    triggerConfig?: Record<string, unknown>;
+    actionConfig?: Record<string, unknown>;
+    isEnabled?: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.request(`/api/hooks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async deleteHook(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/hooks/${id}`, { method: 'DELETE' });
+  }
+
+  async toggleHook(id: string, enabled: boolean): Promise<{ success: boolean; enabled: boolean }> {
+    return this.request(`/api/hooks/${id}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   // ─── Knowledge / RAG ───
 
-  async searchKnowledge(query: string, limit?: number): Promise<{ results: any[] }> {
+  async searchKnowledge(query: string, limit?: number, mode?: string): Promise<{ results: any[] }> {
     return this.request('/api/tools/knowledge/tools/search_knowledge/execute', {
       method: 'POST',
-      body: JSON.stringify({ args: { query, limit: limit || 5 } }),
+      body: JSON.stringify({ args: { query, limit: limit || 5, mode: mode || 'hybrid' } }),
+    });
+  }
+
+  async readKnowledge(id: string): Promise<any> {
+    return this.request('/api/tools/knowledge/tools/read_knowledge/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: { id } }),
     });
   }
 
@@ -322,6 +367,47 @@ export class AssistantClient {
     return this.request('/api/tools/knowledge/tools/index_file/execute', {
       method: 'POST',
       body: JSON.stringify({ args: { path, type: type || 'document' } }),
+    });
+  }
+
+  // ─── Messaging ───
+
+  async sendChannelMessage(
+    channel: string,
+    target: string,
+    message: string,
+    replyTo?: string,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    return this.request('/api/tools/messaging/tools/send_message/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: { channel, target, message, reply_to: replyTo } }),
+    });
+  }
+
+  async listChannels(): Promise<{ channels: Array<{ type: string; name: string; connected: boolean }> }> {
+    return this.request('/api/tools/messaging/tools/list_channels/execute', {
+      method: 'POST',
+      body: JSON.stringify({ args: {} }),
+    });
+  }
+
+  // ─── Plugins ───
+
+  async listPlugins(): Promise<Array<{
+    name: string; version: string; description: string; author?: string;
+    directory: string;
+    tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+  }>> {
+    const res = await this.request<{ plugins: any[] }>('/api/plugins');
+    return res.plugins || [];
+  }
+
+  async reloadPlugin(name: string): Promise<{
+    message: string; name: string; version: string; tools: number;
+    error?: string;
+  }> {
+    return this.request(`/api/plugins/${encodeURIComponent(name)}/reload`, {
+      method: 'POST',
     });
   }
 

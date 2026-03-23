@@ -1,25 +1,47 @@
-import { pgTable, text, timestamp, uuid, jsonb, index, real } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, jsonb, index, customType } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Note: pgvector extension must be installed
 // CREATE EXTENSION IF NOT EXISTS vector;
 
+// Custom type for pgvector's vector column
+const vector = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return 'vector(768)';
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(',')}]`;
+  },
+  fromDriver(value: string): number[] {
+    // Parse "[0.1,0.2,...]" format from pgvector
+    return value.replace(/^\[|\]$/g, '').split(',').map(Number);
+  },
+});
+
+// Read-only tsvector type (auto-generated column — never insert/update directly)
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return 'tsvector';
+  },
+});
+
 export const embeddings = pgTable('embeddings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  sourceType: text('source_type').notNull(), // message, document, code
-  sourceId: uuid('source_id').notNull(),
+  sourceType: text('source_type').notNull(), // message, document, code, agent_output
+  sourceId: text('source_id').notNull(),
   content: text('content').notNull(),
-  // Vector is stored as array of floats (1536 dimensions for OpenAI embeddings)
-  // In actual usage, you'd use the vector type from pgvector
-  embedding: real('embedding').array().notNull(),
-  model: text('model').notNull(), // text-embedding-3-small, etc.
+  embedding: vector('embedding').notNull(),
+  // Auto-generated tsvector for full-text search (GENERATED ALWAYS AS — read-only)
+  contentTsv: tsvector('content_tsv'),
+  model: text('model').notNull(),
+  // Tiered content summaries (generated async by LLM)
+  abstract: text('abstract'),   // L0: ~1-2 sentences, ~100 tokens
+  overview: text('overview'),   // L1: ~1 paragraph, ~500 tokens
   metadata: jsonb('metadata').$type<EmbeddingMetadata>().default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => ({
   sourceTypeIdx: index('embeddings_source_type_idx').on(table.sourceType),
   sourceIdIdx: index('embeddings_source_id_idx').on(table.sourceId),
-  // Note: For actual vector search, you'd create an HNSW or IVFFlat index:
-  // CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops);
 }));
 
 export interface EmbeddingMetadata {

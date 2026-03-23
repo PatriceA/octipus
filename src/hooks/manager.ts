@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { eq, and, desc } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { hooks, type Hook, type NewHook } from '@/db/schema/hooks';
+import { hookExecutions } from '@/db/schema/hook-executions';
 import { matchesTrigger, checkConditions, type TriggerEvent, type TriggerContext } from './triggers';
 import { executeAction, type ActionResult } from './actions';
 import { coreLogger } from '@/utils/logger';
@@ -19,7 +20,6 @@ export interface HookExecutionResult {
 export class HookManager extends EventEmitter {
   private get db() { return getDb(); }
   private hookCache: Map<TriggerType, Hook[]> = new Map();
-  private scheduledJobs: Map<string, ReturnType<typeof setInterval>> = new Map();
 
   /**
    * Load hooks from database
@@ -39,9 +39,6 @@ export class HookManager extends EventEmitter {
       }
       this.hookCache.get(hook.trigger)!.push(hook);
     }
-
-    // Set up scheduled hooks
-    this.setupScheduledHooks();
 
     coreLogger.info({ count: allHooks.length }, 'Hooks loaded');
   }
@@ -84,6 +81,7 @@ export class HookManager extends EventEmitter {
       // Execute the action
       try {
         const result = await executeAction(hook, context);
+        const executionTime = Date.now() - startTime;
 
         // Update execution stats
         await this.db
@@ -94,12 +92,25 @@ export class HookManager extends EventEmitter {
           })
           .where(eq(hooks.id, hook.id));
 
+        // Log execution
+        await this.logExecution({
+          hookId: hook.id,
+          source: 'hook',
+          status: result.success ? 'success' : 'error',
+          triggerType: event.type,
+          actionType: hook.action,
+          result: result.data as Record<string, unknown> | undefined,
+          error: result.error || undefined,
+          durationMs: executionTime,
+          triggerContext: this.sanitizeContext(context),
+        });
+
         results.push({
           hookId: hook.id,
           hookName: hook.name,
           triggered: true,
           result,
-          executionTime: Date.now() - startTime,
+          executionTime,
         });
 
         this.emit('executed', { hook, result, context });
@@ -109,12 +120,26 @@ export class HookManager extends EventEmitter {
           'Hook executed'
         );
       } catch (error) {
+        const executionTime = Date.now() - startTime;
+
+        // Log failed execution
+        await this.logExecution({
+          hookId: hook.id,
+          source: 'hook',
+          status: 'error',
+          triggerType: event.type,
+          actionType: hook.action,
+          error: (error as Error).message,
+          durationMs: executionTime,
+          triggerContext: this.sanitizeContext(context),
+        }).catch(() => {}); // Don't fail the hook if logging fails
+
         results.push({
           hookId: hook.id,
           hookName: hook.name,
           triggered: true,
           error: (error as Error).message,
-          executionTime: Date.now() - startTime,
+          executionTime,
         });
 
         this.emit('error', { hook, error, context });
@@ -139,6 +164,12 @@ export class HookManager extends EventEmitter {
    * Create a new hook
    */
   async createHook(data: Omit<NewHook, 'id' | 'createdAt' | 'updatedAt'>): Promise<Hook> {
+    // For schedule triggers, compute nextRunAt
+    if (data.trigger === 'schedule' && data.triggerConfig?.cronExpression) {
+      const { getNextCronDate } = await import('@/core/cron-runner');
+      const timezone = (data.triggerConfig.timezone as string) || 'UTC';
+      (data as any).nextRunAt = getNextCronDate(data.triggerConfig.cronExpression as string, timezone);
+    }
     const result = await this.db.insert(hooks).values(data).returning();
     await this.loadHooks(); // Reload cache
     return result[0];
@@ -148,6 +179,12 @@ export class HookManager extends EventEmitter {
    * Update a hook
    */
   async updateHook(id: string, data: Partial<NewHook>): Promise<Hook | null> {
+    // If triggerConfig changes for a schedule hook, recompute nextRunAt
+    if (data.triggerConfig?.cronExpression) {
+      const { getNextCronDate } = await import('@/core/cron-runner');
+      const timezone = (data.triggerConfig.timezone as string) || 'UTC';
+      (data as any).nextRunAt = getNextCronDate(data.triggerConfig.cronExpression as string, timezone);
+    }
     const result = await this.db
       .update(hooks)
       .set({ ...data, updatedAt: new Date() })
@@ -209,83 +246,96 @@ export class HookManager extends EventEmitter {
   }
 
   /**
-   * Set up scheduled hooks
+   * Log an execution to the hook_executions table
    */
-  private setupScheduledHooks(): void {
-    // Clear existing scheduled jobs
-    for (const job of this.scheduledJobs.values()) {
-      clearInterval(job);
-    }
-    this.scheduledJobs.clear();
-
-    const scheduledHooks = this.hookCache.get('schedule') || [];
-
-    for (const hook of scheduledHooks) {
-      const cronExpression = hook.triggerConfig.cronExpression;
-      if (!cronExpression) continue;
-
-      // Simple cron parsing - in production, use a proper cron library
-      const interval = this.parseCronToInterval(cronExpression);
-      if (!interval) continue;
-
-      const job = setInterval(async () => {
-        await this.trigger(
-          { type: 'schedule', data: { hookId: hook.id }, timestamp: new Date() },
-          {
-            schedule: {
-              cronExpression,
-              scheduledTime: new Date(),
-            },
-          }
-        );
-      }, interval);
-
-      this.scheduledJobs.set(hook.id, job);
-      coreLogger.debug({ hookId: hook.id, intervalMs: interval }, 'Scheduled hook set up');
+  async logExecution(data: {
+    hookId?: string;
+    recurringTaskId?: string;
+    source: 'hook' | 'recurring_task' | 'manual_test';
+    status: 'success' | 'error' | 'skipped';
+    triggerType?: string;
+    actionType?: string;
+    result?: Record<string, unknown>;
+    error?: string;
+    durationMs?: number;
+    triggerContext?: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      await this.db.insert(hookExecutions).values(data);
+    } catch (err) {
+      coreLogger.error({ err }, 'Failed to log hook execution');
     }
   }
 
   /**
-   * Parse cron expression to interval (simplified)
+   * Get execution history for a hook or recurring task
    */
-  private parseCronToInterval(cron: string): number | null {
-    // Very simplified cron parsing - handle common patterns
-    const parts = cron.split(' ');
+  async getExecutions(opts: {
+    hookId?: string;
+    recurringTaskId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ executions: typeof hookExecutions.$inferSelect[]; total: number }> {
+    const { sql: sqlFn } = await import('drizzle-orm');
+    const conditions = [];
+    if (opts.hookId) conditions.push(eq(hookExecutions.hookId, opts.hookId));
+    if (opts.recurringTaskId) conditions.push(eq(hookExecutions.recurringTaskId, opts.recurringTaskId));
 
-    // Every minute: * * * * *
-    if (parts.length === 5 && parts[0] === '*') {
-      return 60 * 1000;
-    }
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Every N minutes: */N * * * *
-    const minuteMatch = parts[0]?.match(/^\*\/(\d+)$/);
-    if (minuteMatch) {
-      return parseInt(minuteMatch[1], 10) * 60 * 1000;
-    }
+    const [executions, countResult] = await Promise.all([
+      this.db
+        .select()
+        .from(hookExecutions)
+        .where(where)
+        .orderBy(desc(hookExecutions.createdAt))
+        .limit(opts.limit || 50)
+        .offset(opts.offset || 0),
+      this.db
+        .select({ count: sqlFn`count(*)::int` })
+        .from(hookExecutions)
+        .where(where),
+    ]);
 
-    // Every hour: 0 * * * *
-    if (parts[0] === '0' && parts[1] === '*') {
-      return 60 * 60 * 1000;
-    }
-
-    // Every N hours: 0 */N * * *
-    const hourMatch = parts[1]?.match(/^\*\/(\d+)$/);
-    if (parts[0] === '0' && hourMatch) {
-      return parseInt(hourMatch[1], 10) * 60 * 60 * 1000;
-    }
-
-    return null;
+    return { executions, total: (countResult[0]?.count as number) || 0 };
   }
 
   /**
-   * Clean up scheduled jobs
+   * Sanitize context for storage — remove large or sensitive fields
    */
-  cleanup(): void {
-    for (const job of this.scheduledJobs.values()) {
-      clearInterval(job);
+  private sanitizeContext(context: TriggerContext): Record<string, unknown> {
+    const sanitized: Record<string, unknown> = {};
+    if (context.message) {
+      sanitized.message = {
+        channelType: context.message.channelType,
+        channelId: context.message.channelId,
+        userId: context.message.userId,
+        content: (context.message.content || '').slice(0, 500),
+      };
     }
-    this.scheduledJobs.clear();
+    if (context.agent) {
+      sanitized.agent = {
+        id: context.agent.id,
+        sessionId: context.agent.sessionId,
+        topic: context.agent.topic,
+        status: context.agent.status,
+      };
+    }
+    if (context.tool) {
+      sanitized.tool = { name: context.tool.name, toolId: context.tool.toolId };
+    }
+    if (context.schedule) {
+      sanitized.schedule = context.schedule;
+    }
+    if (context.webhook) {
+      sanitized.webhook = {
+        path: context.webhook.path,
+        method: context.webhook.method,
+      };
+    }
+    return sanitized;
   }
+
 }
 
 // Singleton instance

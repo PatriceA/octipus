@@ -14,13 +14,13 @@ const EVENT_CONFIG: Record<string, {
   bgColor: string;
   label: string;
 }> = {
-  thought: { icon: Brain, color: 'text-gray-500', bgColor: 'bg-gray-100 dark:bg-gray-700', label: 'Thought' },
-  action: { icon: Wrench, color: 'text-blue-500', bgColor: 'bg-blue-50 dark:bg-blue-900/20', label: 'Action' },
-  observation: { icon: Eye, color: 'text-green-500', bgColor: 'bg-green-50 dark:bg-green-900/20', label: 'Result' },
-  error: { icon: AlertCircle, color: 'text-red-500', bgColor: 'bg-red-50 dark:bg-red-900/20', label: 'Error' },
-  complete: { icon: CheckCircle, color: 'text-green-600', bgColor: 'bg-green-50 dark:bg-green-900/20', label: 'Complete' },
-  status_change: { icon: Loader2, color: 'text-yellow-500', bgColor: 'bg-yellow-50 dark:bg-yellow-900/20', label: 'Status' },
-  permission_request: { icon: Shield, color: 'text-orange-500', bgColor: 'bg-orange-50 dark:bg-orange-900/20', label: 'Permission' },
+  thought: { icon: Brain, color: 'text-on-surface-variant', bgColor: 'bg-[#262626]', label: 'Thought' },
+  action: { icon: Wrench, color: 'text-blue-400', bgColor: 'bg-blue-900/20', label: 'Action' },
+  observation: { icon: Eye, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Result' },
+  error: { icon: AlertCircle, color: 'text-[#ff716c]', bgColor: 'bg-red-900/20', label: 'Error' },
+  complete: { icon: CheckCircle, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Complete' },
+  status_change: { icon: Loader2, color: 'text-yellow-400', bgColor: 'bg-yellow-900/20', label: 'Status' },
+  permission_request: { icon: Shield, color: 'text-orange-400', bgColor: 'bg-orange-900/20', label: 'Permission' },
 };
 
 interface TimelineCardProps {
@@ -49,11 +49,11 @@ function TimelineCard({ event }: TimelineCardProps) {
           <span className={cn('text-xs font-semibold uppercase', config.color)}>
             {config.label}
           </span>
-          <span className="text-xs text-gray-500" suppressHydrationWarning>
+          <span className="text-xs text-on-surface-variant" suppressHydrationWarning>
             {event.timestamp.toLocaleTimeString()}
           </span>
         </div>
-        <pre className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono break-all">
+        <pre className="text-xs text-white/80 whitespace-pre-wrap font-mono break-all">
           {expanded ? dataStr : preview}
         </pre>
         {hasMore && (
@@ -87,7 +87,7 @@ export function AgentTimeline({ events, className }: AgentTimelineProps) {
 
   if (events.length === 0) {
     return (
-      <div className={cn('flex items-center justify-center p-8 text-gray-500 text-sm', className)}>
+      <div className={cn('flex items-center justify-center p-8 text-on-surface-variant text-sm', className)}>
         No events yet. Waiting for agent activity...
       </div>
     );

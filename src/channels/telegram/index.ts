@@ -202,10 +202,20 @@ export class TelegramChannel extends BaseChannel {
       });
     }
 
-    // Handle commands
+    // Handle channel-specific commands locally; pass everything else through
     if (content.startsWith('/')) {
-      await this.handleCommand(ctx, content, user.id);
-      return;
+      const cmd = content.split(/\s+/)[0].toLowerCase();
+      // /start and /link are Telegram-only commands
+      if (cmd === '/start') {
+        await ctx.reply('Hello! I am your AI assistant. How can I help you today?');
+        return;
+      }
+      if (cmd === '/link') {
+        await ctx.reply('Your account is already linked!');
+        return;
+      }
+      // All other commands (/help, /status, /clear, /plan, /experts, /models, /stop)
+      // flow through as regular messages to the centralized command registry
     }
 
     // Create and emit unified message
@@ -220,45 +230,6 @@ export class TelegramChannel extends BaseChannel {
     });
 
     this.emitMessage(message);
-  }
-
-  private async handleCommand(ctx: Context, command: string, userId: string): Promise<void> {
-    const cmd = command.split(' ')[0].toLowerCase();
-
-    switch (cmd) {
-      case '/start':
-        await ctx.reply('Hello! I am your AI assistant. How can I help you today?');
-        break;
-
-      case '/help':
-        await ctx.reply(
-          'Available commands:\n' +
-          '/start - Start conversation\n' +
-          '/help - Show this help\n' +
-          '/link - Get a code to link your account\n' +
-          '/status - Check bot status\n' +
-          '/clear - Clear conversation history'
-        );
-        break;
-
-      case '/status':
-        await ctx.reply('Bot is online and ready to assist you.');
-        break;
-
-      case '/link':
-        // Handled before user-binding check in handleMessage()
-        // This branch is for already-linked users who want a new code
-        await ctx.reply('Your account is already linked!');
-        break;
-
-      case '/clear':
-        // This would need to clear the session
-        await ctx.reply('Conversation history cleared.');
-        break;
-
-      default:
-        await ctx.reply(`Unknown command: ${cmd}`);
-    }
   }
 
   private splitMessage(text: string, maxLen: number): string[] {

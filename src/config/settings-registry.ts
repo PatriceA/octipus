@@ -187,6 +187,55 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'TEAMS_TENANT_ID',
   },
 
+  // ── WhatsApp ──
+  {
+    key: 'whatsapp.accessToken',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'WhatsApp Cloud API access token',
+    isSecret: true,
+    vaultName: 'whatsapp_access_token',
+    envVar: 'WHATSAPP_ACCESS_TOKEN',
+  },
+  {
+    key: 'whatsapp.phoneNumberId',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'WhatsApp phone number ID',
+    isSecret: false,
+    envVar: 'WHATSAPP_PHONE_NUMBER_ID',
+  },
+  {
+    key: 'whatsapp.verifyToken',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: 'assistant-whatsapp-verify',
+    description: 'Webhook verification token',
+    isSecret: false,
+    envVar: 'WHATSAPP_VERIFY_TOKEN',
+  },
+  {
+    key: 'whatsapp.appSecret',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Meta app secret for webhook signature verification',
+    isSecret: true,
+    vaultName: 'whatsapp_app_secret',
+    envVar: 'WHATSAPP_APP_SECRET',
+  },
+  {
+    key: 'whatsapp.businessAccountId',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'WhatsApp Business Account ID',
+    isSecret: false,
+    envVar: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
+  },
+
   // ── Agent ──
   {
     key: 'agent.maxConcurrentAgents',
@@ -201,8 +250,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.defaultTimeout',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 300000,
-    description: 'Agent default timeout (ms)',
+    defaultValue: 900000,
+    description: 'Agent default timeout in ms (0 = no timeout)',
     isSecret: false,
     envVar: 'AGENT_DEFAULT_TIMEOUT',
   },
@@ -309,6 +358,22 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'WORKSPACE_ADDITIONAL_PATHS',
   },
+  {
+    key: 'workspace.sessionFolders',
+    category: 'workspace',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Create per-session output directories (workspace/sessions/<date>-<topic>/)',
+    isSecret: false,
+  },
+  {
+    key: 'workspace.autoIndexFiles',
+    category: 'workspace',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Automatically index written files into the RAG knowledge base',
+    isSecret: false,
+  },
 
   // ── Logging ──
   {
@@ -411,9 +476,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'integrations',
     valueType: 'string',
     defaultValue: '',
-    description: 'Path to MCP servers JSON config',
+    description: 'Path to MCP servers JSON config (leave empty to use database storage)',
     isSecret: false,
     envVar: 'MCP_SERVERS_CONFIG',
+  },
+  {
+    key: 'mcp.servers',
+    category: 'integrations',
+    valueType: 'json',
+    defaultValue: [],
+    description: 'MCP server configurations (stored in database)',
+    isSecret: false,
   },
   {
     key: 'mcp.autoStart',

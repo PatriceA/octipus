@@ -23,10 +23,10 @@ export class BrowserTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'navigate', description: 'Navigate to URLs', defaultLevel: 'ASK' },
-        { action: 'interact', description: 'Click/type on pages', defaultLevel: 'ASK' },
-        { action: 'screenshot', description: 'Take screenshots', defaultLevel: 'ALLOW' },
-        { action: 'execute', description: 'Execute JavaScript', defaultLevel: 'ASK', dangerous: true },
+        { action: 'navigate', description: 'Open and navigate to URLs in a headless Playwright browser', defaultLevel: 'ASK' },
+        { action: 'interact', description: 'Click buttons, fill forms, and type text on web pages via Playwright', defaultLevel: 'ASK' },
+        { action: 'screenshot', description: 'Capture PNG screenshots of web pages in the headless browser', defaultLevel: 'ALLOW' },
+        { action: 'execute', description: 'Run arbitrary JavaScript code in the context of the loaded web page', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [],
     };
@@ -295,6 +295,74 @@ export class BrowserTool extends BaseTool {
         return { scrolled: args.direction, amount };
       },
       { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'hover',
+      'Hover over an element on the page',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        selector: { type: 'string', description: 'CSS selector to hover', required: true },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        await page.hover(args.selector as string, { timeout: DEFAULT_TIMEOUT });
+        return { hovered: args.selector };
+      },
+      { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'press_key',
+      'Press a keyboard key on the page',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        key: { type: 'string', description: 'Key to press (Enter, Tab, Escape, etc.)', required: true },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        await page.keyboard.press(args.key as string);
+        return { pressed: args.key };
+      },
+      { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'drag',
+      'Drag an element to a target position',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        sourceSelector: { type: 'string', description: 'Source element selector', required: true },
+        targetSelector: { type: 'string', description: 'Target element selector', required: true },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        await page.dragAndDrop(args.sourceSelector as string, args.targetSelector as string, { timeout: DEFAULT_TIMEOUT });
+        return { dragged: args.sourceSelector, to: args.targetSelector };
+      },
+      { permissionAction: 'interact' }
+    );
+
+    this.registerTool(
+      'pdf',
+      'Generate a PDF of the current page',
+      createParameterSchema({
+        pageId: { type: 'string', description: 'Page ID', required: true },
+        format: { type: 'string', description: 'Paper format (A4, Letter, etc.)', default: 'A4' },
+      }),
+      async (args) => {
+        const page = this.getPage(args.pageId as string);
+        const buffer = await page.pdf({
+          format: (args.format as string) || 'A4',
+          printBackground: true,
+        });
+        return {
+          base64: buffer.toString('base64'),
+          size: buffer.length,
+          url: page.url(),
+        };
+      },
+      { permissionAction: 'screenshot' }
     );
   }
 

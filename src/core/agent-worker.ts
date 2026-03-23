@@ -4,6 +4,8 @@ import { getModelRegistry } from '@/models/model-registry';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { agentRepository } from '@/db/repositories/agent-repository';
+import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
 import { agentLogger } from '@/utils/logger';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import type { AgentMessage, ToolCall } from './types';
@@ -19,6 +21,12 @@ export class AgentWorker extends BaseAgentWorker {
   private abortController: AbortController;
   private totalTokensUsed: number = 0;
   private startTime: number = 0;
+  private emptyRetries: number = 0;
+  private llmRetries: number = 0;
+  /** Track consecutive identical tool calls to detect loops */
+  private lastToolCallSignature: string = '';
+  private consecutiveRepeatCount: number = 0;
+  private static MAX_CONSECUTIVE_REPEATS = 3;
 
   /** Milliseconds since agent start */
   private elapsed(): number {
@@ -116,6 +124,24 @@ export class AgentWorker extends BaseAgentWorker {
         { durationMs, iterations: this.iteration, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
 
+      // Persist final state to DB
+      agentRepository.updateStatus(this.context.id, {
+        status: 'completed',
+        iterations: this.iteration,
+        totalTokens: this.totalTokensUsed,
+        durationMs,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
+
+      // Auto-index output into knowledge base (fire-and-forget)
+      autoIndexAgentOutput({
+        agentId: this.context.id,
+        sessionId: this.context.sessionId,
+        userId: this.context.userId,
+        role: this.context.role,
+        topic: this.context.topic,
+        output: typeof result === 'string' ? result : JSON.stringify(result),
+      }).catch(() => {}); // Never block on indexing failures
+
       return result;
     } catch (error) {
       this.context.status = 'failed';
@@ -135,6 +161,15 @@ export class AgentWorker extends BaseAgentWorker {
         this.context.userId, this.context.sessionId, this.context.id,
         { error: (error as Error).message, iteration: this.iteration, elapsedMs: failDurationMs, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
       );
+
+      // Persist final state to DB
+      agentRepository.updateStatus(this.context.id, {
+        status: 'failed',
+        iterations: this.iteration,
+        totalTokens: this.totalTokensUsed,
+        durationMs: failDurationMs,
+        error: (error as Error).message,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure'));
 
       throw error;
     }
@@ -211,13 +246,14 @@ export class AgentWorker extends BaseAgentWorker {
         }, 'Messages compacted');
       }
 
-      // Get completion from LLM
+      // Get completion from LLM (with retry for transient failures)
       const llmStart = Date.now();
       let completion: CompletionResult;
       try {
         completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
       } catch (err) {
         const errMsg = (err as Error).message || '';
+
         // Handle context window overflow — aggressively compact and retry
         if (errMsg.includes('ContextWindowExceeded') || errMsg.includes('context_length_exceeded') || errMsg.includes('maximum context length')) {
           agentLogger.warn({
@@ -225,14 +261,12 @@ export class AgentWorker extends BaseAgentWorker {
             messageCount: this.messages.length,
           }, 'Context window exceeded, compacting aggressively and retrying');
 
-          // Truncate large tool results (keep first 2000 chars each)
           for (const msg of this.messages) {
             if (msg.role === 'tool' && msg.content.length > 2000) {
               msg.content = msg.content.slice(0, 2000) + '\n\n[... truncated due to context window limit]';
             }
           }
 
-          // Force aggressive compaction with smaller window
           const { messages: compacted } = await compactMessagesWithSummary(this.messages, {
             maxTokens: Math.floor(this.config.contextWindowSize * 0.5),
             preserveSystemMessages: true,
@@ -242,8 +276,34 @@ export class AgentWorker extends BaseAgentWorker {
           this.messages = compacted;
           continue;
         }
+
+        // Retry transient LLM failures (JSON parse, rate limit, server errors)
+        const isTransient = errMsg.includes('JSON') || errMsg.includes('parse')
+          || errMsg.includes('Unterminated') || errMsg.includes('500')
+          || errMsg.includes('502') || errMsg.includes('503')
+          || errMsg.includes('rate_limit') || errMsg.includes('overloaded');
+
+        this.llmRetries = (this.llmRetries || 0) + 1;
+        if (isTransient && this.llmRetries <= 3) {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            error: errMsg, retry: this.llmRetries,
+          }, 'Transient LLM error, retrying after delay');
+
+          // Brief backoff: 2s, 4s, 8s
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, this.llmRetries)));
+
+          // Remove the last assistant message if it was malformed (caused the parse error)
+          if (this.messages.length > 0 && this.messages[this.messages.length - 1].role === 'assistant') {
+            this.messages.pop();
+          }
+          continue;
+        }
+
         throw err;
       }
+      // Reset retry counter on success
+      this.llmRetries = 0;
       this.totalTokensUsed += completion.usage.totalTokens;
 
       agentLogger.info({
@@ -258,6 +318,32 @@ export class AgentWorker extends BaseAgentWorker {
       // Handle tool calls if present
       if (completion.toolCalls?.length && !this.toolExecutor.toolsDisabled) {
         const toolNames = completion.toolCalls.map(tc => tc.name);
+
+        // Detect repetitive tool call loops (same tool + same args N times in a row)
+        const callSignature = completion.toolCalls
+          .map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`)
+          .join('|');
+        if (callSignature === this.lastToolCallSignature) {
+          this.consecutiveRepeatCount++;
+          if (this.consecutiveRepeatCount >= AgentWorker.MAX_CONSECUTIVE_REPEATS) {
+            agentLogger.warn({
+              agentId: this.context.id, sessionId: this.context.sessionId,
+              iteration: this.iteration, tools: toolNames,
+              repeats: this.consecutiveRepeatCount,
+            }, 'Repetitive tool call loop detected, forcing completion');
+            // Inject a nudge to stop looping and return a final response
+            this.messages.push({
+              role: 'user' as const,
+              content: '[SYSTEM] You have called the same tool multiple times with identical arguments. The task appears complete. Stop calling tools and provide your final text response now.',
+              timestamp: new Date(),
+            });
+            continue;
+          }
+        } else {
+          this.lastToolCallSignature = callSignature;
+          this.consecutiveRepeatCount = 1;
+        }
+
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -280,25 +366,23 @@ export class AgentWorker extends BaseAgentWorker {
       }
 
       // No tool calls — treat as final response
-      // If content is empty (e.g. thinking tokens consumed entire output), retry once
-      if (!completion.content?.trim() && this.iteration < (this.config.maxIterations || 10)) {
-        agentLogger.warn({
-          agentId: this.context.id, iteration: this.iteration,
-          outputTokens: completion.usage.outputTokens,
-        }, 'Empty response (likely thinking-only output), retrying');
-        continue;
+      // If content is empty (e.g. thinking tokens consumed entire output), retry up to 3 times
+      if (!completion.content?.trim()) {
+        this.emptyRetries = (this.emptyRetries || 0) + 1;
+        if (this.emptyRetries <= 3) {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            outputTokens: completion.usage.outputTokens, emptyRetry: this.emptyRetries,
+          }, 'Empty response (likely thinking-only output), retrying');
+          continue;
+        }
+        agentLogger.warn({ agentId: this.context.id }, 'Max empty retries reached, returning fallback');
       }
 
       const response = completion.content || 'I was unable to generate a response.';
 
-      // Only persist messages for orchestrator agents
+      // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
       if (this.context.role === 'orchestrator') {
-        await messageRepository.create({
-          sessionId: this.context.sessionId,
-          role: 'assistant',
-          content: response,
-          agentId: this.context.id,
-        });
         await sessionRepository.incrementMessageCount(this.context.sessionId, completion.usage.totalTokens);
       }
 
@@ -334,13 +418,11 @@ export class AgentWorker extends BaseAgentWorker {
 
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
-    // Task workers benefit from reasoning — override think:false if set,
-    // since the LLM client strips <think> blocks from the output anyway.
-    // The orchestrator should NOT think: it needs to call meta-tools quickly,
-    // and thinking tokens consume the output budget, preventing tool calls.
-    const isOrchestrator = this.context.role === 'orchestrator';
-    const extraBody = metadata?.extraBody
-      ? { ...metadata.extraBody, ...(isOrchestrator ? {} : { think: true }) }
+    // Respect the model's configured extraBody (e.g. think:false for Qwen).
+    // Forcing think:true on tool-use models can cause thinking tokens to consume
+    // the entire output budget, leaving nothing for tool calls.
+    const extraBody = metadata?.extraBody && Object.keys(metadata.extraBody).length > 0
+      ? metadata.extraBody
       : undefined;
 
     const result = await client.complete({

@@ -4,6 +4,9 @@ import { getAgentManager } from '@/core/agent-manager';
 import { webChatChannel } from '@/channels/webchat';
 import { getPermissionManager } from '@/security/permissions';
 import { getOrchestratorService } from '@/core/orchestrator';
+import { getBrowserBridge } from './browser-bridge';
+import { getDocumentQueue } from '@/core/documents/queue';
+import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 
 interface WebSocketData {
@@ -53,19 +56,24 @@ export function setupWebSocket(app: Elysia): void {
         apiLogger.debug({ userId: session.userId }, 'Closed previous WebSocket connection');
       }
 
+      // Safe send helper — prevents crashes when WebSocket is closed
+      const safeSend = (data: unknown) => {
+        try { ws.send(JSON.stringify(data)); } catch { /* connection closed */ }
+      };
+
       // Subscribe to agent events for this user
       const agentManager = getAgentManager();
       const unsubscribe = agentManager.onEvent((event) => {
         // Only send events for agents belonging to this user
         const agent = agentManager.get(event.agentId);
         if (agent?.getContext().userId === session.userId) {
-          ws.send(JSON.stringify({
+          safeSend({
             type: 'agent_event',
             event: event.type,
             agentId: event.agentId,
             data: event.data,
             timestamp: event.timestamp,
-          }));
+          });
         }
       });
 
@@ -74,23 +82,42 @@ export function setupWebSocket(app: Elysia): void {
       const unsubscribeOrchestrator = orchestrator.onEvent((event) => {
         // Only send events belonging to this user
         if (event.userId && event.userId !== session.userId) return;
-        ws.send(JSON.stringify({
+        safeSend({
           type: 'orchestrator_event',
           event: event.type,
           sessionId: event.sessionId,
           data: event.data,
           timestamp: event.timestamp,
-        }));
+        });
       });
+
+      // Subscribe to document processing events for this user
+      const docQueue = getDocumentQueue();
+      const docHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
+      for (const eventName of ['enqueued', 'processing', 'completed', 'failed'] as const) {
+        const handler = (documentId: string, errorOrUserId?: string, maybeUserId?: string) => {
+          const docUserId = eventName === 'failed' ? maybeUserId : errorOrUserId;
+          if (docUserId && docUserId !== session.userId) return;
+          safeSend({
+            type: 'document_event',
+            event: eventName,
+            documentId,
+            ...(eventName === 'failed' ? { error: errorOrUserId } : {}),
+            timestamp: Date.now(),
+          });
+        };
+        docQueue.on(eventName, handler);
+        docHandlers.push({ event: eventName, handler });
+      }
 
       // Subscribe to permission requests for this user
       const permissionManager = getPermissionManager();
       const unsubscribePermissions = permissionManager.onRequest?.((request: any) => {
         if (request.userId === session.userId) {
-          ws.send(JSON.stringify({
+          safeSend({
             type: 'permission_request',
             ...request,
-          }));
+          });
         }
       });
 
@@ -104,6 +131,9 @@ export function setupWebSocket(app: Elysia): void {
         unsubscribe();
         unsubscribeOrchestrator();
         if (unsubscribePermissions) unsubscribePermissions();
+        for (const { event, handler } of docHandlers) {
+          docQueue.off(event, handler);
+        }
         webChatChannel.unregisterConnection(connectionId);
       };
       activeConnections.set(session.userId, { ws, cleanup });
@@ -155,18 +185,19 @@ export function setupWebSocket(app: Elysia): void {
             break;
 
           case 'chat': {
-            // Route chat messages through the orchestrator
-            const orchestrator = getOrchestratorService();
             const sessionId = parsed.sessionId || `ws-${data.connectionId}`;
+            const content = (parsed.content || '').trim();
+
+            // Route through orchestrator (commands are handled inside handleMessage)
+            const orchestrator = getOrchestratorService();
             try {
               const result = await orchestrator.handleMessage(
                 sessionId,
                 data.userId,
-                parsed.content,
+                content,
                 'webchat',
                 parsed.expertId,
               );
-              // Use the resolved UUID sessionId from orchestrator (not the ephemeral ws- one)
               const resolvedId = result.sessionId || sessionId;
               ws.send(JSON.stringify({
                 type: 'chat_response',
@@ -305,4 +336,82 @@ export function setupWebSocket(app: Elysia): void {
       apiLogger.info({ userId: data.userId }, 'Permission WS disconnected');
     },
   });
+
+  // Browser bridge WebSocket — registered alongside other WS routes
+  const bridge = getBrowserBridge();
+
+  app.ws('/ws/browser-bridge', {
+    open(ws) {
+      const url = new URL(ws.data?.request?.url || '', 'http://localhost');
+      const token = url.searchParams.get('token');
+
+      if (!token) {
+        ws.close(4001, 'Missing authentication token');
+        return;
+      }
+
+      const config = getConfig();
+      const masterKey = config.security.masterKey;
+
+      if (token !== masterKey) {
+        ws.close(4001, 'Invalid authentication token');
+        return;
+      }
+
+      (ws.data as any)._bridgeAuthed = true;
+      apiLogger.info('Browser bridge: WebSocket connected, awaiting handshake');
+      ws.send(JSON.stringify({ type: 'ready' }));
+    },
+
+    message(ws, message) {
+      if (!(ws.data as any)?._bridgeAuthed) return;
+
+      let parsed: any;
+      try {
+        if (typeof message === 'object' && message !== null && !(message instanceof Buffer) && !(message instanceof Uint8Array)) {
+          parsed = message;
+        } else {
+          const str = typeof message === 'string' ? message : new TextDecoder().decode(message as any);
+          parsed = JSON.parse(str);
+        }
+      } catch (err) {
+        apiLogger.warn({ error: (err as Error).message }, 'Browser bridge: failed to parse message');
+        return;
+      }
+
+      switch (parsed.type) {
+        case 'connect':
+          bridge.registerConnection(ws, {
+            version: parsed.version,
+            tabCount: parsed.tabCount,
+            userAgent: parsed.userAgent,
+          });
+          ws.send(JSON.stringify({ type: 'connected' }));
+          break;
+
+        case 'result':
+          bridge.handleResult(parsed.id, parsed.result, parsed.error);
+          break;
+
+        case 'tab_update':
+          bridge.handleTabUpdate(parsed.tab);
+          break;
+
+        case 'ping':
+          ws.send(JSON.stringify({ type: 'pong' }));
+          break;
+      }
+    },
+
+    close(ws) {
+      if ((ws.data as any)?._bridgeAuthed) {
+        bridge.handleDisconnect();
+      }
+    },
+
+    error(ws: any) {
+      apiLogger.error('Browser bridge WebSocket error');
+    },
+  });
+
 }

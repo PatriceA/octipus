@@ -88,8 +88,8 @@ describe('Router', () => {
   describe('topic keywords coverage', () => {
     const codingKeywords = [
       'code', 'function', 'bug', 'error', 'implement', 'debug', 'fix', 'refactor',
-      'typescript', 'javascript', 'python', 'rust', 'go', 'java', 'sql',
-      'api', 'database', 'backend', 'frontend', 'test', 'deploy',
+      'typescript', 'javascript', 'python', 'rust', 'go', 'java',
+      'api', 'backend', 'frontend',
     ];
 
     test('recognizes all coding keywords', () => {
@@ -99,16 +99,25 @@ describe('Router', () => {
       }
     });
 
+    test('routes specialized keywords to correct topics', () => {
+      // Keywords moved to dedicated topics in expanded routing
+      expect(router.classifyTopic('deploy the container to kubernetes').topic).toBe('devops');
+      expect(router.classifyTopic('run the unit test coverage').topic).toBe('qa');
+      expect(router.classifyTopic('database schema migration').topic).toBe('data');
+      expect(router.classifyTopic('write a sql query for postgres').topic).toBe('data');
+      expect(router.classifyTopic('check for xss vulnerability').topic).toBe('security');
+    });
+
     const analysisKeywords = [
       'analyze', 'review', 'explain', 'compare', 'evaluate',
-      'pros', 'cons', 'architecture', 'design', 'pattern', 'best practice',
+      'pros', 'cons', 'architecture', 'pattern', 'best practice',
     ];
 
     test('recognizes all analysis keywords', () => {
       for (const keyword of analysisKeywords) {
         const result = router.classifyTopic(`Please ${keyword} this`);
         // May be analysis or overlap with other topics
-        expect(['analysis', 'coding', 'chat']).toContain(result.topic);
+        expect(['analysis', 'coding', 'chat', 'design']).toContain(result.topic);
       }
     });
 

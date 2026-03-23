@@ -23,6 +23,18 @@ Pre-configured agent personas that combine a role, tools, skills, and system pro
 
 **Location:** DB table `presets`, seeded from `src/db/seed-experts.ts`
 
+#### Structured Expert Prompts
+
+Every system expert includes three structured prompt sections that are automatically injected into the agent's system prompt:
+
+| Field | Schema Column | Purpose |
+|-------|--------------|---------|
+| **Critical Rules** | `criticalRules` (string[]) | Hard constraints the agent must follow (e.g., "Never commit directly to main", "Always validate user input") |
+| **Deliverable Template** | `deliverableTemplate` (text) | Expected output format — defines the structure of the agent's final response (e.g., code review format with sections for issues, suggestions, summary) |
+| **Success Metrics** | `successMetrics` (string[]) | Evaluation criteria for the agent's output (e.g., "All tests pass", "No security vulnerabilities introduced") |
+
+These fields are defined on the `presets` table and populated for all 15 system experts. Custom experts can also define them via the API or web UI.
+
 ### Agents (Workers)
 Runtime instances that execute tasks using an LLM tool loop. Each agent has a context (session, user, model, role) and iterates: call LLM → parse tool calls → execute tools → repeat.
 
@@ -55,6 +67,30 @@ Orchestrator
                                     Stage 1 → Stage 2 → ... → Stage N
 ```
 
+### QA Retry Loop
+
+Pipeline stages can be typed as `qa_validation`. When a QA stage fails, the pipeline automatically retries the previous implementation stage with the QA feedback injected into context. This loop continues up to 3 retries (configurable via `maxRetries` on the pipeline step). After max retries are exhausted, the pipeline escalates to the user for manual approval.
+
+Pipeline step fields for QA retry:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `stageType` | `"implementation"` \| `"qa_validation"` \| `"review"` | Classifies the stage for retry logic |
+| `maxRetries` | number | Maximum retry attempts before escalation (default: 3) |
+| `retryTargetStage` | string | Which stage to retry on failure (typically the preceding implementation stage) |
+
+### Handoff Context Documents
+
+When work passes between pipeline stages, a structured **handoff document** is automatically generated and forwarded to the next stage's agent. Each handoff contains:
+
+- **Completed work summary** — what the previous stage accomplished
+- **Key decisions** — architectural or implementation choices made
+- **Open questions** — unresolved issues for the next stage to address
+- **Artifacts produced** — files created/modified, endpoints added, etc.
+- **Role-aware instructions** — context tailored to the receiving agent's role
+
+The full handoff chain is accumulated across all stages, so later stages have visibility into the entire pipeline history. This prevents context loss and reduces redundant work across sequential stages.
+
 ### Automatic Expert Selection
 
 When the orchestrator spawns a worker via `spawn_worker(role)`, it automatically matches a system expert from the database by role. The matched expert provides:
@@ -83,21 +119,21 @@ This means workers automatically receive expert-level capabilities without manua
 | Role | Tools | Default Skills | Use Case |
 |------|-------|---------------|----------|
 | orchestrator | meta-tools only | — | Routes tasks to specialists |
-| coding | filesystem, shell, git | architecture, data-structures, db-design, api-design | Code implementation |
-| review | filesystem, git | architecture, testing, security, performance | Code review |
-| research | browser, websearch, knowledge, filesystem | technical-writing | Investigation |
+| coding | filesystem, shell, git, knowledge | architecture, data-structures, db-design, api-design | Code implementation |
+| review | filesystem, git, knowledge | architecture, testing, security, performance | Code review |
+| research | browser, browser-ext, websearch, knowledge, filesystem | technical-writing | Investigation |
 | design | browser, filesystem | design-principles, design-frameworks | UI/UX |
 | devops | shell, docker, git, filesystem | devops, containers, cloud, networking | Infrastructure |
-| security | shell, filesystem, browser, websearch | security, networking, cloud | Security analysis |
-| data | shell, filesystem | db-design, data-engineering, performance | Data/DB work |
-| ai | shell, filesystem, browser, websearch | ai-engineering, ML, data-structures | AI/ML tasks |
-| qa | browser, shell, docker | test-automation, performance | Testing |
+| security | shell, filesystem, browser, browser-ext, websearch, knowledge | security, networking, cloud | Security analysis |
+| data | shell, filesystem, knowledge | db-design, data-engineering, performance | Data/DB work |
+| ai | shell, filesystem, browser, browser-ext, websearch, knowledge | ai-engineering, ML, data-structures | AI/ML tasks |
+| qa | browser, browser-ext, shell, docker | test-automation, performance | Testing |
 | finance | browser, websearch, filesystem | financial-analysis | Financial work |
 | automation | shell, docker, filesystem | automation-patterns, devops | Workflows |
 | pm | filesystem, messaging | project-management, technical-writing | Project mgmt |
-| writing | filesystem, browser, websearch | technical-writing, api-design | Documentation |
+| writing | filesystem, browser, websearch, knowledge | technical-writing, api-design | Documentation |
 | communication | google-workspace, microsoft365, messaging | — | Email/calendar |
-| general | filesystem, shell, messaging | — | Fallback |
+| general | filesystem, shell, messaging, knowledge, browser-ext | — | Fallback |
 
 ## Thinking Token Management
 
@@ -121,3 +157,9 @@ Create via the API (`POST /api/skills`) or add to `SYSTEM_SKILLS` in `src/db/see
 ### New Expert
 1. Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`
 2. If new role needed, add to `AgentRole` type and `ROLE_CONFIGS`
+
+## Knowledge Base (RAG)
+
+Agent outputs are automatically indexed into the knowledge base on completion, enabling future agents to retrieve past work. Most specialist roles have access to the `knowledge` tool for search and manual indexing.
+
+See **[RAG Documentation](RAG.md)** for full details on setup, configuration, and architecture.

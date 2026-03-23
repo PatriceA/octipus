@@ -53,8 +53,8 @@ export function SessionTabs({ sessions, activeSessionId, onSelect, onCreate, onC
           className={cn(
             'group flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors min-w-0 max-w-[200px]',
             session.id === activeSessionId
-              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-800'
-              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50',
+              ? 'bg-surface-container text-primary ring-1 ring-primary/30'
+              : 'text-on-surface-variant hover:bg-surface-container-high/50',
           )}
           onClick={() => onSelect(session.id)}
           onDoubleClick={() => startRename(session.id, session.title || 'Untitled')}
@@ -80,7 +80,7 @@ export function SessionTabs({ sessions, activeSessionId, onSelect, onCreate, onC
               e.stopPropagation();
               onClose(session.id);
             }}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-opacity flex-shrink-0"
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-surface-container-highest transition-opacity flex-shrink-0"
           >
             <X className="w-3 h-3" />
           </button>
@@ -88,7 +88,7 @@ export function SessionTabs({ sessions, activeSessionId, onSelect, onCreate, onC
       ))}
       <button
         onClick={onCreate}
-        className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors flex-shrink-0"
+        className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-sm text-on-surface-variant hover:text-white hover:bg-surface-container-high/50 transition-colors flex-shrink-0"
         title="New session"
       >
         <Plus className="w-4 h-4" />

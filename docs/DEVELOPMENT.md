@@ -10,7 +10,7 @@ assistant/
 │   │   ├── routes/         # Endpoint handlers
 │   │   ├── middleware/     # Auth guard
 │   │   └── websocket.ts   # WebSocket handler
-│   ├── channels/           # Messaging channels (Telegram, Slack, Teams, WebChat)
+│   ├── channels/           # Messaging channels (Telegram, Slack, Teams, WhatsApp, WebChat)
 │   ├── config/             # Zod-validated configuration, settings service, hot-reload
 │   ├── core/               # Agent runtime
 │   │   ├── agent-worker.ts # LLM agent loop (thought → action → observation)
@@ -25,14 +25,15 @@ assistant/
 │   ├── models/             # LLM providers, routing, cost/quota tracking
 │   ├── security/           # Auth (JWT, passkeys, TOTP), vault, permissions
 │   ├── skills/             # Domain knowledge registry (DB-backed)
-│   ├── tools/              # Built-in tool modules (filesystem, shell, git, browser, etc.)
+│   ├── tools/              # Built-in tool modules (filesystem, shell, git, browser, browser-ext, documents, messaging, knowledge, etc.)
 │   ├── visual/             # Playwright visual debugger
 │   └── voice/              # STT, TTS, wake word
 ├── mcp-server/             # MCP server bridge for CLI models
 ├── web/                    # Next.js 14 web UI
-├── tui/                    # Ink terminal UI
+├── browser-extension/      # Chrome extension for real browser control
+├── eval/                   # YAML-based capability eval suites
 ├── scripts/
-│   ├── e2e/                # E2E test suite
+│   ├── e2e/                # E2E test suite (22 modules, 112 tests)
 │   └── setup.ts            # Bootstrap setup wizard
 └── docs/                   # Documentation
 ```
@@ -48,7 +49,6 @@ assistant/
 | `bun run db:migrate` | Run database migrations |
 | `bun run db:generate` | Generate migrations from schema changes |
 | `bun run db:studio` | Open Drizzle Studio |
-| `bun run tui` | Start terminal UI |
 | `bun run setup` | Interactive setup wizard |
 | `bun run backup` | Backup database, Redis, config, vault |
 
@@ -83,9 +83,8 @@ Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`, or create via API (`P
 | Database | PostgreSQL + pgvector |
 | Cache | Redis (ioredis) |
 | Web UI | Next.js 14, React 18, Tailwind CSS |
-| Terminal UI | Ink |
 | LLM Client | OpenAI SDK (via LiteLLM proxy) |
-| Channels | grammY (Telegram), Bolt.js (Slack), Bot Framework (Teams) |
+| Channels | grammY (Telegram), Bolt.js (Slack), Bot Framework (Teams), WhatsApp Cloud API |
 | Auth | Bun.password (argon2id), scrypt, @simplewebauthn/server, otplib |
 | Browser | Playwright |
 | Logging | Pino |

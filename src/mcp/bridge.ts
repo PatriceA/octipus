@@ -3,7 +3,9 @@ import { MCPProtocol, MCPMethods, type MCPToolDefinition, type MCPResource, type
 import type { MCPTransport } from './transports/interface';
 import { StdioTransport } from './transports/stdio';
 import { SSETransport } from './transports/sse';
+import { StreamableHTTPTransport } from './transports/streamable-http';
 import { getConfig } from '@/config';
+import { getSettingsService } from '@/config/settings-service';
 import { coreLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
 import type { MCPServer, MCPTool } from '@/core/types';
@@ -27,24 +29,36 @@ export class MCPBridge extends EventEmitter {
   private serverConfigs: MCPServer[] = [];
 
   /**
-   * Load MCP server configurations
+   * Load MCP server configurations from JSON file (if configured) or database.
    */
   async loadConfig(): Promise<void> {
     const config = getConfig();
 
-    if (!config.mcp.serversConfigPath) {
-      coreLogger.debug('No MCP servers config path specified');
-      return;
+    // Prefer file-based config if explicitly configured
+    if (config.mcp.serversConfigPath) {
+      try {
+        const file = Bun.file(config.mcp.serversConfigPath);
+        const content = await file.json();
+        this.serverConfigs = content.servers || [];
+        coreLogger.info({ count: this.serverConfigs.length, source: 'file' }, 'MCP server configs loaded');
+        return;
+      } catch (error) {
+        coreLogger.warn({ error }, 'Failed to load MCP servers config from file');
+      }
     }
 
+    // Fall back to database storage
     try {
-      const file = Bun.file(config.mcp.serversConfigPath);
-      const content = await file.json();
-
-      this.serverConfigs = content.servers || [];
-      coreLogger.info({ count: this.serverConfigs.length }, 'MCP server configs loaded');
+      const settingsService = getSettingsService();
+      const stored = await settingsService.get('mcp.servers');
+      if (stored && Array.isArray(stored)) {
+        this.serverConfigs = stored as MCPServer[];
+        coreLogger.info({ count: this.serverConfigs.length, source: 'database' }, 'MCP server configs loaded');
+      } else {
+        coreLogger.debug('No MCP server configs found in database');
+      }
     } catch (error) {
-      coreLogger.warn({ error }, 'Failed to load MCP servers config');
+      coreLogger.warn({ error }, 'Failed to load MCP servers config from database');
     }
   }
 
@@ -56,6 +70,13 @@ export class MCPBridge extends EventEmitter {
       return new SSETransport({
         sseUrl: server.sseUrl,
         postUrl: server.postUrl,
+        headers: server.headers,
+      });
+    }
+
+    if (server.transport === 'streamable-http' && server.sseUrl) {
+      return new StreamableHTTPTransport({
+        url: server.sseUrl, // sseUrl field reused for the HTTP endpoint URL
         headers: server.headers,
       });
     }
@@ -106,7 +127,7 @@ export class MCPBridge extends EventEmitter {
       });
 
       transport.onError((error) => {
-        coreLogger.error({ error, serverId: server.id }, 'MCP transport error');
+        coreLogger.error({ err: error, serverId: server.id, errorMessage: error.message }, 'MCP transport error');
         connection.status = 'error';
         connection.error = error.message;
         this.emit('error', server.id, error);
@@ -176,7 +197,7 @@ export class MCPBridge extends EventEmitter {
     } catch (error) {
       connection.status = 'error';
       connection.error = (error as Error).message;
-      coreLogger.error({ error, serverId: server.id }, 'Failed to connect to MCP server');
+      coreLogger.error({ err: error, serverId: server.id, errorMessage: (error as Error).message }, 'Failed to connect to MCP server');
       throw error;
     }
   }
@@ -399,18 +420,33 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
-   * Persist current server configs back to the JSON file
+   * Persist current server configs to JSON file (if configured) or database.
    */
   private async saveConfig(): Promise<void> {
     const config = getConfig();
-    if (!config.mcp.serversConfigPath) return;
 
-    const content = JSON.stringify({ servers: this.serverConfigs }, null, 2);
-    await Bun.write(config.mcp.serversConfigPath, content);
+    // Prefer file-based storage if explicitly configured
+    if (config.mcp.serversConfigPath) {
+      const content = JSON.stringify({ servers: this.serverConfigs }, null, 2);
+      await Bun.write(config.mcp.serversConfigPath, content);
+      return;
+    }
+
+    // Fall back to database storage
+    try {
+      const settingsService = getSettingsService();
+      await settingsService.set('mcp.servers', this.serverConfigs);
+      coreLogger.debug({ count: this.serverConfigs.length }, 'MCP server configs saved to database');
+    } catch (error) {
+      coreLogger.error({ error }, 'Failed to save MCP server configs to database');
+    }
   }
 
   /**
-   * Convert all MCP tools into ToolHandlers usable by AgentWorker
+   * Convert all MCP tools into ToolHandlers usable by AgentWorker.
+   * WARNING: This expands every tool into a separate handler, which can flood
+   * the model context when many MCP servers are connected. Prefer
+   * getLazyToolHandlers() for agent use.
    */
   getToolHandlers(): ToolHandler[] {
     const handlers: ToolHandler[] = [];
@@ -434,6 +470,100 @@ export class MCPBridge extends EventEmitter {
     }
 
     return handlers;
+  }
+
+  /**
+   * Get two lightweight meta-tools (mcp_list_tools, mcp_call_tool) that let
+   * agents discover and invoke MCP tools on demand, without flooding the
+   * model context with every tool definition upfront.
+   */
+  getLazyToolHandlers(): ToolHandler[] {
+    const bridge = this;
+
+    // Don't add meta-tools if no MCP servers are connected
+    const hasConnected = Array.from(this.connections.values()).some(c => c.status === 'connected');
+    if (!hasConnected) return [];
+
+    return [
+      {
+        name: 'mcp_list_tools',
+        description:
+          'List available tools from connected MCP (Model Context Protocol) servers. ' +
+          'Call this to discover what external tools are available before calling mcp_call_tool. ' +
+          'Returns server names and their tools with descriptions and parameter schemas.',
+        parameters: {
+          type: 'object',
+          properties: {
+            server_id: {
+              type: 'string',
+              description: 'Optional: filter by a specific server ID. Omit to list all servers and tools.',
+            },
+          },
+        },
+        toolId: 'mcp',
+        execute: async (args) => {
+          const serverId = args.server_id as string | undefined;
+          const result: Array<{
+            server_id: string;
+            server_name: string;
+            tools: Array<{ name: string; description: string; parameters?: unknown }>;
+          }> = [];
+
+          for (const connection of bridge.connections.values()) {
+            if (connection.status !== 'connected') continue;
+            if (serverId && connection.id !== serverId) continue;
+
+            result.push({
+              server_id: connection.id,
+              server_name: connection.server.name,
+              tools: connection.tools.map(t => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.inputSchema,
+              })),
+            });
+          }
+
+          if (result.length === 0) {
+            return { message: serverId ? `MCP server '${serverId}' not found or not connected.` : 'No MCP servers connected.' };
+          }
+
+          return result;
+        },
+      },
+      {
+        name: 'mcp_call_tool',
+        description:
+          'Call a tool on a connected MCP server. Use mcp_list_tools first to discover available tools, ' +
+          'server IDs, and parameter schemas.',
+        parameters: {
+          type: 'object',
+          properties: {
+            server_id: {
+              type: 'string',
+              description: 'The MCP server ID (from mcp_list_tools)',
+            },
+            tool_name: {
+              type: 'string',
+              description: 'The tool name to call (from mcp_list_tools)',
+            },
+            arguments: {
+              type: 'object',
+              description: 'Arguments to pass to the tool (see parameter schema from mcp_list_tools)',
+            },
+          },
+          required: ['server_id', 'tool_name'],
+        },
+        toolId: 'mcp',
+        execute: async (args) => {
+          const serverId = args.server_id as string;
+          const toolName = args.tool_name as string;
+          const toolArgs = (args.arguments as Record<string, unknown>) || {};
+
+          return bridge.callTool(serverId, toolName, toolArgs);
+        },
+      },
+    ];
   }
 }
 

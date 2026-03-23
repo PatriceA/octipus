@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Cpu, Bot, Server } from 'lucide-react';
+import { Loader2, Cpu, Bot, Server, FolderOpen } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   type SettingItem,
@@ -16,6 +16,7 @@ const SERVER_CATEGORIES = new Set([
   'ollama',
   'agent',
   'orchestrator',
+  'workspace',
   'api',
   'logging',
   'voice',
@@ -45,6 +46,15 @@ const SECTIONS = [
     ],
   },
   {
+    id: 'workspace',
+    title: 'Workspace',
+    description: 'File output directory, session folders, and RAG indexing',
+    icon: FolderOpen,
+    subsections: [
+      { category: 'workspace', label: 'Workspace' },
+    ],
+  },
+  {
     id: 'server',
     title: 'Server',
     description: 'API, logging, voice, and session settings',
@@ -69,7 +79,7 @@ export function ConfigurationTab() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+        <Loader2 className="w-6 h-6 animate-spin text-on-surface-variant" />
       </div>
     );
   }
@@ -90,15 +100,15 @@ export function ConfigurationTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">System Configuration</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+        <h2 className="text-lg font-extrabold tracking-tighter text-white">System Configuration</h2>
+        <p className="text-sm text-on-surface-variant mt-1">
           Runtime settings. Changes take effect immediately without restart.
         </p>
       </div>
 
       {error && (
-        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        <div className="p-3 bg-error-dim/10 border border-error-dim/20 rounded-lg">
+          <p className="text-sm text-error">{error}</p>
         </div>
       )}
 
@@ -114,26 +124,26 @@ export function ConfigurationTab() {
         return (
           <div
             key={section.id}
-            className="ring-1 ring-gray-200/60 dark:ring-gray-700/60 rounded-xl overflow-hidden"
+            className="bg-[#131313] rounded-[1rem] overflow-hidden"
           >
             {/* Section header */}
-            <div className="flex items-center gap-3 px-5 py-4 bg-gray-50/50 dark:bg-gray-800/50 border-b border-gray-200/60 dark:border-gray-700/60">
-              <section.icon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
+              <section.icon className="w-5 h-5 text-on-surface-variant" />
               <div>
-                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{section.title}</h3>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{section.description}</p>
+                <h3 className="text-base font-semibold text-white">{section.title}</h3>
+                <p className="text-xs text-on-surface-variant">{section.description}</p>
               </div>
             </div>
 
             {/* Subsections */}
-            <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+            <div className="divide-y divide-outline-variant/10">
               {section.subsections.map((sub) => {
                 const items = getFilteredSettings(sub.category);
                 if (items.length === 0) return null;
 
                 return (
                   <div key={sub.category} className="px-5 py-4">
-                    <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                    <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-wider mb-1">
                       {sub.label}
                     </h4>
                     <SettingsGroup

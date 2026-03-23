@@ -5,6 +5,9 @@ import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 import { getSessionManager } from '@/security/auth/session';
 import { secureCompare } from '@/utils/crypto';
+import { getDb } from '@/db/postgres';
+import { users } from '@/db/schema/users';
+import { eq } from 'drizzle-orm';
 
 // Import routes
 import { authRoutes } from './routes/auth';
@@ -17,6 +20,9 @@ import { vaultRoutes } from './routes/vault';
 import { chatRoutes } from './routes/chat';
 import { pipelineRoutes } from './routes/pipelines';
 import { webhookRoutes } from './routes/webhooks';
+import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
+import { teamsWebhookRoutes } from './routes/teams-webhook';
+import { webhookIncomingRoutes } from './routes/webhook-incoming';
 import { mcpRoutes } from './routes/mcp';
 import { toolRoutes } from './routes/tools';
 import { voiceRoutes } from './routes/voice';
@@ -27,6 +33,11 @@ import { settingsRoutes } from './routes/settings';
 import { expertRoutes } from './routes/experts';
 import { skillRoutes } from './routes/skills';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
+import { evalRoutes } from './routes/eval';
+import { documentRoutes } from './routes/documents';
+import { knowledgeRoutes } from './routes/knowledge';
+import { pluginRoutes } from './routes/plugins';
+import { searchRoutes } from './routes/search';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { setupWebSocket } from './websocket';
@@ -118,8 +129,19 @@ export function createServer() {
         if (masterKey && secureCompare(token, masterKey)) {
           apiLogger.warn(
             { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
-            'MASTER_KEY authentication used — system user access'
+            'MASTER_KEY authentication used — admin user access'
           );
+          // Resolve to the first admin user so UUID-typed queries work
+          const db = getDb();
+          const [adminUser] = await db.select({ id: users.id, username: users.username })
+            .from(users).where(eq(users.isAdmin, true)).orderBy(users.createdAt).limit(1);
+          if (adminUser) {
+            return {
+              user: { id: adminUser.id, username: adminUser.username, isAdmin: true },
+              session: null,
+            };
+          }
+          // Fallback if no admin user exists yet
           return {
             user: { id: 'system', username: 'system', isAdmin: true },
             session: null,
@@ -163,12 +185,26 @@ export function createServer() {
         .use(expertRoutes)
         .use(skillRoutes)
         .use(recurringTaskRoutes)
+        .use(evalRoutes)
+        .use(documentRoutes)
+        .use(knowledgeRoutes)
+        .use(pluginRoutes)
+        .use(searchRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group
   app.group('/api', (app) => app.use(webhookRoutes));
 
-  // WebSocket setup
+  // WhatsApp webhook — unauthenticated (Meta calls directly)
+  app.group('/api', (app) => app.use(whatsappWebhookRoutes));
+
+  // Teams webhook — unauthenticated (Azure Bot Framework calls directly)
+  app.group('/api', (app) => app.use(teamsWebhookRoutes));
+
+  // Incoming webhooks — unauthenticated (uses per-hook webhookSecret for auth)
+  app.group('/api', (app) => app.use(webhookIncomingRoutes));
+
+  // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
   setupWebSocket(app as any);
 
   return app;

@@ -49,8 +49,8 @@ export function PresetSelector({ selectedPresetId, onSelect }: PresetSelectorPro
           className={cn(
             'flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors',
             selectedPresetId === preset.id
-              ? 'bg-primary-600 text-white'
-              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+              ? 'bg-primary text-[#002a6d]'
+              : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high'
           )}
           title={preset.description || preset.name}
         >

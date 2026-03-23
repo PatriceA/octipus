@@ -56,7 +56,7 @@ export const defaultConfig: Partial<Config> = {
   },
   agent: {
     maxConcurrentAgents: 10,
-    defaultTimeout: 300000,
+    defaultTimeout: 900000,
     maxIterations: 50,
     contextWindowSize: 32000,
     maxTokenBudget: 100000,
@@ -71,6 +71,12 @@ export const defaultConfig: Partial<Config> = {
   workspace: {
     rootPath: './workspace',
     additionalPaths: [],
+    sessionFolders: true,
+    autoIndexFiles: true,
+    documentsPath: './workspace/documents',
+    maxUploadSize: 52428800,
+    ocrModel: 'glm-ocr',
+    ocrEndpoint: 'http://localhost:11435',
   },
 };
 

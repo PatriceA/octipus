@@ -39,7 +39,36 @@ export function calculateTotalTokens(messages: AgentMessage[]): number {
 }
 
 /**
- * Compact message history by removing old messages while preserving context
+ * Group messages into atomic units that must stay together:
+ * - assistant message with toolCalls + all following tool result messages
+ * - standalone messages (user, assistant without tools, etc.)
+ */
+function groupAtomicBlocks(messages: AgentMessage[]): AgentMessage[][] {
+  const blocks: AgentMessage[][] = [];
+  let current: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'tool') {
+      // Tool results always attach to the current block (assistant+toolCalls)
+      current.push(msg);
+    } else {
+      // Flush previous block
+      if (current.length > 0) {
+        blocks.push(current);
+      }
+      current = [msg];
+    }
+  }
+  if (current.length > 0) {
+    blocks.push(current);
+  }
+  return blocks;
+}
+
+/**
+ * Compact message history by removing old messages while preserving context.
+ * Tool call/result pairs are kept together as atomic blocks to prevent
+ * orphaned tool messages that cause LLM API errors.
  */
 export function compactMessages(
   messages: AgentMessage[],
@@ -66,27 +95,42 @@ export function compactMessages(
     }
   }
 
-  // Preserve recent messages
-  const recentCount = opts.preserveRecentCount || 10;
-  const recentMessages = otherMessages.slice(-recentCount);
-  const olderMessages = otherMessages.slice(0, -recentCount);
+  // Group into atomic blocks (assistant+toolCalls + tool results stay together)
+  const blocks = groupAtomicBlocks(otherMessages);
 
-  // Calculate how many older messages we can keep
+  // Count individual messages to determine the split point
+  const recentCount = opts.preserveRecentCount || 10;
+  let recentMsgCount = 0;
+  let splitIdx = blocks.length;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    recentMsgCount += blocks[i].length;
+    if (recentMsgCount >= recentCount) {
+      splitIdx = i;
+      break;
+    }
+  }
+
+  const recentBlocks = blocks.slice(splitIdx);
+  const olderBlocks = blocks.slice(0, splitIdx);
+
+  const recentMessages = recentBlocks.flat();
+
+  // Calculate how many older blocks we can keep
   const systemTokens = calculateTotalTokens(systemMessages);
   const recentTokens = calculateTotalTokens(recentMessages);
   const remainingTokenBudget = (opts.maxTokens || 32000) - systemTokens - recentTokens;
 
-  // Keep older messages that fit in the budget
+  // Keep older blocks that fit in the budget (most recent first)
   const keptOlderMessages: AgentMessage[] = [];
   let usedTokens = 0;
 
-  for (let i = olderMessages.length - 1; i >= 0; i--) {
-    const msg = olderMessages[i];
-    const msgTokens = estimateTokens(msg.content);
+  for (let i = olderBlocks.length - 1; i >= 0; i--) {
+    const block = olderBlocks[i];
+    const blockTokens = calculateTotalTokens(block);
 
-    if (usedTokens + msgTokens <= remainingTokenBudget) {
-      keptOlderMessages.unshift(msg);
-      usedTokens += msgTokens;
+    if (usedTokens + blockTokens <= remainingTokenBudget) {
+      keptOlderMessages.unshift(...block);
+      usedTokens += blockTokens;
     } else {
       break;
     }

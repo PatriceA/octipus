@@ -77,6 +77,15 @@ export const slackConfigSchema = z.object({
   signingSecret: z.string().optional(),
 });
 
+// WhatsApp configuration schema
+export const whatsappConfigSchema = z.object({
+  accessToken: z.string().optional(),
+  phoneNumberId: z.string().optional(),
+  verifyToken: z.string().default('assistant-whatsapp-verify'),
+  appSecret: z.string().optional(),
+  businessAccountId: z.string().optional(),
+});
+
 // Voice configuration schema
 export const voiceConfigSchema = z.object({
   sttEnabled: z.boolean().default(false),
@@ -111,7 +120,7 @@ export const loggingConfigSchema = z.object({
 // Agent configuration schema
 export const agentConfigSchema = z.object({
   maxConcurrentAgents: z.number().min(1).max(100).default(10),
-  defaultTimeout: z.number().min(0).default(300000), // 5 minutes
+  defaultTimeout: z.number().min(0).default(900000), // 15 minutes
   maxIterations: z.number().min(1).max(1000).default(50),
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
@@ -155,10 +164,32 @@ export const oauthConfigSchema = z.object({
   publicUrl: z.string().optional(),
 }).default({});
 
+// Rate limit configuration schema
+export const rateLimitConfigSchema = z.object({
+  /** Per-provider overrides */
+  providers: z.record(z.object({
+    maxConcurrency: z.number().min(1).optional(),
+    rpm: z.number().min(0).optional(),
+    tpm: z.number().min(0).optional(),
+    minDelay: z.number().min(0).optional(),
+    adaptive: z.boolean().optional(),
+  })).optional(),
+  /** Global max concurrent requests across all providers */
+  globalMaxConcurrency: z.number().min(1).default(50),
+  /** Max time (ms) a request can wait in the queue before being rejected */
+  queueTimeout: z.number().min(0).default(30000),
+}).optional();
+
 // Workspace configuration schema
 export const workspaceConfigSchema = z.object({
   rootPath: z.string().default('./workspace'),
   additionalPaths: z.array(z.string()).default([]),
+  sessionFolders: z.boolean().default(true),
+  autoIndexFiles: z.boolean().default(true),
+  documentsPath: z.string().default('./workspace/documents'),
+  maxUploadSize: z.number().min(0).default(52428800), // 50MB
+  ocrModel: z.string().default('glm-ocr'),
+  ocrEndpoint: z.string().default('http://localhost:11435'),
 });
 
 // Full configuration schema
@@ -173,6 +204,7 @@ export const configSchema = z.object({
   telegram: telegramConfigSchema.optional(),
   teams: teamsConfigSchema.optional(),
   slack: slackConfigSchema.optional(),
+  whatsapp: whatsappConfigSchema.optional(),
   voice: voiceConfigSchema,
   mcp: mcpConfigSchema,
   n8n: n8nConfigSchema.optional(),
@@ -182,6 +214,7 @@ export const configSchema = z.object({
   cliModels: cliModelsConfigSchema.default({}),
   workspace: workspaceConfigSchema.default({}),
   oauth: oauthConfigSchema,
+  rateLimit: rateLimitConfigSchema,
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -203,4 +236,6 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
+export type RateLimitConfig = z.infer<typeof rateLimitConfigSchema>;

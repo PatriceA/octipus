@@ -21,12 +21,12 @@ interface Agent {
 
 function StatusBadge({ status }: { status: Agent['status'] }) {
   const config: Record<string, { color: string; icon: typeof Play }> = {
-    idle: { color: 'bg-gray-100 text-gray-800', icon: Clock },
-    running: { color: 'bg-green-100 text-green-800', icon: Play },
-    paused: { color: 'bg-yellow-100 text-yellow-800', icon: Pause },
-    stopped: { color: 'bg-gray-100 text-gray-800', icon: Ban },
-    completed: { color: 'bg-blue-100 text-blue-800', icon: CheckCircle },
-    failed: { color: 'bg-red-100 text-red-800', icon: XCircle },
+    idle: { color: 'bg-on-surface-variant/10 text-on-surface-variant', icon: Clock },
+    running: { color: 'bg-emerald-500/10 text-emerald-400', icon: Play },
+    paused: { color: 'bg-yellow-500/10 text-yellow-400', icon: Pause },
+    stopped: { color: 'bg-on-surface-variant/10 text-on-surface-variant', icon: Ban },
+    completed: { color: 'bg-primary/10 text-primary', icon: CheckCircle },
+    failed: { color: 'bg-error/10 text-error', icon: XCircle },
   };
   const { color, icon: Icon } = config[status] || config.idle;
 
@@ -76,37 +76,37 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
+      <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">New Agent</h2>
-          <button onClick={onClose} className="p-1 text-gray-500 hover:text-gray-600 cursor-pointer">
+          <h2 className="text-lg font-semibold text-white">New Agent</h2>
+          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-on-surface-variant mb-1">
               Task Description
             </label>
             <textarea
               value={task}
               onChange={e => setTask(e.target.value)}
               rows={3}
-              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
               placeholder="Describe what the agent should do..."
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">
                 Role
               </label>
               <select
                 value={role}
                 onChange={e => setRole(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
               >
                 <option value="general">General</option>
                 <option value="coding">Coding</option>
@@ -116,34 +116,34 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">
                 Model (optional)
               </label>
               <input
                 type="text"
                 value={model}
                 onChange={e => setModel(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-primary-500/40 focus:border-primary-400 dark:text-gray-200"
+                className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
                 placeholder="auto"
               />
             </div>
           </div>
 
           {error && (
-            <p className="text-sm text-red-600">{error}</p>
+            <p className="text-sm text-error">{error}</p>
           )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
+              className="px-4 py-2 text-sm text-on-surface-variant hover:text-white"
             >
               Cancel
             </button>
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !task.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 text-sm font-medium"
             >
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -200,49 +200,49 @@ export default function AgentsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+          <div className="w-10 h-10 rounded-[1rem] bg-primary/10 flex items-center justify-center">
+            <Bot className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Agents</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Manage running and completed agents</p>
+            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Agents</h1>
+            <p className="text-on-surface-variant">Monitor and manage running AI agents. View their status, tool calls, iterations, and results.</p>
           </div>
         </div>
         <button
           onClick={() => setShowNewAgent(true)}
-          className="px-4 py-2 bg-primary-600 text-white cursor-pointer rounded-lg hover:bg-primary-700 flex items-center gap-2"
+          className="px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
         >
           <Bot className="w-4 h-4" />
           New Agent
         </button>
       </div>
 
-      <div className="bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60">
+      <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-700">
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Agent</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Status</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Role</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Model</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Iterations</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Created</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Actions</th>
+              <tr className="border-b border-outline-variant/10">
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Agent</th>
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Status</th>
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Role</th>
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Model</th>
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Iterations</th>
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Created</th>
+                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Actions</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={7} className="px-4 py-8 text-center text-on-surface-variant">
                     <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
                     Loading...
                   </td>
                 </tr>
               ) : agents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                    No agents running. Click "New Agent" to start one.
+                  <td colSpan={7} className="px-4 py-8 text-center text-on-surface-variant">
+                    No agents running. Click &quot;New Agent&quot; to spawn an AI agent with a specific task and role.
                   </td>
                 </tr>
               ) : (
@@ -250,11 +250,11 @@ export default function AgentsPage() {
                   <tr
                     key={agent.id}
                     onClick={() => router.push(`/agents/${agent.id}`)}
-                    className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+                    className="border-b border-outline-variant/10 hover:bg-surface-container-high cursor-pointer"
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <Bot className="w-5 h-5 text-gray-500" />
+                        <Bot className="w-5 h-5 text-on-surface-variant" />
                         <span className="font-mono text-sm">{agent.id.slice(0, 8)}</span>
                       </div>
                     </td>
@@ -270,7 +270,7 @@ export default function AgentsPage() {
                         {agent.status === 'running' && (
                           <button
                             onClick={(e) => handleStop(agent.id, e)}
-                            className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded cursor-pointer"
+                            className="p-1.5 text-error hover:bg-error/10 rounded cursor-pointer"
                             title="Stop"
                           >
                             <Square className="w-4 h-4" />
@@ -279,7 +279,7 @@ export default function AgentsPage() {
                         {agent.status !== 'running' && (
                           <button
                             onClick={(e) => handleRemove(agent.id, e)}
-                            className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded cursor-pointer"
+                            className="p-1.5 text-on-surface-variant hover:text-error hover:bg-error/10 rounded cursor-pointer"
                             title="Remove"
                           >
                             <Trash2 className="w-4 h-4" />

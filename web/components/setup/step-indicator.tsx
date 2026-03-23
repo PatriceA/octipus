@@ -33,7 +33,7 @@ export function StepIndicator({ steps, currentStep, onStepClick }: StepIndicator
             onClick={() => onStepClick(i)}
             className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${
               i <= currentStep
-                ? 'text-primary-600 dark:text-primary-400'
+                ? 'text-primary-700 dark:text-primary-400'
                 : 'text-gray-400 dark:text-gray-600'
             }`}
           >

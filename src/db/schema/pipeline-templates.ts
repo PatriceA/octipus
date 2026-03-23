@@ -8,6 +8,9 @@ export interface PipelineStepConfig {
   toolIds: string[];
   requiresApproval: boolean;
   promptTemplate?: string;
+  stageType?: 'standard' | 'qa_validation';
+  maxRetries?: number;
+  retryTargetStage?: number;
 }
 
 export const pipelineTemplates = pgTable('pipeline_templates', {
