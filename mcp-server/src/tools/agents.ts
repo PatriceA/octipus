@@ -90,7 +90,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_send_message',
+    'assistant_send_agent_message',
     'Send a message to a running agent and get its response.',
     {
       agent_id: z.string().describe('The agent ID to message'),

@@ -8,7 +8,7 @@ import type { AssistantClient } from '../client.js';
 
 export function registerMessagingTools(server: McpServer, client: AssistantClient): void {
   server.tool(
-    'assistant_send_message',
+    'assistant_send_channel_message',
     'Send a message to a specific channel (telegram, slack, teams, whatsapp, webchat).',
     {
       channel: z.string().describe('Channel type: telegram, slack, teams, whatsapp, or webchat'),
