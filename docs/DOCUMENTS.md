@@ -198,10 +198,6 @@ Status enum: `queued` | `processing` | `completed` | `failed`
 - Detail modal with OCR text and summary
 - Real-time status updates via WebSocket
 
-### TUI (press `d`)
-- Document list with name, category, status, size, date
-- Detail view with full summary and OCR text preview
-
 ## Key Files
 
 | File | Purpose |
@@ -214,4 +210,3 @@ Status enum: `queued` | `processing` | `completed` | `failed`
 | `src/db/repositories/document-repository.ts` | Data access layer |
 | `src/tools/documents/index.ts` | Agent tool for document access |
 | `web/app/documents/page.tsx` | WebUI documents page |
-| `tui/views/documents.tsx` | TUI documents view |

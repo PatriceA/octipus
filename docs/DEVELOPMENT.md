@@ -30,7 +30,6 @@ assistant/
 │   └── voice/              # STT, TTS, wake word
 ├── mcp-server/             # MCP server bridge for CLI models
 ├── web/                    # Next.js 14 web UI
-├── tui/                    # Ink terminal UI
 ├── browser-extension/      # Chrome extension for real browser control
 ├── eval/                   # YAML-based capability eval suites
 ├── scripts/
@@ -50,7 +49,6 @@ assistant/
 | `bun run db:migrate` | Run database migrations |
 | `bun run db:generate` | Generate migrations from schema changes |
 | `bun run db:studio` | Open Drizzle Studio |
-| `bun run tui` | Start terminal UI |
 | `bun run setup` | Interactive setup wizard |
 | `bun run backup` | Backup database, Redis, config, vault |
 
@@ -85,7 +83,6 @@ Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`, or create via API (`P
 | Database | PostgreSQL + pgvector |
 | Cache | Redis (ioredis) |
 | Web UI | Next.js 14, React 18, Tailwind CSS |
-| Terminal UI | Ink |
 | LLM Client | OpenAI SDK (via LiteLLM proxy) |
 | Channels | grammY (Telegram), Bolt.js (Slack), Bot Framework (Teams), WhatsApp Cloud API |
 | Auth | Bun.password (argon2id), scrypt, @simplewebauthn/server, otplib |

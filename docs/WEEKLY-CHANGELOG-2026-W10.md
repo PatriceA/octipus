@@ -57,7 +57,7 @@
 - **Pipeline approval flow** (Mar 9): Fixed approval flow, added WebSocket reconnection, expanded roles and topics
 
 ### Skills & Hooks
-- **Skill CRUD** (Mar 9, 10 files): Full CRUD for skills across web UI, MCP, and TUI; hook edit modal; extended e2e tests
+- **Skill CRUD** (Mar 9, 10 files): Full CRUD for skills across web UI and MCP; hook edit modal; extended e2e tests
 - **Markdown skills** (Mar 10, 8 files): Added markdown content field for Claude Code-style skill definitions
 - **Editable system skills** (Mar 10): Allow editing system/preset skills
 - **Hook execution logging** (Mar 10, 16 files): Merged recurring tasks into hooks system, added prompting docs

@@ -75,9 +75,8 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Eval UI** — web dashboard at `/eval` with summary cards, pass rate charts, assertion breakdowns, latency histograms, run comparison matrix with regression detection, and red-team results grouped by attack category. Supports triggering eval runs directly from the UI
 - **112 E2E API tests** — 22 test modules covering health, auth, models, vault, sessions, agents, tools, MCP, pipelines, hooks, settings, experts, skills, recurring tasks, chat, documents, browser extension, messaging, knowledge, and channel webhooks
 
-### Full Web UI and Terminal UI
-- **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, settings
-- **Terminal UI** (Ink) — full-featured TUI with dashboard, agents, chat, logs, models, pipelines, secrets
+### Full Web UI
+- **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, profiles, settings
 - **MCP server** — expose all capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients
 
 ### Automation and Extensibility
