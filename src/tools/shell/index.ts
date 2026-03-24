@@ -25,6 +25,11 @@ const BLOCKED_COMMANDS = [
   'ncat -',
   'netcat ',
   'netcat -',
+  // Process management — prevent agents from killing the assistant or other processes
+  'shutdown',
+  'reboot',
+  'halt',
+  'poweroff',
 ];
 
 // Commands that require elevated permissions
@@ -47,6 +52,11 @@ const ELEVATED_COMMANDS = [
   'iptables',
   'ip6tables',
   'nft',
+  // Process management — prevent accidental self-kill
+  'kill',
+  'pkill',
+  'killall',
+  'xkill',
 ];
 
 export class ShellTool extends BaseTool {
@@ -90,7 +100,7 @@ export class ShellTool extends BaseTool {
         timeout: { type: 'number', description: 'Command timeout in milliseconds', default: DEFAULT_TIMEOUT },
         env: { type: 'object', description: 'Additional environment variables' },
       }),
-      async (args) => {
+      async (args, context) => {
         const command = args.command as string;
         const cwd = (args.cwd as string) || this.getWorkspaceRoot();
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
@@ -99,7 +109,26 @@ export class ShellTool extends BaseTool {
         // Security checks
         this.validateCommand(command);
 
-        return this.executeCommand(command, { cwd, timeout, env });
+        toolLogger.info({
+          command: command.slice(0, 500),
+          cwd,
+          agentId: context?.id,
+          role: context?.role,
+        }, 'Shell command executing');
+
+        const result = await this.executeCommand(command, { cwd, timeout, env });
+
+        if (result.exitCode !== 0 || result.killed) {
+          toolLogger.warn({
+            command: command.slice(0, 200),
+            exitCode: result.exitCode,
+            killed: result.killed,
+            stderrSnippet: result.stderr.slice(0, 200),
+            agentId: context?.id,
+          }, 'Shell command failed');
+        }
+
+        return result;
       },
       { permissionAction: this.getPermissionAction(args => args.command as string) }
     );
