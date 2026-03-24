@@ -39,6 +39,8 @@ interface ToolModule {
   description: string;
   author?: string;
   isInitialized: boolean;
+  status?: 'active' | 'inactive' | 'degraded';
+  statusReason?: string;
   permissions: ToolPermission[];
   tools: ToolFunction[];
 }
@@ -159,10 +161,13 @@ function ToolModuleCard({
           <div className="text-on-surface-variant">
             {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </div>
-          <Wrench className="w-5 h-5 text-primary" />
+          <Wrench className={cn('w-5 h-5', module.status === 'active' ? 'text-primary' : module.status === 'degraded' ? 'text-amber-400' : 'text-on-surface-variant')} />
           <div>
             <h3 className="font-medium text-white">{module.name}</h3>
             <p className="text-xs text-on-surface-variant mt-0.5">{module.description}</p>
+            {module.status !== 'active' && module.statusReason && (
+              <p className={cn('text-xs mt-0.5', module.status === 'degraded' ? 'text-amber-400' : 'text-red-400')}>{module.statusReason}</p>
+            )}
           </div>
         </div>
 
@@ -181,12 +186,15 @@ function ToolModuleCard({
           <span
             className={cn(
               'px-2 py-0.5 text-xs rounded-full',
-              module.isInitialized
+              module.status === 'active'
                 ? 'bg-green-900/30 text-green-300'
+                : module.status === 'degraded'
+                ? 'bg-amber-900/30 text-amber-300'
                 : 'bg-[#262626] text-on-surface-variant'
             )}
+            title={module.statusReason}
           >
-            {module.isInitialized ? 'Active' : 'Inactive'}
+            {module.status === 'active' ? 'Active' : module.status === 'degraded' ? 'Degraded' : 'Inactive'}
           </span>
         </div>
       </button>

@@ -1,4 +1,4 @@
-export { BaseTool, createParameterSchema, type ToolContext, type ToolExecutionOptions } from './base-tool';
+export { BaseTool, createParameterSchema, type ToolContext, type ToolExecutionOptions, type ToolAvailability } from './base-tool';
 export { ToolRegistry, getToolRegistry, type ToolRegistryOptions } from './registry';
 
 // Built-in tools
@@ -80,6 +80,14 @@ export async function registerBuiltinTools(): Promise<void> {
         { pluginName: plugin.manifest.name, error: (err as Error).message },
         'Failed to register plugin tool',
       );
+    }
+  }
+
+  // Populate availability cache so agents immediately skip unavailable tools
+  const availability = await registry.checkAllAvailability();
+  for (const [id, result] of availability) {
+    if (!result.available) {
+      toolLogger.info({ toolId: id, reason: result.reason }, 'Tool unavailable');
     }
   }
 }

@@ -1,4 +1,4 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { getEmbeddingService } from '@/core/rag/embeddings';
@@ -8,6 +8,22 @@ export class DocumentsTool extends BaseTool {
   readonly name = 'Documents';
   readonly version = '1.0.0';
   readonly description = 'List, view, and search uploaded documents — access OCR text, summaries, and categories.';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const registry = getModelRegistry();
+      const visionModel = await registry.getModelForTopic('vision');
+      const hasVision = visionModel?.topics?.includes('vision') ||
+        (visionModel?.topicRoles && 'vision' in visionModel.topicRoles);
+      if (!hasVision) {
+        return { available: true, degraded: true, reason: 'No vision/OCR model configured — document processing limited' };
+      }
+      return { available: true };
+    } catch {
+      return { available: true, degraded: true, reason: 'No vision/OCR model configured' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {

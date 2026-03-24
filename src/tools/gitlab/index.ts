@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 
 export class GitLabTool extends BaseTool {
@@ -7,6 +7,16 @@ export class GitLabTool extends BaseTool {
   readonly name = 'GitLab';
   readonly version = '1.0.0';
   readonly description = 'GitLab project, issue, merge request, and CI/CD management via glab CLI';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { execSync } = await import('child_process');
+      execSync('glab auth status', { stdio: 'ignore', timeout: 5000 });
+      return { available: true };
+    } catch {
+      return { available: false, reason: 'GitLab CLI (glab) not installed or not authenticated' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {

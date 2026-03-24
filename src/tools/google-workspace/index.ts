@@ -1,6 +1,6 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest, AgentContext } from '@/core/types';
-import { getOAuthManager } from '@/security/oauth';
+import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
 import { registerGmailTools } from './gmail';
 import { registerCalendarTools } from './calendar';
 import { registerDriveTools } from './drive';
@@ -12,6 +12,18 @@ export class GoogleWorkspaceTool extends BaseTool {
   readonly name = 'Google Workspace';
   readonly version = '1.0.0';
   readonly description = 'Gmail, Calendar, Sheets, Docs, Drive, Contacts, and Tasks via Google APIs';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { getVault } = await import('@/security/vault');
+      const v = getVault();
+      const clientId = await v.getByName('system', OAUTH_VAULT_NAMES.google.clientId);
+      if (!clientId) return { available: false, reason: 'Google OAuth credentials not configured' };
+      return { available: true };
+    } catch {
+      return { available: false, reason: 'Google OAuth credentials not configured' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {

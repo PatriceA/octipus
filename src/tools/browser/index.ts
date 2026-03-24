@@ -1,5 +1,5 @@
 import { chromium, type Browser, type Page, type BrowserContext } from 'playwright';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 
@@ -11,6 +11,21 @@ export class BrowserTool extends BaseTool {
   readonly name = 'Browser';
   readonly version = '1.0.0';
   readonly description = 'Web browser automation using Playwright';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      // Check if Playwright's chromium browser binary is installed
+      const { chromium: pw } = await import('playwright');
+      const path = pw.executablePath();
+      const { existsSync } = await import('fs');
+      if (!path || !existsSync(path)) {
+        return { available: false, reason: 'Playwright chromium not installed (run: npx playwright install chromium)' };
+      }
+      return { available: true };
+    } catch {
+      return { available: false, reason: 'Playwright not available' };
+    }
+  }
 
   private browser: Browser | null = null;
   private contexts: Map<string, BrowserContext> = new Map();

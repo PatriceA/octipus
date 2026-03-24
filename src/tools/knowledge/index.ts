@@ -1,4 +1,4 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
@@ -8,6 +8,22 @@ export class KnowledgeTool extends BaseTool {
   readonly name = 'Knowledge Base';
   readonly version = '1.1.0';
   readonly description = 'Search and manage the RAG knowledge base — hybrid search (semantic + keyword), index files, and read stored knowledge.';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const registry = getModelRegistry();
+      const embeddingModel = await registry.getModelForTopic('embedding');
+      const hasEmbedding = embeddingModel?.topics?.includes('embedding') ||
+        (embeddingModel?.topicRoles && 'embedding' in embeddingModel.topicRoles);
+      if (!hasEmbedding) {
+        return { available: true, degraded: true, reason: 'No embedding model configured — indexing and semantic search disabled' };
+      }
+      return { available: true };
+    } catch {
+      return { available: true, degraded: true, reason: 'No embedding model configured' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {

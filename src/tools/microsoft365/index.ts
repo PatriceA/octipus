@@ -1,6 +1,6 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest, AgentContext } from '@/core/types';
-import { getOAuthManager } from '@/security/oauth';
+import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
 import { registerMailTools } from './mail';
 import { registerCalendarTools } from './calendar';
 import { registerOneDriveTools } from './onedrive';
@@ -12,6 +12,18 @@ export class Microsoft365Tool extends BaseTool {
   readonly name = 'Microsoft 365';
   readonly version = '1.0.0';
   readonly description = 'Outlook Mail, Calendar, OneDrive, To Do, and Contacts via Microsoft Graph';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { getVault } = await import('@/security/vault');
+      const v = getVault();
+      const clientId = await v.getByName('system', OAUTH_VAULT_NAMES.microsoft.clientId);
+      if (!clientId) return { available: false, reason: 'Microsoft OAuth credentials not configured' };
+      return { available: true };
+    } catch {
+      return { available: false, reason: 'Microsoft OAuth credentials not configured' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {

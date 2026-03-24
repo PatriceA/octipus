@@ -14,6 +14,12 @@ export interface ToolExecutionOptions {
   injectSecrets?: boolean;
 }
 
+export interface ToolAvailability {
+  available: boolean;
+  degraded?: boolean;
+  reason?: string;
+}
+
 export abstract class BaseTool {
   abstract readonly id: string;
   abstract readonly name: string;
@@ -26,6 +32,14 @@ export abstract class BaseTool {
    * Get the tool manifest
    */
   abstract getManifest(): ToolManifest;
+
+  /**
+   * Check if this tool's external dependencies are satisfied.
+   * Override in subclasses that require OAuth tokens, CLI binaries, etc.
+   */
+  async checkAvailability(): Promise<ToolAvailability> {
+    return { available: true };
+  }
 
   /**
    * Initialize the tool

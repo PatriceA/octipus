@@ -1,4 +1,4 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest, AgentContext } from '@/core/types';
 
 export class EmailProcessorTool extends BaseTool {
@@ -6,6 +6,20 @@ export class EmailProcessorTool extends BaseTool {
   readonly name = 'Email Processor';
   readonly version = '1.0.0';
   readonly description = 'Process emails one-by-one with AI-driven classification and actions. Supports batch processing with per-email decisions.';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    // Requires at least one email provider (Google or Microsoft) to be configured
+    const { getToolRegistry } = await import('../registry');
+    const registry = getToolRegistry();
+    const google = registry.get('google-workspace');
+    const microsoft = registry.get('microsoft365');
+    const googleOk = google ? (await google.checkAvailability()).available : false;
+    const microsoftOk = microsoft ? (await microsoft.checkAvailability()).available : false;
+    if (!googleOk && !microsoftOk) {
+      return { available: false, reason: 'No email provider configured (Google or Microsoft OAuth required)' };
+    }
+    return { available: true };
+  }
 
   getManifest(): ToolManifest {
     return {

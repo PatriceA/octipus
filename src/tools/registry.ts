@@ -1,4 +1,4 @@
-import { BaseTool } from './base-tool';
+import { BaseTool, type ToolAvailability } from './base-tool';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
@@ -10,6 +10,8 @@ export interface ToolRegistryOptions {
 export class ToolRegistry {
   private tools: Map<string, BaseTool> = new Map();
   private initialized: Set<string> = new Set();
+  private availabilityCache: Map<string, { result: ToolAvailability; checkedAt: number }> = new Map();
+  private static AVAILABILITY_TTL = 60_000; // Cache for 60s
 
   /**
    * Register a tool
@@ -78,6 +80,49 @@ export class ToolRegistry {
   }
 
   /**
+   * Check availability of a single tool (cached).
+   */
+  async checkAvailability(toolId: string): Promise<ToolAvailability> {
+    const cached = this.availabilityCache.get(toolId);
+    if (cached && Date.now() - cached.checkedAt < ToolRegistry.AVAILABILITY_TTL) {
+      return cached.result;
+    }
+
+    const tool = this.tools.get(toolId);
+    if (!tool) return { available: false, reason: 'Tool not found' };
+
+    try {
+      const result = await tool.checkAvailability();
+      this.availabilityCache.set(toolId, { result, checkedAt: Date.now() });
+      return result;
+    } catch (error) {
+      const result: ToolAvailability = { available: false, reason: (error as Error).message };
+      this.availabilityCache.set(toolId, { result, checkedAt: Date.now() });
+      return result;
+    }
+  }
+
+  /**
+   * Check availability of all tools.
+   */
+  async checkAllAvailability(): Promise<Map<string, ToolAvailability>> {
+    const results = new Map<string, ToolAvailability>();
+    await Promise.all(
+      Array.from(this.tools.keys()).map(async (id) => {
+        results.set(id, await this.checkAvailability(id));
+      }),
+    );
+    return results;
+  }
+
+  /**
+   * Invalidate availability cache (e.g., after settings change).
+   */
+  invalidateAvailabilityCache(): void {
+    this.availabilityCache.clear();
+  }
+
+  /**
    * Get all tool handlers from all tools
    */
   getAllToolHandlers(): ToolHandler[] {
@@ -93,7 +138,7 @@ export class ToolRegistry {
   }
 
   /**
-   * Get tool handlers for specific tools
+   * Get tool handlers for specific tools, skipping unavailable ones.
    */
   getToolHandlersForTools(toolIds: string[]): ToolHandler[] {
     const handlers: ToolHandler[] = [];
@@ -101,6 +146,13 @@ export class ToolRegistry {
     for (const toolId of toolIds) {
       const tool = this.tools.get(toolId);
       if (tool && this.initialized.has(toolId)) {
+        // Use cached availability — stale check is fine here since agents
+        // are short-lived and availability is refreshed periodically
+        const cached = this.availabilityCache.get(toolId);
+        if (cached && !cached.result.available) {
+          toolLogger.debug({ toolId }, 'Skipping unavailable tool for agent');
+          continue;
+        }
         handlers.push(...tool.getToolHandlers());
       }
     }

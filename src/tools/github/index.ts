@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 
 export class GitHubTool extends BaseTool {
@@ -7,6 +7,16 @@ export class GitHubTool extends BaseTool {
   readonly name = 'GitHub';
   readonly version = '1.0.0';
   readonly description = 'GitHub repository, issue, PR, and workflow management via gh CLI';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { execSync } = await import('child_process');
+      execSync('gh auth status', { stdio: 'ignore', timeout: 5000 });
+      return { available: true };
+    } catch {
+      return { available: false, reason: 'GitHub CLI (gh) not installed or not authenticated' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {

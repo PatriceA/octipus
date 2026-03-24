@@ -17,22 +17,29 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
 
       const registry = getToolRegistry();
       const manifests = registry.getManifests();
+      const availability = await registry.checkAllAvailability();
 
-      const tools = manifests.map((m) => ({
-        id: m.id,
-        name: m.name,
-        version: m.version,
-        description: m.description,
-        author: m.author,
-        isInitialized: registry.isInitialized(m.id),
-        permissions: m.permissions,
-        tools: m.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-          returns: t.returns,
-        })),
-      }));
+      const tools = manifests.map((m) => {
+        const avail = availability.get(m.id);
+        const status = !avail?.available ? 'inactive' : avail.degraded ? 'degraded' : 'active';
+        return {
+          id: m.id,
+          name: m.name,
+          version: m.version,
+          description: m.description,
+          author: m.author,
+          isInitialized: registry.isInitialized(m.id),
+          status,
+          statusReason: status !== 'active' ? avail?.reason : undefined,
+          permissions: m.permissions,
+          tools: m.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+            returns: t.returns,
+          })),
+        };
+      });
 
       return { tools };
     },
@@ -170,6 +177,8 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       }
 
       const manifest = tool.getManifest();
+      const avail = await registry.checkAvailability(manifest.id);
+      const status = !avail.available ? 'inactive' : avail.degraded ? 'degraded' : 'active';
 
       return {
         id: manifest.id,
@@ -178,6 +187,8 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
         description: manifest.description,
         author: manifest.author,
         isInitialized: registry.isInitialized(manifest.id),
+        status,
+        statusReason: status !== 'active' ? avail.reason : undefined,
         permissions: manifest.permissions,
         tools: manifest.tools,
       };

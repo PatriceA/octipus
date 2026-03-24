@@ -1,4 +1,4 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import type { AgentContext } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
@@ -23,6 +23,16 @@ export class DockerTool extends BaseTool {
   readonly name = 'Docker';
   readonly version = '1.0.0';
   readonly description = 'Manage Docker containers, images, and services';
+
+  async checkAvailability(): Promise<ToolAvailability> {
+    try {
+      const { execSync } = await import('child_process');
+      execSync('docker info', { stdio: 'ignore', timeout: 5000 });
+      return { available: true };
+    } catch {
+      return { available: false, reason: 'Docker not installed or not running' };
+    }
+  }
 
   getManifest(): ToolManifest {
     return {
