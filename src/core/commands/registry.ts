@@ -59,20 +59,52 @@ export async function handleCommand(
       return response;
     }
 
-    const handler = getCommand(ctx.activeCommand);
-    if (handler) {
-      await messageRepository.create({ sessionId, role: 'user', content });
-      const result = await handler.execute({ sessionId, userId, args: content });
-      if (!result.continueCommand) {
-        // Re-read session to avoid overwriting state saved by the command handler
-        const freshSession = await sessionRepository.findById(sessionId);
-        const freshCtx = (freshSession?.context as SessionContext) || {};
-        await sessionRepository.update(sessionId, {
-          context: { ...freshCtx, activeCommand: undefined },
-        });
+    // Allow other slash commands to pass through during active commands
+    // (e.g., /status, /help, /stop should work even mid-questionnaire)
+    if (content.trim().startsWith('/')) {
+      const [slashCmd] = content.trim().split(/\s+/);
+      const slashName = slashCmd.toLowerCase().slice(1);
+      if (slashName !== ctx.activeCommand && getCommand(slashName)) {
+        // Fall through to normal slash command handling below
+      } else if (slashName !== ctx.activeCommand) {
+        // Unknown slash command during active command — don't feed it to the questionnaire
+        const response = `Unknown command: \`${slashCmd}\`. Type \`/help\` to see available commands.\n\n_Note: \`/${ctx.activeCommand}\` is still active. Send \`/cancel\` to abort it._`;
+        await persistCommandExchange(sessionId, userId, content, response);
+        return response;
+      } else {
+        // Re-entering the same active command — route to handler
+        const handler = getCommand(ctx.activeCommand);
+        if (handler) {
+          await messageRepository.create({ sessionId, role: 'user', content });
+          const result = await handler.execute({ sessionId, userId, args: content });
+          if (!result.continueCommand) {
+            const freshSession = await sessionRepository.findById(sessionId);
+            const freshCtx = (freshSession?.context as SessionContext) || {};
+            await sessionRepository.update(sessionId, {
+              context: { ...freshCtx, activeCommand: undefined },
+            });
+          }
+          await messageRepository.create({ sessionId, role: 'assistant', content: result.response });
+          return result.response;
+        }
       }
-      await messageRepository.create({ sessionId, role: 'assistant', content: result.response });
-      return result.response;
+    } else {
+      // Non-slash message — route to active command handler
+      const handler = getCommand(ctx.activeCommand);
+      if (handler) {
+        await messageRepository.create({ sessionId, role: 'user', content });
+        const result = await handler.execute({ sessionId, userId, args: content });
+        if (!result.continueCommand) {
+          // Re-read session to avoid overwriting state saved by the command handler
+          const freshSession = await sessionRepository.findById(sessionId);
+          const freshCtx = (freshSession?.context as SessionContext) || {};
+          await sessionRepository.update(sessionId, {
+            context: { ...freshCtx, activeCommand: undefined },
+          });
+        }
+        await messageRepository.create({ sessionId, role: 'assistant', content: result.response });
+        return result.response;
+      }
     }
   }
 

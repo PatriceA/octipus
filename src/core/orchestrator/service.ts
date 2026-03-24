@@ -157,15 +157,43 @@ export class OrchestratorService {
       }
 
       // Plan execution: detect "go" after a plan was completed in this session
-      const sessionCtx = (session?.context as Record<string, any>) || {};
+      // Re-read session fresh to avoid race conditions with concurrent "go" messages
+      const freshSessionForPlan = await sessionRepository.findById(resolvedSessionId);
+      const sessionCtx = (freshSessionForPlan?.context as Record<string, any>) || {};
       const planState = sessionCtx.planningState;
       if (planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
-        coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via orchestrator');
+        // Check if an orchestrator is already running for this session
+        const agentManager = getAgentManager();
+        const sessionAgents = agentManager.getBySession(resolvedSessionId);
+        const runningOrchestrator = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().role === 'orchestrator');
+        if (runningOrchestrator) {
+          const response = 'A plan is already being executed. Use `/status` to check progress or `/stop` to cancel it.';
+          await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+          await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: response });
+          return { response, sessionId: resolvedSessionId, classification: { type: 'casual' as const, confidence: 1 } };
+        }
+
+        // Mark as executed BEFORE spawning to prevent race conditions
         await sessionRepository.update(resolvedSessionId, {
           context: { ...sessionCtx, planningState: { ...planState, executed: true } },
         });
+        coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via orchestrator');
+
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
+
+        // Send immediate feedback before the long-running orchestrator starts
+        const startMessage = 'Starting plan execution... Use `/status` to check progress.';
+        await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: startMessage });
+        // Emit so WebSocket/Telegram can show it immediately
+        this.emit({
+          type: 'status_update',
+          sessionId: resolvedSessionId,
+          userId,
+          data: { message: startMessage, stage: 'Starting' },
+          timestamp: new Date(),
+        });
+
         const planMessage = `Execute this project plan. Follow the brief and use the appropriate tools and agents:\n\n${planState.brief}`;
         const classification = classifyMessage(planMessage);
         const { response, agentId } = await this.runOrchestrator(

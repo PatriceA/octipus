@@ -33,6 +33,11 @@ export class AgentWorker extends BaseAgentWorker {
     return Date.now() - this.startTime;
   }
 
+  /** Public elapsed time for status reporting */
+  getElapsedMs(): number {
+    return this.startTime > 0 ? Date.now() - this.startTime : 0;
+  }
+
   constructor(context: import('./types').AgentContext, config: import('./agent-base').AgentWorkerConfig) {
     super(context, config);
     this.abortController = new AbortController();

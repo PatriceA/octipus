@@ -26,6 +26,7 @@ export interface PlanningState {
   area: string | null;
   answers: Array<{ question: string; answer: string; step: number }>;
   brief: string | null;
+  executed?: boolean;
   createdAt: string;
 }
 

@@ -83,4 +83,8 @@ export abstract class BaseAgentWorker {
   getTotalTokens(): number {
     return 0;
   }
+
+  getElapsedMs(): number {
+    return 0;
+  }
 }
