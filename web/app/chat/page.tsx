@@ -744,7 +744,37 @@ export default function ChatPage() {
 
   // Send message
   const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
-    const sid = activeSessionId;
+    let sid = activeSessionId;
+
+    // Auto-create a session if none is active
+    if (!sid) {
+      try {
+        const result = await api.post<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }>('/sessions', {
+          channelType: 'webchat',
+          channelId: `chat-${Date.now().toString(36)}`,
+          title: userInput.slice(0, 100) || 'New Chat',
+        });
+        if (result?.id) {
+          sid = result.id;
+          const item: SessionInfo = {
+            id: result.id,
+            title: result.title || 'New Chat',
+            updatedAt: result.updatedAt || new Date().toISOString(),
+            messageCount: 0,
+            tokenCount: 0,
+            status: 'active',
+          };
+          setSessions(prev => [item, ...prev]);
+          setActiveSessionId(sid);
+          updateSessionState(sid, () => newSessionState());
+        }
+      } catch (error) {
+        console.error('Failed to create session:', error);
+        return;
+      }
+    }
+
+    if (!sid) return; // Should not happen — session creation above handles this
 
     const userMessage: ChatMessageData = {
       id: Date.now().toString(),
@@ -753,14 +783,12 @@ export default function ChatPage() {
       timestamp: new Date(),
     };
 
-    if (sid) {
-      updateSessionState(sid, (prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-        trackedAgents: new Map(),
-        teams: new Map(),
-      }));
-    }
+    updateSessionState(sid, (prev) => ({
+      ...prev,
+      messages: [...prev.messages, userMessage],
+      trackedAgents: new Map(),
+      teams: new Map(),
+    }));
 
     setIsLoading(true);
 

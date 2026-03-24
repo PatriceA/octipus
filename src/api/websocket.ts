@@ -186,8 +186,21 @@ export function setupWebSocket(app: Elysia): void {
             break;
 
           case 'chat': {
-            const sessionId = parsed.sessionId || `ws-${data.connectionId}`;
             const content = (parsed.content || '').trim();
+            let sessionId = parsed.sessionId as string | undefined;
+
+            // Auto-create a proper DB session when none provided
+            if (!sessionId) {
+              const { sessionRepository } = await import('@/db/repositories/session-repository');
+              const { generateId } = await import('@/utils/crypto');
+              const session = await sessionRepository.create({
+                userId: data.userId,
+                channelType: 'webchat',
+                channelId: `chat-${generateId().slice(0, 8)}`,
+                title: content.slice(0, 100) || 'New Chat',
+              });
+              sessionId = session.id;
+            }
 
             // Route through orchestrator (commands are handled inside handleMessage)
             const orchestrator = getOrchestratorService();
