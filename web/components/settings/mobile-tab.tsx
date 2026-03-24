@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 interface PairingData {
   code: string;
   expiresIn: number;
+  serverUrl?: string;
 }
 
 export function MobileTab() {
@@ -32,10 +33,11 @@ export function MobileTab() {
       setPairing(data);
       setSecondsLeft(data.expiresIn);
 
-      // Build QR payload — use current page origin as base URL for the backend
-      const backendUrl = typeof window !== 'undefined'
-        ? `${window.location.protocol}//${window.location.hostname}:3005`
-        : 'http://localhost:3005';
+      // Use server-provided LAN URL, fall back to current hostname
+      const backendUrl = data.serverUrl
+        || (typeof window !== 'undefined'
+          ? `${window.location.protocol}//${window.location.hostname}:3005`
+          : 'http://localhost:3005');
 
       const qrPayload = JSON.stringify({ url: backendUrl, code: data.code });
       const dataUrl = await QRCode.toDataURL(qrPayload, {

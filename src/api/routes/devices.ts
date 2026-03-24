@@ -1,9 +1,21 @@
 import { Elysia, t } from 'elysia';
+import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
 import { getSessionManager } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';
 import { randomBytes } from 'crypto';
 import { getRedis } from '@/db/redis';
+
+/** Get the first non-internal IPv4 address */
+function getLanIp(): string | null {
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return null;
+}
 
 const PAIRING_CODE_PREFIX = 'device:pair:';
 const PAIRING_CODE_TTL = 300; // 5 minutes
@@ -34,7 +46,11 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
 
       apiLogger.info({ userId: user.id }, 'Device pairing code generated');
 
-      return { code, expiresIn: PAIRING_CODE_TTL };
+      const lanIp = getLanIp();
+      const port = process.env.PORT || 3005;
+      const serverUrl = lanIp ? `http://${lanIp}:${port}` : null;
+
+      return { code, expiresIn: PAIRING_CODE_TTL, serverUrl };
     },
     { detail: { tags: ['devices'] } }
   )
