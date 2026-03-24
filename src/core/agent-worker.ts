@@ -229,8 +229,9 @@ export class AgentWorker extends BaseAgentWorker {
         throw new Error(`Token budget exceeded (${this.totalTokensUsed}/${this.config.maxTokenBudget})`);
       }
 
-      // Check timeout
-      if (this.config.timeout > 0 && this.elapsed() > this.config.timeout) {
+      // Check timeout — skip if a final/delegation tool already completed
+      // (tools are disabled after delegation; we just need one more LLM call for the summary)
+      if (this.config.timeout > 0 && this.elapsed() > this.config.timeout && !this.toolExecutor.toolsDisabled) {
         throw new Error(`Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`);
       }
 
@@ -356,10 +357,16 @@ export class AgentWorker extends BaseAgentWorker {
         }, 'Tool execution starting');
 
         const toolStart = Date.now();
-        const toolMessages = await this.raceTimeout(
-          this.toolExecutor.handleToolCalls(completion.toolCalls),
-          'handleToolCalls',
-        );
+        // Final/delegation tools (spawn_worker, create_pipeline) manage their own timeouts.
+        // Don't race the orchestrator timeout against them — a pipeline can legitimately
+        // run for much longer than the orchestrator's own timeout.
+        const isFinalTool = this.toolExecutor.hasFinalToolCall(completion.toolCalls);
+        const toolMessages = isFinalTool
+          ? await this.toolExecutor.handleToolCalls(completion.toolCalls)
+          : await this.raceTimeout(
+              this.toolExecutor.handleToolCalls(completion.toolCalls),
+              'handleToolCalls',
+            );
         this.messages.push(...toolMessages);
 
         agentLogger.info({

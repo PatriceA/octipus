@@ -37,6 +37,11 @@ export class ToolExecutor {
     return this.tools;
   }
 
+  /** Check if any of the given tool calls target a final (delegation) tool */
+  hasFinalToolCall(toolCalls: ToolCall[]): boolean {
+    return toolCalls.some(tc => this.tools.get(tc.name)?.final === true);
+  }
+
   /**
    * Handle tool calls from the LLM with permission gating.
    * Returns tool result messages to append to the conversation.
