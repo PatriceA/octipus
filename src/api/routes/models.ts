@@ -182,13 +182,38 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           return { success: true, message: `${tool.name} binary detected and available` };
 
         } else {
-          // For LiteLLM-proxied models (openai, anthropic, deepseek, etc.)
-          // Test via LiteLLM proxy
+          // Direct providers (openai, anthropic, gemini, deepseek, voyage)
+          // Try the direct provider first; fall back to LiteLLM proxy
+          const router = getProviderRouter();
+          const directProvider = router.getAllProviders().find(p => p.name === provider);
+
+          if (directProvider) {
+            // Check if the provider has an API key configured
+            const health = await directProvider.checkHealth();
+            if (!health.healthy && health.error?.toLowerCase().includes('not configured')) {
+              return { success: false, error: `${provider} API key is not configured. Add it on the Secrets page.` };
+            }
+
+            try {
+              const result = await directProvider.complete({
+                model: modelId,
+                messages: [{ role: 'user', content: 'Say ok', timestamp: new Date() }],
+                maxTokens: 5,
+                temperature: 0,
+              });
+              const reply = result.content || '';
+              return { success: true, message: `Model responded: "${reply.slice(0, 100)}"` };
+            } catch (directErr) {
+              return { success: false, error: `Direct ${provider} test failed: ${(directErr as Error).message}` };
+            }
+          }
+
+          // Fallback: LiteLLM proxy
           const config = getConfig();
           const litellmBase = config.litellm.proxyUrl || 'http://localhost:4000';
           const litellmKey = config.litellm.apiKey || process.env.LITELLM_MASTER_KEY;
           if (!litellmKey) {
-            return { success: false, error: 'LITELLM_API_KEY is not configured' };
+            return { success: false, error: `No direct provider or LiteLLM proxy configured for "${provider}"` };
           }
           try {
             const testRes = await fetch(`${litellmBase}/v1/chat/completions`, {
@@ -212,7 +237,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
 
             const testData = await testRes.json();
             const reply = testData.choices?.[0]?.message?.content || '';
-            return { success: true, message: `Model responded: "${reply.slice(0, 100)}"` };
+            return { success: true, message: `Model responded via LiteLLM: "${reply.slice(0, 100)}"` };
           } catch (fetchErr) {
             return { success: false, error: `Cannot reach LiteLLM proxy at ${litellmBase}` };
           }
