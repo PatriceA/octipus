@@ -123,7 +123,7 @@ export class HealthChecker {
    * Providers that cannot be health-checked via a LiteLLM completion call.
    * CLI tools are local subprocess wrappers; direct providers have their own health endpoints.
    */
-  private static SKIP_LITELLM_PROVIDERS = new Set(['cli', 'openai', 'anthropic', 'gemini']);
+  private static SKIP_LITELLM_PROVIDERS = new Set(['cli', 'ollama', 'openai', 'anthropic', 'gemini']);
 
   /**
    * Check health of a specific model
@@ -244,29 +244,25 @@ export class HealthChecker {
    */
   async checkOllama(): Promise<HealthStatus> {
     const config = getConfig();
+    const url = config.ollama?.url;
+
+    if (!url) {
+      return { service: 'ollama', status: 'not_configured', message: 'Not configured', lastChecked: new Date() };
+    }
+
     const startTime = Date.now();
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const response = await fetch(`${config.ollama.url}/api/tags`, { signal: controller.signal });
+      const response = await fetch(`${url}/api/tags`, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        return {
-          service: 'ollama',
-          status: 'unhealthy',
-          message: `HTTP ${response.status}`,
-          lastChecked: new Date(),
-        };
+        return { service: 'ollama', status: 'unhealthy', message: `HTTP ${response.status}`, lastChecked: new Date() };
       }
 
-      return {
-        service: 'ollama',
-        status: 'healthy',
-        latency: Date.now() - startTime,
-        lastChecked: new Date(),
-      };
+      return { service: 'ollama', status: 'healthy', latency: Date.now() - startTime, lastChecked: new Date() };
     } catch (error) {
       const msg = (error as Error).message;
       const isNetworkError = msg.includes('Unable to connect') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed');
@@ -274,7 +270,49 @@ export class HealthChecker {
       return {
         service: 'ollama',
         status: isNetworkError ? 'not_configured' : 'unhealthy',
-        message: isNetworkError ? 'Not running' : msg,
+        message: isNetworkError ? 'Not configured' : msg,
+        lastChecked: new Date(),
+      };
+    }
+  }
+
+  /**
+   * Check a direct provider's health via its checkHealth() method.
+   * Returns 'not_configured' when the provider reports a missing API key or connection error.
+   */
+  async checkDirectProvider(
+    name: string,
+    provider: { checkHealth(): Promise<{ healthy: boolean; latencyMs?: number; error?: string }> },
+  ): Promise<HealthStatus> {
+    try {
+      const result = await provider.checkHealth();
+
+      if (!result.healthy && result.error) {
+        const lower = result.error.toLowerCase();
+        const isNotConfigured = lower.includes('not configured') || lower.includes('api key');
+        return {
+          service: name,
+          status: isNotConfigured ? 'not_configured' : 'unhealthy',
+          message: isNotConfigured ? 'Not configured' : result.error,
+          lastChecked: new Date(),
+        };
+      }
+
+      return {
+        service: name,
+        status: result.healthy ? 'healthy' : 'unhealthy',
+        latency: result.latencyMs,
+        message: result.error,
+        lastChecked: new Date(),
+      };
+    } catch (error) {
+      const msg = (error as Error).message;
+      const isNetworkError = msg.includes('Unable to connect') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed');
+
+      return {
+        service: name,
+        status: isNetworkError ? 'not_configured' : 'unhealthy',
+        message: isNetworkError ? 'Not configured' : msg,
         lastChecked: new Date(),
       };
     }
@@ -314,11 +352,11 @@ export class HealthChecker {
     const rateLimits = this.getRateLimitStats();
     const circuitBreakers = this.getCircuitBreakerStatuses();
 
-    // Determine overall status
+    // Determine overall status — ignore 'not_configured' services
     const allStatuses = [
       ...services.map((s) => s.status),
       ...providers.map((p) => p.status),
-    ];
+    ].filter((s) => s !== 'not_configured');
 
     // Factor in circuit breakers — open circuits degrade health
     const openCircuits = circuitBreakers.filter(cb => cb.state === 'open');
@@ -327,7 +365,7 @@ export class HealthChecker {
     }
 
     let overall: 'healthy' | 'degraded' | 'unhealthy';
-    if (allStatuses.every((s) => s === 'healthy')) {
+    if (allStatuses.length === 0 || allStatuses.every((s) => s === 'healthy')) {
       overall = 'healthy';
     } else if (allStatuses.some((s) => s === 'healthy')) {
       overall = 'degraded';

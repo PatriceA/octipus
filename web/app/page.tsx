@@ -20,6 +20,11 @@ interface HealthData {
     database: ServiceHealth;
     redis: ServiceHealth;
     litellm: ServiceHealth;
+    ollama: ServiceHealth;
+    openai: ServiceHealth;
+    anthropic: ServiceHealth;
+    gemini: ServiceHealth;
+    deepseek: ServiceHealth;
   };
   agents?: { running: number; total: number };
 }
@@ -41,8 +46,9 @@ export default function DashboardPage() {
     refetchInterval: (query) => {
       const h = query.state.data?.health;
       if (!h) return 3000; // No data yet — poll fast
-      const statuses = [h.database, h.redis, h.litellm]
-        .map(s => s?.status);
+      const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek]
+        .map(s => s?.status)
+        .filter(s => s && s !== 'not_configured');
       const allHealthy = statuses.every(s => s === 'healthy');
       return allHealthy ? 30000 : 5000; // Slow down once all green
     },
@@ -123,11 +129,11 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Health & Feature Status */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <HealthStatus health={health?.health} isFetching={healthFetching} />
-        <FeatureStatus />
-      </div>
+      {/* System Health */}
+      <HealthStatus health={health?.health} isFetching={healthFetching} />
+
+      {/* Feature Status */}
+      <FeatureStatus />
 
       {/* Charts and Lists */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

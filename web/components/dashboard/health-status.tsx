@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, XCircle, AlertCircle, RefreshCw, Database, Server, Layers } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, RefreshCw, Database, Server, Layers, Cpu, Brain, Sparkles, Zap } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 
 interface ServiceHealth {
@@ -14,6 +14,11 @@ interface HealthStatusProps {
     database: ServiceHealth;
     redis: ServiceHealth;
     litellm: ServiceHealth;
+    ollama: ServiceHealth;
+    openai: ServiceHealth;
+    anthropic: ServiceHealth;
+    gemini: ServiceHealth;
+    deepseek: ServiceHealth;
   };
   isFetching?: boolean;
 }
@@ -21,7 +26,12 @@ interface HealthStatusProps {
 const SERVICE_CONFIG = [
   { key: 'database', label: 'PostgreSQL', icon: Database, description: 'Primary database' },
   { key: 'redis', label: 'Redis', icon: Server, description: 'Cache & sessions' },
-  { key: 'litellm', label: 'LiteLLM', icon: Layers, description: 'Model proxy (Ollama, OpenAI, etc.)' },
+  { key: 'litellm', label: 'LiteLLM', icon: Layers, description: 'Model proxy' },
+  { key: 'ollama', label: 'Ollama', icon: Cpu, description: 'Local models' },
+  { key: 'openai', label: 'OpenAI', icon: Zap, description: 'GPT models' },
+  { key: 'anthropic', label: 'Anthropic', icon: Brain, description: 'Claude models' },
+  { key: 'gemini', label: 'Gemini', icon: Sparkles, description: 'Google AI' },
+  { key: 'deepseek', label: 'DeepSeek', icon: Layers, description: 'DeepSeek models' },
 ] as const;
 
 export function HealthStatus({ health, isFetching }: HealthStatusProps) {
@@ -80,7 +90,7 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
         </div>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {SERVICE_CONFIG.map(({ key, label, icon: Icon, description }) => {
             const service = health?.[key];
             return (

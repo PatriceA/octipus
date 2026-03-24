@@ -6,6 +6,7 @@ import { checkStorageHealth } from '@/db/storage';
 import { getHealthChecker } from '@/models/health-checker';
 import { getUMI } from '@/channels/interface';
 import { getModelRegistry } from '@/models/model-registry';
+import { getProviderRouter } from '@/models/providers';
 
 export const healthRoutes = new Elysia({ prefix: '/health' })
   // Basic health check
@@ -24,17 +25,39 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
       const status = await gateway.getStatus();
       const healthChecker = getHealthChecker();
 
-      // Get real service health for LiteLLM (Ollama is proxied through LiteLLM)
-      let litellm: { status: string; latency?: number; message?: string; lastChecked?: Date };
-      try {
-        litellm = await healthChecker.checkLiteLLMProxy();
-      } catch (e) {
-        litellm = {
-          status: 'unhealthy',
-          message: (e as Error).message,
-          lastChecked: new Date(),
-        };
-      }
+      // Check all service health in parallel
+      const router = getProviderRouter();
+      const allProviders = router.getAllProviders();
+      const providerByName = (name: string) => allProviders.find(p => p.name === name);
+
+      const [litellm, ollama, openai, anthropic, gemini, deepseek] = await Promise.all([
+        healthChecker.checkLiteLLMProxy().catch((e: Error) => ({
+          service: 'litellm', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
+        })),
+        healthChecker.checkOllama().catch((e: Error) => ({
+          service: 'ollama', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
+        })),
+        healthChecker.checkDirectProvider('openai', providerByName('openai')!).catch((e: Error) => ({
+          service: 'openai', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
+        })),
+        healthChecker.checkDirectProvider('anthropic', providerByName('anthropic')!).catch((e: Error) => ({
+          service: 'anthropic', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
+        })),
+        healthChecker.checkDirectProvider('gemini', providerByName('gemini')!).catch((e: Error) => ({
+          service: 'gemini', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
+        })),
+        healthChecker.checkDirectProvider('deepseek', providerByName('deepseek')!).catch((e: Error) => ({
+          service: 'deepseek', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
+        })),
+      ]);
+
+      const toHealthEntry = (h: { service?: string; status: string; latency?: number; message?: string; lastChecked?: Date }) => ({
+        service: h.service,
+        status: h.status,
+        latency: h.latency,
+        message: h.message,
+        lastChecked: h.lastChecked,
+      });
 
       return {
         status: status.state === 'running' ? 'ok' : 'degraded',
@@ -48,26 +71,31 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         health: {
           database: status.health.database,
           redis: status.health.redis,
-          litellm: {
-            service: 'litellm',
-            status: litellm.status,
-            latency: litellm.latency,
-            message: litellm.message,
-            lastChecked: litellm.lastChecked,
-          },
+          litellm: toHealthEntry(litellm),
+          ollama: toHealthEntry(ollama),
+          openai: toHealthEntry(openai),
+          anthropic: toHealthEntry(anthropic),
+          gemini: toHealthEntry(gemini),
+          deepseek: toHealthEntry(deepseek),
         },
       };
     } catch (error) {
       // Fallback — never return empty response
+      const fallback = (svc: string) => ({ service: svc, status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() });
       return {
         status: 'error',
         state: 'unknown',
         uptime: 0,
         agents: { total: 0, running: 0 },
         health: {
-          database: { service: 'database', status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() },
-          redis: { service: 'redis', status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() },
-          litellm: { service: 'litellm', status: 'unhealthy', message: 'Health check failed', lastChecked: new Date() },
+          database: fallback('database'),
+          redis: fallback('redis'),
+          litellm: fallback('litellm'),
+          ollama: fallback('ollama'),
+          openai: fallback('openai'),
+          anthropic: fallback('anthropic'),
+          gemini: fallback('gemini'),
+          deepseek: fallback('deepseek'),
         },
       };
     }
