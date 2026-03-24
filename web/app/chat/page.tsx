@@ -164,15 +164,28 @@ export default function ChatPage() {
         const sessionAgents = (agentData?.agents || []).filter(a => a.sessionId === sessionId);
         for (const a of sessionAgents) {
           let toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
+          let cliIterations = 0;
           try {
             const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
             for (const ev of evData?.events || []) {
-              if (ev.type === 'action' && ev.data?.toolCalls) {
-                toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
-                  id: tc.id || Date.now().toString(),
-                  name: tc.name,
-                  argsSummary: tc.argsSummary,
-                })));
+              if (ev.type === 'action') {
+                // Standard agent tool calls (array format)
+                if (ev.data?.toolCalls) {
+                  toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
+                    id: tc.id || Date.now().toString(),
+                    name: tc.name,
+                    argsSummary: tc.argsSummary,
+                  })));
+                }
+                // CLI agent tool use (single tool format from cli_tool_use events)
+                else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
+                  cliIterations++;
+                  toolCalls.push({
+                    id: Date.now().toString() + cliIterations,
+                    name: String(ev.data.toolName),
+                    argsSummary: ev.data.args ? JSON.stringify(ev.data.args).slice(0, 80) : undefined,
+                  });
+                }
               }
             }
           } catch {}
@@ -190,7 +203,7 @@ export default function ChatPage() {
             startTime,
             endTime,
             durationMs: a.durationMs ?? (endTime != null ? endTime - startTime : undefined),
-            iterations: a.iteration,
+            iterations: a.iteration || cliIterations || undefined,
           });
         }
       } catch {}

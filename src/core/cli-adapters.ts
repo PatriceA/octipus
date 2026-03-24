@@ -269,6 +269,12 @@ export class CLIOutputParser {
       return { text: event.content as string };
     }
     if (type === 'result' && event.text) {
+      this.emitFn('thought', {
+        status: 'completed',
+        stats: {
+          durationMs: event.duration_ms,
+        },
+      });
       return { text: event.text as string, replace: true };
     }
     if (type === 'tool_call') {
@@ -277,7 +283,18 @@ export class CLIOutputParser {
         tool: event.name || 'unknown',
         type: 'cli_tool_use',
         toolName: event.name,
+        args: event.args || event.parameters,
       });
+      return null;
+    }
+    if (type === 'tool_result') {
+      this.emitFn('observation', {
+        tool: event.name || event.tool_name,
+        type: 'cli_tool_result',
+        status: event.status || 'completed',
+        result: typeof event.output === 'string' ? (event.output as string).slice(0, 500) : event.output,
+      });
+      return null;
     }
     return null;
   }

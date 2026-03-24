@@ -71,6 +71,7 @@ export function setupWebSocket(app: Elysia): void {
             type: 'agent_event',
             event: event.type,
             agentId: event.agentId,
+            sessionId: agent.getContext().sessionId,
             data: event.data,
             timestamp: event.timestamp,
           });
