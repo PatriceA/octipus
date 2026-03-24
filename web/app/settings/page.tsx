@@ -8,6 +8,7 @@ import {
   Plug,
   Shield,
   Sliders,
+  Smartphone,
 } from 'lucide-react';
 import { GeneralTab } from '@/components/settings/general-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
@@ -15,6 +16,7 @@ import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { SecurityTab } from '@/components/settings/security-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
+import { MobileTab } from '@/components/settings/mobile-tab';
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('general');
@@ -26,6 +28,7 @@ export default function SettingsPage() {
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'notifications', label: 'Notifications', icon: Bell },
+    { id: 'mobile', label: 'Mobile App', icon: Smartphone },
   ];
 
   return (
@@ -65,6 +68,7 @@ export default function SettingsPage() {
           {activeTab === 'channels' && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
+          {activeTab === 'mobile' && <MobileTab />}
         </div>
       </div>
     </div>
