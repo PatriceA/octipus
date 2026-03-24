@@ -112,12 +112,63 @@ export class CLIOutputParser {
   }
 
   private parseClaudeEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
+    // Claude Code stream-json format:
+    // { type: "system", subtype: "init" }
+    // { type: "assistant", message: { content: [{ type: "tool_use", name, input }, { type: "text", text }] } }
+    // { type: "user" } — tool results (no details exposed)
+    // { type: "result", subtype: "success", result, num_turns, duration_ms }
+
+    if (type === 'system') {
+      const subtype = event.subtype as string | undefined;
+      if (subtype === 'init') {
+        this.emitFn('thought', { model: this.model, status: 'initialized' });
+      }
+      return null;
+    }
+
+    if (type === 'assistant') {
+      const message = event.message as Record<string, unknown> | undefined;
+      const contentBlocks = message?.content as Array<Record<string, unknown>> | undefined;
+      if (!contentBlocks) return null;
+
+      let resultText = '';
+
+      for (const block of contentBlocks) {
+        if (block.type === 'tool_use') {
+          this.onIteration();
+          this.emitFn('action', {
+            tool: block.name,
+            type: 'cli_tool_use',
+            toolName: block.name,
+            args: block.input,
+          });
+        } else if (block.type === 'text') {
+          const text = block.text as string;
+          if (text) {
+            this.emitFn('thought', { text: text.slice(0, 200), model: this.model });
+            resultText += text;
+          }
+        }
+      }
+
+      return resultText ? { text: resultText, replace: true } : null;
+    }
+
+    if (type === 'user') {
+      // Tool results come back as user messages — emit as observation
+      // Claude doesn't expose tool name/output in this event, but we note it happened
+      this.emitFn('observation', {
+        type: 'cli_tool_result',
+        status: 'completed',
+      });
+      return null;
+    }
+
+    // Legacy: handle stream_event wrapper format (older Claude Code versions)
     if (type === 'stream_event') {
       const inner = event.event as Record<string, unknown> | undefined;
       if (!inner) return null;
-
       const innerType = inner.type as string;
-
       if (innerType === 'content_block_start') {
         const block = inner.content_block as Record<string, unknown> | undefined;
         if (block?.type === 'tool_use') {
@@ -129,25 +180,21 @@ export class CLIOutputParser {
           });
         }
       }
-
-      return null;
-    }
-
-    if (type === 'assistant') {
-      const content = event.message as Record<string, unknown> | undefined;
-      if (content?.content) {
-        const blocks = content.content as Array<Record<string, unknown>>;
-        const textBlocks = blocks.filter((b) => b.type === 'text');
-        if (textBlocks.length > 0) {
-          const text = textBlocks.map((b) => b.text as string).join('');
-          this.emitFn('thought', { text: text.slice(0, 200), model: this.model });
-          return { text, replace: true };
-        }
-      }
       return null;
     }
 
     if (type === 'result') {
+      const numTurns = event.num_turns as number | undefined;
+      const durationMs = event.duration_ms as number | undefined;
+      this.emitFn('thought', {
+        status: 'completed',
+        stats: {
+          numTurns,
+          durationMs,
+          totalCostUsd: event.total_cost_usd,
+        },
+      });
+
       const result = (event.result as string) || '';
       if (result) {
         return { text: result, replace: true };
