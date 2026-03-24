@@ -124,6 +124,50 @@ export class SessionManager {
   }
 
   /**
+   * List active sessions for a user with their hashes (IDs)
+   */
+  async listForUserWithHashes(userId: string): Promise<(SessionData & { id: string })[]> {
+    const userSessionsKey = `${USER_SESSIONS_PREFIX}${userId}`;
+    const userSessions = (await this.cache.get<string[]>(userSessionsKey)) || [];
+
+    const sessions: (SessionData & { id: string })[] = [];
+
+    for (const tokenHash of userSessions) {
+      const session = await this.cache.get<SessionData>(`${SESSION_PREFIX}${tokenHash}`);
+      if (session && new Date(session.expiresAt) > new Date()) {
+        sessions.push({ ...session, id: tokenHash });
+      }
+    }
+
+    return sessions;
+  }
+
+  /**
+   * Revoke a session by its token hash
+   */
+  async revokeByHash(userId: string, tokenHash: string): Promise<boolean> {
+    const session = await this.cache.get<SessionData>(`${SESSION_PREFIX}${tokenHash}`);
+
+    if (!session || session.userId !== userId) {
+      return false;
+    }
+
+    // Remove session
+    await this.cache.delete(`${SESSION_PREFIX}${tokenHash}`);
+
+    // Remove from user's sessions
+    const userSessionsKey = `${USER_SESSIONS_PREFIX}${userId}`;
+    const userSessions = (await this.cache.get<string[]>(userSessionsKey)) || [];
+    const filteredSessions = userSessions.filter((h) => h !== tokenHash);
+    await this.cache.set(userSessionsKey, filteredSessions, this.maxAge / 1000);
+
+    await auditRepository.logLogout(userId);
+    securityLogger.info({ userId }, 'Session revoked by hash');
+
+    return true;
+  }
+
+  /**
    * Revoke a session
    */
   async revoke(token: string): Promise<boolean> {

@@ -19,6 +19,8 @@ function isPublicPath(path: string): boolean {
   if (path.startsWith('/api/hooks/incoming/')) return true;
   // WhatsApp webhook — Meta calls directly with signature verification
   if (path.startsWith('/api/channels/whatsapp/webhook')) return true;
+  // Mobile device pairing — code-based auth
+  if (path === '/api/devices/pair/redeem') return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 

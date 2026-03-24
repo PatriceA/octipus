@@ -443,7 +443,7 @@ export class EmbeddingService {
     const staleRes = await db.execute(sql`
       SELECT id FROM embeddings
       WHERE source_type = 'agent_output'
-        AND created_at < ${cutoffDate}
+        AND created_at < ${cutoffDate.toISOString()}
     `);
     const stale = Array.isArray(staleRes) ? staleRes : (staleRes as any).rows || [];
 
