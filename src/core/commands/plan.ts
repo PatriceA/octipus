@@ -217,6 +217,11 @@ registerCommand({
       };
     }
 
+    // Notify user before the potentially slow LLM compilation
+    if (ctx.notify) {
+      await ctx.notify('Working on the project brief, this can take a moment...');
+    }
+
     // Compile the brief
     const brief = await compileBrief(state);
     state.brief = brief;

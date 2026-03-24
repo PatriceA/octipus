@@ -44,10 +44,8 @@ function summarizeForChannel(response: string): string {
       : `_(Response contained ${plural} — view full output in the web UI.)_`;
   }
 
-  // Truncate if still too long (keep under 3000 chars for readability)
-  if (text.length > 3000) {
-    text = text.slice(0, 2900) + '\n\n_(Truncated — view full response in the web UI.)_';
-  }
+  // No hard truncation — let each channel's own message splitting handle long content
+  // (e.g., Telegram splits at 4096, Slack at 3000, etc.)
 
   return text || '_(Response contained only code — view in the web UI.)_';
 }
@@ -456,7 +454,7 @@ export async function initializeChannels(): Promise<void> {
             }
             case 'status_update': {
               const d = event.data as { message?: string; stage?: string };
-              if (d.message && d.stage === 'budget_warning') {
+              if (d.message && (d.stage === 'budget_warning' || d.stage === 'command' || d.stage === 'Starting')) {
                 statusMsg = d.message;
               }
               break;

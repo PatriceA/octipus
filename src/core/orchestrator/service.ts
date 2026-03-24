@@ -144,7 +144,18 @@ export class OrchestratorService {
 
       // Command interception (works across all channels)
       try {
-        const commandResponse = await handleCommand(message, resolvedSessionId, userId);
+        // Provide a notify callback so commands can send intermediate messages
+        const commandNotify = async (msg: string) => {
+          this.emit({
+            type: 'status_update',
+            sessionId: resolvedSessionId,
+            userId,
+            data: { message: msg, stage: 'command' },
+            timestamp: new Date(),
+          });
+          await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: msg });
+        };
+        const commandResponse = await handleCommand(message, resolvedSessionId, userId, commandNotify);
         if (commandResponse) {
           return {
             response: commandResponse,

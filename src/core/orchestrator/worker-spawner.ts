@@ -254,6 +254,14 @@ export async function spawnWorker(
     const result = await worker.run(workerMessage);
     const durationMs = Date.now() - startTime;
 
+    coreLogger.info({
+      workerId, role: agentRole, model: finalModel,
+      durationMs, iterations: worker.getIteration(),
+      totalTokens: worker.getTotalTokens(),
+      resultLength: result?.length || 0,
+      parentAgentId: context.id,
+    }, 'Worker completed');
+
     const workerResult: WorkerResult = {
       workerId,
       role: agentRole,

@@ -1,6 +1,7 @@
 import type { ToolHandler } from '@/core/agent-worker';
 import type { OrchestratorService } from './service';
 import { createHandoffContext, formatHandoff } from './handoff';
+import { coreLogger } from '@/utils/logger';
 
 /**
  * Create meta-tools for the orchestrator agent.
@@ -54,24 +55,48 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
       execute: async (args, context) => {
         if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
         delegationDone = true;
+        const role = args.role as string;
+        const task = args.task as string;
         const result = await orchestrator.spawnWorker(
-          args.role as string,
-          args.task as string,
-          (args.input as string) || '',
-          context,
+          role, task, (args.input as string) || '', context,
         );
 
         // Generate a brief structured handoff summary for the orchestrator
         const resultStr = String(result || '');
+        coreLogger.info({
+          role, task: task.slice(0, 100),
+          resultLength: resultStr.length,
+          agentId: context.id,
+        }, 'Worker result received by orchestrator');
+
         try {
           const handoff = await createHandoffContext({
-            from: { role: args.role as string },
+            from: { role },
             to: { role: 'orchestrator' },
-            originalRequest: args.task as string,
+            originalRequest: task,
             stageOutput: resultStr,
           });
-          return `${resultStr}\n\n---\n${formatHandoff(handoff)}`;
+
+          // Cap result size to prevent context overflow in orchestrator's next LLM call.
+          // The handoff summary contains the essential structured info.
+          const MAX_RESULT_FOR_ORCHESTRATOR = 6000;
+          let cappedResult = resultStr;
+          if (resultStr.length > MAX_RESULT_FOR_ORCHESTRATOR) {
+            coreLogger.info({
+              role, originalLength: resultStr.length,
+              cappedLength: MAX_RESULT_FOR_ORCHESTRATOR,
+              agentId: context.id,
+            }, 'Capping worker result for orchestrator context');
+            cappedResult = resultStr.slice(0, MAX_RESULT_FOR_ORCHESTRATOR)
+              + `\n\n[... result truncated from ${resultStr.length} chars — see handoff summary below for key details ...]`;
+          }
+
+          return `${cappedResult}\n\n---\n${formatHandoff(handoff)}`;
         } catch {
+          // Still cap even without handoff
+          if (resultStr.length > 8000) {
+            return resultStr.slice(0, 8000) + `\n\n[... truncated from ${resultStr.length} chars]`;
+          }
           return result;
         }
       },
@@ -119,23 +144,40 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
       execute: async (args, context) => {
         if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
         delegationDone = true;
-        const result = await orchestrator.spawnTeam(
-          args.members as Array<{ role: string; task: string; input?: string }>,
-          context,
-        );
+        const members = args.members as Array<{ role: string; task: string; input?: string }>;
+        const result = await orchestrator.spawnTeam(members, context);
 
-        // Generate a brief structured handoff summary for the orchestrator
         const resultStr = String(result || '');
+        coreLogger.info({
+          members: members.map(m => m.role),
+          resultLength: resultStr.length,
+          agentId: context.id,
+        }, 'Team result received by orchestrator');
+
         try {
-          const members = args.members as Array<{ role: string; task: string }>;
           const handoff = await createHandoffContext({
             from: { role: members.map(m => m.role).join('+') },
             to: { role: 'orchestrator' },
             originalRequest: members.map(m => m.task).join('; '),
             stageOutput: resultStr,
           });
-          return `${resultStr}\n\n---\n${formatHandoff(handoff)}`;
+
+          const MAX_RESULT_FOR_ORCHESTRATOR = 8000;
+          let cappedResult = resultStr;
+          if (resultStr.length > MAX_RESULT_FOR_ORCHESTRATOR) {
+            coreLogger.info({
+              originalLength: resultStr.length,
+              cappedLength: MAX_RESULT_FOR_ORCHESTRATOR,
+              agentId: context.id,
+            }, 'Capping team result for orchestrator context');
+            cappedResult = resultStr.slice(0, MAX_RESULT_FOR_ORCHESTRATOR)
+              + `\n\n[... result truncated from ${resultStr.length} chars — see handoff summary below ...]`;
+          }
+          return `${cappedResult}\n\n---\n${formatHandoff(handoff)}`;
         } catch {
+          if (resultStr.length > 10000) {
+            return resultStr.slice(0, 10000) + `\n\n[... truncated from ${resultStr.length} chars]`;
+          }
           return result;
         }
       },

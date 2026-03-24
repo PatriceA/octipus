@@ -7,6 +7,8 @@ export interface CommandContext {
   sessionId: string;
   userId: string;
   args: string;
+  /** Send an intermediate message to the user before the final response */
+  notify?: (message: string) => Promise<void>;
 }
 
 export interface CommandResult {
@@ -43,6 +45,7 @@ export async function handleCommand(
   content: string,
   sessionId: string,
   userId: string,
+  notify?: (message: string) => Promise<void>,
 ): Promise<string | null> {
   // Check if there's an active multi-step command
   const session = await sessionRepository.findById(sessionId);
@@ -76,7 +79,7 @@ export async function handleCommand(
         const handler = getCommand(ctx.activeCommand);
         if (handler) {
           await messageRepository.create({ sessionId, role: 'user', content });
-          const result = await handler.execute({ sessionId, userId, args: content });
+          const result = await handler.execute({ sessionId, userId, args: content, notify });
           if (!result.continueCommand) {
             const freshSession = await sessionRepository.findById(sessionId);
             const freshCtx = (freshSession?.context as SessionContext) || {};
@@ -93,7 +96,7 @@ export async function handleCommand(
       const handler = getCommand(ctx.activeCommand);
       if (handler) {
         await messageRepository.create({ sessionId, role: 'user', content });
-        const result = await handler.execute({ sessionId, userId, args: content });
+        const result = await handler.execute({ sessionId, userId, args: content, notify });
         if (!result.continueCommand) {
           // Re-read session to avoid overwriting state saved by the command handler
           const freshSession = await sessionRepository.findById(sessionId);
@@ -134,6 +137,7 @@ export async function handleCommand(
     sessionId,
     userId,
     args: rest.join(' '),
+    notify,
   });
 
   if (result.continueCommand) {
