@@ -208,27 +208,52 @@ export class CLIAgentWorker extends BaseAgentWorker {
       workspaceCwd = process.cwd();
     }
 
-    // On Windows, resolve .cmd wrapper path explicitly to avoid shell: true
-    // (shell: true causes argument splitting issues with long prompts)
-    let resolvedBinary = binary;
-    if (process.platform === 'win32' && !binary.includes('/') && !binary.includes('\\')) {
-      try {
-        const { execSync } = await import('child_process');
-        const wherePath = execSync(`where ${binary}`, { encoding: 'utf-8', timeout: 3000 }).trim().split('\n')[0].trim();
-        if (wherePath) resolvedBinary = wherePath;
-      } catch {}
+    // On Windows, CLI tools are installed as .cmd wrappers that require shell: true.
+    // But shell: true can mangle long prompts with special characters.
+    // For Gemini: pipe the prompt via stdin (supported: "Appended to input on stdin")
+    // For Claude: write prompt to temp file and use shell redirection
+    let stdinPrompt: string | undefined;
+    let tempPromptFile: string | undefined;
+    if (process.platform === 'win32') {
+      const promptIdx = args.findIndex(a => a === '-p' || a === '--prompt');
+      if (promptIdx !== -1 && promptIdx + 1 < args.length) {
+        const prompt = args[promptIdx + 1];
+        const isGemini = binary === 'gemini';
+
+        if (isGemini) {
+          // Gemini: remove -p and value, pipe prompt via stdin with bare -p flag
+          stdinPrompt = prompt;
+          args.splice(promptIdx, 2);
+          args.push('-p'); // Bare -p reads from stdin
+        } else {
+          // Claude/others: write to temp file, pass file contents via shell redirection
+          const { writeFileSync } = await import('fs');
+          const { tmpdir } = await import('os');
+          tempPromptFile = `${tmpdir()}/assistant-prompt-${Date.now()}.txt`;
+          writeFileSync(tempPromptFile, prompt, 'utf-8');
+          // Replace the prompt arg with a quoted file read
+          args[promptIdx + 1] = `$(cat "${tempPromptFile}")`;
+        }
+      }
     }
 
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
 
-      const proc = spawn(resolvedBinary, args, {
+      const proc = spawn(binary, args, {
         env,
         cwd: workspaceCwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         timeout: this.config.timeout,
+        shell: process.platform === 'win32',
       });
+
+      // Pipe the prompt via stdin for Gemini
+      if (stdinPrompt && proc.stdin) {
+        proc.stdin.write(stdinPrompt);
+        proc.stdin.end();
+      }
 
       this.process = proc;
 
@@ -266,6 +291,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
       proc.on('close', async (code) => {
         this.process = null;
 
+        // Clean up temp prompt file if used
+        if (tempPromptFile) {
+          try { const { unlinkSync } = await import('fs'); unlinkSync(tempPromptFile); } catch {}
+        }
+
         // Process remaining buffer
         if (lineBuffer.trim()) {
           try {
@@ -283,7 +313,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         }
 
         if (this.aborted) {
-          reject(new Error('CLI agent execution aborted'));
+          resolve(accumulatedText || 'Task was stopped. Would you like to adjust the request or start something new?');
           return;
         }
 
