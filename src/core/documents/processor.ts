@@ -282,7 +282,7 @@ export class DocumentProcessor {
 
     // 1. Try pdftotext for text-based PDFs
     try {
-      const result = spawnSync('pdftotext', ['-layout', filePath, '-'], {
+      const result = spawnSync('pdftotext', ['-layout', '-enc', 'UTF-8', filePath, '-'], {
         timeout: 30000,
         maxBuffer: 10 * 1024 * 1024,
       });
