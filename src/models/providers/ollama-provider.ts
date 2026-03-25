@@ -91,8 +91,12 @@ export class OllamaProvider implements ModelProvider {
       const latencyMs = Date.now() - startTime;
       const choice = response.choices[0];
 
+      // Qwen3/thinking models may put output in 'reasoning' instead of 'content'
+      const msg = choice.message as unknown as Record<string, unknown>;
+      const content = (choice.message.content || msg.reasoning || '') as string;
+
       const result: CompletionResult = {
-        content: choice.message.content || '',
+        content,
         finishReason: choice.finish_reason || 'stop',
         usage: {
           inputTokens: response.usage?.prompt_tokens || 0,
@@ -162,8 +166,11 @@ export class OllamaProvider implements ModelProvider {
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
-      if (delta?.content) {
-        yield { content: delta.content };
+      // Qwen3/thinking models may stream output in 'reasoning' instead of 'content'
+      const deltaAny = delta as Record<string, unknown> | undefined;
+      const text = delta?.content || (deltaAny?.reasoning as string | undefined);
+      if (text) {
+        yield { content: text };
       }
 
       if (delta?.tool_calls) {
