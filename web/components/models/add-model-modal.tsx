@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil, ChevronDown, AlertCircle, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   type LiteLLMModel,
@@ -10,6 +10,12 @@ import {
   PROVIDER_LABELS,
   PROVIDER_DEFAULTS,
 } from '@/lib/types/models';
+
+interface AvailableModel {
+  id: string;
+  label: string;
+  parameterSize?: string;
+}
 
 export interface AddModelModalProps {
   isOpen: boolean;
@@ -48,6 +54,12 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
 
+  // Available models for the selected provider
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
+  const [providerConfigured, setProviderConfigured] = useState<boolean | null>(null);
+  const [providerError, setProviderError] = useState('');
+  const [loadingAvailable, setLoadingAvailable] = useState(false);
+
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -55,8 +67,40 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       setConnectionType('litellm');
       setError('');
       setTestResult(null);
+      setAvailableModels([]);
+      setProviderConfigured(null);
+      setProviderError('');
     }
   }, [isOpen]);
+
+  // Fetch available models when provider changes (direct connection only)
+  const fetchAvailableModels = useCallback(async (provider: string) => {
+    if (!provider || provider === 'cli' || provider === 'litellm') {
+      setAvailableModels([]);
+      setProviderConfigured(null);
+      return;
+    }
+    setLoadingAvailable(true);
+    setProviderError('');
+    setAvailableModels([]);
+    setProviderConfigured(null);
+    try {
+      const data = await api.get<{ configured: boolean; models?: AvailableModel[]; error?: string; source?: string }>(
+        `/models/providers/${provider}/available`
+      );
+      if (data.configured === false) {
+        setProviderConfigured(false);
+        setProviderError(data.error || `${provider} is not configured`);
+      } else {
+        setProviderConfigured(true);
+        setAvailableModels(data.models || []);
+      }
+    } catch (err) {
+      setProviderConfigured(false);
+      setProviderError((err as Error).message);
+    }
+    setLoadingAvailable(false);
+  }, []);
 
   if (!isOpen) return null;
 
@@ -100,6 +144,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     setError('');
     setTestResult(null);
     setStep('configure');
+    fetchAvailableModels('ollama');
   };
 
   const handleSelectModel = (model: LiteLLMModel) => {
@@ -323,7 +368,12 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Provider</label>
                 <select
                   value={formData.provider}
-                  onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
+                  onChange={(e) => {
+                    const p = e.target.value;
+                    setFormData({ ...formData, provider: p, modelId: '' });
+                    setTestResult(null);
+                    if (connectionType === 'direct') fetchAvailableModels(p);
+                  }}
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                 >
                   {Object.entries(PROVIDER_LABELS).map(([value, label]) => (
@@ -333,15 +383,53 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               </div>
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Model ID *</label>
-                <input
-                  type="text"
-                  value={formData.modelId}
-                  onChange={(e) => setFormData({ ...formData, modelId: e.target.value })}
-                  placeholder={isCli ? 'cli/claude-code' : 'e.g., gpt-4o'}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
-                />
+                {connectionType === 'direct' && !isCli && availableModels.length > 0 ? (
+                  <select
+                    value={formData.modelId}
+                    onChange={(e) => {
+                      const modelId = e.target.value;
+                      const defaults = PROVIDER_DEFAULTS[formData.provider] || {};
+                      setFormData({
+                        ...formData,
+                        modelId,
+                        name: formData.name || modelId,
+                        contextWindow: defaults.contextWindow || formData.contextWindow,
+                        maxTokens: defaults.maxTokens || formData.maxTokens,
+                      });
+                    }}
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  >
+                    <option value="">Select a model...</option>
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}{m.parameterSize ? ` (${m.parameterSize})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={formData.modelId}
+                    onChange={(e) => setFormData({ ...formData, modelId: e.target.value })}
+                    placeholder={isCli ? 'cli/claude-code' : 'e.g., gpt-4o'}
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  />
+                )}
+                {loadingAvailable && (
+                  <p className="text-xs text-on-surface-variant mt-1 flex items-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Loading models...
+                  </p>
+                )}
               </div>
             </div>
+
+            {/* Provider not configured warning */}
+            {connectionType === 'direct' && providerConfigured === false && providerError && (
+              <div className="flex items-start gap-2 px-3 py-2 bg-error/10 text-error text-sm rounded-lg">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{providerError}</span>
+              </div>
+            )}
 
             {!isCli && (
               <div>

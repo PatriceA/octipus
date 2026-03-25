@@ -544,7 +544,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     { detail: { tags: ['models'] } }
   )
 
-  // Known models for a provider (static list)
+  // Known models for a provider (static list — kept for backwards compat)
   .get(
     '/providers/:provider/known',
     async ({ user, params }) => {
@@ -558,6 +558,138 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       };
 
       return { models: known[params.provider] || [] };
+    },
+    {
+      params: t.Object({ provider: t.String() }),
+      detail: { tags: ['models'] },
+    }
+  )
+
+  // List available models for a direct provider (checks configuration first)
+  .get(
+    '/providers/:provider/available',
+    async ({ user, params }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const provider = params.provider;
+
+      // Ollama: live model list
+      if (provider === 'ollama') {
+        const config = getConfig();
+        const url = config.ollama?.url;
+        if (!url) return { configured: false, error: 'Ollama URL not configured' };
+        try {
+          const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+          if (!res.ok) return { configured: false, error: `Ollama unreachable (${res.status})` };
+          const data = await res.json();
+          const models = (data.models || []).map((m: { name: string; details?: { parameter_size?: string } }) => ({
+            id: m.name,
+            label: m.name,
+            parameterSize: m.details?.parameter_size,
+          }));
+          return { configured: true, models };
+        } catch (err) {
+          return { configured: false, error: `Cannot reach Ollama: ${(err as Error).message}` };
+        }
+      }
+
+      // Cloud providers: check API key, return known models
+      const router = getProviderRouter();
+      const directProvider = router.getAllProviders().find(p => p.name === provider);
+      if (!directProvider) {
+        return { configured: false, error: `Unknown provider: ${provider}` };
+      }
+
+      const health = await directProvider.checkHealth();
+      if (!health.healthy && health.error?.toLowerCase().includes('not configured')) {
+        return { configured: false, error: `${provider} API key not configured. Add it on the Secrets page.` };
+      }
+
+      // Try to list live models from the provider
+      try {
+        if (provider === 'openai' || provider === 'anthropic' || provider === 'gemini' || provider === 'deepseek') {
+          // These providers use OpenAI-compatible SDK — try models.list()
+          const OpenAI = (await import('openai')).default;
+          const endpoints: Record<string, string> = {
+            openai: 'https://api.openai.com/v1',
+            anthropic: 'https://api.anthropic.com/v1/',
+            gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+            deepseek: 'https://api.deepseek.com/v1',
+          };
+          const vaultNames: Record<string, string> = {
+            openai: 'openai_api_key',
+            anthropic: 'anthropic_api_key',
+            gemini: 'gemini_api_key',
+            deepseek: 'deepseek_api_key',
+          };
+          const { getVault } = await import('@/security/vault');
+          const vault = getVault();
+          const apiKey = await vault.getByName('system', vaultNames[provider]) ||
+            process.env[`${provider.toUpperCase()}_API_KEY`] || '';
+          if (!apiKey) {
+            // Fall back to known list
+            const known: Record<string, Array<{ id: string; label: string }>> = {
+              openai: [
+                { id: 'gpt-4o', label: 'GPT-4o' }, { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+                { id: 'gpt-4.1', label: 'GPT-4.1' }, { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+                { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' }, { id: 'o3-mini', label: 'o3 Mini' },
+              ],
+              anthropic: [
+                { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+                { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+              ],
+              gemini: [
+                { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+                { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+                { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+              ],
+              deepseek: [
+                { id: 'deepseek-chat', label: 'DeepSeek Chat' },
+                { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
+              ],
+            };
+            return { configured: true, models: known[provider] || [], source: 'known' };
+          }
+
+          const client = new OpenAI({ baseURL: endpoints[provider], apiKey, timeout: 10_000 });
+          const modelsRes = await client.models.list();
+          const models = [];
+          for await (const m of modelsRes) {
+            models.push({ id: m.id, label: m.id });
+          }
+          return { configured: true, models, source: 'live' };
+        }
+      } catch {
+        // Fall through to known list on any error
+      }
+
+      // Fallback: known static list
+      const known: Record<string, Array<{ id: string; label: string }>> = {
+        openai: [
+          { id: 'gpt-4o', label: 'GPT-4o' }, { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+          { id: 'gpt-4.1', label: 'GPT-4.1' }, { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+          { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' }, { id: 'o3-mini', label: 'o3 Mini' },
+        ],
+        anthropic: [
+          { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+          { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+        ],
+        gemini: [
+          { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+          { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+          { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+        ],
+        deepseek: [
+          { id: 'deepseek-chat', label: 'DeepSeek Chat' },
+          { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
+        ],
+        voyage: [
+          { id: 'voyage-3', label: 'Voyage 3' },
+          { id: 'voyage-3-lite', label: 'Voyage 3 Lite' },
+          { id: 'voyage-code-3', label: 'Voyage Code 3' },
+        ],
+      };
+      return { configured: true, models: known[provider] || [], source: 'known' };
     },
     {
       params: t.Object({ provider: t.String() }),
