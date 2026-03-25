@@ -208,17 +208,26 @@ export class CLIAgentWorker extends BaseAgentWorker {
       workspaceCwd = process.cwd();
     }
 
+    // On Windows, resolve .cmd wrapper path explicitly to avoid shell: true
+    // (shell: true causes argument splitting issues with long prompts)
+    let resolvedBinary = binary;
+    if (process.platform === 'win32' && !binary.includes('/') && !binary.includes('\\')) {
+      try {
+        const { execSync } = await import('child_process');
+        const wherePath = execSync(`where ${binary}`, { encoding: 'utf-8', timeout: 3000 }).trim().split('\n')[0].trim();
+        if (wherePath) resolvedBinary = wherePath;
+      } catch {}
+    }
+
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
 
-      const proc = spawn(binary, args, {
+      const proc = spawn(resolvedBinary, args, {
         env,
         cwd: workspaceCwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: this.config.timeout,
-        // On Windows, CLI tools are .cmd wrappers — shell: true is required to resolve them
-        shell: process.platform === 'win32',
       });
 
       this.process = proc;
@@ -305,7 +314,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
           'CLI sub-agent completed',
         );
 
-        resolve(accumulatedText || '(no response)');
+        if (this.aborted) {
+          resolve(accumulatedText || 'Task was stopped. Would you like to adjust the request or start something new?');
+        } else {
+          resolve(accumulatedText || '(no response)');
+        }
       });
 
       proc.on('error', (err) => {

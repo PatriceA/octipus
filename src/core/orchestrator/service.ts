@@ -445,10 +445,12 @@ export class OrchestratorService {
         timestamp: new Date(),
       });
 
-      return {
-        response: `I encountered an error while processing your request: ${(error as Error).message}`,
-        agentId,
-      };
+      const errMsg = (error as Error).message || '';
+      const wasStopped = errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped';
+      const response = wasStopped
+        ? 'Task was stopped. Would you like to adjust the request or start something new?'
+        : `I encountered an error while processing your request: ${errMsg}`;
+      return { response, agentId };
     }
   }
 

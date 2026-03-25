@@ -61,7 +61,7 @@ export class CLIArgumentBuilder {
     prompt: string,
     settings: CLIAgentConfig,
   ): { binary: string; args: string[] } {
-    const args = ['-p', prompt, '-o', 'stream-json'];
+    const args = ['-o', 'stream-json'];
 
     const approvalMode = settings.permissionMode || 'yolo';
     args.push('--approval-mode', approvalMode);
@@ -69,6 +69,9 @@ export class CLIArgumentBuilder {
     if (settings.extraArgs?.length) {
       args.push(...settings.extraArgs);
     }
+
+    // -p must be last so the prompt value isn't split by shell expansion
+    args.push('-p', prompt);
 
     return { binary: 'gemini', args };
   }
