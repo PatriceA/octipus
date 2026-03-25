@@ -15,6 +15,12 @@ interface AvailableModel {
   id: string;
   label: string;
   parameterSize?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  costPerInputToken?: number;
+  costPerOutputToken?: number;
+  supportsVision?: boolean;
+  supportsTools?: boolean;
 }
 
 export interface AddModelModalProps {
@@ -388,13 +394,17 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     value={formData.modelId}
                     onChange={(e) => {
                       const modelId = e.target.value;
-                      const defaults = PROVIDER_DEFAULTS[formData.provider] || {};
+                      const selected = availableModels.find(m => m.id === modelId);
                       setFormData({
                         ...formData,
                         modelId,
-                        name: formData.name || modelId,
-                        contextWindow: defaults.contextWindow || formData.contextWindow,
-                        maxTokens: defaults.maxTokens || formData.maxTokens,
+                        name: selected?.label || modelId,
+                        contextWindow: selected?.contextWindow || formData.contextWindow,
+                        maxTokens: selected?.maxOutputTokens || formData.maxTokens,
+                        supportsVision: selected?.supportsVision ?? formData.supportsVision,
+                        supportsTools: selected?.supportsTools ?? formData.supportsTools,
+                        costPerInputToken: selected?.costPerInputToken ?? formData.costPerInputToken,
+                        costPerOutputToken: selected?.costPerOutputToken ?? formData.costPerOutputToken,
                       });
                     }}
                     className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
@@ -431,14 +441,14 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               </div>
             )}
 
-            {!isCli && (
+            {!isCli && (connectionType === 'litellm' || formData.provider === 'ollama') && (
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Endpoint URL</label>
                 <input
                   type="text"
                   value={formData.endpoint}
                   onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
-                  placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://localhost:11434'}
+                  placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://192.168.1.100:11434'}
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
                 />
               </div>

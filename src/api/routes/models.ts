@@ -8,6 +8,71 @@ import { getQuotaTracker } from '@/models/quota-tracker';
 import { getConfig } from '@/config';
 import type { NewModelConfigEntry } from '@/db/schema/models';
 
+// ── Known model catalog with specs & pricing ────────────────────────
+// Prices are per 1M tokens. Context/max output in tokens.
+interface KnownModel {
+  id: string;
+  label: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  costPerInputToken?: number;   // $ per 1M input tokens
+  costPerOutputToken?: number;  // $ per 1M output tokens
+  supportsVision?: boolean;
+  supportsTools?: boolean;
+}
+
+const KNOWN_PROVIDER_MODELS: Record<string, KnownModel[]> = {
+  openai: [
+    // GPT-4.1 family (April 2025)
+    { id: 'gpt-4.1', label: 'GPT-4.1', contextWindow: 1047576, maxOutputTokens: 32768, costPerInputToken: 2.00, costPerOutputToken: 8.00, supportsVision: true, supportsTools: true },
+    { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', contextWindow: 1047576, maxOutputTokens: 32768, costPerInputToken: 0.40, costPerOutputToken: 1.60, supportsVision: true, supportsTools: true },
+    { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', contextWindow: 1047576, maxOutputTokens: 32768, costPerInputToken: 0.10, costPerOutputToken: 0.40, supportsVision: true, supportsTools: true },
+    // GPT-4o family
+    { id: 'gpt-4o', label: 'GPT-4o', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 2.50, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
+    { id: 'gpt-4o-mini', label: 'GPT-4o Mini', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
+    // o-series reasoning
+    { id: 'o3', label: 'o3', contextWindow: 200000, maxOutputTokens: 100000, costPerInputToken: 2.00, costPerOutputToken: 8.00, supportsVision: true, supportsTools: true },
+    { id: 'o3-mini', label: 'o3 Mini', contextWindow: 200000, maxOutputTokens: 100000, costPerInputToken: 1.10, costPerOutputToken: 4.40, supportsTools: true },
+    { id: 'o4-mini', label: 'o4 Mini', contextWindow: 200000, maxOutputTokens: 100000, costPerInputToken: 1.10, costPerOutputToken: 4.40, supportsVision: true, supportsTools: true },
+    // Embeddings
+    { id: 'text-embedding-3-large', label: 'Embedding 3 Large', contextWindow: 8191, costPerInputToken: 0.13 },
+    { id: 'text-embedding-3-small', label: 'Embedding 3 Small', contextWindow: 8191, costPerInputToken: 0.02 },
+  ],
+  anthropic: [
+    // Claude 4 family
+    { id: 'claude-opus-4-20250514', label: 'Claude Opus 4', contextWindow: 200000, maxOutputTokens: 32000, costPerInputToken: 15.00, costPerOutputToken: 75.00, supportsVision: true, supportsTools: true },
+    { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
+    // Claude 3.5 family
+    { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', contextWindow: 200000, maxOutputTokens: 8192, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
+    { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', contextWindow: 200000, maxOutputTokens: 8192, costPerInputToken: 0.80, costPerOutputToken: 4.00, supportsVision: true, supportsTools: true },
+    // Claude 4.5 Haiku
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', contextWindow: 200000, maxOutputTokens: 8192, costPerInputToken: 1.00, costPerOutputToken: 5.00, supportsVision: true, supportsTools: true },
+  ],
+  gemini: [
+    // Gemini 2.5
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 1.25, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
+    // Gemini 2.0
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', contextWindow: 1048576, maxOutputTokens: 8192, costPerInputToken: 0.10, costPerOutputToken: 0.40, supportsVision: true, supportsTools: true },
+    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', contextWindow: 1048576, maxOutputTokens: 8192, costPerInputToken: 0.075, costPerOutputToken: 0.30, supportsVision: true, supportsTools: true },
+    // Embeddings
+    { id: 'text-embedding-004', label: 'Text Embedding 004', contextWindow: 2048, costPerInputToken: 0.006 },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat', label: 'DeepSeek V3', contextWindow: 65536, maxOutputTokens: 8192, costPerInputToken: 0.27, costPerOutputToken: 1.10, supportsTools: true },
+    { id: 'deepseek-reasoner', label: 'DeepSeek R1', contextWindow: 65536, maxOutputTokens: 8192, costPerInputToken: 0.55, costPerOutputToken: 2.19 },
+  ],
+  voyage: [
+    { id: 'voyage-3-large', label: 'Voyage 3 Large', contextWindow: 32000, costPerInputToken: 0.18 },
+    { id: 'voyage-3', label: 'Voyage 3', contextWindow: 32000, costPerInputToken: 0.06 },
+    { id: 'voyage-3-lite', label: 'Voyage 3 Lite', contextWindow: 32000, costPerInputToken: 0.02 },
+    { id: 'voyage-code-3', label: 'Voyage Code 3', contextWindow: 32000, costPerInputToken: 0.18 },
+    { id: 'voyage-finance-2', label: 'Voyage Finance 2', contextWindow: 32000, costPerInputToken: 0.12 },
+    { id: 'voyage-law-2', label: 'Voyage Law 2', contextWindow: 32000, costPerInputToken: 0.12 },
+    { id: 'voyage-multilingual-2', label: 'Voyage Multilingual 2', contextWindow: 32000, costPerInputToken: 0.12 },
+  ],
+};
+
 export const modelRoutes = new Elysia({ prefix: '/models' })
   .use(apiContext)
   // List all models
@@ -582,7 +647,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
           if (!res.ok) return { configured: false, error: `Ollama unreachable (${res.status})` };
           const data = await res.json();
-          const models = (data.models || []).map((m: { name: string; details?: { parameter_size?: string } }) => ({
+          const models = (data.models || []).map((m: { name: string; details?: { parameter_size?: string; family?: string } }) => ({
             id: m.name,
             label: m.name,
             parameterSize: m.details?.parameter_size,
@@ -593,7 +658,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         }
       }
 
-      // Cloud providers: check API key, return known models
+      // Cloud providers: check API key
       const router = getProviderRouter();
       const directProvider = router.getAllProviders().find(p => p.name === provider);
       if (!directProvider) {
@@ -605,94 +670,49 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         return { configured: false, error: `${provider} API key not configured. Add it on the Secrets page.` };
       }
 
-      // Try to list live models from the provider
+      // Merge built-in catalog with user-customized entries from settings
+      const builtIn = KNOWN_PROVIDER_MODELS[provider] || [];
+      let custom: KnownModel[] = [];
       try {
-        if (provider === 'openai' || provider === 'anthropic' || provider === 'gemini' || provider === 'deepseek') {
-          // These providers use OpenAI-compatible SDK — try models.list()
-          const OpenAI = (await import('openai')).default;
-          const endpoints: Record<string, string> = {
-            openai: 'https://api.openai.com/v1',
-            anthropic: 'https://api.anthropic.com/v1/',
-            gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-            deepseek: 'https://api.deepseek.com/v1',
-          };
-          const vaultNames: Record<string, string> = {
-            openai: 'openai_api_key',
-            anthropic: 'anthropic_api_key',
-            gemini: 'gemini_api_key',
-            deepseek: 'deepseek_api_key',
-          };
-          const { getVault } = await import('@/security/vault');
-          const vault = getVault();
-          const apiKey = await vault.getByName('system', vaultNames[provider]) ||
-            process.env[`${provider.toUpperCase()}_API_KEY`] || '';
-          if (!apiKey) {
-            // Fall back to known list
-            const known: Record<string, Array<{ id: string; label: string }>> = {
-              openai: [
-                { id: 'gpt-4o', label: 'GPT-4o' }, { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-                { id: 'gpt-4.1', label: 'GPT-4.1' }, { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
-                { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' }, { id: 'o3-mini', label: 'o3 Mini' },
-              ],
-              anthropic: [
-                { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-                { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-              ],
-              gemini: [
-                { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-                { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-                { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-              ],
-              deepseek: [
-                { id: 'deepseek-chat', label: 'DeepSeek Chat' },
-                { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
-              ],
-            };
-            return { configured: true, models: known[provider] || [], source: 'known' };
-          }
+        const { getSettingsService } = await import('@/config/settings-service');
+        const svc = getSettingsService();
+        const raw = svc.getSync('models.catalog.' + provider) as KnownModel[] | undefined;
+        if (Array.isArray(raw)) custom = raw;
+      } catch {}
 
-          const client = new OpenAI({ baseURL: endpoints[provider], apiKey, timeout: 10_000 });
-          const modelsRes = await client.models.list();
-          const models = [];
-          for await (const m of modelsRes) {
-            models.push({ id: m.id, label: m.id });
-          }
-          return { configured: true, models, source: 'live' };
-        }
-      } catch {
-        // Fall through to known list on any error
-      }
+      // Custom entries override built-in by id, then append new ones
+      const builtInIds = new Set(builtIn.map(m => m.id));
+      const merged = [
+        ...builtIn.map(m => {
+          const override = custom.find(c => c.id === m.id);
+          return override ? { ...m, ...override } : m;
+        }),
+        ...custom.filter(c => !builtInIds.has(c.id)),
+      ];
 
-      // Fallback: known static list
-      const known: Record<string, Array<{ id: string; label: string }>> = {
-        openai: [
-          { id: 'gpt-4o', label: 'GPT-4o' }, { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-          { id: 'gpt-4.1', label: 'GPT-4.1' }, { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
-          { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' }, { id: 'o3-mini', label: 'o3 Mini' },
-        ],
-        anthropic: [
-          { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-          { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-        ],
-        gemini: [
-          { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-          { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-          { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-        ],
-        deepseek: [
-          { id: 'deepseek-chat', label: 'DeepSeek Chat' },
-          { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
-        ],
-        voyage: [
-          { id: 'voyage-3', label: 'Voyage 3' },
-          { id: 'voyage-3-lite', label: 'Voyage 3 Lite' },
-          { id: 'voyage-code-3', label: 'Voyage Code 3' },
-        ],
-      };
-      return { configured: true, models: known[provider] || [], source: 'known' };
+      return { configured: true, models: merged, source: 'known' };
     },
     {
       params: t.Object({ provider: t.String() }),
+      detail: { tags: ['models'] },
+    }
+  )
+
+  // Update custom model catalog for a provider
+  .put(
+    '/providers/:provider/catalog',
+    async ({ user, params, body }) => {
+      if (!user?.isAdmin) return { error: 'Admin access required' };
+
+      const { getSettingsService } = await import('@/config/settings-service');
+      const svc = getSettingsService();
+      await svc.set('models.catalog.' + params.provider, body.models, user.id);
+
+      return { success: true };
+    },
+    {
+      params: t.Object({ provider: t.String() }),
+      body: t.Object({ models: t.Array(t.Any()) }),
       detail: { tags: ['models'] },
     }
   )
