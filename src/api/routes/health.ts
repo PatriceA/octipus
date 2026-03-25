@@ -191,7 +191,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     const FEATURE_TOPICS = [
       { name: 'Chat & Orchestration', topic: 'general', hint: 'Add a model and set it as default' },
       { name: 'Code Generation', topic: 'coding', hint: "Assign a model to the 'coding' topic" },
-      { name: 'Knowledge Base (RAG)', topic: 'embedding', hint: "Pull nomic-embed-text on Ollama and assign 'embedding' topic" },
+      { name: 'Knowledge Base (RAG)', topic: 'embedding', hint: "Assign the 'embedding' topic to an embedding model" },
       { name: 'Document OCR', topic: 'vision', hint: "Pull a vision model (e.g., glm-ocr) and assign 'vision' topic" },
       { name: 'Research & Analysis', topic: 'analysis', hint: "Assign a model to the 'analysis' topic" },
     ] as const;
