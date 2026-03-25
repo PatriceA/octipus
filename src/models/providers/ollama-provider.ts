@@ -57,6 +57,11 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
+    // Ollama's /v1 endpoint doesn't support think:false — use native /api/chat when thinking is disabled
+    if (options.extraBody?.think === false && !options.tools?.length) {
+      return this.completeNative(options);
+    }
+
     const client = this.createClient();
     const startTime = Date.now();
 
@@ -76,7 +81,7 @@ export class OllamaProvider implements ModelProvider {
       params.tool_choice = 'auto';
     }
 
-    // Merge extra body parameters (e.g. { think: false } for Qwen3)
+    // Merge extra body parameters
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
@@ -132,6 +137,85 @@ export class OllamaProvider implements ModelProvider {
       modelLogger.error({ error, model: params.model, provider: this.name }, 'Ollama completion failed');
       throw error;
     }
+  }
+
+  /**
+   * Use Ollama's native /api/chat endpoint which properly supports think:false.
+   * The OpenAI-compatible /v1 endpoint ignores this parameter.
+   */
+  private async completeNative(options: CompletionOptions): Promise<CompletionResult> {
+    const startTime = Date.now();
+
+    const messages = this.formatMessages(options.messages).map((m) => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : '',
+    }));
+
+    const body: Record<string, unknown> = {
+      model: options.model,
+      messages,
+      stream: false,
+      think: false,
+      options: {
+        temperature: options.temperature,
+        num_predict: options.maxTokens,
+        ...(options.topP != null ? { top_p: options.topP } : {}),
+        ...(options.stopSequences?.length ? { stop: options.stopSequences } : {}),
+      },
+    };
+
+    modelLogger.debug(
+      { model: options.model, messageCount: messages.length, provider: this.name, native: true },
+      'Sending native completion request to Ollama (think:false)'
+    );
+
+    const response = await fetch(`${this.endpoint}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    });
+
+    if (!response.ok) {
+      const err = await response.text().catch(() => '');
+      throw new Error(`Ollama native API error (${response.status}): ${err}`);
+    }
+
+    const data = await response.json() as {
+      message: { role: string; content: string };
+      done: boolean;
+      done_reason?: string;
+      prompt_eval_count?: number;
+      eval_count?: number;
+    };
+
+    const latencyMs = Date.now() - startTime;
+
+    const result: CompletionResult = {
+      content: data.message.content || '',
+      finishReason: data.done_reason || 'stop',
+      usage: {
+        inputTokens: data.prompt_eval_count || 0,
+        outputTokens: data.eval_count || 0,
+        totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+      },
+      model: options.model,
+      latencyMs,
+    };
+
+    modelLogger.debug(
+      {
+        model: options.model,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        latencyMs,
+        provider: this.name,
+        native: true,
+      },
+      'Ollama native completion successful'
+    );
+
+    return result;
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
