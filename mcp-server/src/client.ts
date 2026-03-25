@@ -126,18 +126,7 @@ export class AssistantClient {
 
   // ─── Chat ───
 
-  async chat(message: string, sessionId?: string): Promise<ChatResponse> {
-    return this.request<ChatResponse>('/api/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        message,
-        sessionId,
-        channel: 'mcp',
-      }),
-    });
-  }
-
-  async chatWithExpert(message: string, expertId: string, sessionId?: string): Promise<ChatResponse> {
+  async chat(message: string, sessionId?: string, expertId?: string): Promise<ChatResponse> {
     return this.request<ChatResponse>('/api/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -145,6 +134,22 @@ export class AssistantClient {
         sessionId,
         expertId,
         channel: 'mcp',
+      }),
+    });
+  }
+
+  async chatWithExpert(message: string, expertId: string, sessionId?: string): Promise<ChatResponse> {
+    return this.chat(message, sessionId, expertId);
+  }
+
+  async createSession(opts: { channelType?: string; title?: string; context?: Record<string, unknown> }): Promise<{ id: string }> {
+    return this.request<{ id: string }>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        channelType: opts.channelType || 'mcp',
+        channelId: `mcp-${Date.now().toString(36)}`,
+        title: opts.title,
+        context: opts.context,
       }),
     });
   }

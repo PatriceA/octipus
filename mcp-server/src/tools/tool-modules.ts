@@ -15,12 +15,14 @@ export function registerToolModuleTools(server: McpServer, client: AssistantClie
       try {
         const tools = await client.listTools();
         // Format as a readable summary
-        const summary = tools.map((s) => ({
+        const summary = tools.map((s: any) => ({
           id: s.id,
           name: s.name,
           version: s.version,
           description: s.description,
-          tools: s.tools.map((t) => `${s.id}.${t.name}: ${t.description}`),
+          status: s.status || 'active',
+          statusReason: s.statusReason,
+          tools: s.tools.map((t: any) => `${s.id}.${t.name}: ${t.description}`),
         }));
 
         return {
