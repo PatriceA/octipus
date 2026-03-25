@@ -430,53 +430,45 @@ export class LiteLLMClient {
         modelLogger.info({ model: options.model, provider: provider.name }, 'Routing vision request through direct provider');
         const startTime = Date.now();
 
-        // Use the provider's OpenAI-compatible endpoint directly
-        const { OllamaProvider } = await import('@/models/providers/ollama-provider');
-        const { OpenAIProvider } = await import('@/models/providers/openai-provider');
+        // Resolve endpoint + API key for the model (supports per-model overrides)
+        const { getVault } = await import('@/security/vault');
+        const vault = getVault();
+        const { getModelRegistry: getVisionRegistry } = await import('@/models/model-registry');
+        const visionModelEntry = await getVisionRegistry().getModelByModelId(options.model);
+        const modelEndpoint = visionModelEntry?.endpoint;
+        const modelApiKeyRef = visionModelEntry?.apiKeyRef;
 
-        let client: OpenAI;
-        if (provider instanceof OllamaProvider) {
-          const config = getConfig();
-          client = new OpenAI({
-            baseURL: `${config.ollama.url}/v1`,
-            apiKey: 'ollama',
-            timeout: 120_000,
-            maxRetries: 2,
-          });
-        } else if (provider instanceof OpenAIProvider) {
-          const apiKey = process.env.OPENAI_API_KEY;
-          if (!apiKey) {
-            try {
-              const { getVault } = await import('@/security/vault');
-              const vault = getVault();
-              const vaultKey = await vault.getByName('system', 'openai_api_key');
-              if (vaultKey) {
-                client = new OpenAI({
-                  baseURL: 'https://api.openai.com/v1',
-                  apiKey: vaultKey,
-                  timeout: 120_000,
-                  maxRetries: 2,
-                });
-              } else {
-                throw new Error('No OpenAI API key');
-              }
-            } catch {
-              throw new Error('No OpenAI API key');
-            }
-          } else {
-            client = new OpenAI({
-              baseURL: 'https://api.openai.com/v1',
-              apiKey,
-              timeout: 120_000,
-              maxRetries: 2,
-            });
-          }
-        } else {
-          // Other direct providers — fall through to proxy
-          throw new Error('Unsupported provider for vision');
+        // Build endpoint + API key for each provider type
+        const providerEndpoints: Record<string, { baseURL: string; vaultName: string; envVar: string }> = {
+          ollama: { baseURL: `${modelEndpoint || getConfig().ollama.url}/v1`, vaultName: '', envVar: '' },
+          openai: { baseURL: 'https://api.openai.com/v1', vaultName: 'openai_api_key', envVar: 'OPENAI_API_KEY' },
+          anthropic: { baseURL: 'https://api.anthropic.com/v1/', vaultName: 'anthropic_api_key', envVar: 'ANTHROPIC_API_KEY' },
+          gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', vaultName: 'gemini_api_key', envVar: 'GEMINI_API_KEY' },
+          deepseek: { baseURL: 'https://api.deepseek.com/v1', vaultName: 'deepseek_api_key', envVar: 'DEEPSEEK_API_KEY' },
+        };
+
+        const pe = providerEndpoints[provider.name];
+        if (!pe) throw new Error(`Unsupported provider for vision: ${provider.name}`);
+
+        let apiKey = 'ollama';
+        if (provider.name !== 'ollama') {
+          apiKey = (modelApiKeyRef ? await vault.getByName('system', modelApiKeyRef) : null)
+            || await vault.getByName('system', pe.vaultName)
+            || process.env[pe.envVar]
+            || '';
+          if (!apiKey) throw new Error(`No API key for ${provider.name}`);
+        } else if (modelApiKeyRef) {
+          apiKey = await vault.getByName('system', modelApiKeyRef) || 'ollama';
         }
 
-        const response = await client!.chat.completions.create({
+        const client = new OpenAI({
+          baseURL: modelEndpoint ? `${modelEndpoint}/v1` : pe.baseURL,
+          apiKey,
+          timeout: 120_000,
+          maxRetries: 2,
+        });
+
+        const response = await client.chat.completions.create({
           model: options.model,
           messages: visionMessages,
           max_tokens: maxTokens,
@@ -484,7 +476,9 @@ export class LiteLLMClient {
         });
 
         const latencyMs = Date.now() - startTime;
-        let content = response.choices[0]?.message?.content || '';
+        const choice = response.choices[0];
+        const msg = choice?.message as unknown as Record<string, unknown>;
+        let content = (choice?.message?.content || msg?.reasoning || '') as string;
         if (content.includes('<think>')) {
           content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         }
