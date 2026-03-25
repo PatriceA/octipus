@@ -8,6 +8,15 @@ import type { ToolHandler, AgentEvent } from './agent-base';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
+const FILE_CHANGE_TOOLS = new Set([
+  'filesystem__write_file',
+  'filesystem__append_file',
+  'filesystem__delete_file',
+  'filesystem__copy_file',
+  'filesystem__move_file',
+  'filesystem__create_directory',
+]);
+
 export class ToolExecutor {
   private tools: Map<string, ToolHandler> = new Map();
   private consecutiveToolErrors: number = 0;
@@ -205,6 +214,20 @@ export class ToolExecutor {
         }, 'Tool executed');
 
         results.push({ toolCallId: toolCall.id, result });
+
+        // Emit file change events for file-modifying operations
+        if (FILE_CHANGE_TOOLS.has(toolCall.name)) {
+          const filePath = (toolCall.arguments.path || toolCall.arguments.destination || toolCall.arguments.source) as string | undefined;
+          if (filePath) {
+            this.emitFn('action', {
+              type: 'file_change',
+              action: toolCall.name.replace('filesystem__', '').replace('_file', '').replace('_directory', '_dir'),
+              path: filePath,
+              agentId: this.context.id,
+              agentRole: this.context.role,
+            });
+          }
+        }
 
         if (tool.final) {
           this._toolsDisabled = true;

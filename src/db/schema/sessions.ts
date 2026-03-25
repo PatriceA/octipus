@@ -37,6 +37,10 @@ export interface SessionContext {
   compactedSummary?: string;
   activeCommand?: string;
   planningState?: PlanningState;
+  // Development Mode
+  devMode?: boolean;
+  projectPath?: string;
+  projectName?: string;
 }
 
 export type Session = typeof sessions.$inferSelect;

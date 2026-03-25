@@ -189,7 +189,21 @@ export async function spawnWorker(
   // Inject current date/time context so agents know "today"
   const now = new Date();
   systemPrompt += `\n\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
-  if (agentRole === 'coding') {
+  // Determine if this is a dev mode session
+  const session = await sessionRepository.findById(context.sessionId);
+  const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
+  const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+  const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
+
+  // Inject project summary — dev mode: all roles from project path; normal: coding role from workspace root
+  if (isDevMode && devProjectPath) {
+    const projectSummary = await loadProjectSummary(devProjectPath);
+    if (projectSummary) {
+      const projectName = sessionCtx!.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
+      systemPrompt += `\n\n--- Project Summary (${projectName}) ---\n${projectSummary}`;
+    }
+    systemPrompt += `\n\nAfter completing your task, if you made significant changes, update .assistant/project-summary.md in the project with any new findings.`;
+  } else if (agentRole === 'coding') {
     const projectSummary = await loadProjectSummary();
     if (projectSummary) {
       systemPrompt += `\n\n--- Existing Project Summary ---\n${projectSummary}`;
@@ -210,21 +224,33 @@ export async function spawnWorker(
   }
 
   // Inject workspace context
-  const config = getConfig();
-  const workspaceRoot = resolve(config.workspace.rootPath);
-  const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
-  let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
-  if (additionalPaths.length > 0) {
-    workspaceHint += ` Additional allowed paths: ${additionalPaths.join(', ')}.`;
+  if (isDevMode && devProjectPath) {
+    // Dev mode: workspace is the specific project
+    let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${devProjectPath}.`;
+    workspaceHint += ` Focus your work within this directory. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
+    const assistantRoot = resolve(process.cwd());
+    if (devProjectPath !== assistantRoot) {
+      workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
+    }
+    workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    systemPrompt += workspaceHint;
+  } else {
+    // Normal mode: global workspace
+    const config = getConfig();
+    const workspaceRoot = resolve(config.workspace.rootPath);
+    const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+    let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
+    if (additionalPaths.length > 0) {
+      workspaceHint += ` Additional allowed paths: ${additionalPaths.join(', ')}.`;
+    }
+    workspaceHint += ` Focus your work within these directories. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
+    const assistantRoot = resolve(process.cwd());
+    if (workspaceRoot !== assistantRoot) {
+      workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
+    }
+    workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    systemPrompt += workspaceHint;
   }
-  workspaceHint += ` Focus your work within these directories. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
-  // Tell agents where the assistant itself is installed (for plugins, extensions, config)
-  const assistantRoot = resolve(process.cwd());
-  if (workspaceRoot !== assistantRoot) {
-    workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
-  }
-  workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
-  systemPrompt += workspaceHint;
 
   const worker = await agentManager.spawn({
     sessionId: context.sessionId,
@@ -515,10 +541,10 @@ async function handleWorkerFailure(
   throw new Error(`Worker "${agentRole}" failed: ${error.message}`);
 }
 
-async function loadProjectSummary(): Promise<string | null> {
+async function loadProjectSummary(rootOverride?: string): Promise<string | null> {
   try {
-    const config = getConfig();
-    const summaryPath = resolve(config.workspace?.rootPath || '.', '.assistant/project-summary.md');
+    const root = rootOverride || getConfig().workspace?.rootPath || '.';
+    const summaryPath = resolve(root, '.assistant/project-summary.md');
     const file = Bun.file(summaryPath);
     if (await file.exists()) {
       const content = await file.text();

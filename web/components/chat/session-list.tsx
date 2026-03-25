@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Search, MessageSquare, Trash2, MoreHorizontal, Pencil } from 'lucide-react';
+import { Plus, Search, MessageSquare, Trash2, MoreHorizontal, Pencil, Code2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 
@@ -12,6 +12,8 @@ export interface SessionInfo {
   messageCount: number;
   tokenCount: number;
   status: string;
+  devMode?: boolean;
+  projectName?: string;
 }
 
 interface SessionListProps {
@@ -241,6 +243,12 @@ export function SessionList({
                         )}
 
                         <div className="mt-0.5 flex items-center gap-2">
+                          {session.devMode && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400" title={session.projectName}>
+                              <Code2 className="h-2.5 w-2.5" />
+                              {session.projectName || 'dev'}
+                            </span>
+                          )}
                           <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant">
                             <MessageSquare className="h-2.5 w-2.5" />
                             {session.messageCount}

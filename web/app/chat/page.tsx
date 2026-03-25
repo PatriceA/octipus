@@ -13,6 +13,7 @@ import MessageTimeline, {
 import { SessionList, type SessionInfo } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
+import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
 
 interface ApprovalRequest {
   requestId: string;
@@ -34,12 +35,21 @@ interface ToolCallInfo {
   argsSummary?: string;
 }
 
+export interface FileChange {
+  path: string;
+  action: string;
+  agentId: string;
+  agentRole: string;
+  timestamp: string;
+}
+
 // Per-session state
 interface SessionState {
   messages: ChatMessageData[];
   trackedAgents: Map<string, TrackedAgent>;
   teams: Map<string, TeamState>;
   totalTokens: number;
+  fileChanges: FileChange[];
 }
 
 // Module-level guard to prevent React Strict Mode double WebSocket connections
@@ -62,6 +72,7 @@ function newSessionState(): SessionState {
     trackedAgents: new Map(),
     teams: new Map(),
     totalTokens: 0,
+    fileChanges: [],
   };
 }
 
@@ -87,6 +98,7 @@ export default function ChatPage() {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
+  const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -110,7 +122,7 @@ export default function ChatPage() {
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
     try {
-      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string }>; maxTokenBudget?: number }>('/sessions');
+      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string; context?: { devMode?: boolean; projectName?: string } }>; maxTokenBudget?: number }>('/sessions');
       if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
@@ -123,6 +135,8 @@ export default function ChatPage() {
             messageCount: s.messageCount,
             tokenCount: s.tokenCount || 0,
             status: s.status,
+            devMode: s.context?.devMode,
+            projectName: s.context?.projectName,
           }));
         setSessions(items);
 
@@ -663,28 +677,72 @@ export default function ChatPage() {
               }],
             });
           }
+          // Track file changes from CLI agents (Write, Edit)
+          const cliFileTools = ['Write', 'Edit'];
+          if (cliFileTools.includes(String(d.toolName)) && d.args) {
+            const filePath = d.args.file_path || d.args.path || '';
+            if (filePath) {
+              return {
+                ...prev,
+                trackedAgents: next,
+                fileChanges: [...prev.fileChanges, {
+                  path: String(filePath),
+                  action: String(d.toolName).toLowerCase(),
+                  agentId: data.agentId,
+                  agentRole: existing?.role || 'unknown',
+                  timestamp: new Date().toISOString(),
+                }],
+              };
+            }
+          }
           return { ...prev, trackedAgents: next };
         });
+      }
+      // File change events from built-in filesystem tools
+      else if (d?.type === 'file_change' && d?.path) {
+        updateSessionState(sessionId, (prev) => ({
+          ...prev,
+          fileChanges: [...prev.fileChanges, {
+            path: String(d.path),
+            action: String(d.action || 'write'),
+            agentId: data.agentId,
+            agentRole: String(d.agentRole || 'unknown'),
+            timestamp: new Date().toISOString(),
+          }],
+        }));
       }
     }
   };
 
   // Session management
-  const createSession = async () => {
+  const createSession = () => {
+    setShowNewSessionDialog(true);
+  };
+
+  const handleCreateSession = async (opts: NewSessionOptions) => {
+    setShowNewSessionDialog(false);
     try {
+      const title = opts.devMode ? `Dev: ${opts.projectName || 'project'}` : 'New Chat';
+      const context = opts.devMode
+        ? { devMode: true, projectPath: opts.projectPath, projectName: opts.projectName }
+        : {};
+
       const result = await api.post<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }>('/sessions', {
         channelType: 'webchat',
         channelId: `chat-${Date.now().toString(36)}`,
-        title: 'New Chat',
+        title,
+        context,
       });
       if (result?.id) {
         const item: SessionInfo = {
           id: result.id,
-          title: result.title || 'New Chat',
+          title: result.title || title,
           updatedAt: result.updatedAt || new Date().toISOString(),
           messageCount: 0,
           tokenCount: 0,
           status: 'active',
+          devMode: opts.devMode,
+          projectName: opts.projectName,
         };
         setSessions(prev => [item, ...prev]);
         setActiveSessionId(item.id);
@@ -883,6 +941,13 @@ export default function ChatPage() {
 
   return (
     <div className="h-full flex">
+      {/* New session dialog */}
+      <NewSessionDialog
+        open={showNewSessionDialog}
+        onClose={() => setShowNewSessionDialog(false)}
+        onCreate={handleCreateSession}
+      />
+
       {/* Left panel — Session list */}
       <div className="w-64 border-r border-outline-variant/10 flex-shrink-0 bg-surface-container-low">
         <SessionList

@@ -328,25 +328,50 @@ export class OrchestratorService {
     }
 
     // Inject workspace awareness
-    const wsConfig = getConfig();
-    const wsRoot = resolve(wsConfig.workspace.rootPath);
-    const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
-    try {
-      const { readdirSync, statSync: statS } = await import('fs');
-      const dirs = readdirSync(wsRoot)
-        .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
-        .map(name => `  - ${name}/`);
-      let wsContext = `\nWORKSPACE: Root is ${wsRoot}`;
-      if (dirs.length > 0 && dirs.length <= 30) {
-        wsContext += `\nProjects:\n${dirs.join('\n')}`;
-      }
-      if (wsAdditional.length > 0) {
-        wsContext += `\nAdditional paths: ${wsAdditional.join(', ')}`;
-      }
-      wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (assistant)", your task descriptions must say "audit the project at ${wsRoot}/assistant". Workers do NOT know which project the user means unless you tell them the exact path.`;
+    const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
+    const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+
+    if (isDevMode) {
+      // Dev mode: focused on a specific project
+      const projectPath = sessionCtx!.projectPath!;
+      const projectName = sessionCtx!.projectName || projectPath.split(/[/\\]/).pop() || 'project';
+      let wsContext = `\n\nDEV MODE SESSION — Project: ${projectName}`;
+      wsContext += `\nProject path: ${projectPath}`;
+
+      // Load brief summary for orchestrator (lightweight)
+      try {
+        const summaryPath = resolve(projectPath, '.assistant/project-summary.md');
+        const file = Bun.file(summaryPath);
+        if (await file.exists()) {
+          const brief = (await file.text()).slice(0, 500);
+          wsContext += `\nProject overview: ${brief}`;
+        }
+      } catch {}
+
+      wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
       systemPrompt += wsContext;
-    } catch {
-      systemPrompt += `\nWORKSPACE: ${wsRoot}`;
+    } else {
+      // Normal mode: generic workspace awareness
+      const wsConfig = getConfig();
+      const wsRoot = resolve(wsConfig.workspace.rootPath);
+      const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+      try {
+        const { readdirSync, statSync: statS } = await import('fs');
+        const dirs = readdirSync(wsRoot)
+          .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
+          .map(name => `  - ${name}/`);
+        let wsContext = `\nWORKSPACE: Root is ${wsRoot}`;
+        if (dirs.length > 0 && dirs.length <= 30) {
+          wsContext += `\nProjects:\n${dirs.join('\n')}`;
+        }
+        if (wsAdditional.length > 0) {
+          wsContext += `\nAdditional paths: ${wsAdditional.join(', ')}`;
+        }
+        wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (assistant)", your task descriptions must say "audit the project at ${wsRoot}/assistant". Workers do NOT know which project the user means unless you tell them the exact path.`;
+        systemPrompt += wsContext;
+      } catch {
+        systemPrompt += `\nWORKSPACE: ${wsRoot}`;
+      }
     }
 
     // Hook-triggered tasks get a longer timeout (45 min) since they run unattended
