@@ -147,20 +147,38 @@ check_service() {
   fi
 }
 
+# Detect platform
+IS_WINDOWS=false
+if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]] || [[ "$OSTYPE" == msys ]] || [[ "$OSTYPE" == cygwin ]]; then
+  IS_WINDOWS=true
+fi
+
 # Kill any process using a given port
 kill_port_users() {
   local port="$1"
-  local pids
-  pids=$(lsof -ti :"$port" 2>/dev/null || true)
-  if [[ -n "$pids" ]]; then
+
+  if [[ "$IS_WINDOWS" == true ]]; then
+    # Windows: use netstat + taskkill
+    local pids
+    pids=$(netstat -ano 2>/dev/null | grep ":${port} " | grep "LISTENING" | awk '{print $NF}' | sort -u || true)
     for pid in $pids; do
-      kill "$pid" 2>/dev/null || true
+      if [[ -n "$pid" && "$pid" != "0" ]]; then
+        taskkill //F //PID "$pid" >/dev/null 2>&1 || true
+      fi
     done
-    sleep 0.5
-    # Force kill stragglers
-    for pid in $pids; do
-      kill -9 "$pid" 2>/dev/null || true
-    done
+  else
+    # Unix: use lsof
+    local pids
+    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+      for pid in $pids; do
+        kill "$pid" 2>/dev/null || true
+      done
+      sleep 0.5
+      for pid in $pids; do
+        kill -9 "$pid" 2>/dev/null || true
+      done
+    fi
   fi
 }
 
@@ -171,21 +189,24 @@ kill_tracked() {
 
   if [[ -f "$pid_file" ]]; then
     local pid
-    pid=$(cat "$pid_file")
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    if [[ -z "$pid" ]]; then
+      rm -f "$pid_file"
+      return
+    fi
     if kill -0 "$pid" 2>/dev/null; then
       log_step "Stopping $label (PID $pid)..."
-      # Kill process group to catch child processes
-      kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-      # Wait for graceful shutdown
-      local i
-      for i in $(seq 1 10); do
-        if ! kill -0 "$pid" 2>/dev/null; then
-          break
-        fi
-        sleep 0.5
-      done
-      # Force kill if still alive
-      kill -9 "$pid" 2>/dev/null || true
+      if [[ "$IS_WINDOWS" == true ]]; then
+        taskkill //F //PID "$pid" //T >/dev/null 2>&1 || true
+      else
+        kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+        local i
+        for i in $(seq 1 10); do
+          if ! kill -0 "$pid" 2>/dev/null; then break; fi
+          sleep 0.5
+        done
+        kill -9 "$pid" 2>/dev/null || true
+      fi
       log_info "$label stopped"
     fi
     rm -f "$pid_file"
@@ -198,15 +219,45 @@ kill_all_assistant() {
   kill_tracked "$PID_FILE_BACKEND" "backend"
   kill_tracked "$PID_FILE_WEB" "web UI"
 
-  # Kill orphaned bun/next processes for this project
-  pkill -f "bun.*src/index.ts" 2>/dev/null || true
-  pkill -f "next.*${WEB_PORT}" 2>/dev/null || true
-  pkill -f "bun run dev.*${PROJECT_DIR}" 2>/dev/null || true
-  pkill -f "bun run start.*${PROJECT_DIR}" 2>/dev/null || true
+  if [[ "$IS_WINDOWS" == true ]]; then
+    # Windows: kill all bun.exe processes running our project files
+    # Get PIDs of bun processes whose command line matches our project
+    local pids
+    pids=$(WMIC process where "name='bun.exe'" get ProcessId,CommandLine 2>/dev/null \
+      | grep -i "$(echo "$PROJECT_DIR" | tr '/' '\\')" \
+      | awk '{print $NF}' || true)
+    if [[ -z "$pids" ]]; then
+      # Fallback: kill ALL bun.exe (safe since we're restarting anyway)
+      pids=$(tasklist //FI "IMAGENAME eq bun.exe" //FO CSV //NH 2>/dev/null \
+        | grep -i "bun" | cut -d'"' -f4 || true)
+    fi
+    for pid in $pids; do
+      if [[ -n "$pid" && "$pid" != "0" ]]; then
+        taskkill //F //PID "$pid" //T >/dev/null 2>&1 || true
+      fi
+    done
+    # Also kill any node processes for the web UI (next.js)
+    local node_pids
+    node_pids=$(WMIC process where "name='node.exe'" get ProcessId,CommandLine 2>/dev/null \
+      | grep -i "next" | awk '{print $NF}' || true)
+    for pid in $node_pids; do
+      if [[ -n "$pid" && "$pid" != "0" ]]; then
+        taskkill //F //PID "$pid" //T >/dev/null 2>&1 || true
+      fi
+    done
+  else
+    # Unix: pkill orphans
+    pkill -f "bun.*src/index.ts" 2>/dev/null || true
+    pkill -f "next.*${WEB_PORT}" 2>/dev/null || true
+    pkill -f "bun run dev.*${PROJECT_DIR}" 2>/dev/null || true
+    pkill -f "bun run start.*${PROJECT_DIR}" 2>/dev/null || true
+  fi
 
   # Free up ports
   kill_port_users "$API_PORT"
   kill_port_users "$WEB_PORT"
+
+  sleep 1
 
   # Clean stale PID files
   rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB"
