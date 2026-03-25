@@ -62,7 +62,7 @@ export class OllamaProvider implements ModelProvider {
       return this.completeNative(options);
     }
 
-    const client = this.createClient();
+    const client = this.createClient(options.endpoint);
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = {
@@ -144,6 +144,7 @@ export class OllamaProvider implements ModelProvider {
    * The OpenAI-compatible /v1 endpoint ignores this parameter.
    */
   private async completeNative(options: CompletionOptions): Promise<CompletionResult> {
+    const resolvedEndpoint = options.endpoint || this.endpoint;
     const startTime = Date.now();
 
     const messages = this.formatMessages(options.messages).map((m) => ({
@@ -169,7 +170,7 @@ export class OllamaProvider implements ModelProvider {
       'Sending native completion request to Ollama (think:false)'
     );
 
-    const response = await fetch(`${this.endpoint}/api/chat`, {
+    const response = await fetch(`${resolvedEndpoint}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -219,7 +220,7 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const client = this.createClient();
+    const client = this.createClient(options.endpoint);
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
@@ -320,9 +321,10 @@ export class OllamaProvider implements ModelProvider {
 
   // -- Private helpers --
 
-  private createClient(): OpenAI {
+  private createClient(endpointOverride?: string): OpenAI {
+    const base = endpointOverride || this.endpoint;
     return new OpenAI({
-      baseURL: `${this.endpoint}/v1`,
+      baseURL: `${base}/v1`,
       apiKey: 'ollama', // Ollama doesn't require a real key
       timeout: 120_000,
       maxRetries: 2,

@@ -20,6 +20,8 @@ export interface CompletionOptions {
   responseFormat?: { type: 'text' | 'json_object' };
   /** Extra body parameters forwarded to the provider (e.g. { think: false } for Ollama Qwen3) */
   extraBody?: Record<string, unknown>;
+  /** Per-model endpoint override (e.g. second Ollama instance) */
+  endpoint?: string;
 }
 
 export interface CompletionResult {

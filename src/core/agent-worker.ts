@@ -444,6 +444,7 @@ export class AgentWorker extends BaseAgentWorker {
       temperature: model.defaultTemperature || 0.7,
       maxTokens: model.defaultMaxTokens || model.maxTokens || 4096,
       extraBody,
+      endpoint: model.endpoint || undefined,
     });
 
     await costTracker.logUsageWithCost(

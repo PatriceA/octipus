@@ -80,7 +80,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   }, [isOpen]);
 
   // Fetch available models when provider changes (direct connection only)
-  const fetchAvailableModels = useCallback(async (provider: string) => {
+  const fetchAvailableModels = useCallback(async (provider: string, endpoint?: string) => {
     if (!provider || provider === 'cli' || provider === 'litellm') {
       setAvailableModels([]);
       setProviderConfigured(null);
@@ -91,8 +91,9 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     setAvailableModels([]);
     setProviderConfigured(null);
     try {
+      const qs = endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : '';
       const data = await api.get<{ configured: boolean; models?: AvailableModel[]; error?: string; source?: string }>(
-        `/models/providers/${provider}/available`
+        `/models/providers/${provider}/available${qs}`
       );
       if (data.configured === false) {
         setProviderConfigured(false);
@@ -444,13 +445,25 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             {!isCli && (connectionType === 'litellm' || formData.provider === 'ollama') && (
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Endpoint URL</label>
-                <input
-                  type="text"
-                  value={formData.endpoint}
-                  onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
-                  placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://192.168.1.100:11434'}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={formData.endpoint}
+                    onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
+                    placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://192.168.1.100:11434'}
+                    className="flex-1 px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  />
+                  {connectionType === 'direct' && formData.provider === 'ollama' && formData.endpoint && (
+                    <button
+                      type="button"
+                      onClick={() => fetchAvailableModels('ollama', formData.endpoint)}
+                      className="px-3 py-2 border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-on-surface-variant text-sm flex items-center gap-1 cursor-pointer"
+                      title="Reload models from this endpoint"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 

@@ -638,19 +638,19 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // List available models for a direct provider (checks configuration first)
   .get(
     '/providers/:provider/available',
-    async ({ user, params }) => {
+    async ({ user, params, query }) => {
       if (!user) return { error: 'Not authenticated' };
 
       const provider = params.provider;
 
-      // Ollama: live model list
+      // Ollama: live model list (supports custom endpoint via ?endpoint=)
       if (provider === 'ollama') {
         const config = getConfig();
-        const url = config.ollama?.url;
+        const url = query.endpoint || config.ollama?.url;
         if (!url) return { configured: false, error: 'Ollama URL not configured' };
         try {
           const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return { configured: false, error: `Ollama unreachable (${res.status})` };
+          if (!res.ok) return { configured: false, error: `Ollama unreachable at ${url} (${res.status})` };
           const data = await res.json();
           const models = (data.models || []).map((m: { name: string; details?: { parameter_size?: string; family?: string } }) => ({
             id: m.name,
@@ -659,7 +659,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           }));
           return { configured: true, models };
         } catch (err) {
-          return { configured: false, error: `Cannot reach Ollama: ${(err as Error).message}` };
+          return { configured: false, error: `Cannot reach Ollama at ${url}: ${(err as Error).message}` };
         }
       }
 
@@ -699,6 +699,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     },
     {
       params: t.Object({ provider: t.String() }),
+      query: t.Object({ endpoint: t.Optional(t.String()) }),
       detail: { tags: ['models'] },
     }
   )
