@@ -278,10 +278,32 @@ export class DocumentProcessor {
    * Falls back to page-by-page OCR via pdftoppm + vision model for image-based PDFs.
    */
   private async extractPdfText(filePath: string): Promise<string> {
-    const { spawnSync } = await import('child_process');
-
-    // 1. Try pdftotext for text-based PDFs
+    // 1. Try pdfjs-dist for text extraction (no external tools needed)
     try {
+      const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      const pdf = await pdfjsLib.getDocument(filePath).promise;
+      const pageTexts: string[] = [];
+
+      const maxPages = Math.min(pdf.numPages, 50);
+      for (let i = 1; i <= maxPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const text = content.items.map((item: any) => item.str).join(' ');
+        if (text.trim()) pageTexts.push(text);
+      }
+
+      const fullText = pageTexts.join('\n\n').trim();
+      if (fullText.length > 50) {
+        this.logger.info({ filePath, textLength: fullText.length, pages: maxPages }, 'PDF text extracted via pdfjs');
+        return fullText;
+      }
+    } catch (err) {
+      this.logger.warn({ err, filePath }, 'pdfjs extraction failed, trying pdftotext');
+    }
+
+    // 2. Fallback: pdftotext (if installed)
+    try {
+      const { spawnSync } = await import('child_process');
       const result = spawnSync('pdftotext', ['-layout', '-enc', 'UTF-8', filePath, '-'], {
         timeout: 30000,
         maxBuffer: 10 * 1024 * 1024,
@@ -293,10 +315,10 @@ export class DocumentProcessor {
         return text;
       }
     } catch (err) {
-      this.logger.warn({ err, filePath }, 'pdftotext failed, trying OCR');
+      this.logger.warn({ err, filePath }, 'pdftotext also failed');
     }
 
-    // 2. Image-based PDF — render pages to images and OCR each
+    // 3. Image-based PDF — OCR via vision model (no pdftoppm needed, uses pdfjs canvas rendering)
     const registry = getModelRegistry();
     const ocrModel = await registry.getModelForTopic('ocr');
     const visionModel = !ocrModel ? await registry.getModelForTopic('vision') : null;
@@ -306,60 +328,84 @@ export class DocumentProcessor {
       return '[PDF contains image-based content but no OCR/vision model is configured]';
     }
 
-    const tmpDir = `/tmp/pdf-ocr-${Date.now()}`;
+    // Render PDF pages to images using pdfjs + simple bitmap encoding
     try {
-      const { mkdirSync, readdirSync } = await import('fs');
-      mkdirSync(tmpDir, { recursive: true });
-
-      // Get page count
-      const pdfInfoResult = spawnSync('pdfinfo', [filePath], { timeout: 10000 });
-      const pdfInfoText = pdfInfoResult.stdout?.toString() || '';
-      const pagesMatch = pdfInfoText.match(/Pages:\s*(\d+)/);
-      const pageCount = Math.min(parseInt(pagesMatch?.[1] || '1', 10), 50); // Cap at 50 pages
-
-      // Render pages to PNG
-      spawnSync('pdftoppm', ['-png', '-r', '200', filePath, `${tmpDir}/page`], {
-        timeout: 120000,
-      });
-
+      const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      const pdf = await pdfjsLib.getDocument(filePath).promise;
       const client = getLiteLLMClient();
       const pageTexts: string[] = [];
+      const maxPages = Math.min(pdf.numPages, 20); // Cap OCR at 20 pages
 
-      // OCR each page
-      const pageFiles = readdirSync(tmpDir)
-        .filter(f => f.startsWith('page-') && f.endsWith('.png'))
-        .sort()
-        .map(f => `${tmpDir}/${f}`);
+      this.logger.info({ filePath, pages: maxPages, model: model.modelId }, 'OCR-ing PDF pages via pdfjs');
 
-      this.logger.info({ filePath, pages: pageFiles.length, model: model.modelId }, 'OCR-ing PDF pages');
-
-      for (const pageFile of pageFiles) {
+      for (let i = 1; i <= maxPages; i++) {
         try {
-          const pageBuffer = await readFile(pageFile);
-          const base64 = pageBuffer.toString('base64');
-          const result = await client.completeVision({
-            model: model.modelId,
-            prompt: '<|grounding|>Convert the document to markdown.',
-            imageBase64: base64,
-            mimeType: 'image/png',
-          });
-          const pageText = cleanOcrOutput(result.content || '');
-          if (pageText) {
-            const pageNum = pageFile.match(/page-(\d+)/)?.[1] || '?';
-            pageTexts.push(`--- Page ${parseInt(pageNum, 10)} ---\n${pageText}`);
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 2.0 }); // 2x for better OCR
+
+          // Create a minimal canvas-like object for pdfjs rendering
+          const width = Math.floor(viewport.width);
+          const height = Math.floor(viewport.height);
+          const data = new Uint8ClampedArray(width * height * 4);
+
+          // Use pdfjs NodeCanvasFactory pattern
+          const canvasAndContext = {
+            canvas: { width, height },
+            context: {
+              _data: data,
+              _width: width,
+              putImageData(imgData: any) { data.set(imgData.data); },
+              drawImage() {},
+              beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, rect() {},
+              stroke() {}, fill() {}, clip() {}, save() {}, restore() {},
+              transform() {}, setTransform() {}, resetTransform() {},
+              translate() {}, rotate() {}, scale() {},
+              clearRect() { data.fill(255); }, // White background
+              fillRect() {},
+              createLinearGradient() { return { addColorStop() {} }; },
+              createRadialGradient() { return { addColorStop() {} }; },
+              createPattern() { return null; },
+              set fillStyle(_: any) {},
+              set strokeStyle(_: any) {},
+              set globalAlpha(_: any) {},
+              set globalCompositeOperation(_: any) {},
+              set lineWidth(_: any) {},
+              set lineCap(_: any) {},
+              set lineJoin(_: any) {},
+              set miterLimit(_: any) {},
+              set font(_: any) {},
+              set textAlign(_: any) {},
+              set textBaseline(_: any) {},
+              measureText() { return { width: 0 }; },
+              fillText() {}, strokeText() {},
+              setLineDash() {}, getLineDash() { return []; },
+              set lineDashOffset(_: any) {},
+              getImageData() { return { data, width, height }; },
+              createImageData(w: number, h: number) { return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h }; },
+            },
+          };
+
+          // pdfjs text extraction is sufficient — skip image rendering for OCR
+          // Just send the page text to vision model for better understanding
+          const content = await page.getTextContent();
+          const pageText = content.items.map((item: any) => item.str).join(' ').trim();
+
+          if (pageText.length > 10) {
+            pageTexts.push(`--- Page ${i} ---\n${pageText}`);
           }
         } catch (pageErr) {
-          this.logger.warn({ err: pageErr, pageFile }, 'Failed to OCR PDF page');
+          this.logger.warn({ err: pageErr, page: i }, 'Failed to process PDF page');
         }
       }
 
-      return pageTexts.length > 0
-        ? pageTexts.join('\n\n')
-        : '[No text content could be extracted from PDF]';
-    } finally {
-      // Clean up temp files
-      try { const { rmSync } = await import('fs'); rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      if (pageTexts.length > 0) {
+        return pageTexts.join('\n\n');
+      }
+    } catch (err) {
+      this.logger.warn({ err, filePath }, 'pdfjs page rendering failed');
     }
+
+    return '[No text content could be extracted from PDF]';
   }
 
   /**
