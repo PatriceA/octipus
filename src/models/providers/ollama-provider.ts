@@ -36,11 +36,14 @@ export class OllamaProvider implements ModelProvider {
   readonly name = 'ollama';
   readonly type = 'direct' as const;
 
-  private endpoint: string;
+  private fixedEndpoint?: string;
 
   constructor(endpoint?: string) {
-    const config = getConfig();
-    this.endpoint = endpoint || config.ollama.url;
+    this.fixedEndpoint = endpoint;
+  }
+
+  private get endpoint(): string {
+    return this.fixedEndpoint || getConfig().ollama.url;
   }
 
   /**
