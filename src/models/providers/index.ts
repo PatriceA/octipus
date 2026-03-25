@@ -95,7 +95,7 @@ export class ProviderRouter {
     }
   }
 
-  /** Get the provider that handles a given model */
+  /** Get the provider that handles a given model (name-based heuristic) */
   getProvider(modelName: string): ModelProvider {
     for (const provider of this.providers) {
       if (provider.supportsModel(modelName)) {
@@ -106,9 +106,27 @@ export class ProviderRouter {
     return this.providers[this.providers.length - 1];
   }
 
+  /** Get a provider by its name (e.g., 'ollama', 'openai'). Used for DB-configured provider lookup. */
+  getProviderByName(name: string): ModelProvider | undefined {
+    return this.providers.find(p => p.name === name);
+  }
+
+  /** Resolve provider: check DB config first (handles models like "deepseek-ocr" on Ollama), fall back to name heuristic */
+  async resolveProvider(modelName: string): Promise<ModelProvider> {
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const dbModel = await getModelRegistry().getModelByModelId(modelName);
+      if (dbModel?.provider) {
+        const dbProvider = this.getProviderByName(dbModel.provider);
+        if (dbProvider) return dbProvider;
+      }
+    } catch {}
+    return this.getProvider(modelName);
+  }
+
   /** Complete with automatic provider selection, rate limiting, and circuit breaking */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const provider = this.getProvider(options.model);
+    const provider = await this.resolveProvider(options.model);
     const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
     modelLogger.debug({
@@ -171,7 +189,7 @@ export class ProviderRouter {
 
   /** Stream with automatic provider selection, rate limiting, and circuit breaking */
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const provider = this.getProvider(options.model);
+    const provider = await this.resolveProvider(options.model);
     const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
     modelLogger.debug({

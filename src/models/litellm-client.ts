@@ -138,7 +138,7 @@ export class LiteLLMClient {
     try {
       const { getProviderRouter } = await import('@/models/providers');
       const router = getProviderRouter();
-      const provider = router.getProvider(resolvedModel);
+      const provider = await router.resolveProvider(resolvedModel);
       if (provider.name !== 'litellm') {
         modelLogger.debug(
           { model: resolvedModel, provider: provider.name },
@@ -425,7 +425,16 @@ export class LiteLLMClient {
     try {
       const { getProviderRouter } = await import('@/models/providers');
       const router = getProviderRouter();
-      const provider = router.getProvider(options.model);
+      const { getModelRegistry: getVisionRegistry } = await import('@/models/model-registry');
+      const visionModelEntry = await getVisionRegistry().getModelByModelId(options.model);
+
+      // Use the model's configured provider from DB, not the name-based heuristic
+      // (e.g. "deepseek-ocr:latest" is an Ollama model, not DeepSeek cloud)
+      const dbProvider = visionModelEntry?.provider;
+      const provider = dbProvider
+        ? (router.getAllProviders().find(p => p.name === dbProvider) || router.getProvider(options.model))
+        : router.getProvider(options.model);
+
       if (provider.name !== 'litellm') {
         modelLogger.info({ model: options.model, provider: provider.name }, 'Routing vision request through direct provider');
         const startTime = Date.now();
@@ -433,8 +442,6 @@ export class LiteLLMClient {
         // Resolve endpoint + API key for the model (supports per-model overrides)
         const { getVault } = await import('@/security/vault');
         const vault = getVault();
-        const { getModelRegistry: getVisionRegistry } = await import('@/models/model-registry');
-        const visionModelEntry = await getVisionRegistry().getModelByModelId(options.model);
         const modelEndpoint = visionModelEntry?.endpoint;
         const modelApiKeyRef = visionModelEntry?.apiKeyRef;
 
