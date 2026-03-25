@@ -194,23 +194,31 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     const startTime = Date.now();
 
+    // Resolve cwd: dev mode sessions use project path, otherwise workspace root
+    let workspaceCwd: string;
+    try {
+      const session = await sessionRepository.findById(this.context.sessionId);
+      const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
+      if (sessionCtx?.devMode && sessionCtx.projectPath) {
+        workspaceCwd = resolvePath(sessionCtx.projectPath);
+      } else {
+        workspaceCwd = resolvePath(getConfig().workspace.rootPath);
+      }
+    } catch {
+      workspaceCwd = process.cwd();
+    }
+
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
-
-      // Run in workspace root, not the assistant project directory
-      let workspaceCwd: string;
-      try {
-        workspaceCwd = resolvePath(getConfig().workspace.rootPath);
-      } catch {
-        workspaceCwd = process.cwd();
-      }
 
       const proc = spawn(binary, args, {
         env,
         cwd: workspaceCwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: this.config.timeout,
+        // On Windows, CLI tools are .cmd wrappers — shell: true is required to resolve them
+        shell: process.platform === 'win32',
       });
 
       this.process = proc;
