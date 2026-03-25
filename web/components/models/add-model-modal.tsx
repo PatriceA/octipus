@@ -207,11 +207,16 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     if (!formData.modelId.trim()) { setError('Model ID is required'); return; }
 
     try {
+      // Custom provider: route through ollama provider with API key ref
+      const isCustom = formData.provider === 'custom';
+      const effectiveProvider = isCustom ? 'ollama' : formData.provider;
+
       await onAdd({
         name: formData.name,
-        provider: formData.provider,
+        provider: effectiveProvider,
         modelId: formData.modelId,
         endpoint: formData.endpoint || undefined,
+        apiKeyRef: isCustom ? 'custom_api_key' : undefined,
         contextWindow: formData.contextWindow,
         maxTokens: formData.maxTokens,
         supportsVision: formData.supportsVision,
@@ -442,21 +447,27 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               </div>
             )}
 
-            {!isCli && (connectionType === 'litellm' || formData.provider === 'ollama') && (
+            {connectionType === 'direct' && formData.provider === 'custom' && (
+              <p className="text-xs text-on-surface-variant bg-surface-container-high px-3 py-2 rounded-lg">
+                Custom providers use the OpenAI-compatible API format (/v1/chat/completions). Set the API key on the <strong>Secrets</strong> page under &quot;Custom Provider&quot;.
+              </p>
+            )}
+
+            {!isCli && (connectionType === 'litellm' || formData.provider === 'ollama' || formData.provider === 'custom') && (
               <div>
-                <label className="block text-sm font-medium text-on-surface-variant mb-1">Endpoint URL</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Endpoint URL {formData.provider === 'custom' ? '*' : ''}</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={formData.endpoint}
                     onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
-                    placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : 'e.g., http://192.168.1.100:11434'}
+                    placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : formData.provider === 'custom' ? 'e.g., https://api.provider.com' : 'e.g., http://192.168.1.100:11434'}
                     className="flex-1 px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
                   />
-                  {connectionType === 'direct' && formData.provider === 'ollama' && formData.endpoint && (
+                  {connectionType === 'direct' && (formData.provider === 'ollama' || formData.provider === 'custom') && formData.endpoint && (
                     <button
                       type="button"
-                      onClick={() => fetchAvailableModels('ollama', formData.endpoint)}
+                      onClick={() => fetchAvailableModels('ollama', formData.endpoint)}  /* custom uses same Ollama-compat endpoint */
                       className="px-3 py-2 border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-on-surface-variant text-sm flex items-center gap-1 cursor-pointer"
                       title="Reload models from this endpoint"
                     >

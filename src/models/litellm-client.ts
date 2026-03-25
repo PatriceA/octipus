@@ -22,6 +22,8 @@ export interface CompletionOptions {
   extraBody?: Record<string, unknown>;
   /** Per-model endpoint override (e.g. second Ollama instance) */
   endpoint?: string;
+  /** Per-model API key (e.g. custom OpenAI-compatible provider) */
+  apiKey?: string;
 }
 
 export interface CompletionResult {

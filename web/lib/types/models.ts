@@ -90,7 +90,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   gemini: 'Google Gemini',
   voyage: 'Voyage AI (Embeddings)',
   cli: 'CLI (Subscription)',
-  custom: 'Custom',
+  custom: 'Custom (OpenAI-compatible)',
 };
 
 /** Default model capabilities by provider */

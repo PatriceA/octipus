@@ -437,6 +437,15 @@ export class AgentWorker extends BaseAgentWorker {
       ? metadata.extraBody
       : undefined;
 
+    // Resolve API key from vault for custom/direct providers
+    let apiKey: string | undefined;
+    if (model.apiKeyRef) {
+      try {
+        const { getVault } = await import('@/security/vault');
+        apiKey = await getVault().getByName('system', model.apiKeyRef) || undefined;
+      } catch {}
+    }
+
     const result = await client.complete({
       model: litellmModel,
       messages: this.messages,
@@ -445,6 +454,7 @@ export class AgentWorker extends BaseAgentWorker {
       maxTokens: model.defaultMaxTokens || model.maxTokens || 4096,
       extraBody,
       endpoint: model.endpoint || undefined,
+      apiKey,
     });
 
     await costTracker.logUsageWithCost(
