@@ -86,6 +86,7 @@ interface Preset {
 export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const deletedSessionsRef = useRef<Set<string>>(new Set());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
@@ -127,6 +128,7 @@ export default function ChatPage() {
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
           .filter(s => s.status === 'active' && (!s.channelType || s.channelType === 'webchat' || s.channelType === 'api'))
+          .filter(s => !deletedSessionsRef.current.has(s.id))
           .slice(0, 50)
           .map(s => ({
             id: s.id,
@@ -777,6 +779,9 @@ export default function ChatPage() {
   };
 
   const deleteSession = async (id: string) => {
+    // Track locally so polling doesn't resurrect the session
+    deletedSessionsRef.current.add(id);
+
     try {
       await api.delete(`/sessions/${id}`);
     } catch (err) {

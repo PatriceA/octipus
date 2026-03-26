@@ -91,6 +91,25 @@ export class SessionRepository {
   }
 
   async delete(id: string): Promise<boolean> {
+    // Manually delete related records — PGlite may not enforce ON DELETE CASCADE
+    // from the Drizzle schema definition if the migration didn't include it.
+    try {
+      const { messages } = await import('../schema/messages');
+      const { pipelines, pipelineStages } = await import('../schema/pipelines');
+      const { agents } = await import('../schema/agents');
+
+      // Delete pipeline stages first (FK to pipelines)
+      const pipelineRows = await this.db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.sessionId, id));
+      for (const p of pipelineRows) {
+        await this.db.delete(pipelineStages).where(eq(pipelineStages.pipelineId, p.id));
+      }
+      await this.db.delete(pipelines).where(eq(pipelines.sessionId, id));
+      await this.db.delete(messages).where(eq(messages.sessionId, id));
+      await this.db.delete(agents).where(eq(agents.sessionId, id));
+    } catch (err) {
+      dbLogger.warn({ sessionId: id, err }, 'Failed to clean up related records before session delete');
+    }
+
     const result = await this.db.delete(sessions).where(eq(sessions.id, id)).returning();
     if (result.length > 0) {
       dbLogger.info({ sessionId: id }, 'Session deleted');

@@ -145,6 +145,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
     this.aborted = true;
     if (this.process && !this.process.killed) {
       const pid = this.process.pid;
+
+      // Destroy streams first to stop event processing immediately
+      try { this.process.stdout?.destroy(); } catch { /* ignore */ }
+      try { this.process.stderr?.destroy(); } catch { /* ignore */ }
+      try { this.process.stdin?.destroy(); } catch { /* ignore */ }
+
       if (process.platform === 'win32' && pid) {
         // On Windows, SIGTERM doesn't work for shell:true processes (cmd.exe wraps child).
         // taskkill /F /T kills the entire process tree.
@@ -152,7 +158,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           const { execSync } = require('child_process');
           execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
         } catch {
-          this.process.kill('SIGKILL');
+          try { this.process.kill('SIGKILL'); } catch { /* already dead */ }
         }
       } else {
         this.process.kill('SIGTERM');
@@ -275,12 +281,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
       let lineBuffer = '';
 
       proc.stdout.on('data', (chunk: Buffer) => {
+        if (this.aborted) return; // Stop processing events after abort
         lineBuffer += chunk.toString();
         const lines = lineBuffer.split('\n');
         lineBuffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.trim()) continue;
+          if (!line.trim() || this.aborted) continue;
           try {
             const event = JSON.parse(line);
             const result = parser.parse(event, toolConfig.name);

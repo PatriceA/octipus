@@ -425,7 +425,8 @@ async function handleWorkerFailure(
       data: { workerId, role: agentRole, status: 'stopped', totalTokens: failedTokens, durationMs: Date.now() - startTime },
       timestamp: new Date(),
     });
-    return 'Agent was stopped by user.';
+    // Re-throw so the orchestrator aborts the pipeline instead of proceeding to the next stage
+    throw new Error('Agent was stopped by user');
   }
 
   // Retry transient failures (JSON parse, rate limit) with the same model

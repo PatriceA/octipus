@@ -27,25 +27,28 @@ export class GeminiProvider implements ModelProvider {
     const client = await this.createClient();
     const startTime = Date.now();
 
+    // Gemini's OpenAI-compatible endpoint is strict — only include params that are set.
+    // Sending undefined/null for unsupported fields (response_format, stop) causes 400 Bad Request.
     const params: ChatCompletionCreateParams = {
       model: options.model,
       messages: this.formatMessages(options.messages),
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-      top_p: options.topP,
-      stop: options.stopSequences,
-      response_format: options.responseFormat,
       stream: false,
     };
+
+    if (options.temperature != null) params.temperature = options.temperature;
+    if (options.maxTokens != null) params.max_tokens = options.maxTokens;
+    if (options.topP != null) params.top_p = options.topP;
+    if (options.stopSequences?.length) params.stop = options.stopSequences;
 
     if (options.tools?.length) {
       params.tools = options.tools;
       params.tool_choice = 'auto';
     }
 
-    // Merge extra body parameters
+    // Merge extra body parameters (skip response_format — Gemini doesn't support it)
     if (options.extraBody) {
-      Object.assign(params, options.extraBody);
+      const { response_format, ...rest } = options.extraBody as Record<string, unknown>;
+      Object.assign(params, rest);
     }
 
     modelLogger.debug(
@@ -92,7 +95,13 @@ export class GeminiProvider implements ModelProvider {
 
       return result;
     } catch (error) {
-      modelLogger.error({ error, model: params.model, provider: this.name }, 'Gemini completion failed');
+      // Extract detailed error from OpenAI client (Gemini often returns useful error bodies)
+      const errDetail = (error as any)?.error?.message || (error as any)?.message || '';
+      const status = (error as any)?.status;
+      modelLogger.error(
+        { error: errDetail, status, model: params.model, provider: this.name, messageCount: options.messages.length },
+        'Gemini completion failed',
+      );
       throw error;
     }
   }
@@ -103,21 +112,22 @@ export class GeminiProvider implements ModelProvider {
     const params: ChatCompletionCreateParams = {
       model: options.model,
       messages: this.formatMessages(options.messages),
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-      top_p: options.topP,
-      stop: options.stopSequences,
       stream: true,
     };
+
+    if (options.temperature != null) params.temperature = options.temperature;
+    if (options.maxTokens != null) params.max_tokens = options.maxTokens;
+    if (options.topP != null) params.top_p = options.topP;
+    if (options.stopSequences?.length) params.stop = options.stopSequences;
 
     if (options.tools?.length) {
       params.tools = options.tools;
       params.tool_choice = 'auto';
     }
 
-    // Merge extra body parameters
     if (options.extraBody) {
-      Object.assign(params, options.extraBody);
+      const { response_format, ...rest } = options.extraBody as Record<string, unknown>;
+      Object.assign(params, rest);
     }
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Gemini');
@@ -213,30 +223,40 @@ export class GeminiProvider implements ModelProvider {
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
     return messages.map((msg) => {
       if (msg.role === 'tool') {
+        // Gemini requires non-empty tool_call_id and string content
         return {
           role: 'tool' as const,
-          content: msg.content,
-          tool_call_id: msg.toolCallId || '',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+          tool_call_id: msg.toolCallId || 'unknown',
         };
       }
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        // Gemini requires content to be a string (not null) when tool_calls are present
         return {
           role: 'assistant' as const,
-          content: msg.content || null,
+          content: msg.content || '',
           tool_calls: msg.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
             function: {
               name: tc.name,
-              arguments: JSON.stringify(tc.arguments),
+              arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
             },
           })),
         };
       }
 
+      // Gemini doesn't support 'system' role — convert to user message
+      if (msg.role === 'system') {
+        return {
+          role: 'user' as const,
+          content: msg.content,
+        };
+      }
+
       return {
-        role: msg.role as 'system' | 'user' | 'assistant',
+        role: msg.role as 'user' | 'assistant',
         content: msg.content,
       };
     });
