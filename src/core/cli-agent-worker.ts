@@ -177,7 +177,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     const prompt = this.buildPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages);
+    const { binary, args, stdinPrompt } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages);
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
@@ -208,34 +208,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
       workspaceCwd = process.cwd();
     }
 
-    // On Windows, CLI tools are installed as .cmd wrappers that require shell: true.
-    // But shell: true can mangle long prompts with special characters.
-    // Solution: write prompt to temp file, pipe it via stdin, use -p " " (space) so
-    // the CLI enters non-interactive mode and appends stdin to the prompt value.
-    let stdinPrompt: string | undefined;
-    let tempPromptFile: string | undefined;
-    if (process.platform === 'win32') {
-      const promptIdx = args.findIndex(a => a === '-p' || a === '--prompt');
-      if (promptIdx !== -1 && promptIdx + 1 < args.length) {
-        const prompt = args[promptIdx + 1];
-
-        // Write prompt to temp file for safe piping
-        const { writeFileSync } = await import('fs');
-        const { tmpdir } = await import('os');
-        tempPromptFile = `${tmpdir()}/assistant-prompt-${Date.now()}.txt`;
-        writeFileSync(tempPromptFile, prompt, 'utf-8');
-
-        if (binary === 'gemini') {
-          // Gemini: -p " " enters headless mode, stdin is appended to the prompt value
-          stdinPrompt = prompt;
-          args[promptIdx + 1] = ' ';
-        } else {
-          // Claude/others: use shell substitution to read from temp file
-          args[promptIdx + 1] = `$(cat "${tempPromptFile.replace(/\\/g, '/')}")`;
-        }
-      }
-    }
-
+    // On Windows: shell: true is required for .cmd wrappers, and prompts are piped
+    // via stdin (set up by CLIArgumentBuilder) to avoid shell argument mangling.
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
@@ -248,9 +222,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
         shell: process.platform === 'win32',
       });
 
-      // Pipe the prompt via stdin for Gemini
+      // Pipe prompt via stdin on Windows (avoids shell mangling of long args)
       if (stdinPrompt && proc.stdin) {
         proc.stdin.write(stdinPrompt);
+        proc.stdin.end();
+      } else if (proc.stdin) {
         proc.stdin.end();
       }
 
@@ -289,11 +265,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       proc.on('close', async (code) => {
         this.process = null;
-
-        // Clean up temp prompt file if used
-        if (tempPromptFile) {
-          try { const { unlinkSync } = await import('fs'); unlinkSync(tempPromptFile); } catch {}
-        }
 
         // Process remaining buffer
         if (lineBuffer.trim()) {
