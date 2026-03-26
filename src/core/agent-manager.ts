@@ -247,6 +247,22 @@ export class AgentManager {
   }
 
   /**
+   * Stop all running agents (used during shutdown)
+   */
+  stopAll(): void {
+    for (const [id, agent] of this.agents) {
+      if (agent.getStatus() === 'running') {
+        try {
+          agent.stop();
+          agentLogger.info({ agentId: id }, 'Agent stopped during shutdown');
+        } catch {
+          // Best effort
+        }
+      }
+    }
+  }
+
+  /**
    * Remove an agent (clean up)
    */
   remove(agentId: string): boolean {

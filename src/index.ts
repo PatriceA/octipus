@@ -87,6 +87,16 @@ async function main() {
     const shutdown = async () => {
       logger.info('Shutting down...');
 
+      // Stop all running agents (kills CLI child processes)
+      try {
+        const { getAgentManager } = await import('@/core/agent-manager');
+        const agentManager = getAgentManager();
+        agentManager.stopAll();
+        logger.info('All agents stopped');
+      } catch {
+        // Agent manager may not be initialized
+      }
+
       stopCronLoop();
       await mcpBridge.disconnectAll();
       await gateway.stop();

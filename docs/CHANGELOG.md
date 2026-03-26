@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-03-26
+
+### CLI Agent Reliability & Windows Stability
+- **Gemini CLI event parsing**: Fixed parser to match actual Gemini CLI stream-json format — `tool_use` (not `tool_call`), `parameters` (not `tool_args`), `result` with nested `stats` (not top-level `stats`), streaming deltas
+- **Codex CLI event parsing**: Rewrote parser for actual Codex `--json` JSONL format — `thread.started`, `item.started`/`item.completed` (command_execution, agent_message), `turn.completed` with usage stats
+- **Claude CLI `--verbose` flag**: Claude Code now requires `--verbose` when using `--output-format stream-json` with `--print` mode
+- **Removed `--bare` flag**: Claude CLI `--bare` disables OAuth/keychain auth, breaking Pro/Max subscription users. Removed to preserve normal auth flow
+- **Windows command-line length fix**: System prompts passed via `--append-system-prompt-file` (temp file) instead of `--append-system-prompt=<inline>` to avoid the ~8191-char Windows limit
+- **CLI agent hard timeout**: Reliable `setTimeout`-based timeout that force-kills CLI processes (spawn `timeout` option is unreliable on Windows). Default 15 min
+- **Agent stop propagation**: Stopping an agent now stops all agents in the same session via `stopSession()` — prevents orphan CLI workers running indefinitely
+- **Aborted agents throw**: CLI workers throw on abort instead of resolving, so orchestrator correctly detects stop and doesn't proceed to next pipeline stage
+- **Stopped status in UI**: Orchestrator emits `status: 'stopped'` (not `'failed'`) on user abort; chat UI marks agents as 'stopped' when response indicates abort
+
+### Startup & Process Management
+- **Lazy Playwright imports**: `import { chromium } from 'playwright'` moved from top-level to lazy `await import('playwright')` in browser, websearch, and screenshot tools. Startup dropped from ~20s to ~2s
+- **Graceful shutdown**: `stopAll()` kills all running agents and CLI child processes before exit
+- **Orphan process cleanup**: `kill_all_assistant` in `assistant.cmd` now kills orphan `cmd.exe` wrapper processes and stray `bun.exe` instances that held log file locks, preventing backend restart
+
+### Ollama Configuration
+- **Optional Ollama URL**: Removed hardcoded `http://localhost:11434` default. Ollama URL is now truly optional — if not configured, health check returns `not_configured` instead of failing against localhost
+- **Settings-driven health check**: `checkOllama()` uses the DB-configured URL, not a hardcoded default
+
 ## 2026-03-19
 
 ### Knowledge Base Upgrade — Hybrid Search & Tiered Content

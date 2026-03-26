@@ -28,7 +28,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       maxRetries: parseInt(process.env.LITELLM_MAX_RETRIES || '3', 10),
     },
     ollama: {
-      url: process.env.OLLAMA_URL || defaultConfig.ollama!.url!,
+      url: process.env.OLLAMA_URL || undefined,
       defaultModel: process.env.OLLAMA_DEFAULT_MODEL || defaultConfig.ollama!.defaultModel!,
     },
     security: {

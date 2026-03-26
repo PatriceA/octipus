@@ -81,13 +81,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       // Don't mark as completed if we were stopped mid-execution
       if (this.aborted) {
+        this.context.status = 'stopped';
+        this.emit('status_change', { status: 'stopped' });
         const durationMs = Date.now() - this.context.createdAt.getTime();
         agentRepository.updateStatus(this.context.id, {
           status: 'stopped',
           iterations: this.iteration,
           durationMs,
         }).catch(() => {});
-        return result;
+        throw new Error('Agent was aborted by user');
       }
 
       this.context.status = 'completed';
@@ -256,6 +258,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       this.process = proc;
 
+      // Hard timeout: forcefully kill the CLI process if it exceeds the configured timeout.
+      // The spawn `timeout` option is unreliable across platforms.
+      const hardTimeout = setTimeout(() => {
+        if (!this.aborted && this.process && !this.process.killed) {
+          agentLogger.warn(
+            { agentId: this.context.id, tool: toolConfig.name, timeoutMs: this.config.timeout },
+            'CLI agent exceeded hard timeout, force-killing',
+          );
+          this.stop();
+        }
+      }, this.config.timeout);
+
       let accumulatedText = '';
       let stderr = '';
       let lineBuffer = '';
@@ -288,6 +302,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       });
 
       proc.on('close', async (code) => {
+        clearTimeout(hardTimeout);
         this.process = null;
 
         // Process remaining buffer
@@ -346,6 +361,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       });
 
       proc.on('error', (err) => {
+        clearTimeout(hardTimeout);
         this.process = null;
         reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
       });

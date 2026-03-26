@@ -346,7 +346,7 @@ export class ModelRegistry {
         name: 'llama3.2',
         provider: 'ollama',
         modelId: 'llama3.2',
-        endpoint: config.ollama.url,
+        endpoint: config.ollama.url || '',
         maxTokens: 4096,
         contextWindow: 128000,
         supportsVision: false,

@@ -57,3 +57,4 @@ eval/results/*.json
 # Claude Code local config & skills
 .claude/settings.local.json
 .claude/skills/
+.mcp.json

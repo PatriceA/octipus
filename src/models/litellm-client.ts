@@ -447,7 +447,7 @@ export class LiteLLMClient {
 
         // Build endpoint + API key for each provider type
         const providerEndpoints: Record<string, { baseURL: string; vaultName: string; envVar: string }> = {
-          ollama: { baseURL: `${modelEndpoint || getConfig().ollama.url}/v1`, vaultName: '', envVar: '' },
+          ollama: { baseURL: `${modelEndpoint || getConfig().ollama.url || 'http://localhost:11434'}/v1`, vaultName: '', envVar: '' },
           openai: { baseURL: 'https://api.openai.com/v1', vaultName: 'openai_api_key', envVar: 'OPENAI_API_KEY' },
           anthropic: { baseURL: 'https://api.anthropic.com/v1/', vaultName: 'anthropic_api_key', envVar: 'ANTHROPIC_API_KEY' },
           gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', vaultName: 'gemini_api_key', envVar: 'GEMINI_API_KEY' },

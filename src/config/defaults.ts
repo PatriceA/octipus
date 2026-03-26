@@ -21,7 +21,6 @@ export const defaultConfig: Partial<Config> = {
     maxRetries: 3,
   },
   ollama: {
-    url: 'http://localhost:11434',
     defaultModel: 'llama3.2',
   },
   security: {

@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
@@ -326,6 +326,7 @@ export class WebSearchTool extends BaseTool {
 
   private async getOrCreateBrowser(): Promise<Browser> {
     if (!this.browser || !this.browser.isConnected()) {
+      const { chromium } = await import('playwright');
       this.browser = await chromium.launch({ headless: true });
       toolLogger.info('Browser launched for web search');
     }

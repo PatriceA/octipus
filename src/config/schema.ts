@@ -30,7 +30,7 @@ export const litellmConfigSchema = z.object({
 
 // Ollama configuration schema
 export const ollamaConfigSchema = z.object({
-  url: z.string().url().default('http://localhost:11434'),
+  url: z.string().url().optional().describe('Ollama service URL — leave empty if not using a local/remote Ollama instance'),
   defaultModel: z.string().default('llama3.2'),
 });
 

@@ -429,6 +429,10 @@ export default function ChatPage() {
         if (sid) {
           updateSessionState(sid, (prev) => {
             // Finalize any agents still marked as 'running'.
+            // If the response indicates the task was stopped/aborted, mark as 'stopped'.
+            const responseText = typeof data.content === 'string' ? data.content : '';
+            const wasStopped = responseText.includes('stopped') || responseText.includes('aborted');
+            const finalStatus = wasStopped ? 'stopped' : 'completed';
             const now = Date.now();
             const next = new Map(prev.trackedAgents);
             Array.from(next.entries()).forEach(([id, agent]) => {
@@ -436,7 +440,7 @@ export default function ChatPage() {
                 const elapsed = now - agent.startTime;
                 next.set(id, {
                   ...agent,
-                  status: 'completed',
+                  status: finalStatus,
                   endTime: agent.endTime ?? now,
                   // Keep existing durationMs if already set by worker_completed
                   durationMs: agent.durationMs || elapsed,

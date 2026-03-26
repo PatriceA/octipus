@@ -427,6 +427,9 @@ export class OrchestratorService {
       this._lastWorkerResult = null;
       coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
 
+      const errMsg = (error as Error).message || '';
+      const wasStopped = errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped';
+
       this.emit({
         type: 'worker_completed',
         sessionId,
@@ -436,17 +439,14 @@ export class OrchestratorService {
           role: 'orchestrator',
           result: '',
           model: modelName,
-          status: 'failed',
+          status: wasStopped ? 'stopped' : 'failed',
           durationMs: Date.now() - orchStartTime,
           totalTokens: worker.getTotalTokens(),
           iterations: worker.getIteration(),
-          error: (error as Error).message,
+          error: wasStopped ? undefined : (error as Error).message,
         },
         timestamp: new Date(),
       });
-
-      const errMsg = (error as Error).message || '';
-      const wasStopped = errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped';
       const response = wasStopped
         ? 'Task was stopped. Would you like to adjust the request or start something new?'
         : `I encountered an error while processing your request: ${errMsg}`;

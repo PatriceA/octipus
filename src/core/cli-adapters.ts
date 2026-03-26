@@ -1,6 +1,10 @@
 import { agentLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 import type { CLIAgentConfig } from '@/db/schema/models';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { randomBytes } from 'crypto';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -40,19 +44,20 @@ export class CLIArgumentBuilder {
     const args: string[] = [];
 
     if (IS_WIN) {
-      args.push('-p', '--output-format', 'stream-json', '--bare');
+      args.push('-p', '--verbose', '--output-format', 'stream-json');
     } else {
-      args.push('-p', prompt, '--output-format', 'stream-json', '--bare');
+      args.push('-p', prompt, '--verbose', '--output-format', 'stream-json');
     }
 
     const permMode = settings.permissionMode || 'bypassPermissions';
     args.push('--permission-mode', permMode);
 
     if (systemMessages.length > 0) {
-      // On Windows, use = format to keep it as one token for the shell
       const sysPrompt = systemMessages.join('\n');
       if (IS_WIN) {
-        args.push(`--append-system-prompt=${sysPrompt}`);
+        // Write to temp file to avoid Windows command-line length limit (~8191 chars)
+        const tmpFile = this.writeTempFile('claude-sys-', sysPrompt);
+        args.push('--append-system-prompt-file', tmpFile);
       } else {
         args.push('--append-system-prompt', sysPrompt);
       }
@@ -99,6 +104,18 @@ export class CLIArgumentBuilder {
     }
 
     return { binary: 'gemini', args, stdinPrompt: IS_WIN ? prompt : undefined };
+  }
+
+  /**
+   * Write content to a temp file, returning the path.
+   * Used on Windows to bypass the ~8191-char command-line limit.
+   */
+  private writeTempFile(prefix: string, content: string): string {
+    const dir = join(tmpdir(), 'assistant-cli');
+    mkdirSync(dir, { recursive: true });
+    const filePath = join(dir, `${prefix}${randomBytes(6).toString('hex')}.txt`);
+    writeFileSync(filePath, content, 'utf-8');
+    return filePath;
   }
 
   private buildCodexArgs(prompt: string): { binary: string; args: string[]; stdinPrompt?: string } {
@@ -221,12 +238,12 @@ export class CLIOutputParser {
   }
 
   private parseGeminiEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
-    // Gemini CLI stream-json format:
+    // Gemini CLI stream-json format (verified):
     // { type: "init", model, session_id }
-    // { type: "message", role: "user"|"assistant", content }
-    // { type: "tool_call", tool_name, tool_args }
-    // { type: "tool_result", tool_name, output }
-    // { type: "stats", total_tokens, input_tokens, output_tokens, duration_ms, tool_calls }
+    // { type: "message", role: "user"|"assistant", content, delta: true }
+    // { type: "tool_use", tool_name, tool_id, parameters }
+    // { type: "tool_result", tool_id, status, output }
+    // { type: "result", status, stats: { total_tokens, input_tokens, output_tokens, duration_ms, tool_calls } }
 
     if (type === 'init') {
       this.emitFn('thought', {
@@ -241,29 +258,35 @@ export class CLIOutputParser {
       const role = event.role as string;
       const content = event.content as string | undefined;
       if (role === 'assistant' && content) {
-        return { text: content, replace: true };
+        // delta: true means streaming chunks — append, don't replace
+        return { text: content };
       }
       return null;
     }
 
-    if (type === 'tool_call') {
+    if (type === 'tool_use') {
       this.onIteration();
       this.emitFn('action', {
         type: 'cli_tool_use',
-        toolName: event.tool_name || event.name,
-        args: event.tool_args || event.args,
+        toolName: event.tool_name,
+        args: event.parameters,
       });
       return null;
     }
 
     if (type === 'tool_result') {
-      // Tool results from Gemini — just log, don't surface
+      this.emitFn('action', {
+        type: 'cli_tool_result',
+        toolName: event.tool_id,
+        result: ((event.output || '') as string).slice(0, 500),
+        status: event.status,
+      });
       return null;
     }
 
-    if (type === 'stats') {
-      const stats = event as Record<string, unknown>;
-      if (stats.total_tokens || stats.duration_ms) {
+    if (type === 'result') {
+      const stats = event.stats as Record<string, unknown> | undefined;
+      if (stats) {
         this.emitFn('thought', {
           status: 'completed',
           stats: {
@@ -282,44 +305,79 @@ export class CLIOutputParser {
   }
 
   private parseCodexEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
-    // Codex --json outputs: message, function_call, function_call_output, result
-    if (type === 'message' && (event.content || event.text)) {
-      const text = (event.content || event.text) as string;
-      return { text };
-    }
+    // Codex --json JSONL format:
+    //   { type: "thread.started", thread_id }
+    //   { type: "turn.started" }
+    //   { type: "item.started",   item: { id, type: "command_execution", command, status: "in_progress" } }
+    //   { type: "item.completed", item: { id, type: "agent_message", text } }
+    //   { type: "item.completed", item: { id, type: "command_execution", command, aggregated_output, exit_code, status } }
+    //   { type: "turn.completed", usage: { input_tokens, cached_input_tokens, output_tokens } }
 
-    // Tool call events (function_call is the Codex format)
-    if (type === 'function_call' || type === 'tool_call') {
-      this.onIteration();
-      const name = (event.name || event.tool_name || event.function) as string;
-      this.emitFn('action', {
-        type: 'cli_tool_use',
-        toolName: name,
-        args: event.arguments || event.tool_args || event.args,
+    const item = event.item as Record<string, unknown> | undefined;
+
+    if (type === 'thread.started') {
+      this.emitFn('thought', {
+        status: 'running',
+        sessionId: event.thread_id,
       });
       return null;
     }
 
-    // Tool result/output
-    if (type === 'function_call_output' || type === 'tool_result') {
-      return null; // Just log, don't surface
+    if (type === 'item.started' && item) {
+      const itemType = item.type as string;
+      if (itemType === 'command_execution') {
+        this.onIteration();
+        this.emitFn('action', {
+          type: 'cli_tool_use',
+          toolName: 'shell',
+          args: { command: item.command },
+        });
+      }
+      return null;
     }
 
-    // Final result
-    if (type === 'result') {
-      const text = (event.text || event.result || event.content || '') as string;
-      this.emitFn('thought', {
-        status: 'completed',
-        stats: {
-          durationMs: event.duration_ms,
-        },
-      });
-      return text ? { text, replace: true } : null;
+    if (type === 'item.completed' && item) {
+      const itemType = item.type as string;
+
+      if (itemType === 'agent_message') {
+        const text = (item.text || '') as string;
+        return text ? { text, replace: true } : null;
+      }
+
+      if (itemType === 'command_execution') {
+        // Emit the completed tool result with output
+        const output = (item.aggregated_output || '') as string;
+        const exitCode = item.exit_code as number | null;
+        this.emitFn('action', {
+          type: 'cli_tool_result',
+          toolName: 'shell',
+          args: { command: item.command },
+          result: output.slice(0, 500),
+          exitCode,
+        });
+        return null;
+      }
+
+      return null;
     }
 
-    // Catch-all: if event has content/text, surface it
-    if (event.content || event.text) {
-      return { text: (event.content || event.text) as string };
+    if (type === 'turn.completed') {
+      const usage = event.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        const inputTokens = (usage.input_tokens || 0) as number;
+        const cachedTokens = (usage.cached_input_tokens || 0) as number;
+        const outputTokens = (usage.output_tokens || 0) as number;
+        this.emitFn('thought', {
+          status: 'completed',
+          stats: {
+            totalTokens: inputTokens + outputTokens,
+            inputTokens,
+            outputTokens,
+            cacheRead: cachedTokens,
+          },
+        });
+      }
+      return null;
     }
 
     return null;

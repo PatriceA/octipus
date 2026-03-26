@@ -1,4 +1,4 @@
-import { chromium, firefox, webkit, type Browser, type Page, type BrowserContext } from 'playwright';
+import type { Browser, Page, BrowserContext } from 'playwright';
 import { logger } from '../utils/logger';
 
 export interface ScreenshotOptions {
@@ -59,11 +59,12 @@ export class ScreenshotCapture {
   async init(): Promise<void> {
     if (this.browser) return;
 
+    const pw = await import('playwright');
     const launcher = this.browserType === 'firefox'
-      ? firefox
+      ? pw.firefox
       : this.browserType === 'webkit'
-        ? webkit
-        : chromium;
+        ? pw.webkit
+        : pw.chromium;
 
     this.browser = await launcher.launch({
       headless: this.headless,

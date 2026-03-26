@@ -43,7 +43,9 @@ export class OllamaProvider implements ModelProvider {
   }
 
   private get endpoint(): string {
-    return this.fixedEndpoint || getConfig().ollama.url;
+    const url = this.fixedEndpoint || getConfig().ollama.url;
+    if (!url) throw new Error('Ollama URL not configured');
+    return url;
   }
 
   /**
@@ -305,10 +307,15 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {
+    const url = this.fixedEndpoint || getConfig().ollama.url;
+    if (!url) {
+      return { healthy: false, error: 'Ollama URL not configured' };
+    }
+
     const startTime = Date.now();
 
     try {
-      const response = await fetch(`${this.endpoint}/api/tags`, {
+      const response = await fetch(`${url}/api/tags`, {
         signal: AbortSignal.timeout(5000),
       });
 

@@ -257,9 +257,11 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         return { error: 'Not authorized' };
       }
 
-      const stopped = agentManager.stop(params.id);
+      // Stop the target agent and all other agents in the same session
+      // (e.g. stopping the orchestrator should also stop child CLI workers)
+      const stopped = agentManager.stopSession(context.sessionId);
 
-      return { stopped };
+      return { stopped: stopped > 0 };
     },
     {
       params: t.Object({

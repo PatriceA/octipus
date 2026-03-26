@@ -102,6 +102,15 @@ exit /b %errorlevel%
 :: Kill tracked processes and free ports
 call :kill_port %API_PORT%
 call :kill_port %WEB_PORT%
+:: Kill orphan wrapper cmd.exe processes spawned by start_hidden (they hold log file locks)
+if exist "%STATE_DIR%\run_backend.cmd" (
+    powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"CommandLine like '%%run_backend.cmd%%'\" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+)
+if exist "%STATE_DIR%\run_webui.cmd" (
+    powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"CommandLine like '%%run_webui.cmd%%'\" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+)
+:: Also kill any stray bun processes from our project directory
+powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"Name='bun.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*the_assistant*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
 if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%"
 exit /b 0

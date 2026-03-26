@@ -562,8 +562,10 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     async ({ user }) => {
       if (!user) return { error: 'Not authenticated' };
       const config = getConfig();
+      const ollamaUrl = config.ollama?.url;
+      if (!ollamaUrl) return { error: 'Ollama URL not configured' };
       try {
-        const res = await fetch(`${config.ollama.url}/api/tags`, {
+        const res = await fetch(`${ollamaUrl}/api/tags`, {
           signal: AbortSignal.timeout(5000),
         });
         if (!res.ok) return { error: `Ollama unreachable (${res.status})` };

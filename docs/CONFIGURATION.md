@@ -30,7 +30,7 @@ CORS_ORIGINS=http://localhost:3006,http://localhost:3007
 
 # ─── Models ───────────────────────────────────────────────────
 LITELLM_URL=http://localhost:4000      # LiteLLM proxy (optional)
-OLLAMA_URL=http://localhost:11434      # Local Ollama (optional)
+OLLAMA_URL=                            # Ollama URL (optional — set in Settings > Configuration or here)
 # Default model is configured in the database via the Models page.
 # Provider API keys (OpenAI, Anthropic, Gemini) are stored in the encrypted vault.
 
