@@ -78,6 +78,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     try {
       const result = await this.executeCLI();
+
+      // Don't mark as completed if we were stopped mid-execution
+      if (this.aborted) {
+        const durationMs = Date.now() - this.context.createdAt.getTime();
+        agentRepository.updateStatus(this.context.id, {
+          status: 'stopped',
+          iterations: this.iteration,
+          durationMs,
+        }).catch(() => {});
+        return result;
+      }
+
       this.context.status = 'completed';
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result });
@@ -94,7 +106,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         durationMs,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
 
-      // Auto-index output into knowledge base (fire-and-forget)
+      // Auto-index output into knowledge base
       autoIndexAgentOutput({
         agentId: this.context.id,
         sessionId: this.context.sessionId,
@@ -102,7 +114,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         role: this.context.role,
         topic: this.context.topic,
         output: result,
-      }).catch(() => {});
+      }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to index agent output'));
 
       return result;
     } catch (error) {
@@ -130,12 +142,24 @@ export class CLIAgentWorker extends BaseAgentWorker {
   stop(): void {
     this.aborted = true;
     if (this.process && !this.process.killed) {
-      this.process.kill('SIGTERM');
-      setTimeout(() => {
-        if (this.process && !this.process.killed) {
+      const pid = this.process.pid;
+      if (process.platform === 'win32' && pid) {
+        // On Windows, SIGTERM doesn't work for shell:true processes (cmd.exe wraps child).
+        // taskkill /F /T kills the entire process tree.
+        try {
+          const { execSync } = require('child_process');
+          execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
+        } catch {
           this.process.kill('SIGKILL');
         }
-      }, 5000);
+      } else {
+        this.process.kill('SIGTERM');
+        setTimeout(() => {
+          if (this.process && !this.process.killed) {
+            this.process.kill('SIGKILL');
+          }
+        }, 5000);
+      }
     }
     this.context.status = 'stopped';
     this.emit('status_change', { status: 'stopped' });

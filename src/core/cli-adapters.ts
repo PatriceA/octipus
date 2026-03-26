@@ -40,9 +40,9 @@ export class CLIArgumentBuilder {
     const args: string[] = [];
 
     if (IS_WIN) {
-      args.push('-p', '--output-format', 'stream-json', '--verbose');
+      args.push('-p', '--output-format', 'stream-json', '--bare');
     } else {
-      args.push('-p', prompt, '--output-format', 'stream-json', '--verbose');
+      args.push('-p', prompt, '--output-format', 'stream-json', '--bare');
     }
 
     const permMode = settings.permissionMode || 'bypassPermissions';
@@ -104,9 +104,9 @@ export class CLIArgumentBuilder {
   private buildCodexArgs(prompt: string): { binary: string; args: string[]; stdinPrompt?: string } {
     // Codex: positional prompt or '-' to read from stdin
     if (IS_WIN) {
-      return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', '-'], stdinPrompt: prompt };
+      return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', '--ephemeral', '-'], stdinPrompt: prompt };
     }
-    return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', prompt] };
+    return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', '--ephemeral', prompt] };
   }
 }
 
@@ -282,27 +282,46 @@ export class CLIOutputParser {
   }
 
   private parseCodexEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
-    if (type === 'message' && event.content) {
-      return { text: event.content as string };
+    // Codex --json outputs: message, function_call, function_call_output, result
+    if (type === 'message' && (event.content || event.text)) {
+      const text = (event.content || event.text) as string;
+      return { text };
     }
-    if (type === 'result' && event.text) {
+
+    // Tool call events (function_call is the Codex format)
+    if (type === 'function_call' || type === 'tool_call') {
+      this.onIteration();
+      const name = (event.name || event.tool_name || event.function) as string;
+      this.emitFn('action', {
+        type: 'cli_tool_use',
+        toolName: name,
+        args: event.arguments || event.tool_args || event.args,
+      });
+      return null;
+    }
+
+    // Tool result/output
+    if (type === 'function_call_output' || type === 'tool_result') {
+      return null; // Just log, don't surface
+    }
+
+    // Final result
+    if (type === 'result') {
+      const text = (event.text || event.result || event.content || '') as string;
       this.emitFn('thought', {
         status: 'completed',
         stats: {
           durationMs: event.duration_ms,
         },
       });
-      return { text: event.text as string, replace: true };
+      return text ? { text, replace: true } : null;
     }
-    if (type === 'tool_call') {
-      this.onIteration();
-      this.emitFn('action', {
-        type: 'cli_tool_use',
-        toolName: event.tool_name,
-        args: event.tool_args,
-      });
-      return null;
+
+    // Catch-all: if event has content/text, surface it
+    if (event.content || event.text) {
+      return { text: (event.content || event.text) as string };
     }
+
     return null;
   }
 }

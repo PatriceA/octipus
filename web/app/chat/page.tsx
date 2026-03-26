@@ -1031,6 +1031,7 @@ export default function ChatPage() {
           messages={messages}
           trackedAgents={trackedAgents}
           teams={teams}
+          fileChanges={activeState?.fileChanges}
           isLoading={isLoading}
           statusMessage={statusMessage}
         />

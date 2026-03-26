@@ -202,7 +202,14 @@ export async function spawnWorker(
       const projectName = sessionCtx!.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
       systemPrompt += `\n\n--- Project Summary (${projectName}) ---\n${projectSummary}`;
     }
-    systemPrompt += `\n\nAfter completing your task, if you made significant changes, update .assistant/project-summary.md in the project with any new findings.`;
+    systemPrompt += `\n\nPROJECT SUMMARY MAINTENANCE:
+After completing your task, update .assistant/project-summary.md in the project root with:
+- Project structure overview (key directories, entry points)
+- Main technologies and frameworks used
+- Key files and their purposes
+- Summary of recent changes you made
+Keep it under 4000 chars — this summary is injected into all future agents working on this project.
+If the file doesn't exist, create it.`;
   } else if (agentRole === 'coding') {
     const projectSummary = await loadProjectSummary();
     if (projectSummary) {

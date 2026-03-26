@@ -15,6 +15,10 @@ import {
   XCircle,
   Wrench,
   Users,
+  FileText,
+  FilePlus,
+  FileEdit,
+  FileX,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -485,13 +489,88 @@ function TeamActivityInline({
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// FileChangesInline — shows file changes grouped by agent
+// ---------------------------------------------------------------------------
+
+const FILE_ACTION_ICONS: Record<string, { icon: typeof FileText; color: string; label: string }> = {
+  write: { icon: FilePlus, color: 'text-emerald-400', label: 'created' },
+  create: { icon: FilePlus, color: 'text-emerald-400', label: 'created' },
+  edit: { icon: FileEdit, color: 'text-amber-400', label: 'modified' },
+  append: { icon: FileEdit, color: 'text-amber-400', label: 'modified' },
+  delete: { icon: FileX, color: 'text-red-400', label: 'deleted' },
+  move: { icon: FileEdit, color: 'text-blue-400', label: 'moved' },
+  copy: { icon: FilePlus, color: 'text-blue-400', label: 'copied' },
+  create_dir: { icon: FilePlus, color: 'text-emerald-400', label: 'created dir' },
+};
+
+function FileChangesInline({ group }: { group: FileChangeGroup }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Deduplicate by path (keep latest action)
+  const uniqueChanges = new Map<string, FileChange>();
+  for (const change of group.changes) {
+    uniqueChanges.set(change.path, change);
+  }
+  const changes = Array.from(uniqueChanges.values());
+  return (
+    <div className="ml-9 my-1">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-xs text-on-surface-variant hover:text-white cursor-pointer py-1"
+      >
+        <FileText className="w-3.5 h-3.5" />
+        <span className="font-medium text-white/70">
+          {group.agentRole}
+        </span>
+        <span>{changes.length} file{changes.length !== 1 ? 's' : ''} changed</span>
+        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+      </button>
+
+      {expanded && (
+        <div className="ml-5 mt-1 space-y-0.5">
+          {changes.map((change, i) => {
+            const info = FILE_ACTION_ICONS[change.action] || FILE_ACTION_ICONS.write;
+            const Icon = info.icon;
+            const shortPath = change.path.replace(/\\/g, '/').split('/').slice(-3).join('/');
+            return (
+              <div key={`${change.path}-${i}`} className="flex items-center gap-2 text-xs py-0.5">
+                <Icon className={cn('w-3 h-3 shrink-0', info.color)} />
+                <span className="font-mono text-white/80 truncate" title={change.path}>{shortPath}</span>
+                <span className="text-on-surface-variant">({info.label})</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MessageTimeline (main export)
 // ---------------------------------------------------------------------------
+
+export interface FileChange {
+  path: string;
+  action: string;
+  agentId: string;
+  agentRole: string;
+  timestamp: string;
+}
+
+interface FileChangeGroup {
+  agentId: string;
+  agentRole: string;
+  changes: FileChange[];
+  timestamp: number;
+}
 
 interface MessageTimelineProps {
   messages: ChatMessageData[];
   trackedAgents: Map<string, TrackedAgent>;
   teams: Map<string, TeamState>;
+  fileChanges?: FileChange[];
   isLoading: boolean;
   statusMessage: string | null;
 }
@@ -499,12 +578,14 @@ interface MessageTimelineProps {
 type TimelineEntry =
   | { kind: 'message'; data: ChatMessageData; sortKey: number }
   | { kind: 'agent'; data: TrackedAgent; sortKey: number }
-  | { kind: 'team'; data: { teamId: string; members: TrackedAgent[]; status: string; durationMs?: number }; sortKey: number };
+  | { kind: 'team'; data: { teamId: string; members: TrackedAgent[]; status: string; durationMs?: number }; sortKey: number }
+  | { kind: 'file_changes'; data: FileChangeGroup; sortKey: number };
 
 export default function MessageTimeline({
   messages,
   trackedAgents,
   teams,
+  fileChanges,
   isLoading,
   statusMessage,
 }: MessageTimelineProps) {
@@ -564,6 +645,32 @@ export default function MessageTimeline({
     }
   });
 
+  // File changes grouped by agent
+  if (fileChanges && fileChanges.length > 0) {
+    const groups = new Map<string, FileChangeGroup>();
+    for (const fc of fileChanges) {
+      const key = fc.agentId;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          agentId: fc.agentId,
+          agentRole: fc.agentRole,
+          changes: [],
+          timestamp: new Date(fc.timestamp).getTime(),
+        });
+      }
+      const group = groups.get(key)!;
+      group.changes.push(fc);
+      group.timestamp = Math.max(group.timestamp, new Date(fc.timestamp).getTime());
+    }
+    for (const group of Array.from(groups.values())) {
+      timeline.push({
+        kind: 'file_changes',
+        data: group,
+        sortKey: group.timestamp,
+      });
+    }
+  }
+
   timeline.sort((a, b) => a.sortKey - b.sortKey);
 
   // Auto-scroll
@@ -617,6 +724,8 @@ export default function MessageTimeline({
                 durationMs={entry.data.durationMs}
               />
             );
+          case 'file_changes':
+            return <FileChangesInline key={`files-${entry.data.agentId}`} group={entry.data} />;
         }
       })}
 
