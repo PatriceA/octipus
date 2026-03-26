@@ -14,12 +14,18 @@ export class BrowserTool extends BaseTool {
 
   async checkAvailability(): Promise<ToolAvailability> {
     try {
-      // Check if Playwright's chromium browser binary is installed
-      const { chromium: pw } = await import('playwright');
-      const path = pw.executablePath();
+      // Quick file-based check without importing playwright (which is slow)
       const { existsSync } = await import('fs');
-      if (!path || !existsSync(path)) {
-        return { available: false, reason: 'Playwright chromium not installed (run: npx playwright install chromium)' };
+      const { join } = await import('path');
+      const home = process.env.HOME || process.env.USERPROFILE || '';
+      // Playwright stores browsers in ~/.cache/ms-playwright or AppData
+      const possiblePaths = [
+        join(home, '.cache', 'ms-playwright'),
+        join(home, 'AppData', 'Local', 'ms-playwright'),
+      ];
+      const hasPlaywright = possiblePaths.some(p => existsSync(p));
+      if (!hasPlaywright) {
+        return { available: false, reason: 'Playwright browsers not installed (run: npx playwright install chromium)' };
       }
       return { available: true };
     } catch {

@@ -123,7 +123,7 @@ export class HealthChecker {
    * Providers that cannot be health-checked via a LiteLLM completion call.
    * CLI tools are local subprocess wrappers; direct providers have their own health endpoints.
    */
-  private static SKIP_LITELLM_PROVIDERS = new Set(['cli', 'ollama', 'openai', 'anthropic', 'gemini']);
+  private static SKIP_LITELLM_PROVIDERS = new Set(['cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'voyage']);
 
   /**
    * Check health of a specific model
