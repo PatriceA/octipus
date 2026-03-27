@@ -48,6 +48,7 @@ interface SummaryData {
 interface ModelInfo {
   id: string;
   name?: string;
+  modelId?: string;
 }
 
 // Score cell with color intensity

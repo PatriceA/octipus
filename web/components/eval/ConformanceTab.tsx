@@ -218,8 +218,8 @@ export function ConformanceTab() {
           {showModelPicker && models.length > 0 && (
             <div className="absolute top-full mt-1 left-0 z-20 bg-[#1a1a1a] border border-outline-variant/10 rounded-xl shadow-lg min-w-[220px] max-h-60 overflow-y-auto">
               {models.map(m => {
-                const id = m.name || m.modelId || m.id;
-                const label = m.name || m.modelId || m.id;
+                const id = m.name || (m as any).modelId || m.id;
+                const label = m.name || (m as any).modelId || m.id;
                 return (
                   <label key={id} className="flex items-center gap-2 px-4 py-2 hover:bg-[#222] cursor-pointer text-sm text-white/80">
                     <input
