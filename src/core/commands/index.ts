@@ -6,5 +6,6 @@ import './clear';
 import './experts';
 import './models';
 import './plan';
+import './eval';
 
 export { handleCommand, getAllCommands, getCommand } from './registry';
