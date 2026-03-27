@@ -1,7 +1,7 @@
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getDb } from '@/db/postgres';
 import { embeddings, cosineSimilarity, type EmbeddingMetadata } from '@/db/schema/embeddings';
-import { desc, eq, and, sql } from 'drizzle-orm';
+import { desc, eq, and, sql, inArray } from 'drizzle-orm';
 import { coreLogger } from '@/utils/logger';
 
 export interface SearchResult {
@@ -432,7 +432,7 @@ export class EmbeddingService {
       const ids = orphaned.map((r: any) => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
-        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+        await db.delete(embeddings).where(inArray(embeddings.id, batch));
       }
     }
 
@@ -452,7 +452,7 @@ export class EmbeddingService {
       const ids = stale.map((r: any) => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
-        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+        await db.delete(embeddings).where(inArray(embeddings.id, batch));
       }
     }
 
@@ -469,7 +469,7 @@ export class EmbeddingService {
       const ids = short.map((r: any) => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
-        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+        await db.delete(embeddings).where(inArray(embeddings.id, batch));
       }
     }
 
@@ -492,7 +492,7 @@ export class EmbeddingService {
       const ids = dupes.map((r: any) => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
-        await db.execute(sql`DELETE FROM embeddings WHERE id = ANY(${batch}::uuid[])`);
+        await db.delete(embeddings).where(inArray(embeddings.id, batch));
       }
     }
 

@@ -34,7 +34,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyOrigin: 'http://localhost:3000',
   },
   api: {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 3000,
     corsOrigins: ['http://localhost:3001'],
     rateLimitWindow: 60000,
