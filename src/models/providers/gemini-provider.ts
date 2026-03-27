@@ -23,87 +23,156 @@ export class GeminiProvider implements ModelProvider {
     return modelName.toLowerCase().startsWith('gemini-');
   }
 
+  /**
+   * Cache raw assistant messages from Gemini to preserve thought_signature.
+   * Keyed by sorted tool_call IDs so we can match when replaying.
+   */
+  private rawAssistantMessages = new Map<string, Record<string, unknown>>();
+
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const client = await this.createClient();
+    const apiKey = await this.getApiKey();
+    if (!apiKey) throw new Error('Gemini API key not available');
     const startTime = Date.now();
 
-    // Gemini's OpenAI-compatible endpoint is strict — only include params that are set.
-    // Sending undefined/null for unsupported fields (response_format, stop) causes 400 Bad Request.
-    const params: ChatCompletionCreateParams = {
+    // Build request body — only include params that are set.
+    const body: Record<string, unknown> = {
       model: options.model,
-      messages: this.formatMessages(options.messages),
+      messages: this.formatMessagesRaw(options.messages),
       stream: false,
     };
 
-    if (options.temperature != null) params.temperature = options.temperature;
-    if (options.maxTokens != null) params.max_tokens = options.maxTokens;
-    if (options.topP != null) params.top_p = options.topP;
-    if (options.stopSequences?.length) params.stop = options.stopSequences;
+    if (options.temperature != null) body.temperature = options.temperature;
+    if (options.maxTokens != null) body.max_tokens = options.maxTokens;
+    if (options.topP != null) body.top_p = options.topP;
+    if (options.stopSequences?.length) body.stop = options.stopSequences;
 
     if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = 'auto';
+      body.tools = options.tools;
+      body.tool_choice = 'auto';
     }
 
-    // Merge extra body parameters (skip response_format — Gemini doesn't support it)
     if (options.extraBody) {
       const { response_format, ...rest } = options.extraBody as Record<string, unknown>;
-      Object.assign(params, rest);
+      Object.assign(body, rest);
     }
 
     modelLogger.debug(
-      { model: params.model, messageCount: options.messages.length, provider: this.name },
-      'Sending completion request to Gemini'
+      { model: options.model, messageCount: options.messages.length, provider: this.name },
+      'Sending completion request to Gemini',
     );
 
-    try {
-      const response = await client.chat.completions.create(params);
-      const latencyMs = Date.now() - startTime;
-      const choice = response.choices[0];
+    const res = await fetch(`${GEMINI_BASE_URL}chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    });
 
-      const result: CompletionResult = {
-        content: choice.message.content || '',
-        finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-        },
-        model: response.model,
-        latencyMs,
-      };
-
-      if (choice.message.tool_calls?.length) {
-        result.toolCalls = choice.message.tool_calls.map((tc) => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments),
-        }));
-      }
-
-      modelLogger.debug(
-        {
-          model: response.model,
-          inputTokens: result.usage.inputTokens,
-          outputTokens: result.usage.outputTokens,
-          latencyMs,
-          hasToolCalls: !!result.toolCalls?.length,
-          provider: this.name,
-        },
-        'Gemini completion successful'
-      );
-
-      return result;
-    } catch (error) {
-      // Extract detailed error from OpenAI client (Gemini often returns useful error bodies)
-      const errDetail = (error as any)?.error?.message || (error as any)?.message || '';
-      const status = (error as any)?.status;
-      modelLogger.error(
-        { error: errDetail, status, model: params.model, provider: this.name, messageCount: options.messages.length },
-        'Gemini completion failed',
-      );
-      throw error;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      let errMsg = `Gemini API error (${res.status})`;
+      try {
+        const errArr = JSON.parse(errText);
+        const errObj = Array.isArray(errArr) ? errArr[0] : errArr;
+        errMsg = errObj?.error?.message || errMsg;
+      } catch { errMsg = errText.slice(0, 300) || errMsg; }
+      modelLogger.error({ status: res.status, error: errMsg, model: options.model, provider: this.name }, 'Gemini completion failed');
+      throw new Error(errMsg);
     }
+
+    const data = await res.json() as any;
+    const latencyMs = Date.now() - startTime;
+    const choice = data.choices?.[0];
+    if (!choice) throw new Error('Gemini returned no choices');
+
+    // Cache the raw assistant message keyed by tool_call IDs (preserves thought_signature)
+    if (choice.message?.tool_calls?.length) {
+      const tcIds = choice.message.tool_calls.map((tc: any) => tc.id).sort().join(',');
+      this.rawAssistantMessages.set(tcIds, choice.message);
+      // Evict old entries to prevent unbounded growth
+      if (this.rawAssistantMessages.size > 50) {
+        const firstKey = this.rawAssistantMessages.keys().next().value;
+        if (firstKey) this.rawAssistantMessages.delete(firstKey);
+      }
+    }
+
+    const result: CompletionResult = {
+      content: choice.message?.content || '',
+      finishReason: choice.finish_reason || 'stop',
+      usage: {
+        inputTokens: data.usage?.prompt_tokens || 0,
+        outputTokens: data.usage?.completion_tokens || 0,
+        totalTokens: data.usage?.total_tokens || 0,
+      },
+      model: data.model || options.model,
+      latencyMs,
+    };
+
+    if (choice.message?.tool_calls?.length) {
+      result.toolCalls = choice.message.tool_calls.map((tc: any) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments) : tc.function.arguments,
+      }));
+    }
+
+    modelLogger.debug(
+      { model: result.model, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
+        latencyMs, hasToolCalls: !!result.toolCalls?.length, provider: this.name },
+      'Gemini completion successful',
+    );
+
+    return result;
+  }
+
+  /**
+   * Format messages for raw fetch, preserving Gemini-specific fields like thought_signature.
+   * For assistant messages with tool_calls, we replay the raw cached message from Gemini
+   * instead of reconstructing it (which would lose thought_signature).
+   */
+  private formatMessagesRaw(messages: AgentMessage[]): unknown[] {
+    const result: unknown[] = [];
+
+    for (const msg of messages) {
+      if (msg.role === 'tool') {
+        result.push({
+          role: 'tool',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+          tool_call_id: msg.toolCallId || 'unknown',
+        });
+      } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        // Look up cached raw message by tool_call IDs (preserves thought_signature)
+        const tcIds = msg.toolCalls.map(tc => tc.id).sort().join(',');
+        const cachedMsg = this.rawAssistantMessages.get(tcIds);
+
+        if (cachedMsg) {
+          result.push(cachedMsg);
+        } else {
+          // Fallback: reconstruct (may be missing thought_signature for Gemini 3)
+          modelLogger.warn({ toolCallIds: tcIds }, 'No cached raw Gemini message — thought_signature may be missing');
+          result.push({
+            role: 'assistant',
+            content: msg.content || '',
+            tool_calls: msg.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: 'function',
+              function: {
+                name: tc.name,
+                arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
+              },
+            })),
+          });
+        }
+      } else if (msg.role === 'system') {
+        // Gemini 2.0+ supports system role via OpenAI-compat endpoint
+        result.push({ role: 'system', content: msg.content });
+      } else {
+        result.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    return result;
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
@@ -185,6 +254,19 @@ export class GeminiProvider implements ModelProvider {
     } catch (error) {
       return { healthy: false, error: (error as Error).message };
     }
+  }
+
+  async embed(texts: string[], model: string): Promise<number[][]> {
+    const client = await this.createClient();
+    modelLogger.debug({ model, inputCount: texts.length, provider: this.name }, 'Generating embeddings via Gemini');
+
+    const response = await client.embeddings.create({
+      model,
+      input: texts,
+      encoding_format: 'float',
+    });
+
+    return response.data.map((d) => d.embedding);
   }
 
   // -- Private helpers --

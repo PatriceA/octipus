@@ -30,6 +30,7 @@ import {
  * on a separate capabilities module that may not exist yet.
  */
 export interface ModelCapabilities {
+  chat: boolean;        // can do chat completions at all (false for embedding-only models)
   streaming: boolean;
   multiturn: boolean;
   systemRole: boolean;
@@ -89,14 +90,25 @@ function msg(role: 'system' | 'user' | 'assistant' | 'tool', content: string, ex
  * Derive capabilities from model DB fields.
  * Most models support multi-turn and system role by default.
  */
+/**
+ * Providers that do NOT support responseFormat: { type: 'json_object' }.
+ * Anthropic's OpenAI-compat endpoint ignores/rejects it.
+ */
+const NO_STRUCTURED_OUTPUT_PROVIDERS = new Set(['anthropic']);
+
 export function capabilitiesFromModel(model: ModelConfigEntry): ModelCapabilities {
-  const isEmbeddingModel = (model.topics ?? []).includes('embedding');
+  const topics = model.topics ?? [];
+  const isEmbeddingModel = topics.includes('embedding');
+  const isVisionOnly = topics.includes('ocr') || topics.includes('vision');
+  // Chat-capable = not an embedding model and not a pure vision/OCR model
+  const isChatModel = !isEmbeddingModel && !isVisionOnly;
   return {
-    streaming: model.supportsStreaming,
-    multiturn: !isEmbeddingModel,
-    systemRole: !isEmbeddingModel,
-    tools: model.supportsTools,
-    structuredOutput: model.supportsTools, // JSON mode usually available when tools are
+    chat: isChatModel,
+    streaming: model.supportsStreaming && isChatModel,
+    multiturn: isChatModel,
+    systemRole: isChatModel,
+    tools: model.supportsTools && isChatModel,
+    structuredOutput: model.supportsTools && isChatModel && !NO_STRUCTURED_OUTPUT_PROVIDERS.has(model.provider),
     media: model.supportsVision,
     embeddings: isEmbeddingModel,
   };
@@ -109,6 +121,7 @@ const testCases: ConformanceTestCase[] = [
   {
     name: 'basic-completion',
     description: 'Send "What is 2+2?" and verify response contains "4"',
+    requiredCapability: 'chat',
     async run(ctx) {
       const result = await ctx.complete({
         messages: [msg('user', PROMPTS.basicCompletion)],
@@ -233,20 +246,30 @@ const testCases: ConformanceTestCase[] = [
   // 6. Tool result handling
   {
     name: 'tool-result-handling',
-    description: 'Send tool call + tool result messages, verify model incorporates result',
+    description: 'Real round-trip: ask model to call tool, send result back, verify final answer',
     requiredCapability: 'tools',
     async run(ctx) {
-      const toolCallId = 'call_test_001';
-      const messages: AgentMessage[] = [
-        msg('user', 'What is 5 + 3?'),
-        msg('assistant', '', {
-          toolCalls: [{ id: toolCallId, name: 'add_numbers', arguments: { a: 5, b: 3 } }],
-        }),
-        msg('tool', JSON.stringify({ result: 8 }), { toolCallId }),
-      ];
+      // Step 1: Ask the model to call the tool (real request, not fabricated)
+      const step1 = await ctx.complete({
+        messages: [msg('user', 'What is 5 + 3? Use the add_numbers tool.')],
+        tools: [ADD_NUMBERS_TOOL],
+        temperature: 0,
+        maxTokens: 256,
+      });
 
+      if (!step1.toolCalls?.length) {
+        throw new Error('Model did not produce a tool call in step 1');
+      }
+
+      const tc = step1.toolCalls[0];
+
+      // Step 2: Send the tool result back and get the final text answer
       const result = await ctx.complete({
-        messages,
+        messages: [
+          msg('user', 'What is 5 + 3? Use the add_numbers tool.'),
+          msg('assistant', step1.content || '', { toolCalls: step1.toolCalls }),
+          msg('tool', JSON.stringify({ result: 8 }), { toolCallId: tc.id }),
+        ],
         tools: [ADD_NUMBERS_TOOL],
         temperature: 0,
         maxTokens: 512,
@@ -316,11 +339,13 @@ const testCases: ConformanceTestCase[] = [
   {
     name: 'error-handling',
     description: 'Send request with invalid model name, verify error (not crash/hang)',
+    requiredCapability: 'chat',
     async run(ctx) {
       const bogusModel = 'nonexistent-model-xyz-12345';
       let threw = false;
       try {
-        await ctx.client.complete({
+        // Use the provider directly — avoids falling through to LiteLLM proxy
+        await ctx.provider.complete({
           model: bogusModel,
           messages: [msg('user', 'test')],
           maxTokens: 16,
@@ -398,9 +423,12 @@ export async function runConformanceTests(
     const capabilities = capabilitiesFromModel(model);
 
     // Conformance tests verify provider connectivity — disable thinking to avoid
-    // token budget issues (thinking consumes output tokens, leaving empty responses)
+    // token budget issues (thinking consumes output tokens, leaving empty responses).
+    // Only add think:false for providers that support it (ollama) — Gemini and others
+    // reject unknown fields in the request body.
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
-    const extraBody = { ...modelExtra, think: false };
+    const thinkOverride = model.provider === 'ollama' ? { think: false } : {};
+    const extraBody = { ...modelExtra, ...thinkOverride };
 
     // Call provider directly — bypasses circuit breaker and rate limiter.
     // For direct providers (ollama, openai, anthropic, etc.) call provider.complete().

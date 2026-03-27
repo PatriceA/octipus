@@ -168,8 +168,21 @@ export class AnthropicProvider implements ModelProvider {
         return { healthy: false, error: 'Anthropic API key not configured' };
       }
 
-      const client = new OpenAI({ baseURL: ANTHROPIC_BASE_URL, apiKey });
-      await client.models.list();
+      // Use Anthropic's native /v1/models endpoint with x-api-key header.
+      // The OpenAI SDK sends Bearer auth which Anthropic's models endpoint rejects.
+      const res = await fetch(`${ANTHROPIC_BASE_URL}models`, {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        return { healthy: false, error: `Anthropic API error (${res.status}): ${errText.slice(0, 200)}` };
+      }
 
       return { healthy: true, latencyMs: Date.now() - startTime };
     } catch (error) {
