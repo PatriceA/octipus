@@ -66,31 +66,90 @@ function ScoreCell({ value }: { value: { mean: number; passRate: number; count: 
   );
 }
 
-function DrillDown({ samples }: { samples: EvalSample[] }) {
+interface EvalResultItem {
+  dataPointId: string;
+  input: string;
+  output: string;
+  reference?: string;
+  scores: Array<{ metric: string; score: number; status: string; reasoning?: string }>;
+  timestamp?: string;
+}
+
+function ResultsDetail({ results }: { results: EvalResultItem[] }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+
   return (
-    <div className="mt-3 space-y-2 max-h-72 overflow-y-auto">
-      {samples.map((s, i) => (
-        <div key={s.id ?? i} className="bg-[#111] border border-outline-variant/10 rounded-lg p-3 text-xs">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-on-surface-variant">{s.evaluator ?? 'evaluator'}</span>
-            <div className="flex items-center gap-2">
-              {s.passed != null && (
-                <span className={s.passed ? 'text-green-400' : 'text-[#ff716c]'}>
-                  {s.passed ? 'pass' : 'fail'}
+    <div className="mt-3 space-y-2 max-h-[500px] overflow-y-auto">
+      {results.map((r, i) => (
+        <div key={r.dataPointId ?? i} className="bg-[#111] border border-outline-variant/10 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
+            className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#1a1a1a] cursor-pointer text-left"
+          >
+            {expandedIdx === i ? <ChevronDown className="w-3 h-3 text-on-surface-variant flex-shrink-0" /> : <ChevronRight className="w-3 h-3 text-on-surface-variant flex-shrink-0" />}
+            <span className="text-xs text-white/80 truncate flex-1">{r.input}</span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {r.scores.map(s => (
+                <span key={s.metric} className={`text-[10px] px-1.5 py-0.5 rounded ${
+                  s.status === 'PASS' ? 'bg-green-900/30 text-green-400' :
+                  s.status === 'FAIL' ? 'bg-red-900/30 text-[#ff716c]' :
+                  'bg-gray-900/30 text-gray-400'
+                }`}>
+                  {s.metric.slice(0, 3)} {Math.round(s.score * 100)}%
                 </span>
-              )}
-              {s.score != null && (
-                <ScoreBar score={s.score} size="sm" />
-              )}
+              ))}
             </div>
-          </div>
-          {s.input && <p className="text-white/60 mb-1 truncate" title={s.input}><span className="text-on-surface-variant">in: </span>{s.input}</p>}
-          {s.output && <p className="text-white/60 mb-1 truncate" title={s.output}><span className="text-on-surface-variant">out: </span>{s.output}</p>}
-          {s.reasoning && <p className="text-on-surface-variant italic">{s.reasoning}</p>}
+          </button>
+          {expandedIdx === i && (
+            <div className="px-3 pb-3 space-y-2 text-xs border-t border-outline-variant/10">
+              <div className="mt-2">
+                <span className="text-on-surface-variant font-medium">Question:</span>
+                <p className="text-white/80 mt-0.5 whitespace-pre-wrap">{r.input}</p>
+              </div>
+              <div>
+                <span className="text-on-surface-variant font-medium">Model Answer:</span>
+                <p className="text-white/80 mt-0.5 whitespace-pre-wrap max-h-40 overflow-y-auto">{r.output || '(empty)'}</p>
+              </div>
+              {r.reference && (
+                <div>
+                  <span className="text-on-surface-variant font-medium">Expected/Reference:</span>
+                  <p className="text-blue-300/80 mt-0.5 whitespace-pre-wrap">{r.reference}</p>
+                </div>
+              )}
+              <div className="space-y-1.5 mt-2">
+                <span className="text-on-surface-variant font-medium">Scores:</span>
+                {r.scores.map(s => (
+                  <div key={s.metric} className="flex items-start gap-2 bg-[#0a0a0a] rounded p-2">
+                    <div className="flex items-center gap-2 min-w-[140px] flex-shrink-0">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        s.status === 'PASS' ? 'bg-green-500' : s.status === 'FAIL' ? 'bg-red-500' : 'bg-gray-500'
+                      }`} />
+                      <span className="text-white/70">{s.metric}</span>
+                      <ScoreBar score={s.score} size="sm" />
+                    </div>
+                    {s.reasoning && (
+                      <span className="text-on-surface-variant italic flex-1">{s.reasoning}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ))}
     </div>
   );
+}
+
+// Legacy DrillDown for backward compat
+function DrillDown({ samples }: { samples: EvalSample[] }) {
+  const mapped: EvalResultItem[] = samples.map(s => ({
+    dataPointId: s.id ?? '',
+    input: s.input ?? '',
+    output: s.output ?? '',
+    scores: [{ metric: s.evaluator ?? '', score: s.score ?? 0, status: (s.passed ? 'PASS' : 'FAIL'), reasoning: s.reasoning }],
+  }));
+  return <ResultsDetail results={mapped} />;
 }
 
 function RunHistoryRow({ run }: { run: EvalRun }) {
@@ -140,7 +199,13 @@ function RunHistoryRow({ run }: { run: EvalRun }) {
               ))}
             </div>
           )}
-          {run.samples && run.samples.length > 0 && (
+          {(run as any).results && (run as any).results.length > 0 && (
+            <>
+              <p className="text-xs text-on-surface-variant mt-4 mb-2 font-medium">Detailed Results</p>
+              <ResultsDetail results={(run as any).results} />
+            </>
+          )}
+          {run.samples && run.samples.length > 0 && !(run as any).results && (
             <>
               <p className="text-xs text-on-surface-variant mt-4 mb-2 font-medium">Sample Results</p>
               <DrillDown samples={run.samples} />

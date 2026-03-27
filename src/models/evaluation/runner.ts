@@ -38,6 +38,9 @@ export async function runEvaluation(
         options?.onProgress?.(completed, total);
         return {
           dataPointId: dataPoint.id,
+          input: dataPoint.input,
+          output: dataPoint.output,
+          reference: dataPoint.reference,
           scores,
           timestamp: new Date(),
         } satisfies EvalResult;

@@ -30,6 +30,9 @@ export interface Evaluator {
 
 export interface EvalResult {
   dataPointId: string;
+  input: string;
+  output: string;
+  reference?: string;
   scores: EvalScore[];
   timestamp: Date;
 }
