@@ -181,12 +181,34 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
         const modelConfig = await registry.getModel(model)
           ?? await registry.getModelByModelId(model);
         const provider = modelConfig?.provider ?? 'unknown';
+        const modelId = modelConfig?.modelId ?? model;
 
-        const stampedDataset = dataset.map((dp) => ({
-          ...dp,
-          model,
-          provider,
-        }));
+        // Generate model outputs for data points that don't have one
+        const router = (await import('@/models/providers')).getProviderRouter();
+        const stampedDataset = [];
+        for (const dp of dataset) {
+          let output = dp.output;
+          if (!output) {
+            try {
+              const messages: import('@/core/types').AgentMessage[] = [];
+              if (dp.systemPrompt) {
+                messages.push({ role: 'system', content: dp.systemPrompt, timestamp: new Date() });
+              }
+              messages.push({ role: 'user', content: dp.input, timestamp: new Date() });
+              const completion = await router.complete({
+                model: modelId,
+                messages,
+                temperature: 0.3,
+                maxTokens: 1024,
+                extraBody: modelConfig?.metadata?.extraBody ?? {},
+              });
+              output = completion.content;
+            } catch (err) {
+              output = `[Error generating output: ${err instanceof Error ? err.message : String(err)}]`;
+            }
+          }
+          stampedDataset.push({ ...dp, output, model, provider });
+        }
 
         // Run evaluation
         const run = await runEvaluation(stampedDataset, evaluators, { name });
@@ -241,9 +263,10 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
           id: r.id,
           name: r.name,
           model: r.model,
-          datasetName: r.datasetName,
+          dataset: r.datasetName,
           evaluators: r.evaluators,
-          summary: r.summary,
+          scores: r.summary,
+          results: r.results,
           createdAt: r.createdAt,
         })),
       };

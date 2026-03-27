@@ -95,7 +95,7 @@ function DrillDown({ samples }: { samples: EvalSample[] }) {
 
 function RunHistoryRow({ run }: { run: EvalRun }) {
   const [expanded, setExpanded] = useState(false);
-  const scores = run.scores ?? {};
+  const scores = run.scores ?? (run as any).summary ?? {};
   const evaluatorKeys = Object.keys(scores);
 
   return (

@@ -57,8 +57,9 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     ],
   });
 
-  // Try to parse JSON from the response (may be wrapped in markdown fences)
-  const text = result.content.trim();
+  // Strip thinking tags and markdown fences before parsing
+  let text = result.content.trim();
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   const jsonMatch = text.match(/\{[\s\S]*?"score"\s*:\s*(\d+(?:\.\d+)?)[\s\S]*?\}/);
   if (jsonMatch) {
     try {
