@@ -8,6 +8,38 @@ import { randomBytes } from 'crypto';
 
 const IS_WIN = process.platform === 'win32';
 
+/** Detect a more descriptive tool name from a shell command */
+function detectToolFromCommand(command: string): string {
+  const cmd = command.trim().split(/\s+/)[0]?.replace(/^.*\//, '') || 'shell';
+  const toolMap: Record<string, string> = {
+    cat: 'read_file', find: 'find', ls: 'list', grep: 'search', rg: 'search',
+    sed: 'edit_file', mkdir: 'create_dir', rm: 'delete', cp: 'copy', mv: 'move',
+    flutter: 'flutter', npm: 'npm', bun: 'bun', git: 'git', docker: 'docker',
+    cd: 'shell', echo: 'shell', python: 'python', python3: 'python', node: 'node',
+  };
+  // Check for redirects (cat > file = write)
+  if (/>\s*\S/.test(command) && !command.includes('>>')) return 'write_file';
+  if (/>>/.test(command)) return 'append_file';
+  return toolMap[cmd] || cmd;
+}
+
+/** Detect file changes from shell commands like `cat > file`, `sed -i`, `mkdir -p` */
+function detectFileChangeFromCommand(command: string): { action: string; path: string } | null {
+  // cat > file or cat >> file
+  const catWrite = command.match(/cat\s+>+\s*(\S+)/);
+  if (catWrite) return { action: catWrite[0].includes('>>') ? 'append' : 'write', path: catWrite[1] };
+  // sed -i (in-place edit)
+  const sedEdit = command.match(/sed\s+-i\s+.*?\s+(\S+)\s*$/);
+  if (sedEdit) return { action: 'edit', path: sedEdit[1] };
+  // mkdir -p
+  const mkdirCreate = command.match(/mkdir\s+-p\s+(\S+)/);
+  if (mkdirCreate) return { action: 'create_dir', path: mkdirCreate[1] };
+  // rm / rm -rf
+  const rmDelete = command.match(/rm\s+(?:-\w+\s+)?(\S+)/);
+  if (rmDelete) return { action: 'delete', path: rmDelete[1] };
+  return null;
+}
+
 /**
  * Builds CLI arguments for different agent tools (Claude Code, Gemini CLI, Codex).
  *
@@ -365,11 +397,24 @@ export class CLIOutputParser {
       const itemType = item.type as string;
       if (itemType === 'command_execution') {
         this.onIteration();
+        const command = (item.command || '') as string;
+        // Detect the actual tool from the command for better display
+        const toolName = detectToolFromCommand(command);
         this.emitFn('action', {
           type: 'cli_tool_use',
-          toolName: 'shell',
-          args: { command: item.command },
+          toolName,
+          args: { command },
         });
+
+        // Detect file changes from shell commands
+        const fileChange = detectFileChangeFromCommand(command);
+        if (fileChange) {
+          this.emitFn('action', {
+            type: 'file_change',
+            action: fileChange.action,
+            path: fileChange.path,
+          });
+        }
       }
       return null;
     }

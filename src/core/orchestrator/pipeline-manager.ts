@@ -169,10 +169,22 @@ export class PipelineManager {
           handoffChain.push(handoff);
         }
 
+        // Generate a brief summary of what this stage accomplished
+        const stageSummary = previousOutput.length > 300
+          ? previousOutput.slice(0, 300).replace(/\n/g, ' ').trim() + '...'
+          : previousOutput.replace(/\n/g, ' ').trim();
+
         orchestrator['emit']({
           type: 'pipeline_event',
           sessionId,
-          data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: stage.id, name: stage.name },
+          data: {
+            event: 'stage_completed',
+            pipelineId: pipeline.id,
+            stageId: stage.id,
+            name: stage.name,
+            role: stage.role,
+            summary: stageSummary.slice(0, 200),
+          },
           timestamp: new Date(),
         });
 
