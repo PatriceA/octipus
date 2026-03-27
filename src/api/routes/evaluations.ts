@@ -239,7 +239,8 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                 }
                 messages.push({ role: 'user', content: dp.input, timestamp: new Date() });
                 const startMs = Date.now();
-                const completion = await evalClient.complete({
+                // Use completeViaProxy to bypass circuit breaker — eval needs direct provider access
+                const completion = await evalClient.completeViaProxy({
                   model: modelId,
                   messages,
                   tools: dp.tools,
