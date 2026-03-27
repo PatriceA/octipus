@@ -1,0 +1,13 @@
+node_modules
+web/node_modules
+web/.next
+mcp-server/node_modules
+.git
+.claude
+.env
+.env.local
+*.log
+dist
+coverage
+.assistant
+docs/plans
