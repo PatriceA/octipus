@@ -17,3 +17,4 @@ export * from './hook-executions';
 export * from './agents';
 export * from './documents';
 export * from './profiles';
+export * from './evaluations';

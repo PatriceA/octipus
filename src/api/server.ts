@@ -34,6 +34,7 @@ import { expertRoutes } from './routes/experts';
 import { skillRoutes } from './routes/skills';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { evalRoutes } from './routes/eval';
+import { evaluationRoutes } from './routes/evaluations';
 import { documentRoutes } from './routes/documents';
 import { knowledgeRoutes } from './routes/knowledge';
 import { pluginRoutes } from './routes/plugins';
@@ -187,6 +188,7 @@ export function createServer() {
         .use(skillRoutes)
         .use(recurringTaskRoutes)
         .use(evalRoutes)
+        .use(evaluationRoutes)
         .use(documentRoutes)
         .use(knowledgeRoutes)
         .use(pluginRoutes)
