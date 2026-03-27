@@ -41,7 +41,7 @@
 - **16 new commands**: Tab management (new_tab, close_tab, select_tab), interactions (hover, select, press_key, scroll, drag), waiting (wait_for, highlight), storage (set_cookies, get_storage, set_storage), monitoring (get_console, get_network), dialogs (handle_dialog)
 - **Double-click support**: `click` command now accepts `doubleClick` parameter
 - **Playwright parity**: Added hover, press_key, drag, and PDF generation to the Playwright browser tool
-- **Full OpenClaw feature parity**: Browser automation now matches OpenClaw's capabilities across both browser tools
+- **Full competitor feature parity**: Browser automation now matches competitor's capabilities across both browser tools
 
 ### Channel Expansion
 - **WhatsApp channel**: Meta Cloud API with webhook verification, HMAC signature validation, media support, message deduplication

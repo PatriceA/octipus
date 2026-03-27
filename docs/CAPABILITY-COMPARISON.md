@@ -1,6 +1,6 @@
-# Capability Comparison: Assistant vs OpenClaw
+# Capability Comparison: Assistant vs competitor
 
-Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
+Feature comparison with [competitor](https://docs.competitor.ai/) as of March 2026.
 
 ## Legend
 - **Yes** — fully implemented
@@ -10,7 +10,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Core Capabilities
 
-| Capability | OpenClaw | Assistant | Notes |
+| Capability | competitor | Assistant | Notes |
 |---|---|---|---|
 | Multi-agent orchestration | Yes | Yes | Orchestrator + specialist roles |
 | Sub-agent spawning | Yes (depth/concurrency limits) | Yes (workers, teams, pipelines) | Assistant has 3 delegation modes |
@@ -21,7 +21,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Channels
 
-| Channel | OpenClaw | Assistant | Notes |
+| Channel | competitor | Assistant | Notes |
 |---|---|---|---|
 | WebChat | Yes | Yes | WebSocket-based |
 | Telegram | Yes | Yes | Polling via grammy |
@@ -34,7 +34,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Tools
 
-| Tool | OpenClaw | Assistant | Notes |
+| Tool | competitor | Assistant | Notes |
 |---|---|---|---|
 | Web search | Yes | Yes | SearXNG backend |
 | Browser automation (Playwright) | Yes | Yes | Isolated headless browser |
@@ -56,7 +56,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Browser Automation (Detailed)
 
-| Feature | OpenClaw | Assistant (browser-ext) | Assistant (Playwright) |
+| Feature | competitor | Assistant (browser-ext) | Assistant (Playwright) |
 |---|---|---|---|
 | Navigate to URL | Yes | Yes | Yes |
 | Click elements | Yes | Yes (+ double-click) | Yes |
@@ -84,7 +84,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Automation & Scheduling
 
-| Feature | OpenClaw | Assistant | Notes |
+| Feature | competitor | Assistant | Notes |
 |---|---|---|---|
 | Cron-based scheduling | Yes | Yes | Hooks with cronExpression |
 | Event-driven hooks | Yes | Yes | 8 trigger types |
@@ -94,7 +94,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Security
 
-| Feature | OpenClaw | Assistant | Notes |
+| Feature | competitor | Assistant | Notes |
 |---|---|---|---|
 | Tool access profiles | Yes | Yes | Permission system (ALLOW/ASK/DENY) |
 | Per-action permissions | Yes | Yes | Tool-level permission checks |
@@ -106,7 +106,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## Knowledge & RAG
 
-| Feature | OpenClaw | Assistant | Notes |
+| Feature | competitor | Assistant | Notes |
 |---|---|---|---|
 | Vector search (cosine) | Yes | Yes | pgvector with HNSW index |
 | BM25 full-text search | Yes | Yes | PostgreSQL tsvector + GIN |
@@ -118,7 +118,7 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 
 ## UI & Experience
 
-| Feature | OpenClaw | Assistant | Notes |
+| Feature | competitor | Assistant | Notes |
 |---|---|---|---|
 | Web UI | Yes | Yes | React + Tailwind |
 | Settings management | Yes | Yes | Hot-reload config |
@@ -127,14 +127,14 @@ Feature comparison with [OpenClaw](https://docs.openclaw.ai/) as of March 2026.
 | File upload (webchat) | Yes | Yes | Multi-file upload support |
 | Permission prompts | Yes | Yes | Channel-based + web approval |
 
-## Gaps (OpenClaw has, we don't)
+## Gaps (competitor has, we don't)
 
 1. **Discord/Signal/SMS channels** — Lower priority; existing 5 channels cover most use cases
 2. **Image generation** — Could integrate nanobanana service; not core functionality
-3. **Device emulation** — OpenClaw can emulate mobile devices; could add via Playwright options
-4. **Performance tracing** — OpenClaw has trace start/stop; could add via Playwright trace API
+3. **Device emulation** — competitor can emulate mobile devices; could add via Playwright options
+4. **Performance tracing** — competitor has trace start/stop; could add via Playwright trace API
 
-## Advantages (We have, OpenClaw doesn't)
+## Advantages (We have, competitor doesn't)
 
 1. **Real browser control (default)** — browser-ext connects to user's actual browser with cookies/sessions as the primary browser tool, not just an attach mode
 2. **MCP protocol support** — Extend capabilities via external MCP servers

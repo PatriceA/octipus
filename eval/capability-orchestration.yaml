@@ -1,8 +1,8 @@
-name: Multi-Agent Orchestration Tests (OpenClaw Parity)
+name: Multi-Agent Orchestration Tests (Quality Standard)
 description: >
   Tests verifying multi-agent capabilities: team spawning, pipeline execution,
   sub-agent depth control, and cross-role coordination.
-  Covers orchestration features comparable to OpenClaw.
+  Covers orchestration features at production quality.
 
 tests:
   # ── Single Worker Delegation ──
@@ -14,7 +14,7 @@ tests:
         value: task
       - type: routes_to_role
         value: development
-    tags: [orchestration, single-worker, openclaw-parity]
+    tags: [orchestration, single-worker, quality-standard]
 
   # ── Team Spawning ──
   - id: orch-team-spawn
@@ -23,7 +23,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [orchestration, team, openclaw-parity]
+    tags: [orchestration, team, quality-standard]
 
   # ── Pipeline Tasks ──
   - id: orch-pipeline-sequential
@@ -32,7 +32,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [orchestration, pipeline, openclaw-parity]
+    tags: [orchestration, pipeline, quality-standard]
 
   # ── Role Selection Accuracy ──
   - id: orch-devops-not-coding
@@ -41,7 +41,7 @@ tests:
     assertions:
       - type: routes_to_role
         value: devops
-    tags: [orchestration, role-selection, openclaw-parity]
+    tags: [orchestration, role-selection, quality-standard]
 
   - id: orch-security-not-review
     description: Security-focused task routes to security specialist
@@ -49,7 +49,7 @@ tests:
     assertions:
       - type: routes_to_role
         value: security
-    tags: [orchestration, role-selection, openclaw-parity]
+    tags: [orchestration, role-selection, quality-standard]
 
   - id: orch-data-specialist
     description: Database task routes to data specialist
@@ -57,7 +57,7 @@ tests:
     assertions:
       - type: routes_to_role
         value: data
-    tags: [orchestration, role-selection, openclaw-parity]
+    tags: [orchestration, role-selection, quality-standard]
 
   - id: orch-writing-specialist
     description: Documentation task routes to writing
@@ -65,7 +65,7 @@ tests:
     assertions:
       - type: routes_to_role
         value: writing
-    tags: [orchestration, role-selection, openclaw-parity]
+    tags: [orchestration, role-selection, quality-standard]
 
   - id: orch-finance-specialist
     description: Financial analysis routes to finance
@@ -73,7 +73,7 @@ tests:
     assertions:
       - type: routes_to_role
         value: finance
-    tags: [orchestration, role-selection, openclaw-parity]
+    tags: [orchestration, role-selection, quality-standard]
 
   - id: orch-design-specialist
     description: UI/UX task routes to design
@@ -81,7 +81,7 @@ tests:
     assertions:
       - type: routes_to_role
         value: design
-    tags: [orchestration, role-selection, openclaw-parity]
+    tags: [orchestration, role-selection, quality-standard]
 
   # ── Conversation Context ──
   - id: orch-no-spawn-greeting
@@ -90,7 +90,7 @@ tests:
     assertions:
       - type: classification
         value: casual
-    tags: [orchestration, context, openclaw-parity]
+    tags: [orchestration, context, quality-standard]
 
   - id: orch-no-spawn-followup
     description: Simple follow-up does not spawn agent
@@ -98,7 +98,7 @@ tests:
     assertions:
       - type: classification
         value: casual
-    tags: [orchestration, context, openclaw-parity]
+    tags: [orchestration, context, quality-standard]
 
   # ── Latency ──
   - id: orch-classification-speed
@@ -108,4 +108,4 @@ tests:
       - type: latency_under
         value: 5000
         description: Classification should complete under 5 seconds
-    tags: [orchestration, performance, openclaw-parity]
+    tags: [orchestration, performance, quality-standard]

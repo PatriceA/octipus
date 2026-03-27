@@ -1,4 +1,4 @@
-name: Tool Usage Tests (OpenClaw Parity)
+name: Tool Usage Tests (Quality Standard)
 description: >
   Tests verifying correct routing for tool-dependent tasks.
   In unit mode, validates classification and topic routing.
@@ -14,7 +14,7 @@ tests:
         value: task
       - type: routes_to_role
         value: research
-    tags: [tools, search, openclaw-parity]
+    tags: [tools, search, quality-standard]
 
   # ── Browser Tool ──
   - id: tool-browser-navigate
@@ -25,7 +25,7 @@ tests:
         value: task
       - type: routes_to_role
         value: research
-    tags: [tools, browser, openclaw-parity]
+    tags: [tools, browser, quality-standard]
 
   - id: tool-browser-screenshot
     description: Screenshot request routes correctly
@@ -33,7 +33,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, browser, openclaw-parity]
+    tags: [tools, browser, quality-standard]
 
   # ── Shell / Code Execution ──
   - id: tool-shell-execute
@@ -44,7 +44,7 @@ tests:
         value: task
       - type: routes_to_role
         value: devops
-    tags: [tools, shell, openclaw-parity]
+    tags: [tools, shell, quality-standard]
 
   - id: tool-git-status
     description: Git query routes to development
@@ -52,7 +52,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, git, openclaw-parity]
+    tags: [tools, git, quality-standard]
 
   # ── File System ──
   - id: tool-read-file
@@ -61,7 +61,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, filesystem, openclaw-parity]
+    tags: [tools, filesystem, quality-standard]
 
   - id: tool-write-file
     description: File writing routes to development
@@ -71,7 +71,7 @@ tests:
         value: task
       - type: routes_to_role
         value: development
-    tags: [tools, filesystem, openclaw-parity]
+    tags: [tools, filesystem, quality-standard]
 
   # ── Knowledge Base ──
   - id: tool-knowledge-search
@@ -80,7 +80,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, knowledge, openclaw-parity]
+    tags: [tools, knowledge, quality-standard]
 
   # ── Messaging ──
   - id: tool-send-message
@@ -89,7 +89,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, messaging, openclaw-parity]
+    tags: [tools, messaging, quality-standard]
 
   - id: tool-list-channels
     description: Channel listing is a task
@@ -97,7 +97,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, messaging, openclaw-parity]
+    tags: [tools, messaging, quality-standard]
 
   # ── Scheduling ──
   - id: tool-create-schedule
@@ -108,7 +108,7 @@ tests:
         value: task
       - type: routes_to_role
         value: automation
-    tags: [tools, scheduling, openclaw-parity]
+    tags: [tools, scheduling, quality-standard]
 
   # ── Document Processing ──
   - id: tool-list-documents
@@ -117,7 +117,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [tools, documents, openclaw-parity]
+    tags: [tools, documents, quality-standard]
 
   # ── Multi-Tool Usage ──
   - id: tool-research-and-save
@@ -128,4 +128,4 @@ tests:
         value: task
       - type: routes_to_role
         value: research
-    tags: [tools, multi-tool, openclaw-parity]
+    tags: [tools, multi-tool, quality-standard]

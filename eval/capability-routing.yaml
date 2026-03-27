@@ -1,8 +1,8 @@
-name: Capability Routing Tests (OpenClaw Parity)
+name: Capability Routing Tests (Quality Standard)
 description: >
   Tests verifying the assistant routes tasks to correct specialist roles,
-  covering all capability categories that OpenClaw supports.
-  Ensures feature parity with OpenClaw's routing and delegation model.
+  covering all capability categories that standardupports.
+  Ensures feature parity with standard routing and delegation model.
 
 tests:
   # ── Web Search & Research ──
@@ -14,7 +14,7 @@ tests:
         value: task
       - type: routes_to_role
         value: research
-    tags: [routing, research, openclaw-parity]
+    tags: [routing, research, quality-standard]
 
   - id: cap-deep-research
     description: Multi-source research routes correctly
@@ -24,7 +24,7 @@ tests:
         value: task
       - type: routes_to_role
         value: research
-    tags: [routing, research, openclaw-parity]
+    tags: [routing, research, quality-standard]
 
   # ── Browser Automation ──
   - id: cap-browser-real
@@ -35,7 +35,7 @@ tests:
         value: task
       - type: routes_to_role
         value: general
-    tags: [routing, browser, openclaw-parity]
+    tags: [routing, browser, quality-standard]
 
   - id: cap-browser-scrape
     description: Web scraping routes to research
@@ -45,7 +45,7 @@ tests:
         value: task
       - type: routes_to_role
         value: research
-    tags: [routing, browser, openclaw-parity]
+    tags: [routing, browser, quality-standard]
 
   # ── Code Generation & Shell ──
   - id: cap-code-generation
@@ -56,7 +56,7 @@ tests:
         value: task
       - type: routes_to_role
         value: development
-    tags: [routing, coding, openclaw-parity]
+    tags: [routing, coding, quality-standard]
 
   - id: cap-shell-command
     description: Shell command request routes to general or development
@@ -64,7 +64,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [routing, coding, openclaw-parity]
+    tags: [routing, coding, quality-standard]
 
   - id: cap-git-operations
     description: Git operations route to development
@@ -74,7 +74,7 @@ tests:
         value: task
       - type: routes_to_role
         value: development
-    tags: [routing, coding, openclaw-parity]
+    tags: [routing, coding, quality-standard]
 
   # ── Communication ──
   - id: cap-send-email
@@ -85,7 +85,7 @@ tests:
         value: task
       - type: routes_to_role
         value: communication
-    tags: [routing, communication, openclaw-parity]
+    tags: [routing, communication, quality-standard]
 
   - id: cap-calendar
     description: Calendar management routes to communication
@@ -95,7 +95,7 @@ tests:
         value: task
       - type: routes_to_role
         value: communication
-    tags: [routing, communication, openclaw-parity]
+    tags: [routing, communication, quality-standard]
 
   # ── Messaging ──
   - id: cap-send-message-telegram
@@ -104,7 +104,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [routing, messaging, openclaw-parity]
+    tags: [routing, messaging, quality-standard]
 
   # ── Scheduling & Automation ──
   - id: cap-schedule-task
@@ -115,7 +115,7 @@ tests:
         value: task
       - type: routes_to_role
         value: automation
-    tags: [routing, automation, openclaw-parity]
+    tags: [routing, automation, quality-standard]
 
   - id: cap-recurring-reminder
     description: Recurring reminder routes to automation
@@ -125,7 +125,7 @@ tests:
         value: task
       - type: routes_to_role
         value: automation
-    tags: [routing, automation, openclaw-parity]
+    tags: [routing, automation, quality-standard]
 
   # ── Multi-Agent Orchestration ──
   - id: cap-multi-agent-team
@@ -134,7 +134,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [routing, multi-agent, openclaw-parity]
+    tags: [routing, multi-agent, quality-standard]
 
   # ── DevOps & Docker ──
   - id: cap-docker-task
@@ -145,7 +145,7 @@ tests:
         value: task
       - type: routes_to_role
         value: devops
-    tags: [routing, devops, openclaw-parity]
+    tags: [routing, devops, quality-standard]
 
   - id: cap-ci-cd
     description: CI/CD pipeline task routes to devops
@@ -155,7 +155,7 @@ tests:
         value: task
       - type: routes_to_role
         value: devops
-    tags: [routing, devops, openclaw-parity]
+    tags: [routing, devops, quality-standard]
 
   # ── Security ──
   - id: cap-security-audit
@@ -166,7 +166,7 @@ tests:
         value: task
       - type: routes_to_role
         value: security
-    tags: [routing, security, openclaw-parity]
+    tags: [routing, security, quality-standard]
 
   # ── Knowledge / RAG ──
   - id: cap-knowledge-search
@@ -175,7 +175,7 @@ tests:
     assertions:
       - type: classification
         value: task
-    tags: [routing, knowledge, openclaw-parity]
+    tags: [routing, knowledge, quality-standard]
 
   # ── Casual / Conversational ──
   - id: cap-casual-chat
@@ -184,7 +184,7 @@ tests:
     assertions:
       - type: classification
         value: casual
-    tags: [routing, casual, openclaw-parity]
+    tags: [routing, casual, quality-standard]
 
   - id: cap-clarification
     description: Vague request prompts clarification
@@ -192,4 +192,4 @@ tests:
     assertions:
       - type: classification
         value: casual
-    tags: [routing, casual, openclaw-parity]
+    tags: [routing, casual, quality-standard]

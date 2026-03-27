@@ -202,7 +202,7 @@ Make globally available: `bun link`
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables, ports, Docker services |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control by AI agents |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search (BM25 + vector), tiered content, auto-indexing |
-| **[Capability Comparison](docs/CAPABILITY-COMPARISON.md)** | Feature-by-feature comparison with OpenClaw |
+| **[Capability Comparison](docs/CAPABILITY-COMPARISON.md)** | Feature-by-feature comparison with competitor |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools for CLI models |
 | **[MCP Integration](docs/MCP-INTEGRATION.md)** | Connect external MCP servers (n8n, Brave, custom) with lazy tool discovery |
 | **[Development](docs/DEVELOPMENT.md)** | Project structure, commands, tech stack |
