@@ -47,8 +47,20 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     return { score: 0.5, reasoning: 'No model configured for evaluation' };
   }
 
-  // Use LiteLLMClient for proper routing (direct provider → LiteLLM fallback)
+  // Call provider directly — bypasses circuit breaker.
+  // Direct providers first, LiteLLM proxy as fallback.
+  const { getProviderRouter } = await import('@/models/providers');
+  const router = getProviderRouter();
+  const resolvedProvider = await router.resolveProvider(judgeModel.modelId);
   const client = getLiteLLMClient();
+
+  const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => {
+    if (resolvedProvider.name !== 'litellm') {
+      return resolvedProvider.complete(opts);
+    }
+    return client.completeViaProxy(opts);
+  };
+
   const judgeMessages = [
     {
       role: 'system' as const,
@@ -67,7 +79,7 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
   let result;
   try {
     // First attempt with thinking enabled
-    result = await client.complete({
+    result = await callModel({
       model: judgeModel.modelId,
       temperature: 0.1,
       maxTokens: 1024,
@@ -77,7 +89,7 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
 
     // If response is empty (thinking consumed all tokens), retry without thinking
     if (!result.content?.trim()) {
-      result = await client.complete({
+      result = await callModel({
         model: judgeModel.modelId,
         temperature: 0.1,
         maxTokens: 256,

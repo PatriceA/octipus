@@ -224,8 +224,12 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
       // Run in background — don't await
       (async () => {
         try {
-          // Generate model outputs
+          // Generate model outputs — call provider directly (bypass circuit breaker)
+          const { getProviderRouter } = await import('@/models/providers');
+          const router = getProviderRouter();
+          const resolvedProvider = await router.resolveProvider(modelId);
           const evalClient = getLiteLLMClient();
+
           const stampedDataset = [];
           for (const dp of dataset) {
             let output = dp.output;
@@ -239,15 +243,18 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                 }
                 messages.push({ role: 'user', content: dp.input, timestamp: new Date() });
                 const startMs = Date.now();
-                // Use completeViaProxy to bypass circuit breaker — eval needs direct provider access
-                const completion = await evalClient.completeViaProxy({
+                const completeOpts = {
                   model: modelId,
                   messages,
                   tools: dp.tools,
                   temperature: 0.3,
                   maxTokens: 1024,
                   extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
-                });
+                };
+                // Direct provider or LiteLLM fallback — bypass circuit breaker
+                const completion = resolvedProvider.name !== 'litellm'
+                  ? await resolvedProvider.complete(completeOpts)
+                  : await evalClient.completeViaProxy(completeOpts);
                 latencyMs = Date.now() - startMs;
                 output = completion.content;
                 // Capture tool calls if the model made any

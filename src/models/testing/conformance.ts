@@ -128,13 +128,17 @@ const testCases: ConformanceTestCase[] = [
     requiredCapability: 'streaming',
     async run(ctx) {
       const chunks: StreamChunk[] = [];
-      const gen = ctx.client.streamViaProxy({
+      // Direct provider stream or LiteLLM fallback — bypass circuit breaker
+      const streamOpts = {
         model: ctx.model.modelId,
         messages: [msg('user', 'Count from 1 to 5, one number per line.')],
         temperature: 0,
         maxTokens: 512,
         extraBody: ctx.extraBody,
-      });
+      };
+      const gen = ctx.provider.name !== 'litellm'
+        ? ctx.provider.stream(streamOpts)
+        : ctx.client.streamViaProxy(streamOpts);
 
       for await (const chunk of gen) {
         chunks.push(chunk);
@@ -398,10 +402,16 @@ export async function runConformanceTests(
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
     const extraBody = { ...modelExtra, think: false };
 
-    // Use completeViaProxy to bypass circuit breaker + rate limiter
-    // Conformance tests NEED to hit the actual provider, not get blocked by infra
-    const complete: TestContext['complete'] = (opts) =>
-      client.completeViaProxy({ ...opts, model: model.modelId, extraBody });
+    // Call provider directly — bypasses circuit breaker and rate limiter.
+    // For direct providers (ollama, openai, anthropic, etc.) call provider.complete().
+    // For litellm-routed models, fall back to client.completeViaProxy().
+    const complete: TestContext['complete'] = async (opts) => {
+      const fullOpts = { ...opts, model: model.modelId, extraBody };
+      if (provider.name !== 'litellm') {
+        return provider.complete(fullOpts);
+      }
+      return client.completeViaProxy(fullOpts);
+    };
     const ctx: TestContext = { client, model, provider, capabilities, extraBody, complete };
 
     for (const tc of testCases) {
