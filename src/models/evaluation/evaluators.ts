@@ -26,7 +26,9 @@ export function defineEvaluator(
       if (!dp.output || dp.output.startsWith('[Error')) {
         return { metric: name, score: 0, status: 'FAIL' as const, reasoning: 'No model output' };
       }
-      return fn(dp);
+      const result = await fn(dp);
+      // Ensure metric name is always set
+      return { ...result, metric: result.metric || name };
     },
   };
 }
@@ -52,8 +54,9 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     result = await client.complete({
     model: judgeModel.modelId,
     temperature: 0.1,
-    maxTokens: 200,
+    maxTokens: 1024,
     // Always enable thinking for evaluations — models score better with reasoning enabled
+    // Need extra tokens because thinking consumes part of the budget before the JSON output
     extraBody: { ...judgeModel.metadata?.extraBody, think: true },
     messages: [
       {
@@ -90,8 +93,13 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
 
   // Fallback: try to find a bare number
   const numMatch = text.match(/\b(\d+(?:\.\d+)?)\b/);
-  const score = numMatch ? Math.min(10, Math.max(0, Number(numMatch[1]))) : 5;
-  return { score, reasoning: text.slice(0, 200) };
+  if (numMatch) {
+    const score = Math.min(10, Math.max(0, Number(numMatch[1])));
+    return { score, reasoning: text.slice(0, 200) };
+  }
+
+  // No parseable score — return 0 with the raw output for debugging
+  return { score: 0, reasoning: `Could not parse score from: ${text.slice(0, 200) || '(empty response)'}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +125,7 @@ const faithfulness = defineEvaluator(
     if (!dp.context?.length) {
       return {
         metric: 'faithfulness',
-        score: 0.5,
+        score: -1,
         status: 'UNKNOWN' as const,
         reasoning: 'No context provided to evaluate faithfulness',
       };
@@ -278,7 +286,7 @@ const instructionFollowing = defineEvaluator(
     if (!dp.systemPrompt && (!dp.constraints || dp.constraints.length === 0)) {
       return {
         metric: 'instruction-following',
-        score: 0.5,
+        score: -1,
         status: 'UNKNOWN' as const,
         reasoning: 'No system prompt or constraints to evaluate against',
       };

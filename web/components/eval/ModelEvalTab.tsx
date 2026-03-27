@@ -90,7 +90,7 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
             {expandedIdx === i ? <ChevronDown className="w-3 h-3 text-on-surface-variant flex-shrink-0" /> : <ChevronRight className="w-3 h-3 text-on-surface-variant flex-shrink-0" />}
             <span className="text-xs text-white/80 truncate flex-1">{r.input}</span>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {r.scores.map(s => (
+              {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                 <span key={s.metric} className={`text-[10px] px-1.5 py-0.5 rounded ${
                   s.status === 'PASS' ? 'bg-green-900/30 text-green-400' :
                   s.status === 'FAIL' ? 'bg-red-900/30 text-[#ff716c]' :
@@ -119,7 +119,7 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
               )}
               <div className="space-y-1.5 mt-2">
                 <span className="text-on-surface-variant font-medium">Scores:</span>
-                {r.scores.map(s => (
+                {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                   <div key={s.metric} className="flex items-start gap-2 bg-[#0a0a0a] rounded p-2">
                     <div className="flex items-center gap-2 min-w-[140px] flex-shrink-0">
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
@@ -133,6 +133,11 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
                     )}
                   </div>
                 ))}
+                {r.scores.some(s => s.status === 'UNKNOWN') && (
+                  <p className="text-[10px] text-on-surface-variant mt-1">
+                    Skipped: {r.scores.filter(s => s.status === 'UNKNOWN').map(s => s.metric).join(', ')} (not applicable to this dataset)
+                  </p>
+                )}
               </div>
             </div>
           )}
