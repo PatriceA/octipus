@@ -52,8 +52,9 @@ export interface TestContext {
   model: ModelConfigEntry;
   provider: ModelProvider;
   capabilities: ModelCapabilities;
-  /** Always { think: true } — evaluations/tests should use reasoning */
   extraBody: Record<string, unknown>;
+  /** Call model directly via LiteLLM proxy — bypasses circuit breaker and rate limiter */
+  complete: (options: Omit<import('../litellm-client').CompletionOptions, 'model' | 'extraBody'>) => Promise<import('../litellm-client').CompletionResult>;
 }
 
 export interface ConformanceResult {
@@ -109,12 +110,10 @@ const testCases: ConformanceTestCase[] = [
     name: 'basic-completion',
     description: 'Send "What is 2+2?" and verify response contains "4"',
     async run(ctx) {
-      const result = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const result = await ctx.complete({
         messages: [msg('user', PROMPTS.basicCompletion)],
         temperature: 0,
         maxTokens: 256,
-        extraBody: ctx.extraBody,
       });
 
       const v = validateBasicCompletion(result.content);
@@ -129,11 +128,12 @@ const testCases: ConformanceTestCase[] = [
     requiredCapability: 'streaming',
     async run(ctx) {
       const chunks: StreamChunk[] = [];
-      const gen = ctx.client.stream({
+      const gen = ctx.client.streamViaProxy({
         model: ctx.model.modelId,
         messages: [msg('user', 'Count from 1 to 5, one number per line.')],
         temperature: 0,
         maxTokens: 512,
+        extraBody: ctx.extraBody,
       });
 
       for await (const chunk of gen) {
@@ -166,17 +166,14 @@ const testCases: ConformanceTestCase[] = [
     requiredCapability: 'multiturn',
     async run(ctx) {
       // First turn
-      const first = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const first = await ctx.complete({
         messages: [msg('user', PROMPTS.multiTurnFirst)],
         temperature: 0,
         maxTokens: 512,
-        extraBody: ctx.extraBody,
       });
 
       // Second turn includes history
-      const result = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const result = await ctx.complete({
         messages: [
           msg('user', PROMPTS.multiTurnFirst),
           msg('assistant', first.content),
@@ -184,7 +181,6 @@ const testCases: ConformanceTestCase[] = [
         ],
         temperature: 0,
         maxTokens: 512,
-        extraBody: ctx.extraBody,
       });
 
       const v = validateMultiTurn(result.content);
@@ -198,15 +194,13 @@ const testCases: ConformanceTestCase[] = [
     description: 'System prompt instructs French; verify response is in French',
     requiredCapability: 'systemRole',
     async run(ctx) {
-      const result = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const result = await ctx.complete({
         messages: [
           msg('system', PROMPTS.systemPromptFrench),
           msg('user', PROMPTS.systemPromptFrenchUser),
         ],
         temperature: 0,
         maxTokens: 256,
-        extraBody: ctx.extraBody,
       });
 
       const v = validateFrenchResponse(result.content);
@@ -220,13 +214,11 @@ const testCases: ConformanceTestCase[] = [
     description: 'Define add_numbers tool, ask to add 5+3, verify tool_call',
     requiredCapability: 'tools',
     async run(ctx) {
-      const result = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const result = await ctx.complete({
         messages: [msg('user', PROMPTS.toolCalling)],
         tools: [ADD_NUMBERS_TOOL],
         temperature: 0,
         maxTokens: 256,
-        extraBody: ctx.extraBody,
       });
 
       const v = validateToolCall(result.toolCalls);
@@ -249,13 +241,11 @@ const testCases: ConformanceTestCase[] = [
         msg('tool', JSON.stringify({ result: 8 }), { toolCallId }),
       ];
 
-      const result = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const result = await ctx.complete({
         messages,
         tools: [ADD_NUMBERS_TOOL],
         temperature: 0,
         maxTokens: 512,
-        extraBody: ctx.extraBody,
       });
 
       // Model should produce a text response mentioning 8
@@ -274,13 +264,11 @@ const testCases: ConformanceTestCase[] = [
     description: 'Request JSON mode, verify response is valid JSON',
     requiredCapability: 'structuredOutput',
     async run(ctx) {
-      const result = await ctx.client.complete({
-        model: ctx.model.modelId,
+      const result = await ctx.complete({
         messages: [msg('user', PROMPTS.structuredOutput)],
         responseFormat: { type: 'json_object' },
         temperature: 0,
         maxTokens: 256,
-        extraBody: ctx.extraBody,
       });
 
       const v = validateJSON(result.content);
@@ -332,7 +320,6 @@ const testCases: ConformanceTestCase[] = [
           model: bogusModel,
           messages: [msg('user', 'test')],
           maxTokens: 16,
-        extraBody: ctx.extraBody,
         });
       } catch {
         threw = true;
@@ -410,7 +397,12 @@ export async function runConformanceTests(
     // token budget issues (thinking consumes output tokens, leaving empty responses)
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
     const extraBody = { ...modelExtra, think: false };
-    const ctx: TestContext = { client, model, provider, capabilities, extraBody };
+
+    // Use completeViaProxy to bypass circuit breaker + rate limiter
+    // Conformance tests NEED to hit the actual provider, not get blocked by infra
+    const complete: TestContext['complete'] = (opts) =>
+      client.completeViaProxy({ ...opts, model: model.modelId, extraBody });
+    const ctx: TestContext = { client, model, provider, capabilities, extraBody, complete };
 
     for (const tc of testCases) {
       if (selectedTests && !selectedTests.includes(tc.name)) continue;
