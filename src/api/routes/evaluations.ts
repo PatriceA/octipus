@@ -230,6 +230,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
           for (const dp of dataset) {
             let output = dp.output;
             let latencyMs: number | undefined;
+            let actualToolCall: { name: string; args: Record<string, unknown> } | undefined;
             if (!output) {
               try {
                 const messages: AgentMessage[] = [];
@@ -241,17 +242,27 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                 const completion = await evalClient.complete({
                   model: modelId,
                   messages,
+                  tools: dp.tools,
                   temperature: 0.3,
                   maxTokens: 1024,
                   extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
                 });
                 latencyMs = Date.now() - startMs;
                 output = completion.content;
+                // Capture tool calls if the model made any
+                if (completion.toolCalls?.length) {
+                  const tc = completion.toolCalls[0];
+                  actualToolCall = { name: tc.name, args: tc.arguments as Record<string, unknown> };
+                }
               } catch {
                 output = '';
               }
             }
-            stampedDataset.push({ ...dp, output, model, provider, latencyMs: latencyMs ?? dp.latencyMs });
+            stampedDataset.push({
+              ...dp, output, model, provider,
+              latencyMs: latencyMs ?? dp.latencyMs,
+              actualToolCall: actualToolCall ?? dp.actualToolCall,
+            });
           }
 
           // Run evaluators

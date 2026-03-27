@@ -50,6 +50,44 @@ export const generalQA: EvalDataPoint[] = [
 ];
 
 /**
+ * Tool definitions available to the model during tool-calling evaluations.
+ */
+const EVAL_TOOLS = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'add_numbers',
+      description: 'Add two numbers together',
+      parameters: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'] },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'web_search',
+      description: 'Search the web for information',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'shell_run',
+      description: 'Execute a shell command and return the output',
+      parameters: { type: 'object', properties: { command: { type: 'string', description: 'Shell command to run' } }, required: ['command'] },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'filesystem_write',
+      description: 'Write content to a file',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+    },
+  },
+];
+
+/**
  * Scenarios requiring tool use, each with an expected tool call.
  */
 export const toolCalling: EvalDataPoint[] = [
@@ -59,6 +97,7 @@ export const toolCalling: EvalDataPoint[] = [
     output: '',
     model: '',
     provider: '',
+    tools: EVAL_TOOLS,
     expectedToolCall: { name: 'add_numbers', args: { a: 5, b: 3 } },
   },
   {
@@ -67,6 +106,7 @@ export const toolCalling: EvalDataPoint[] = [
     output: '',
     model: '',
     provider: '',
+    tools: EVAL_TOOLS,
     expectedToolCall: { name: 'web_search', args: { query: 'recent AI news' } },
   },
   {
@@ -75,6 +115,7 @@ export const toolCalling: EvalDataPoint[] = [
     output: '',
     model: '',
     provider: '',
+    tools: EVAL_TOOLS,
     expectedToolCall: { name: 'shell_run', args: { command: 'ls /tmp' } },
   },
   {
@@ -83,6 +124,7 @@ export const toolCalling: EvalDataPoint[] = [
     output: '',
     model: '',
     provider: '',
+    tools: EVAL_TOOLS,
     expectedToolCall: {
       name: 'filesystem_write',
       args: { path: 'test.txt', content: 'hello world' },
@@ -94,6 +136,7 @@ export const toolCalling: EvalDataPoint[] = [
     output: '',
     model: '',
     provider: '',
+    tools: EVAL_TOOLS,
     expectedToolCall: { name: 'web_search', args: { query: 'weather in Berlin' } },
   },
 ];

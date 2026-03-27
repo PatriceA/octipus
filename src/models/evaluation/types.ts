@@ -8,6 +8,7 @@ export interface EvalDataPoint {
   provider: string;
   latencyMs?: number;
   // For tool accuracy evaluation
+  tools?: Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
   expectedToolCall?: { name: string; args: Record<string, unknown> };
   actualToolCall?: { name: string; args: Record<string, unknown> };
   // For instruction following
