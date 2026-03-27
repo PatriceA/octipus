@@ -18,7 +18,17 @@ export function defineEvaluator(
   description: string,
   fn: (dataPoint: EvalDataPoint) => Promise<EvalScore>,
 ): Evaluator {
-  return { name, description, evaluate: fn };
+  return {
+    name,
+    description,
+    evaluate: async (dp: EvalDataPoint) => {
+      // Empty or error output is an automatic 0 — don't waste judge tokens
+      if (!dp.output || dp.output.startsWith('[Error')) {
+        return { metric: name, score: 0, status: 'FAIL' as const, reasoning: 'No model output' };
+      }
+      return fn(dp);
+    },
+  };
 }
 
 /**

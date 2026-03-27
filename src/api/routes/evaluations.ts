@@ -183,11 +183,12 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
         const provider = modelConfig?.provider ?? 'unknown';
         const modelId = modelConfig?.modelId ?? model;
 
-        // Generate model outputs for data points that don't have one
-        const router = (await import('@/models/providers')).getProviderRouter();
+        // Generate model outputs using LiteLLMClient (routes via direct provider → LiteLLM fallback)
+        const evalClient = getLiteLLMClient();
         const stampedDataset = [];
         for (const dp of dataset) {
           let output = dp.output;
+          let latencyMs: number | undefined;
           if (!output) {
             try {
               const messages: import('@/core/types').AgentMessage[] = [];
@@ -195,20 +196,22 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                 messages.push({ role: 'system', content: dp.systemPrompt, timestamp: new Date() });
               }
               messages.push({ role: 'user', content: dp.input, timestamp: new Date() });
-              const completion = await router.complete({
+              const startMs = Date.now();
+              const completion = await evalClient.complete({
                 model: modelId,
                 messages,
                 temperature: 0.3,
                 maxTokens: 1024,
-                // Always enable thinking for evaluations — better quality with reasoning
                 extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
               });
+              latencyMs = Date.now() - startMs;
               output = completion.content;
             } catch (err) {
-              output = `[Error generating output: ${err instanceof Error ? err.message : String(err)}]`;
+              // Don't store error messages as output — leave empty so evaluators score 0
+              output = '';
             }
           }
-          stampedDataset.push({ ...dp, output, model, provider });
+          stampedDataset.push({ ...dp, output, model, provider, latencyMs: latencyMs ?? dp.latencyMs });
         }
 
         // Run evaluation
