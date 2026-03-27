@@ -149,9 +149,8 @@ const testCases: ConformanceTestCase[] = [
         maxTokens: 512,
         extraBody: ctx.extraBody,
       };
-      // Route based on DB-configured provider
-      const isLiteLLMRouted = ctx.model.provider === 'litellm';
-      const gen = isLiteLLMRouted
+      // Route based on DB-configured provider field
+      const gen = ctx.model.provider === 'litellm'
         ? ctx.client.streamViaProxy(streamOpts)
         : ctx.provider.stream(streamOpts);
 
@@ -432,8 +431,9 @@ export async function runConformanceTests(
     const thinkOverride = model.provider === 'ollama' ? { think: false } : {};
     const extraBody = { ...modelExtra, ...thinkOverride };
 
-    // Route based on DB-configured provider — not heuristic name matching.
-    // model.provider from DB is the source of truth: 'litellm' → proxy, anything else → direct.
+    // Route based on DB-configured provider field.
+    // Models added via LiteLLM have provider='litellm' → use proxy.
+    // Models with direct API keys have provider='openai'/'anthropic'/etc. → call directly.
     const isLiteLLMRouted = model.provider === 'litellm';
     const complete: TestContext['complete'] = async (opts) => {
       const fullOpts = { ...opts, model: model.modelId, extraBody };

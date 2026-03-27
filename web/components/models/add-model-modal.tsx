@@ -155,11 +155,12 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   };
 
   const handleSelectModel = (model: LiteLLMModel) => {
-    const provider = mapLiteLLMProvider(model.provider);
-    const defaults = PROVIDER_DEFAULTS[provider] || {};
+    // Models from LiteLLM list are routed through LiteLLM proxy — provider is 'litellm'
+    const underlyingProvider = mapLiteLLMProvider(model.provider);
+    const defaults = PROVIDER_DEFAULTS[underlyingProvider] || {};
     setFormData({
       name: model.id,
-      provider,
+      provider: 'litellm',
       modelId: model.id,
       endpoint: '',
       contextWindow: defaults.contextWindow || 4096,
