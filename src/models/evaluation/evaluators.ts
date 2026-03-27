@@ -1,5 +1,5 @@
-import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { getProviderRouter } from '@/models/providers';
 import type { EvalDataPoint, EvalScore, Evaluator } from './types';
 
 // ---------------------------------------------------------------------------
@@ -23,22 +23,24 @@ export function defineEvaluator(
 
 /**
  * Shared LLM-as-judge helper.
- * Calls the project's default model via getLiteLLMClient().complete() with
- * low temperature and a structured system prompt, then parses a JSON object
- * with `score` (0-10) and `reasoning` from the response.
+ * Routes through the provider router (same path as all other completions)
+ * so it works with direct providers, not just LiteLLM.
+ * Uses the 'evaluation' topic model or the default model.
  */
 async function llmJudge(prompt: string): Promise<{ score: number; reasoning: string }> {
   const registry = getModelRegistry();
-  const defaultModel = await registry.getModelForTopic('evaluation')
+  const judgeModel = await registry.getModelForTopic('evaluation')
     ?? await registry.getDefaultModel();
-  const modelId = defaultModel?.modelId ?? 'gpt-oss';
+  if (!judgeModel) {
+    return { score: 0.5, reasoning: 'No model configured for evaluation' };
+  }
 
-  const client = getLiteLLMClient();
-  const result = await client.complete({
-    model: modelId,
+  const router = getProviderRouter();
+  const result = await router.complete({
+    model: judgeModel.modelId,
     temperature: 0.1,
     maxTokens: 200,
-    extraBody: { think: false },
+    extraBody: judgeModel.metadata?.extraBody ?? {},
     messages: [
       {
         role: 'system',
