@@ -29,6 +29,8 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **LiteLLM proxy** — unified gateway to 100+ model providers
 - **Smart routing** — topic-based model selection, quota tracking, cost monitoring, health checks
 - **Adaptive rate limiting** — per-provider concurrency semaphores, token bucket RPM, adaptive concurrency adjustment, priority request queuing, and exponential backoff. Circuit breaker per provider (closed/open/half-open) with automatic failover to LiteLLM. Redis-backed state
+- **Provider conformance testing** — automated test suite validates all providers (completion, streaming, tools, vision, embeddings) with capability-gated skipping
+- **Model evaluation** — 8 quality evaluators (relevance, coherence, completeness, tool-accuracy, etc.) with standard datasets and cross-model comparison
 
 ### Tools That Actually Do Things
 - **Filesystem** — read, write, search, organize files and directories
@@ -67,6 +69,13 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Encrypted vault** — AES-256-GCM credential storage with per-tool access control
 - **Audit logging** — every action tracked with user, resource, and context
 - **Hardened defaults** — HMAC webhook verification, generic error messages, restricted health endpoints, session limits
+
+### Model Evaluation & Testing
+- `/eval conformance` — run provider conformance tests from chat
+- `/eval quality <model>` — evaluate model quality with standard datasets
+- `/eval compare` — side-by-side cross-model comparison
+- **CLI:** `bun run src/models/testing/run.ts`
+- **Web UI:** Evaluations page with conformance matrix and score cards
 
 ### Evaluation & Testing
 - **Agent evaluation harness** — YAML-based test runner (`bun run eval`) for evaluating routing accuracy, tool usage, and response quality. 13 assertion types including `routes_to_role`, `classification`, `response_quality` (LLM-graded), `defense_held`, and `no_hallucination`. Supports unit and integration modes
@@ -120,6 +129,16 @@ Not all models handle every role well. Local models (e.g. qwen3:14b, qwen3.5:35b
 
 Configure per-topic model routing in the web UI under **Settings → Models** or via the API.
 
+## Quick Start (Docker)
+
+```bash
+docker compose up -d
+```
+
+- API: http://localhost:3015
+- Web UI: http://localhost:3017
+- See `docker-compose.yml` for configuration (PostgreSQL, Redis, environment variables)
+
 ## Quick Start (Embedded — Zero Dependencies)
 
 No PostgreSQL or Redis needed. Data is stored locally using PGlite (in-process WASM PostgreSQL) and in-memory cache.
@@ -150,6 +169,14 @@ docker exec <db-container> psql -U <superuser> -d assistant \
 
 bin/assistant start
 ```
+
+## Mobile App
+
+Flutter/Dart Android app with full feature parity with the web UI. iOS support is planned.
+
+- Pair your device via **Settings → Mobile App** — scan the QR code to connect over LAN
+- Full chat, agent monitoring, and tool access
+- Repo: [github.com/PatriceA/mobile-assistant](https://github.com/PatriceA/mobile-assistant)
 
 ## CLI
 

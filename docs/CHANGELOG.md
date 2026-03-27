@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-27
+
+### Model Evaluation & Provider Testing Framework
+- **Provider conformance tests**: 10 automated tests per provider (basic completion, streaming, tool calling, vision, embeddings, etc.) with capability-gated skipping
+- **Model evaluation framework**: 8 evaluators (relevance, faithfulness, coherence, format-compliance, latency, tool-accuracy, instruction-following, completeness) with 4 standard datasets
+- **Model capabilities locked**: supportsTools/Vision/Streaming are preset per provider, not user-editable
+- **Evaluation API**: Full REST API for running tests, storing results, cross-model comparison
+- **Web UI**: Conformance matrix, score cards, drill-down, comparison table in Evaluations page
+- **Chat commands**: `/eval conformance`, `/eval quality <model>`, `/eval compare`
+- **CI integration**: GitHub Action runs conformance tests on provider code changes
+
+### Docker Support
+- Dockerfile with multi-stage build (Bun + Next.js)
+- docker-compose.yml with PostgreSQL (pgvector) and Redis
+- Default ports: API=3015, Web=3017
+
+### Mobile App Integration
+- QR code device pairing in Settings > Mobile App
+- Backend pairing endpoint with LAN IP detection
+- API host defaults to 0.0.0.0 for LAN access
+
+### Bug Fixes
+- Fix embeddings cleanup PostgresError (uuid cast)
+- Register evaluation migration in Drizzle journal
+
 ## 2026-03-26
 
 ### CLI Agent Reliability & Windows Stability
