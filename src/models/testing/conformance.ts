@@ -113,7 +113,7 @@ const testCases: ConformanceTestCase[] = [
         model: ctx.model.modelId,
         messages: [msg('user', PROMPTS.basicCompletion)],
         temperature: 0,
-        maxTokens: 64,
+        maxTokens: 256,
         extraBody: ctx.extraBody,
       });
 
@@ -133,7 +133,7 @@ const testCases: ConformanceTestCase[] = [
         model: ctx.model.modelId,
         messages: [msg('user', 'Count from 1 to 5, one number per line.')],
         temperature: 0,
-        maxTokens: 128,
+        maxTokens: 512,
       });
 
       for await (const chunk of gen) {
@@ -170,7 +170,7 @@ const testCases: ConformanceTestCase[] = [
         model: ctx.model.modelId,
         messages: [msg('user', PROMPTS.multiTurnFirst)],
         temperature: 0,
-        maxTokens: 128,
+        maxTokens: 512,
         extraBody: ctx.extraBody,
       });
 
@@ -183,7 +183,7 @@ const testCases: ConformanceTestCase[] = [
           msg('user', PROMPTS.multiTurnSecond),
         ],
         temperature: 0,
-        maxTokens: 128,
+        maxTokens: 512,
         extraBody: ctx.extraBody,
       });
 
@@ -254,7 +254,7 @@ const testCases: ConformanceTestCase[] = [
         messages,
         tools: [ADD_NUMBERS_TOOL],
         temperature: 0,
-        maxTokens: 128,
+        maxTokens: 512,
         extraBody: ctx.extraBody,
       });
 
@@ -406,9 +406,10 @@ export async function runConformanceTests(
 
     const capabilities = capabilitiesFromModel(model);
 
-    // Always enable thinking for tests — models perform better with reasoning
+    // Conformance tests verify provider connectivity — disable thinking to avoid
+    // token budget issues (thinking consumes output tokens, leaving empty responses)
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
-    const extraBody = { ...modelExtra, think: true };
+    const extraBody = { ...modelExtra, think: false };
     const ctx: TestContext = { client, model, provider, capabilities, extraBody };
 
     for (const tc of testCases) {
