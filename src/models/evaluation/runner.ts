@@ -61,14 +61,17 @@ export async function runEvaluation(
     }
 
     if (metricScores.length > 0) {
-      const mean =
-        metricScores.reduce((sum, s) => sum + s.score, 0) / metricScores.length;
-      const passCount = metricScores.filter((s) => s.status === 'PASS').length;
-      summary[evaluator.name] = {
-        mean: Math.round(mean * 1000) / 1000,
-        passRate: Math.round((passCount / metricScores.length) * 1000) / 1000,
-        count: metricScores.length,
-      };
+      // Exclude UNKNOWN scores from aggregation — they indicate the evaluator wasn't applicable
+      const applicable = metricScores.filter((s) => s.status !== 'UNKNOWN');
+      if (applicable.length > 0) {
+        const mean = applicable.reduce((sum, s) => sum + s.score, 0) / applicable.length;
+        const passCount = applicable.filter((s) => s.status === 'PASS').length;
+        summary[evaluator.name] = {
+          mean: Math.round(mean * 1000) / 1000,
+          passRate: Math.round((passCount / applicable.length) * 1000) / 1000,
+          count: applicable.length,
+        };
+      }
     }
   }
 

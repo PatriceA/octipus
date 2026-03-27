@@ -1,5 +1,5 @@
 import { getModelRegistry } from '@/models/model-registry';
-import { getProviderRouter } from '@/models/providers';
+import { getLiteLLMClient } from '@/models/litellm-client';
 import type { EvalDataPoint, EvalScore, Evaluator } from './types';
 
 // ---------------------------------------------------------------------------
@@ -45,8 +45,11 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     return { score: 0.5, reasoning: 'No model configured for evaluation' };
   }
 
-  const router = getProviderRouter();
-  const result = await router.complete({
+  // Use LiteLLMClient for proper routing (direct provider → LiteLLM fallback)
+  const client = getLiteLLMClient();
+  let result;
+  try {
+    result = await client.complete({
     model: judgeModel.modelId,
     temperature: 0.1,
     maxTokens: 200,
@@ -67,6 +70,9 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
       },
     ],
   });
+  } catch (err) {
+    return { score: 0, reasoning: `Evaluator error: ${(err as Error).message?.slice(0, 200)}` };
+  }
 
   // Strip thinking tags and markdown fences before parsing
   let text = result.content.trim();
