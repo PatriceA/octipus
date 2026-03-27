@@ -428,7 +428,7 @@ export async function runConformanceTests(
     // LiteLLM and Ollama support think:false. Direct providers like Gemini/Anthropic
     // reject unknown fields, so only add for compatible providers.
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
-    const noThinkProviders = new Set(['litellm', 'ollama', 'deepseek']);
+    const noThinkProviders = new Set(['litellm', 'ollama']);
     const thinkOverride = noThinkProviders.has(model.provider) ? { think: false } : {};
     const extraBody = { ...modelExtra, ...thinkOverride };
 
