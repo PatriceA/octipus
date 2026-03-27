@@ -367,7 +367,8 @@ export async function runConformanceTests(
 ): Promise<ConformanceReport> {
   const timeout = options?.timeout ?? 30_000;
   const selectedTests = options?.tests;
-  const skipProviders = new Set(options?.skipProviders ?? []);
+  // Always skip CLI providers — they run as subprocesses, not API calls
+  const skipProviders = new Set([...(options?.skipProviders ?? []), 'cli']);
 
   const results: ConformanceResult[] = [];
   const overallStart = Date.now();
