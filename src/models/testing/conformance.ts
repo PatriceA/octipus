@@ -425,10 +425,11 @@ export async function runConformanceTests(
 
     // Conformance tests verify provider connectivity — disable thinking to avoid
     // token budget issues (thinking consumes output tokens, leaving empty responses).
-    // Only add think:false for providers that support it (ollama) — Gemini and others
-    // reject unknown fields in the request body.
+    // LiteLLM and Ollama support think:false. Direct providers like Gemini/Anthropic
+    // reject unknown fields, so only add for compatible providers.
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
-    const thinkOverride = model.provider === 'ollama' ? { think: false } : {};
+    const noThinkProviders = new Set(['litellm', 'ollama', 'deepseek']);
+    const thinkOverride = noThinkProviders.has(model.provider) ? { think: false } : {};
     const extraBody = { ...modelExtra, ...thinkOverride };
 
     // Route based on DB-configured provider field.
