@@ -168,10 +168,32 @@ export function ConformanceTab() {
     }
   }, []);
 
+  // Poll for running jobs
+  const checkStatus = useCallback(async () => {
+    try {
+      const data = await api.get<{ running: boolean; job?: { type: string; status: string } }>('/evaluations/status');
+      if (data.running) {
+        setRunning(true);
+      } else if (running) {
+        // Job just finished — refresh results
+        setRunning(false);
+        fetchRuns();
+      }
+    } catch { /* ignore */ }
+  }, [running, fetchRuns]);
+
   useEffect(() => {
     fetchRuns();
     fetchModels();
-  }, [fetchRuns, fetchModels]);
+    checkStatus();
+  }, [fetchRuns, fetchModels, checkStatus]);
+
+  // Poll while running
+  useEffect(() => {
+    if (!running) return;
+    const interval = setInterval(checkStatus, 3000);
+    return () => clearInterval(interval);
+  }, [running, checkStatus]);
 
   const runConformance = async () => {
     try {
@@ -180,11 +202,10 @@ export function ConformanceTab() {
       const body: { models?: string[] } = {};
       if (selectedModels.length > 0) body.models = selectedModels;
       await api.post('/evaluations/conformance/run', body);
-      await fetchRuns();
+      // Don't await results — job runs in background, poll will pick it up
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
       setRunning(false);
+      setError((err as Error).message);
     }
   };
 

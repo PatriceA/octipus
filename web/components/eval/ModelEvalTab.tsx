@@ -272,10 +272,30 @@ export function ModelEvalTab() {
     }
   }, [selectedModel]);
 
+  // Poll for running jobs
+  const checkStatus = useCallback(async () => {
+    try {
+      const data = await api.get<{ running: boolean; job?: { type: string; status: string } }>('/evaluations/status');
+      if (data.running) {
+        setRunning(true);
+      } else if (running) {
+        setRunning(false);
+        fetchAll();
+      }
+    } catch { /* ignore */ }
+  }, [running, fetchAll]);
+
   useEffect(() => {
     fetchAll();
     fetchModels();
-  }, [fetchAll, fetchModels]);
+    checkStatus();
+  }, [fetchAll, fetchModels, checkStatus]);
+
+  useEffect(() => {
+    if (!running) return;
+    const interval = setInterval(checkStatus, 3000);
+    return () => clearInterval(interval);
+  }, [running, checkStatus]);
 
   const runEval = async () => {
     if (!selectedModel) return;
@@ -286,11 +306,10 @@ export function ModelEvalTab() {
       if (selectedDataset) body.dataset = selectedDataset;
       if (selectedEvaluators.length > 0) body.evaluators = selectedEvaluators;
       await api.post('/evaluations/eval/run', body);
-      await fetchAll();
+      // Job runs in background — poll will pick up completion
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
       setRunning(false);
+      setError((err as Error).message);
     }
   };
 
