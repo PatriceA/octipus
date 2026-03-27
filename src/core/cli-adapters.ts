@@ -191,6 +191,23 @@ export class CLIOutputParser {
             toolName: block.name,
             args: block.input,
           });
+
+          // Also emit file_change for file-modifying tools
+          const claudeFileTools: Record<string, string> = { Write: 'write', Edit: 'edit' };
+          const toolName = block.name as string;
+          if (claudeFileTools[toolName] && block.input) {
+            const input = block.input as Record<string, unknown>;
+            const filePath = (input.file_path || input.path) as string | undefined;
+            if (filePath) {
+              this.emitFn('action', {
+                type: 'file_change',
+                action: claudeFileTools[toolName],
+                path: filePath,
+                content: (input.content || input.new_string) as string | undefined,
+                oldContent: (input.old_string) as string | undefined,
+              });
+            }
+          }
         }
       }
 
@@ -271,6 +288,27 @@ export class CLIOutputParser {
         toolName: event.tool_name,
         args: event.parameters,
       });
+
+      // Also emit file_change for file-modifying tools
+      const geminiFileTools: Record<string, string> = {
+        replace_file: 'edit', write_file: 'write', create_file: 'write',
+        delete_file: 'delete', patch_file: 'edit', update_file: 'edit',
+      };
+      const toolName = event.tool_name as string;
+      if (geminiFileTools[toolName] && event.parameters) {
+        const params = event.parameters as Record<string, unknown>;
+        const filePath = (params.file_path || params.path || params.filename) as string | undefined;
+        if (filePath) {
+          this.emitFn('action', {
+            type: 'file_change',
+            action: geminiFileTools[toolName],
+            path: filePath,
+            content: (params.content || params.new_content) as string | undefined,
+            oldContent: (params.old_content) as string | undefined,
+          });
+        }
+      }
+
       return null;
     }
 

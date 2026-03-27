@@ -683,17 +683,36 @@ export default function ChatPage() {
               }],
             });
           }
-          // Track file changes from CLI agents (Write, Edit)
-          const cliFileTools = ['Write', 'Edit'];
-          if (cliFileTools.includes(String(d.toolName)) && d.args) {
-            const filePath = d.args.file_path || d.args.path || '';
+          // Track file changes from CLI agents
+          const CLI_FILE_TOOL_MAP: Record<string, string> = {
+            // Claude Code
+            'Write': 'write',
+            'Edit': 'edit',
+            // Gemini CLI
+            'replace_file': 'edit',
+            'write_file': 'write',
+            'create_file': 'write',
+            'delete_file': 'delete',
+            'patch_file': 'edit',
+            'update_file': 'edit',
+            // Generic
+            'write': 'write',
+            'edit': 'edit',
+            'replace': 'edit',
+            'create': 'write',
+            'delete': 'delete',
+          };
+          const toolName = String(d.toolName);
+          const fileAction = CLI_FILE_TOOL_MAP[toolName];
+          if (fileAction && d.args) {
+            const filePath = d.args.file_path || d.args.path || d.args.filename || d.args.target || '';
             if (filePath) {
               return {
                 ...prev,
                 trackedAgents: next,
                 fileChanges: [...prev.fileChanges, {
                   path: String(filePath),
-                  action: String(d.toolName).toLowerCase(),
+                  action: fileAction,
                   agentId: data.agentId,
                   agentRole: existing?.role || 'unknown',
                   timestamp: new Date().toISOString(),
@@ -714,6 +733,8 @@ export default function ChatPage() {
             agentId: data.agentId,
             agentRole: String(d.agentRole || 'unknown'),
             timestamp: new Date().toISOString(),
+            content: d.content as string | undefined,
+            oldContent: d.oldContent as string | undefined,
           }],
         }));
       }

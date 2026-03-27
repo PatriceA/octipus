@@ -504,8 +504,52 @@ const FILE_ACTION_ICONS: Record<string, { icon: typeof FileText; color: string; 
   create_dir: { icon: FilePlus, color: 'text-emerald-400', label: 'created dir' },
 };
 
+function FileDiffView({ change }: { change: FileChange }) {
+  const hasContent = change.content !== undefined || change.oldContent !== undefined;
+  if (!hasContent) return null;
+
+  const isEdit = change.action === 'edit' && change.oldContent !== undefined && change.content !== undefined;
+
+  if (isEdit) {
+    // Show inline diff: old lines in red, new lines in green
+    const oldLines = change.oldContent!.split('\n');
+    const newLines = change.content!.split('\n');
+    return (
+      <div className="mt-1 rounded bg-[#0d1117] border border-white/10 overflow-auto max-h-48 text-xs font-mono">
+        {oldLines.map((line, i) => (
+          <div key={`old-${i}`} className="px-2 py-px bg-red-950/40 text-red-300 whitespace-pre">
+            <span className="select-none text-red-500/60 mr-2">-</span>{line}
+          </div>
+        ))}
+        {newLines.map((line, i) => (
+          <div key={`new-${i}`} className="px-2 py-px bg-green-950/40 text-green-300 whitespace-pre">
+            <span className="select-none text-green-500/60 mr-2">+</span>{line}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Write/create: show new content in green
+  if (change.content !== undefined) {
+    const lines = change.content.split('\n');
+    return (
+      <div className="mt-1 rounded bg-[#0d1117] border border-white/10 overflow-auto max-h-48 text-xs font-mono">
+        {lines.map((line, i) => (
+          <div key={i} className="px-2 py-px bg-green-950/30 text-green-300 whitespace-pre">
+            <span className="select-none text-green-500/60 mr-2">+</span>{line}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function FileChangesInline({ group }: { group: FileChangeGroup }) {
   const [expanded, setExpanded] = useState(false);
+  const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
 
   // Deduplicate by path (keep latest action)
   const uniqueChanges = new Map<string, FileChange>();
@@ -513,6 +557,16 @@ function FileChangesInline({ group }: { group: FileChangeGroup }) {
     uniqueChanges.set(change.path, change);
   }
   const changes = Array.from(uniqueChanges.values());
+
+  const toggleDiff = (path: string) => {
+    setExpandedDiffs(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
   return (
     <div className="ml-9 my-1">
       <button
@@ -528,16 +582,32 @@ function FileChangesInline({ group }: { group: FileChangeGroup }) {
       </button>
 
       {expanded && (
-        <div className="ml-5 mt-1 space-y-0.5">
+        <div className="ml-5 mt-1 space-y-1">
           {changes.map((change, i) => {
             const info = FILE_ACTION_ICONS[change.action] || FILE_ACTION_ICONS.write;
             const Icon = info.icon;
             const shortPath = change.path.replace(/\\/g, '/').split('/').slice(-3).join('/');
+            const hasDiff = change.content !== undefined || change.oldContent !== undefined;
+            const diffOpen = expandedDiffs.has(change.path);
             return (
-              <div key={`${change.path}-${i}`} className="flex items-center gap-2 text-xs py-0.5">
-                <Icon className={cn('w-3 h-3 shrink-0', info.color)} />
-                <span className="font-mono text-white/80 truncate" title={change.path}>{shortPath}</span>
-                <span className="text-on-surface-variant">({info.label})</span>
+              <div key={`${change.path}-${i}`}>
+                <div
+                  className={cn(
+                    'flex items-center gap-2 text-xs py-0.5',
+                    hasDiff && 'cursor-pointer hover:text-white',
+                  )}
+                  onClick={hasDiff ? () => toggleDiff(change.path) : undefined}
+                >
+                  <Icon className={cn('w-3 h-3 shrink-0', info.color)} />
+                  <span className="font-mono text-white/80 truncate" title={change.path}>{shortPath}</span>
+                  <span className="text-on-surface-variant">({info.label})</span>
+                  {hasDiff && (
+                    diffOpen
+                      ? <ChevronDown className="w-3 h-3 text-on-surface-variant ml-auto" />
+                      : <ChevronRight className="w-3 h-3 text-on-surface-variant ml-auto" />
+                  )}
+                </div>
+                {hasDiff && diffOpen && <FileDiffView change={change} />}
               </div>
             );
           })}
@@ -557,6 +627,8 @@ export interface FileChange {
   agentId: string;
   agentRole: string;
   timestamp: string;
+  content?: string;     // new content (for writes)
+  oldContent?: string;  // old content (for edits - old_string)
 }
 
 interface FileChangeGroup {
