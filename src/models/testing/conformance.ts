@@ -149,9 +149,11 @@ const testCases: ConformanceTestCase[] = [
         maxTokens: 512,
         extraBody: ctx.extraBody,
       };
-      const gen = ctx.provider.name !== 'litellm'
-        ? ctx.provider.stream(streamOpts)
-        : ctx.client.streamViaProxy(streamOpts);
+      // Route based on DB-configured provider
+      const isLiteLLMRouted = ctx.model.provider === 'litellm';
+      const gen = isLiteLLMRouted
+        ? ctx.client.streamViaProxy(streamOpts)
+        : ctx.provider.stream(streamOpts);
 
       for await (const chunk of gen) {
         chunks.push(chunk);
@@ -430,15 +432,15 @@ export async function runConformanceTests(
     const thinkOverride = model.provider === 'ollama' ? { think: false } : {};
     const extraBody = { ...modelExtra, ...thinkOverride };
 
-    // Call provider directly — bypasses circuit breaker and rate limiter.
-    // For direct providers (ollama, openai, anthropic, etc.) call provider.complete().
-    // For litellm-routed models, fall back to client.completeViaProxy().
+    // Route based on DB-configured provider — not heuristic name matching.
+    // model.provider from DB is the source of truth: 'litellm' → proxy, anything else → direct.
+    const isLiteLLMRouted = model.provider === 'litellm';
     const complete: TestContext['complete'] = async (opts) => {
       const fullOpts = { ...opts, model: model.modelId, extraBody };
-      if (provider.name !== 'litellm') {
-        return provider.complete(fullOpts);
+      if (isLiteLLMRouted) {
+        return client.completeViaProxy(fullOpts);
       }
-      return client.completeViaProxy(fullOpts);
+      return provider.complete(fullOpts);
     };
     const ctx: TestContext = { client, model, provider, capabilities, extraBody, complete };
 

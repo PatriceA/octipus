@@ -55,7 +55,8 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
   const client = getLiteLLMClient();
 
   const callModel = async (opts: import('@/models/litellm-client').CompletionOptions) => {
-    if (resolvedProvider.name !== 'litellm') {
+    // Route based on DB-configured provider — not heuristic name matching
+    if (judgeModel.provider !== 'litellm') {
       return resolvedProvider.complete(opts);
     }
     return client.completeViaProxy(opts);

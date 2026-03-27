@@ -252,9 +252,11 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                   extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
                 };
                 // Direct provider or LiteLLM fallback — bypass circuit breaker
-                const completion = resolvedProvider.name !== 'litellm'
-                  ? await resolvedProvider.complete(completeOpts)
-                  : await evalClient.completeViaProxy(completeOpts);
+                // Route based on DB-configured provider — not heuristic
+                const isLiteLLMRouted = modelConfig?.provider === 'litellm';
+                const completion = isLiteLLMRouted
+                  ? await evalClient.completeViaProxy(completeOpts)
+                  : await resolvedProvider.complete(completeOpts);
                 latencyMs = Date.now() - startMs;
                 output = completion.content;
                 // Capture tool calls if the model made any
