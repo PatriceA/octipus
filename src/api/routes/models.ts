@@ -7,6 +7,7 @@ import { getProviderRouter } from '@/models/providers';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { getConfig } from '@/config';
 import type { NewModelConfigEntry } from '@/db/schema/models';
+import { getCapabilitiesForModel } from '@/models/capabilities';
 
 // ── Known model catalog with specs & pricing ────────────────────────
 // Prices are per 1M tokens. Context/max output in tokens.
@@ -137,7 +138,10 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         return { error: 'Model not found' };
       }
 
-      return model;
+      return {
+        ...model,
+        capabilities: getCapabilitiesForModel(model),
+      };
     },
     {
       params: t.Object({
@@ -374,14 +378,23 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         return { error: 'Admin access required' };
       }
 
+      // Strip capability flags from user updates — supportsTools, supportsVision,
+      // and supportsStreaming are derived from the provider capabilities system
+      // (see src/models/capabilities.ts) and must not be overridden by user input.
+      // This ensures capability presets remain the single source of truth.
+      const { supportsTools: _t, supportsVision: _v, supportsStreaming: _s, ...safeUpdate } = body as any;
+
       const registry = getModelRegistry();
-      const model = await registry.updateModel(params.name, body as Partial<NewModelConfigEntry>);
+      const model = await registry.updateModel(params.name, safeUpdate as Partial<NewModelConfigEntry>);
 
       if (!model) {
         return { error: 'Model not found' };
       }
 
-      return model;
+      return {
+        ...model,
+        capabilities: getCapabilitiesForModel(model),
+      };
     },
     {
       params: t.Object({
@@ -395,9 +408,8 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         topics: t.Optional(t.Array(t.String())),
         isEnabled: t.Optional(t.Boolean()),
         priority: t.Optional(t.Number()),
-        supportsVision: t.Optional(t.Boolean()),
-        supportsTools: t.Optional(t.Boolean()),
-        supportsStreaming: t.Optional(t.Boolean()),
+        // supportsTools, supportsVision, supportsStreaming are intentionally
+        // excluded — capabilities are preset per provider and not user-editable.
         costPerInputToken: t.Optional(t.Number()),
         costPerOutputToken: t.Optional(t.Number()),
         metadata: t.Optional(t.Any()),

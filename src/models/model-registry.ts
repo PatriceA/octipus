@@ -4,6 +4,7 @@ import { modelConfig, type ModelConfigEntry, type NewModelConfigEntry } from '@/
 import { RedisCache } from '@/db/redis';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
+import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
 
 const CACHE_TTL = 300; // 5 minutes
 
@@ -267,6 +268,16 @@ export class ModelRegistry {
     }
 
     return false;
+  }
+
+  /**
+   * Get resolved capabilities for a model by name.
+   * Returns null if the model does not exist.
+   */
+  async getModelCapabilities(name: string): Promise<ModelCapabilities | null> {
+    const model = await this.getModel(name);
+    if (!model) return null;
+    return getCapabilitiesForModel(model);
   }
 
   /**
