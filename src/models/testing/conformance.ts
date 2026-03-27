@@ -52,6 +52,8 @@ export interface TestContext {
   model: ModelConfigEntry;
   provider: ModelProvider;
   capabilities: ModelCapabilities;
+  /** Always { think: true } — evaluations/tests should use reasoning */
+  extraBody: Record<string, unknown>;
 }
 
 export interface ConformanceResult {
@@ -112,6 +114,7 @@ const testCases: ConformanceTestCase[] = [
         messages: [msg('user', PROMPTS.basicCompletion)],
         temperature: 0,
         maxTokens: 64,
+        extraBody: ctx.extraBody,
       });
 
       const v = validateBasicCompletion(result.content);
@@ -168,6 +171,7 @@ const testCases: ConformanceTestCase[] = [
         messages: [msg('user', PROMPTS.multiTurnFirst)],
         temperature: 0,
         maxTokens: 128,
+        extraBody: ctx.extraBody,
       });
 
       // Second turn includes history
@@ -180,6 +184,7 @@ const testCases: ConformanceTestCase[] = [
         ],
         temperature: 0,
         maxTokens: 128,
+        extraBody: ctx.extraBody,
       });
 
       const v = validateMultiTurn(result.content);
@@ -201,6 +206,7 @@ const testCases: ConformanceTestCase[] = [
         ],
         temperature: 0,
         maxTokens: 256,
+        extraBody: ctx.extraBody,
       });
 
       const v = validateFrenchResponse(result.content);
@@ -220,6 +226,7 @@ const testCases: ConformanceTestCase[] = [
         tools: [ADD_NUMBERS_TOOL],
         temperature: 0,
         maxTokens: 256,
+        extraBody: ctx.extraBody,
       });
 
       const v = validateToolCall(result.toolCalls);
@@ -248,6 +255,7 @@ const testCases: ConformanceTestCase[] = [
         tools: [ADD_NUMBERS_TOOL],
         temperature: 0,
         maxTokens: 128,
+        extraBody: ctx.extraBody,
       });
 
       // Model should produce a text response mentioning 8
@@ -272,6 +280,7 @@ const testCases: ConformanceTestCase[] = [
         responseFormat: { type: 'json_object' },
         temperature: 0,
         maxTokens: 256,
+        extraBody: ctx.extraBody,
       });
 
       const v = validateJSON(result.content);
@@ -323,6 +332,7 @@ const testCases: ConformanceTestCase[] = [
           model: bogusModel,
           messages: [msg('user', 'test')],
           maxTokens: 16,
+        extraBody: ctx.extraBody,
         });
       } catch {
         threw = true;
@@ -395,7 +405,10 @@ export async function runConformanceTests(
 
     const capabilities = capabilitiesFromModel(model);
 
-    const ctx: TestContext = { client, model, provider, capabilities };
+    // Always enable thinking for tests — models perform better with reasoning
+    const modelExtra = (model.metadata as any)?.extraBody ?? {};
+    const extraBody = { ...modelExtra, think: true };
+    const ctx: TestContext = { client, model, provider, capabilities, extraBody };
 
     for (const tc of testCases) {
       if (selectedTests && !selectedTests.includes(tc.name)) continue;

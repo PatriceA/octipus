@@ -40,7 +40,8 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
     model: judgeModel.modelId,
     temperature: 0.1,
     maxTokens: 200,
-    extraBody: judgeModel.metadata?.extraBody ?? {},
+    // Always enable thinking for evaluations — models score better with reasoning enabled
+    extraBody: { ...judgeModel.metadata?.extraBody, think: true },
     messages: [
       {
         role: 'system',

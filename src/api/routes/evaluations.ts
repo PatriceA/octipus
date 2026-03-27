@@ -200,7 +200,8 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                 messages,
                 temperature: 0.3,
                 maxTokens: 1024,
-                extraBody: modelConfig?.metadata?.extraBody ?? {},
+                // Always enable thinking for evaluations — better quality with reasoning
+                extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
               });
               output = completion.content;
             } catch (err) {
