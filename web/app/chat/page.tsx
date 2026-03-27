@@ -541,7 +541,10 @@ export default function ChatPage() {
             setStatusMessage(`Stage ${(pe.index ?? 0) + 1}: ${pe.name}...`);
             break;
           case 'stage_completed':
-            setStatusMessage(`Stage "${pe.name}" completed`);
+            setStatusMessage(`Stage "${pe.name}" completed${pe.note ? ` (${pe.note})` : ''}`);
+            break;
+          case 'qa_retry':
+            setStatusMessage(`QA found issues (attempt ${pe.attempt}/${pe.maxRetries}) — retrying implementation...`);
             break;
           case 'pipeline_completed':
             setStatusMessage(null);

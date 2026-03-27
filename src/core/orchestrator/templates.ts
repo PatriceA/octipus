@@ -122,6 +122,7 @@ Check for:
       requiresApproval: false,
       stageType: 'qa_validation',
       maxRetries: 3,
+      retryTargetStage: 2, // Retry Implementation (index 2), not Code Review
       promptTemplate: QA_VALIDATION_PROMPT_TEMPLATE,
     },
   ],
