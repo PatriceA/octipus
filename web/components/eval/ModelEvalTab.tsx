@@ -195,7 +195,7 @@ export function ModelEvalTab() {
       const data = await api.get<{ models: ModelInfo[] } | ModelInfo[]>('/models/');
       const list = Array.isArray(data) ? data : (data as { models: ModelInfo[] }).models ?? [];
       setModels(list);
-      if (list.length > 0 && !selectedModel) setSelectedModel(list[0].id);
+      if (list.length > 0 && !selectedModel) setSelectedModel(list[0].name || list[0].modelId || list[0].id);
     } catch {
       // Non-fatal
     }
@@ -255,7 +255,7 @@ export function ModelEvalTab() {
               >
                 {models.length === 0 && <option value="">No models available</option>}
                 {models.map(m => (
-                  <option key={m.id} value={m.id}>{m.name || m.id}</option>
+                  <option key={m.id} value={m.name || m.modelId || m.id}>{m.name || m.modelId || m.id}</option>
                 ))}
               </select>
             </div>

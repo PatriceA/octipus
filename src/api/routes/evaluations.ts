@@ -36,7 +36,9 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
         // Resolve which models to test (getAllModels returns only enabled models)
         let modelsToTest = await registry.getAllModels();
         if (modelNames && modelNames.length > 0) {
-          modelsToTest = modelsToTest.filter((m) => modelNames.includes(m.name));
+          modelsToTest = modelsToTest.filter((m) =>
+            modelNames.includes(m.name) || modelNames.includes(m.modelId) || modelNames.includes(m.id)
+          );
         }
 
         if (modelsToTest.length === 0) {
@@ -96,6 +98,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
           id: r.id,
           models: r.models,
           summary: r.summary,
+          results: r.results,
           createdAt: r.createdAt,
         })),
       };
@@ -175,7 +178,8 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
 
         // Stamp the dataset with the requested model/provider
         const registry = getModelRegistry();
-        const modelConfig = await registry.getModel(model);
+        const modelConfig = await registry.getModel(model)
+          ?? await registry.getModelByModelId(model);
         const provider = modelConfig?.provider ?? 'unknown';
 
         const stampedDataset = dataset.map((dp) => ({
