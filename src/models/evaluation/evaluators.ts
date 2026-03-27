@@ -49,30 +49,42 @@ async function llmJudge(prompt: string): Promise<{ score: number; reasoning: str
 
   // Use LiteLLMClient for proper routing (direct provider → LiteLLM fallback)
   const client = getLiteLLMClient();
+  const judgeMessages = [
+    {
+      role: 'system' as const,
+      content:
+        'You are an evaluation judge. Rate the following on a scale of 0-10. ' +
+        'Respond with ONLY a JSON object: {"score": N, "reasoning": "brief explanation"}',
+      timestamp: new Date(),
+    },
+    {
+      role: 'user' as const,
+      content: prompt,
+      timestamp: new Date(),
+    },
+  ];
+
   let result;
   try {
+    // First attempt with thinking enabled
     result = await client.complete({
-    model: judgeModel.modelId,
-    temperature: 0.1,
-    maxTokens: 1024,
-    // Always enable thinking for evaluations — models score better with reasoning enabled
-    // Need extra tokens because thinking consumes part of the budget before the JSON output
-    extraBody: { ...judgeModel.metadata?.extraBody, think: true },
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are an evaluation judge. Rate the following on a scale of 0-10. ' +
-          'Respond with ONLY a JSON object: {"score": N, "reasoning": "brief explanation"}',
-        timestamp: new Date(),
-      },
-      {
-        role: 'user',
-        content: prompt,
-        timestamp: new Date(),
-      },
-    ],
-  });
+      model: judgeModel.modelId,
+      temperature: 0.1,
+      maxTokens: 1024,
+      extraBody: { ...judgeModel.metadata?.extraBody, think: true },
+      messages: judgeMessages,
+    });
+
+    // If response is empty (thinking consumed all tokens), retry without thinking
+    if (!result.content?.trim()) {
+      result = await client.complete({
+        model: judgeModel.modelId,
+        temperature: 0.1,
+        maxTokens: 256,
+        extraBody: { ...judgeModel.metadata?.extraBody, think: false },
+        messages: judgeMessages,
+      });
+    }
   } catch (err) {
     return { score: 0, reasoning: `Evaluator error: ${(err as Error).message?.slice(0, 200)}` };
   }

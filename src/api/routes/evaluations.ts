@@ -214,8 +214,8 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
           stampedDataset.push({ ...dp, output, model, provider, latencyMs: latencyMs ?? dp.latencyMs });
         }
 
-        // Run evaluation
-        const run = await runEvaluation(stampedDataset, evaluators, { name });
+        // Run evaluation — concurrency 3 to avoid overloading the judge model
+        const run = await runEvaluation(stampedDataset, evaluators, { name, concurrency: 3 });
 
         // Persist
         const saved = await evaluationRepository.saveEvalRunWithDataset(
