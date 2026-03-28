@@ -149,13 +149,21 @@ export class PipelineManager {
         await this.updatePipeline(pipeline.id, { status: 'running' });
       }
 
+      // Emit stage_started so UI can show which pipeline stage is active
+      orchestrator['emit']({
+        type: 'pipeline_event',
+        sessionId,
+        data: { event: 'stage_started', pipelineId: pipeline.id, stageId: stage.id, name: stage.name, role: stage.role, index: i },
+        timestamp: new Date(),
+      });
+
       // Spawn worker for this stage with structured handoff context
       try {
         const result = await orchestrator.spawnWorker(
           stage.role,
           input,
           handoffText || previousOutput,
-          context,
+          { ...context, stageName: stage.name } as any,
         );
 
         previousOutput = String(result || '');

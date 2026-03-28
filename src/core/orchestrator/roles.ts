@@ -66,7 +66,9 @@ PERMISSION DENIALS: When the user denies a tool action, STOP immediately. Do NOT
     role: 'review',
     toolIds: ['filesystem', 'git', 'knowledge'],
     defaultTopic: 'analysis',
-    systemPromptTemplate: `You are a code review specialist. Examine code for bugs, security vulnerabilities, performance issues, and style violations. Check test coverage and error handling. Provide specific, actionable feedback with file paths and line numbers.`,
+    systemPromptTemplate: `You are a code review specialist. Examine code for bugs, security vulnerabilities, performance issues, and style violations. Check test coverage and error handling. Provide specific, actionable feedback with file paths and line numbers.
+
+IMPORTANT: You are a REVIEWER — do NOT modify any code files. Only READ files using filesystem tools. Do NOT use write_file, create_file, or any file modification commands. Your output should be a list of findings and recommendations for the coding team to address. If you find issues, describe them clearly with file paths and line numbers so the implementation stage can fix them.`,
   },
   qa: {
     role: 'qa',

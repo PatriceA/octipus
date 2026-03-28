@@ -592,6 +592,7 @@ export default function ChatPage() {
             toolCalls: [],
             startTime: Date.now(),
             parentAgentId: d.parentAgentId,
+            stageName: d.stageName,
           });
           return { ...prev, trackedAgents: next };
         });

@@ -275,7 +275,7 @@ If the file doesn't exist, create it.`;
     type: 'worker_spawned',
     sessionId: context.sessionId,
     userId: context.userId,
-    data: { workerId, role: agentRole, model: finalModel, parentAgentId: context.id },
+    data: { workerId, role: agentRole, model: finalModel, parentAgentId: context.id, stageName: (context as any).stageName },
     timestamp: new Date(),
   });
 

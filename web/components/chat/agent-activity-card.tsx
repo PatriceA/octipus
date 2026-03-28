@@ -23,6 +23,7 @@ export interface TrackedAgent {
   iterations?: number;
   parentAgentId?: string;
   teamId?: string;
+  stageName?: string;
 }
 
 interface AgentActivityCardProps {
@@ -69,7 +70,7 @@ export function AgentActivityCard({ agent }: AgentActivityCardProps) {
       <div className="max-w-[80%] bg-indigo-900/10 border border-outline-variant/10 px-3 py-2 rounded-lg text-sm">
         <div className="flex items-center gap-2 flex-wrap">
           <span className={cn('px-1.5 py-0.5 rounded text-xs font-medium', colorClass)}>
-            {agent.role}
+            {agent.stageName ? `${agent.stageName}` : agent.role}
           </span>
           <span className="text-xs text-on-surface-variant font-mono">{agent.model}</span>
           {agent.status === 'running' ? (
