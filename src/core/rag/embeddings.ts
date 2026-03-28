@@ -1,6 +1,7 @@
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getDb } from '@/db/postgres';
 import { embeddings, cosineSimilarity, type EmbeddingMetadata } from '@/db/schema/embeddings';
+import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { desc, eq, and, sql, inArray } from 'drizzle-orm';
 import { coreLogger } from '@/utils/logger';
 
@@ -12,6 +13,7 @@ export interface SearchResult {
   sourceId: string;
   similarity: number;
   metadata: EmbeddingMetadata;
+  createdAt?: Date;
 }
 
 const DEFAULT_MODEL = 'nomic-embed-text';
@@ -237,6 +239,7 @@ export class EmbeddingService {
         sourceType: embeddings.sourceType,
         sourceId: embeddings.sourceId,
         metadata: embeddings.metadata,
+        createdAt: embeddings.createdAt,
       })
       .from(embeddings)
       .where(eq(embeddings.id, id))
@@ -253,6 +256,7 @@ export class EmbeddingService {
       sourceId: r.sourceId,
       similarity: 1,
       metadata: (r.metadata || {}) as EmbeddingMetadata,
+      createdAt: r.createdAt,
     };
   }
 
@@ -341,29 +345,70 @@ export class EmbeddingService {
     };
   }
 
-  /** Get stats grouped by source type */
+  /** Get stats grouped by source type, with age distribution and storage metrics */
   async getStats(): Promise<{
     total: number;
     bySourceType: Record<string, number>;
     models: string[];
+    avgContentLength: number;
+    oldestEntry: string | null;
+    newestEntry: string | null;
+    ageDistribution: { last24h: number; last7d: number; last30d: number; older: number };
+    abstractCoverage: { withAbstract: number; withoutAbstract: number };
   }> {
     const db = getDb();
-    const [typeResults, modelResults] = await Promise.all([
+    const [typeResults, modelResults, metaResults, ageResults, abstractResults] = await Promise.all([
       db.execute(sql`SELECT source_type, count(*)::int AS count FROM embeddings GROUP BY source_type`),
       db.execute(sql`SELECT DISTINCT model FROM embeddings WHERE model IS NOT NULL`),
+      db.execute(sql`
+        SELECT count(*)::int AS total,
+               coalesce(avg(length(content)), 0)::int AS avg_len,
+               min(created_at)::text AS oldest,
+               max(created_at)::text AS newest
+        FROM embeddings
+      `),
+      db.execute(sql`
+        SELECT
+          count(*) FILTER (WHERE created_at >= now() - interval '24 hours')::int AS last_24h,
+          count(*) FILTER (WHERE created_at >= now() - interval '7 days' AND created_at < now() - interval '24 hours')::int AS last_7d,
+          count(*) FILTER (WHERE created_at >= now() - interval '30 days' AND created_at < now() - interval '7 days')::int AS last_30d,
+          count(*) FILTER (WHERE created_at < now() - interval '30 days')::int AS older
+        FROM embeddings
+      `),
+      db.execute(sql`
+        SELECT
+          count(*) FILTER (WHERE abstract IS NOT NULL)::int AS with_abstract,
+          count(*) FILTER (WHERE abstract IS NULL)::int AS without_abstract
+        FROM embeddings
+      `),
     ]);
 
     const bySourceType: Record<string, number> = {};
-    let total = 0;
     for (const row of typeResults as any[]) {
       bySourceType[row.source_type] = row.count;
-      total += row.count;
     }
 
+    const meta = (metaResults as any[])[0] || {};
+    const age = (ageResults as any[])[0] || {};
+    const abs = (abstractResults as any[])[0] || {};
+
     return {
-      total,
+      total: meta.total || 0,
       bySourceType,
       models: (modelResults as any[]).map(r => r.model),
+      avgContentLength: meta.avg_len || 0,
+      oldestEntry: meta.oldest || null,
+      newestEntry: meta.newest || null,
+      ageDistribution: {
+        last24h: age.last_24h || 0,
+        last7d: age.last_7d || 0,
+        last30d: age.last_30d || 0,
+        older: age.older || 0,
+      },
+      abstractCoverage: {
+        withAbstract: abs.with_abstract || 0,
+        withoutAbstract: abs.without_abstract || 0,
+      },
     };
   }
 
@@ -399,6 +444,7 @@ export class EmbeddingService {
     maxAgeDays?: number;
     minContentLength?: number;
     dryRun?: boolean;
+    triggeredBy?: string;
   } = {}): Promise<{
     orphanedDocuments: number;
     staleAgentOutputs: number;
@@ -409,7 +455,13 @@ export class EmbeddingService {
     const maxAgeDays = options.maxAgeDays ?? 30;
     const minContentLength = options.minContentLength ?? 50;
     const dryRun = options.dryRun ?? false;
+    const triggeredBy = options.triggeredBy ?? 'manual';
+    const startTime = Date.now();
     const db = getDb();
+
+    // Capture pre-cleanup count
+    const beforeRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
+    const totalBefore = ((beforeRes as any[])[0]?.count) || 0;
 
     const results = {
       orphanedDocuments: 0,
@@ -498,14 +550,70 @@ export class EmbeddingService {
 
     results.total = results.orphanedDocuments + results.staleAgentOutputs + results.shortEntries + results.duplicates;
 
+    // Capture post-cleanup count and duration
+    const afterRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
+    const totalAfter = ((afterRes as any[])[0]?.count) || 0;
+    const durationMs = Date.now() - startTime;
+
+    // Write audit log entry
+    try {
+      await db.insert(cleanupAuditLog).values({
+        triggeredBy,
+        dryRun,
+        maxAgeDays,
+        minContentLength,
+        orphanedDocuments: results.orphanedDocuments,
+        staleAgentOutputs: results.staleAgentOutputs,
+        shortEntries: results.shortEntries,
+        duplicates: results.duplicates,
+        totalRemoved: results.total,
+        totalBefore,
+        totalAfter,
+        durationMs,
+      });
+    } catch (err) {
+      // Audit logging is non-critical — don't fail the cleanup
+      coreLogger.warn({ err }, 'Failed to write cleanup audit log');
+    }
+
     coreLogger.info({
       ...results,
       dryRun,
       maxAgeDays,
       minContentLength,
+      durationMs,
+      totalBefore,
+      totalAfter,
     }, 'Knowledge base cleanup completed');
 
     return results;
+  }
+
+  // ── Cleanup History ───────────────────────────────────────────────
+
+  /** Retrieve recent cleanup audit log entries */
+  async getCleanupHistory(limit = 20): Promise<Array<{
+    id: string;
+    triggeredBy: string;
+    dryRun: boolean;
+    orphanedDocuments: number;
+    staleAgentOutputs: number;
+    shortEntries: number;
+    duplicates: number;
+    totalRemoved: number;
+    totalBefore: number | null;
+    totalAfter: number | null;
+    durationMs: number | null;
+    createdAt: Date;
+  }>> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(cleanupAuditLog)
+      .orderBy(desc(cleanupAuditLog.createdAt))
+      .limit(limit);
+
+    return rows;
   }
 
   // ── Chunking ──────────────────────────────────────────────────────

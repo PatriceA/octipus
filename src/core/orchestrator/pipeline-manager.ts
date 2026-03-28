@@ -373,6 +373,12 @@ export class PipelineManager {
       timestamp: new Date(),
     });
 
+    // Auto-update project summary after pipeline completion
+    try {
+      const { autoUpdateProjectSummary } = await import('./project-summary');
+      autoUpdateProjectSummary(context, title, previousOutput).catch(() => {});
+    } catch {}
+
     getNotificationService().notify(
       pipeline.userId,
       'pipeline_complete',
