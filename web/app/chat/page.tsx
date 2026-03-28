@@ -173,8 +173,9 @@ export default function ChatPage() {
           }))
         : [welcomeMessage()];
 
-      // Restore agent activity for this session
+      // Restore agent activity and file changes for this session
       let restoredAgents = new Map<string, TrackedAgent>();
+      const restoredFileChanges: FileChange[] = [];
       try {
         const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>('/agents');
         const sessionAgents = (agentData?.agents || []).filter(a => a.sessionId === sessionId);
@@ -200,6 +201,18 @@ export default function ChatPage() {
                     id: Date.now().toString() + cliIterations,
                     name: String(ev.data.toolName),
                     argsSummary: ev.data.args ? JSON.stringify(ev.data.args).slice(0, 80) : undefined,
+                  });
+                }
+                // File change events — restore for persistence across page loads
+                else if (ev.data?.type === 'file_change' && ev.data?.path) {
+                  restoredFileChanges.push({
+                    path: String(ev.data.path),
+                    action: String(ev.data.action || 'write'),
+                    agentId: a.id,
+                    agentRole: a.role,
+                    timestamp: a.createdAt,
+                    content: ev.data.content as string | undefined,
+                    oldContent: ev.data.oldContent as string | undefined,
                   });
                 }
               }
@@ -240,7 +253,13 @@ export default function ChatPage() {
             }
           });
         }
-        return { ...prev, messages: msgs, trackedAgents: mergedAgents };
+        // Merge restored file changes with any live-tracked ones
+        const mergedFileChanges = restoredFileChanges.length > 0
+          ? [...restoredFileChanges, ...prev.fileChanges.filter(fc =>
+              !restoredFileChanges.some(r => r.path === fc.path && r.agentId === fc.agentId)
+            )]
+          : prev.fileChanges;
+        return { ...prev, messages: msgs, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
       });
     } catch {}
   }, [updateSessionState]);

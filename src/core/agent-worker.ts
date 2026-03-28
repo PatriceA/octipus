@@ -256,7 +256,10 @@ export class AgentWorker extends BaseAgentWorker {
       const llmStart = Date.now();
       let completion: CompletionResult;
       try {
-        completion = await this.raceTimeout(this.getCompletion(), 'getCompletion');
+        // Skip timeout for post-delegation LLM calls (toolsDisabled means a pipeline/worker already completed)
+        completion = this.toolExecutor.toolsDisabled
+          ? await this.getCompletion()
+          : await this.raceTimeout(this.getCompletion(), 'getCompletion');
       } catch (err) {
         const errMsg = (err as Error).message || '';
 
