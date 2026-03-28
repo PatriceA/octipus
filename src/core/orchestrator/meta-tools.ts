@@ -208,6 +208,10 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
             type: 'string',
             description: 'Detailed description of what the pipeline should achieve',
           },
+          maxRetries: {
+            type: 'number',
+            description: 'Max QA retry attempts before escalating (default 3)',
+          },
         },
         required: ['title', 'type', 'description'],
       },
@@ -219,6 +223,7 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
           args.type as string,
           args.description as string,
           context,
+          { maxRetries: args.maxRetries as number | undefined },
         );
       },
     },

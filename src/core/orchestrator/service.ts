@@ -480,11 +480,12 @@ export class OrchestratorService {
     type: string,
     description: string,
     context: AgentContext,
+    options?: { maxRetries?: number },
   ): Promise<unknown> {
     const { getPipelineManager } = await import('./pipeline-manager');
     const pipelineManager = getPipelineManager();
 
-    coreLogger.info({ title, type, description }, 'Creating pipeline');
+    coreLogger.info({ title, type, description, maxRetries: options?.maxRetries }, 'Creating pipeline');
 
     return pipelineManager.createAndRun(
       context.id,
@@ -494,6 +495,7 @@ export class OrchestratorService {
       type,
       description,
       context,
+      options,
     );
   }
 

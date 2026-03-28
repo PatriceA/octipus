@@ -29,8 +29,17 @@ export class PipelineManager {
     type: string,
     description: string,
     context: AgentContext,
+    options?: { maxRetries?: number },
   ): Promise<{ pipelineId: string; result: string }> {
     const template = getPipelineTemplate(type);
+    // Override maxRetries if provided
+    if (options?.maxRetries != null) {
+      for (const stage of template.stages) {
+        if (stage.stageType === 'qa_validation') {
+          stage.maxRetries = options.maxRetries;
+        }
+      }
+    }
     const stageConfigs = buildStagesFromTemplate(template, description);
 
     // Create pipeline record

@@ -541,14 +541,37 @@ export default function ChatPage() {
             setStatusMessage(`Stage ${(pe.index ?? 0) + 1}: ${pe.name}...`);
             break;
           case 'stage_completed': {
-            const summary = pe.summary ? ` — ${pe.summary}` : '';
             const note = pe.note ? ` (${pe.note})` : '';
-            setStatusMessage(`Stage "${pe.name}" completed${note}${summary}`);
+            setStatusMessage(`Stage "${pe.name}" completed${note}`);
+            // Add summary as a system message so it persists in the timeline
+            if (pe.summary && sessionId) {
+              updateSessionState(sessionId, (prev) => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  id: `stage-${pe.stageId || Date.now()}`,
+                  role: 'system' as const,
+                  content: `**${pe.name}** (${pe.role || 'agent'}) completed${note}: ${pe.summary}`,
+                  timestamp: new Date(),
+                }],
+              }));
+            }
             break;
           }
-          case 'qa_retry':
-            setStatusMessage(`QA found issues (attempt ${pe.attempt}/${pe.maxRetries}) — retrying implementation...`);
+          case 'qa_retry': {
+            setStatusMessage(`QA found issues — retrying implementation (attempt ${pe.attempt}/${pe.maxRetries})`);
+            if (sessionId) {
+              updateSessionState(sessionId, (prev) => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  id: `qa-retry-${pe.attempt}-${Date.now()}`,
+                  role: 'system' as const,
+                  content: `**QA Retry** (${pe.attempt}/${pe.maxRetries}): ${pe.issues?.join(', ') || 'Issues found, retrying implementation...'}`,
+                  timestamp: new Date(),
+                }],
+              }));
+            }
             break;
+          }
           case 'pipeline_completed':
             setStatusMessage(null);
             break;
