@@ -556,9 +556,22 @@ export default function ChatPage() {
           case 'pipeline_created':
             setStatusMessage(`Pipeline "${pe.title}" started (${pe.stageCount} stages)`);
             break;
-          case 'stage_started':
-            setStatusMessage(`Stage ${(pe.index ?? 0) + 1}: ${pe.name}...`);
+          case 'stage_started': {
+            const stageNum = (pe.index ?? 0) + 1;
+            setStatusMessage(`Stage ${stageNum}: ${pe.name}...`);
+            if (sessionId) {
+              updateSessionState(sessionId, (prev) => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  id: `stage-start-${pe.stageId || Date.now()}`,
+                  role: 'system' as const,
+                  content: `**Stage ${stageNum}: ${pe.name}** (${pe.role || 'agent'}) started`,
+                  timestamp: new Date(),
+                }],
+              }));
+            }
             break;
+          }
           case 'stage_completed': {
             const note = pe.note ? ` (${pe.note})` : '';
             setStatusMessage(`Stage "${pe.name}" completed${note}`);
