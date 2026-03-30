@@ -168,6 +168,16 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     return { live: true };
   })
 
+  // Server time and timezone — for schedule/calendar UI to show server context
+  .get('/time', async () => {
+    const now = new Date();
+    return {
+      serverTime: now.toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      utcOffset: -now.getTimezoneOffset(),
+    };
+  })
+
   // Channel status
   .get('/channels', async () => {
     try {

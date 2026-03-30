@@ -41,6 +41,8 @@ export interface FileChange {
   agentId: string;
   agentRole: string;
   timestamp: string;
+  content?: string;
+  oldContent?: string;
 }
 
 // Per-session state

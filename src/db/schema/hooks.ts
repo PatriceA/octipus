@@ -59,6 +59,7 @@ export interface TriggerConfig {
   // For schedule
   cronExpression?: string;
   timezone?: string;
+  scheduledAt?: string; // ISO 8601 datetime for one-time scheduled tasks
   // For webhook
   webhookPath?: string;
   webhookSecret?: string;

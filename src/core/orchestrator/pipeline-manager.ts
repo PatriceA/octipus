@@ -31,7 +31,7 @@ export class PipelineManager {
     context: AgentContext,
     options?: { maxRetries?: number },
   ): Promise<{ pipelineId: string; result: string }> {
-    const template = getPipelineTemplate(type);
+    const template = await getPipelineTemplate(type);
     // Override maxRetries if provided
     if (options?.maxRetries != null) {
       for (const stage of template.stages) {

@@ -6,7 +6,7 @@ import { getFileIndexer } from '@/core/rag/indexer';
 export class KnowledgeTool extends BaseTool {
   readonly id = 'knowledge';
   readonly name = 'Knowledge Base';
-  readonly version = '1.1.0';
+  readonly version = '1.2.0';
   readonly description = 'Search and manage the RAG knowledge base — hybrid search (semantic + keyword), index files, and read stored knowledge.';
 
   async checkAvailability(): Promise<ToolAvailability> {
@@ -41,11 +41,27 @@ export class KnowledgeTool extends BaseTool {
         { name: 'index_file', description: 'Index a file into the knowledge base', parameters: { path: { type: 'string', description: 'File path', required: true } }, returns: 'Number of chunks indexed' },
         { name: 'index_directory', description: 'Index all matching files in a directory', parameters: { path: { type: 'string', description: 'Directory path', required: true } }, returns: 'Index results with file and chunk counts' },
         { name: 'cleanup_knowledge', description: 'Remove orphaned, stale, short, and duplicate entries from the knowledge base', parameters: { dry_run: { type: 'boolean', description: 'Preview only' } }, returns: 'Cleanup summary with counts' },
+        { name: 'knowledge_stats', description: 'Get detailed knowledge base statistics', parameters: {}, returns: 'Stats including counts, age distribution, and coverage' },
       ],
     };
   }
 
   protected async registerTools(): Promise<void> {
+    this.registerTool(
+      'knowledge_stats',
+      'Get detailed knowledge base statistics including entry counts by source type, age distribution, content metrics, and abstract coverage.',
+      createParameterSchema({}),
+      async () => {
+        const service = getEmbeddingService();
+        const stats = await service.getStats();
+        return {
+          ...stats,
+          summary: `${stats.total} entries across ${Object.keys(stats.bySourceType).length} source types. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
+        };
+      },
+      { requiresPermission: false },
+    );
+
     this.registerTool(
       'search_knowledge',
       'Search the knowledge base using hybrid search (combines semantic similarity with keyword matching). Returns abstracts — use read_knowledge to get full content.',

@@ -113,7 +113,7 @@ async function maybeCleanupKnowledge(): Promise<void> {
 
   try {
     const service = getEmbeddingService();
-    const result = await service.cleanup({ maxAgeDays: 30, minContentLength: 50 });
+    const result = await service.cleanup({ maxAgeDays: 30, minContentLength: 50, triggeredBy: 'scheduled' });
     if (result.total > 0) {
       coreLogger.info(result, 'Knowledge cleanup: removed stale entries');
     }
@@ -149,19 +149,33 @@ async function processCronTick(): Promise<void> {
 
     for (const hook of dueHooks) {
       const cronExpression = hook.triggerConfig?.cronExpression as string;
+      const scheduledAt = hook.triggerConfig?.scheduledAt as string | undefined;
       const timezone = (hook.triggerConfig?.timezone as string) || 'UTC';
+      const isDatetimeTask = !!scheduledAt && !cronExpression;
 
       // IMPORTANT: Update nextRunAt BEFORE executing — hook execution can take minutes/hours
       // (e.g. spawning an orchestrator + research agent). Without this, the next cron tick
       // finds the same hook still "due" and fires it again, causing duplicate executions.
-      const nextRun = getNextCronDate(cronExpression, timezone);
-      await db
-        .update(hooks)
-        .set({
-          nextRunAt: nextRun,
-          updatedAt: now,
-        })
-        .where(eq(hooks.id, hook.id));
+      const nextRun = isDatetimeTask ? null : getNextCronDate(cronExpression, timezone);
+      if (isDatetimeTask) {
+        // One-time datetime task: clear nextRunAt and disable after firing
+        await db
+          .update(hooks)
+          .set({
+            nextRunAt: null,
+            isEnabled: false,
+            updatedAt: now,
+          })
+          .where(eq(hooks.id, hook.id));
+      } else {
+        await db
+          .update(hooks)
+          .set({
+            nextRunAt: nextRun,
+            updatedAt: now,
+          })
+          .where(eq(hooks.id, hook.id));
+      }
 
       try {
         // Execute directly via hookManager.trigger() — this handles action execution + logging

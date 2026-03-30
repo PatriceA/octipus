@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 
 // ── Types ──────────────────────────────────────────────────────────
 
-type ScheduleMode = 'preset' | 'interval' | 'daily' | 'weekly' | 'cron';
+type ScheduleMode = 'preset' | 'interval' | 'daily' | 'weekly' | 'cron' | 'datetime';
 
 interface Preset {
   label: string;
@@ -15,8 +15,10 @@ interface Preset {
 }
 
 interface SchedulePickerProps {
-  value: string;                   // cron expression
+  value: string;                   // cron expression or @datetime:ISO string
   onChange: (cron: string) => void;
+  onScheduledAtChange?: (scheduledAt: string | null) => void;
+  scheduledAt?: string | null;     // ISO datetime for one-time tasks
   className?: string;
 }
 
@@ -181,10 +183,11 @@ export function describeCron(cron: string): string {
 
 // ── Component ──────────────────────────────────────────────────────
 
-export function SchedulePicker({ value, onChange, className }: SchedulePickerProps) {
+export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduledAt, className }: SchedulePickerProps) {
   const parsed = useMemo(() => parseCron(value), [value]);
 
-  const [mode, setMode] = useState<ScheduleMode>(parsed.mode);
+  const [mode, setMode] = useState<ScheduleMode>(scheduledAt ? 'datetime' : parsed.mode);
+  const [datetimeValue, setDatetimeValue] = useState(scheduledAt || '');
   const [intervalValue, setIntervalValue] = useState(parsed.intervalValue);
   const [intervalUnit, setIntervalUnit] = useState<'minutes' | 'hours'>(parsed.intervalUnit);
   const [hour, setHour] = useState(parsed.hour);
@@ -278,6 +281,9 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
         </button>
         <button type="button" className={tabCls(mode === 'cron')} onClick={() => { setMode('cron'); setRawCron(value); }}>
           Cron
+        </button>
+        <button type="button" className={tabCls(mode === 'datetime')} onClick={() => setMode('datetime')}>
+          <Calendar className="w-3.5 h-3.5 inline mr-1" />Date & Time
         </button>
       </div>
 
@@ -411,12 +417,41 @@ export function SchedulePicker({ value, onChange, className }: SchedulePickerPro
         </div>
       )}
 
+      {/* Datetime mode */}
+      {mode === 'datetime' && (
+        <div className="space-y-2">
+          <p className="text-sm text-on-surface-variant">Run once at a specific date and time:</p>
+          <input
+            type="datetime-local"
+            value={datetimeValue ? datetimeValue.slice(0, 16) : ''}
+            onChange={e => {
+              const val = e.target.value;
+              setDatetimeValue(val);
+              if (val && onScheduledAtChange) {
+                onScheduledAtChange(new Date(val).toISOString());
+              } else if (!val && onScheduledAtChange) {
+                onScheduledAtChange(null);
+              }
+            }}
+            min={new Date().toISOString().slice(0, 16)}
+            className={cn(inputCls, 'w-full')}
+          />
+          <p className="text-xs text-on-surface-variant">
+            The task will execute exactly once at this time, then auto-disable.
+          </p>
+        </div>
+      )}
+
       {/* Preview */}
-      {value && (
+      {(value || (mode === 'datetime' && datetimeValue)) && (
         <div className="flex items-center gap-2 px-3 py-2 bg-primary/10 border border-primary/20 rounded-lg">
           <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
-          <span className="text-sm text-primary font-medium">{description}</span>
-          {mode !== 'cron' && (
+          <span className="text-sm text-primary font-medium">
+            {mode === 'datetime' && datetimeValue
+              ? `Once at ${new Date(datetimeValue).toLocaleString()}`
+              : description}
+          </span>
+          {mode !== 'cron' && mode !== 'datetime' && (
             <span className="text-xs text-primary/60 font-mono ml-auto">{value}</span>
           )}
         </div>

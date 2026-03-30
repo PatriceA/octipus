@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Play, Eye } from 'lucide-react';
+import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Play, Eye, Calendar, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { SchedulePicker, describeCron } from '@/components/schedule-picker';
@@ -382,6 +382,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [webhookPath, setWebhookPath] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
   const [cronExpression, setCronExpression] = useState('');
+  const [scheduledAt, setScheduledAt] = useState<string | null>(null);
   const [messagePattern, setMessagePattern] = useState('');
   const [agentPrompt, setAgentPrompt] = useState('');
   const [orchestrated, setOrchestrated] = useState(true);
@@ -418,7 +419,13 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         triggerConfig.webhookPath = webhookPath;
         if (webhookSecret) triggerConfig.webhookSecret = webhookSecret;
       }
-      if (trigger === 'schedule') triggerConfig.cronExpression = cronExpression;
+      if (trigger === 'schedule') {
+        if (scheduledAt) {
+          triggerConfig.scheduledAt = scheduledAt;
+        } else {
+          triggerConfig.cronExpression = cronExpression;
+        }
+      }
       if (trigger === 'message_received' && messagePattern) triggerConfig.pattern = messagePattern;
 
       const actionConfig: Record<string, unknown> = {};
@@ -446,7 +453,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         action,
         actionConfig,
         isEnabled: true,
-        ...(runOnce ? { maxExecutions: 1 } : {}),
+        ...((runOnce || scheduledAt) ? { maxExecutions: 1 } : {}),
       });
 
       onCreated();
@@ -459,6 +466,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
       setWebhookPath('');
       setWebhookSecret('');
       setCronExpression('');
+      setScheduledAt(null);
       setMessagePattern('');
       setAgentPrompt('');
       setOrchestrated(true);
@@ -572,17 +580,24 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">
                   Schedule
                 </label>
-                <SchedulePicker value={cronExpression} onChange={setCronExpression} />
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={runOnce}
-                  onChange={e => setRunOnce(e.target.checked)}
-                  className="rounded accent-primary"
+                <SchedulePicker
+                  value={cronExpression}
+                  onChange={(cron) => { setCronExpression(cron); setScheduledAt(null); }}
+                  scheduledAt={scheduledAt}
+                  onScheduledAtChange={(dt) => { setScheduledAt(dt); if (dt) setCronExpression(''); }}
                 />
-                <span className="text-sm text-white">Run once (single event, auto-disables after execution)</span>
-              </label>
+              </div>
+              {!scheduledAt && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={runOnce}
+                    onChange={e => setRunOnce(e.target.checked)}
+                    className="rounded accent-primary"
+                  />
+                  <span className="text-sm text-white">Run once (single event, auto-disables after execution)</span>
+                </label>
+              )}
             </div>
           )}
 
@@ -1091,9 +1106,22 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 export default function HooksPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingHook, setEditingHook] = useState<Hook | null>(null);
-  const [activeTab, setActiveTab] = useState<'hooks' | 'tasks' | 'executions'>('hooks');
+  const [activeTab, setActiveTab] = useState<'hooks' | 'tasks' | 'calendar' | 'executions'>('hooks');
   const [viewingExecutions, setViewingExecutions] = useState<string | null>(null);
+  const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
   const queryClient = useQueryClient();
+
+  const { data: serverTime } = useQuery({
+    queryKey: ['server-time'],
+    queryFn: async () => {
+      try {
+        return await api.get<{ serverTime: string; timezone: string; utcOffset: number }>('/health/time');
+      } catch {
+        return null;
+      }
+    },
+    refetchInterval: 60_000,
+  });
 
   const { data: hooks = [], isLoading } = useQuery({
     queryKey: ['hooks'],
@@ -1169,7 +1197,7 @@ export default function HooksPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-outline-variant/10">
-        {(['hooks', 'tasks', 'executions'] as const).map((tab) => (
+        {(['hooks', 'tasks', 'calendar', 'executions'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setViewingExecutions(null); }}
@@ -1182,8 +1210,9 @@ export default function HooksPage() {
           >
             {tab === 'hooks' && <Webhook className="w-4 h-4 inline mr-1.5" />}
             {tab === 'tasks' && <Clock className="w-4 h-4 inline mr-1.5" />}
+            {tab === 'calendar' && <Calendar className="w-4 h-4 inline mr-1.5" />}
             {tab === 'executions' && <History className="w-4 h-4 inline mr-1.5" />}
-            {tab === 'hooks' ? 'Hooks' : tab === 'tasks' ? 'Scheduled Tasks' : 'Execution Log'}
+            {tab === 'hooks' ? 'Hooks' : tab === 'tasks' ? 'Scheduled Tasks' : tab === 'calendar' ? 'Calendar' : 'Execution Log'}
           </button>
         ))}
       </div>
@@ -1204,6 +1233,162 @@ export default function HooksPage() {
           <ExecutionLog hookId={viewingExecutions || undefined} />
         </div>
       )}
+
+      {activeTab === 'calendar' && (() => {
+        const now = new Date();
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() - ((now.getDay() + 6) % 7) + calendarWeekOffset * 7);
+        startOfWeek.setHours(0, 0, 0, 0);
+
+        const weekDays = Array.from({ length: 7 }, (_, i) => {
+          const d = new Date(startOfWeek);
+          d.setDate(startOfWeek.getDate() + i);
+          return d;
+        });
+
+        const scheduledHooks = hooks.filter(h => h.trigger === 'schedule' && h.isEnabled);
+
+        // Map hooks to their calendar days
+        const getHooksForDay = (day: Date) => {
+          const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
+          const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
+
+          return scheduledHooks.filter(h => {
+            // Datetime tasks: show on their exact day
+            if (h.triggerConfig?.scheduledAt) {
+              const scheduled = new Date(h.triggerConfig.scheduledAt as string);
+              return scheduled >= dayStart && scheduled <= dayEnd;
+            }
+            // Cron tasks: show on next run day if within this day
+            if (h.nextRunAt) {
+              const nextRun = new Date(h.nextRunAt);
+              return nextRun >= dayStart && nextRun <= dayEnd;
+            }
+            return false;
+          }).map(h => ({
+            ...h,
+            time: h.triggerConfig?.scheduledAt
+              ? new Date(h.triggerConfig.scheduledAt as string)
+              : h.nextRunAt ? new Date(h.nextRunAt) : null,
+          }));
+        };
+
+        const isToday = (d: Date) => {
+          const t = new Date();
+          return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate();
+        };
+
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+        return (
+          <div className="space-y-3">
+            {/* Server time banner */}
+            {serverTime && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-[#1a1a1a] rounded-lg text-xs text-on-surface-variant">
+                <Globe className="w-3.5 h-3.5" />
+                <span>Server: {serverTime.timezone} ({new Date(serverTime.serverTime).toLocaleTimeString()})</span>
+                <span className="text-on-surface-variant/50">|</span>
+                <span>Your time: {Intl.DateTimeFormat().resolvedOptions().timeZone} ({new Date().toLocaleTimeString()})</span>
+              </div>
+            )}
+
+            {/* Week navigation */}
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => setCalendarWeekOffset(o => o - 1)}
+                className="p-2 text-on-surface-variant hover:text-white hover:bg-[#262626] rounded-lg cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="text-sm font-medium text-white">
+                {weekDays[0].toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} — {weekDays[6].toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                {calendarWeekOffset !== 0 && (
+                  <button
+                    onClick={() => setCalendarWeekOffset(0)}
+                    className="ml-2 text-xs text-primary hover:underline cursor-pointer"
+                  >
+                    Today
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setCalendarWeekOffset(o => o + 1)}
+                className="p-2 text-on-surface-variant hover:text-white hover:bg-[#262626] rounded-lg cursor-pointer"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Week grid */}
+            <div className="grid grid-cols-7 gap-1">
+              {weekDays.map((day, i) => {
+                const dayHooks = getHooksForDay(day);
+                const today = isToday(day);
+                return (
+                  <div
+                    key={i}
+                    className={cn(
+                      'rounded-lg p-2 min-h-[140px] border',
+                      today
+                        ? 'border-primary/30 bg-primary/5'
+                        : 'border-outline-variant/10 bg-[#1a1a1a]',
+                    )}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={cn(
+                        'text-[10px] font-bold uppercase',
+                        today ? 'text-primary' : 'text-on-surface-variant',
+                      )}>
+                        {dayNames[i]}
+                      </span>
+                      <span className={cn(
+                        'text-xs font-medium',
+                        today ? 'text-primary bg-primary/10 px-1.5 py-0.5 rounded' : 'text-on-surface-variant',
+                      )}>
+                        {day.getDate()}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      {dayHooks.map(h => (
+                        <div
+                          key={h.id}
+                          className={cn(
+                            'text-[11px] px-1.5 py-1 rounded cursor-pointer hover:brightness-110 truncate',
+                            h.triggerConfig?.scheduledAt
+                              ? 'bg-blue-900/30 text-blue-300 border border-blue-800/30'
+                              : 'bg-primary/10 text-primary border border-primary/20',
+                          )}
+                          title={`${h.name}${h.time ? ` at ${h.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
+                          onClick={() => setEditingHook(h)}
+                        >
+                          {h.time && (
+                            <span className="font-mono mr-1 opacity-70">
+                              {h.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                          {h.name}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Legend */}
+            <div className="flex items-center gap-4 text-[11px] text-on-surface-variant px-1">
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-2 rounded bg-primary/30" />
+                <span>Recurring (cron)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-2 rounded bg-blue-900/50" />
+                <span>One-time (datetime)</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {activeTab === 'tasks' && (
         <div className="space-y-4">
@@ -1260,6 +1445,16 @@ export default function HooksPage() {
             );
           })()}
 
+          {/* Server time info */}
+          {serverTime && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-[#1a1a1a] rounded-lg text-xs text-on-surface-variant">
+              <Globe className="w-3.5 h-3.5" />
+              <span>Server timezone: {serverTime.timezone}</span>
+              <span className="text-on-surface-variant/50">|</span>
+              <span>Server time: {new Date(serverTime.serverTime).toLocaleTimeString()}</span>
+            </div>
+          )}
+
           <div className="bg-[#1a1a1a] rounded-[1rem]">
             {isLoading ? (
               <div className="p-8 text-center text-on-surface-variant">
@@ -1294,8 +1489,17 @@ export default function HooksPage() {
                         {hook.lastError && <div className="text-xs text-red-500 mt-0.5">{hook.lastError}</div>}
                       </td>
                       <td className="px-4 py-3 text-xs text-on-surface-variant">
-                        <div>{describeCron((hook.triggerConfig?.cronExpression as string) || '')}</div>
-                        <div className="font-mono text-[10px] text-on-surface-variant mt-0.5">{(hook.triggerConfig?.cronExpression as string) || '—'}</div>
+                        {hook.triggerConfig?.scheduledAt ? (
+                          <>
+                            <div>Once at {new Date(hook.triggerConfig.scheduledAt as string).toLocaleString()}</div>
+                            <div className="font-mono text-[10px] text-on-surface-variant mt-0.5">one-time</div>
+                          </>
+                        ) : (
+                          <>
+                            <div>{describeCron((hook.triggerConfig?.cronExpression as string) || '')}</div>
+                            <div className="font-mono text-[10px] text-on-surface-variant mt-0.5">{(hook.triggerConfig?.cronExpression as string) || '—'}</div>
+                          </>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-0.5 bg-green-900/30 text-green-300 text-xs rounded">

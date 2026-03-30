@@ -13,6 +13,7 @@ import {
   Play,
   CheckCircle,
   Shield,
+  RotateCcw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
@@ -24,6 +25,9 @@ interface PipelineStep {
   skillIds?: string[];
   requiresApproval?: boolean;
   promptTemplate?: string;
+  stageType?: 'standard' | 'qa_validation';
+  maxRetries?: number;
+  retryTargetStage?: number;
 }
 
 interface PipelineTemplate {
@@ -242,6 +246,11 @@ function TemplateCard({
                   <Shield className="w-3.5 h-3.5 text-orange-500" />
                 </span>
               )}
+              {(step as any).stageType === 'qa_validation' && (
+                <span title={`QA validation (retries step ${((step as any).retryTargetStage ?? 0) + 1}, max ${(step as any).maxRetries ?? 3})`}>
+                  <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -457,6 +466,57 @@ function TemplateEditor({
                           />
                           <span className="text-sm text-on-surface-variant">Require approval before running</span>
                         </label>
+
+                        {/* QA Validation / Retry config */}
+                        <div className="border-t border-outline-variant/10 pt-3 mt-1">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={step.stageType === 'qa_validation'}
+                              onChange={e => updateStep(i, {
+                                stageType: e.target.checked ? 'qa_validation' : 'standard',
+                                ...(e.target.checked ? { maxRetries: 3, retryTargetStage: Math.max(0, i - 1) } : { maxRetries: undefined, retryTargetStage: undefined }),
+                              })}
+                              className="rounded border-outline-variant text-primary focus:ring-primary"
+                            />
+                            <span className="text-sm text-on-surface-variant">QA validation stage (retry on failure)</span>
+                          </label>
+
+                          {step.stageType === 'qa_validation' && (
+                            <div className="mt-2 ml-6 space-y-2">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-xs text-on-surface-variant mb-1">Max Retries</label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={10}
+                                    value={step.maxRetries ?? 3}
+                                    onChange={e => updateStep(i, { maxRetries: parseInt(e.target.value) || 3 })}
+                                    className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs text-on-surface-variant mb-1">Retry Stage</label>
+                                  <select
+                                    value={step.retryTargetStage ?? 0}
+                                    onChange={e => updateStep(i, { retryTargetStage: parseInt(e.target.value) })}
+                                    className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                                  >
+                                    {steps.map((s, si) => si !== i ? (
+                                      <option key={si} value={si}>
+                                        Step {si + 1}: {s.name || 'Untitled'}
+                                      </option>
+                                    ) : null)}
+                                  </select>
+                                </div>
+                              </div>
+                              <p className="text-[11px] text-on-surface-variant">
+                                If QA fails, the retry stage will re-run with feedback, then QA re-validates. After max retries, escalates for user approval.
+                              </p>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

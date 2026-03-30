@@ -566,6 +566,40 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'TOTP_ISSUER',
   },
+
+  // ── Notifications ─────────────────────────────────────────────
+  {
+    key: 'notifications.agentCompletion',
+    category: 'notifications',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Notify when an agent completes its task',
+    isSecret: false,
+  },
+  {
+    key: 'notifications.permissionRequest',
+    category: 'notifications',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Notify when an agent requests permission',
+    isSecret: false,
+  },
+  {
+    key: 'notifications.pipelineApproval',
+    category: 'notifications',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Notify when a pipeline stage needs approval',
+    isSecret: false,
+  },
+  {
+    key: 'notifications.errors',
+    category: 'notifications',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Notify on agent or pipeline errors',
+    isSecret: false,
+  },
 ];
 
 /** Get a setting definition by key */

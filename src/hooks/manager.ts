@@ -165,10 +165,17 @@ export class HookManager extends EventEmitter {
    */
   async createHook(data: Omit<NewHook, 'id' | 'createdAt' | 'updatedAt'>): Promise<Hook> {
     // For schedule triggers, compute nextRunAt
-    if (data.trigger === 'schedule' && data.triggerConfig?.cronExpression) {
-      const { getNextCronDate } = await import('@/core/cron-runner');
-      const timezone = (data.triggerConfig.timezone as string) || 'UTC';
-      (data as any).nextRunAt = getNextCronDate(data.triggerConfig.cronExpression as string, timezone);
+    if (data.trigger === 'schedule') {
+      if (data.triggerConfig?.scheduledAt) {
+        // One-time datetime task — nextRunAt is the scheduled time
+        (data as any).nextRunAt = new Date(data.triggerConfig.scheduledAt as string);
+        // Force single execution
+        if (!data.maxExecutions) data.maxExecutions = 1;
+      } else if (data.triggerConfig?.cronExpression) {
+        const { getNextCronDate } = await import('@/core/cron-runner');
+        const timezone = (data.triggerConfig.timezone as string) || 'UTC';
+        (data as any).nextRunAt = getNextCronDate(data.triggerConfig.cronExpression as string, timezone);
+      }
     }
     const result = await this.db.insert(hooks).values(data).returning();
     await this.loadHooks(); // Reload cache
@@ -180,7 +187,9 @@ export class HookManager extends EventEmitter {
    */
   async updateHook(id: string, data: Partial<NewHook>): Promise<Hook | null> {
     // If triggerConfig changes for a schedule hook, recompute nextRunAt
-    if (data.triggerConfig?.cronExpression) {
+    if (data.triggerConfig?.scheduledAt) {
+      (data as any).nextRunAt = new Date(data.triggerConfig.scheduledAt as string);
+    } else if (data.triggerConfig?.cronExpression) {
       const { getNextCronDate } = await import('@/core/cron-runner');
       const timezone = (data.triggerConfig.timezone as string) || 'UTC';
       (data as any).nextRunAt = getNextCronDate(data.triggerConfig.cronExpression as string, timezone);

@@ -2,7 +2,7 @@ import { Elysia, t } from 'elysia';
 import { eq, or, isNull, desc } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
-import { getPipelineTemplate } from '@/core/orchestrator/templates';
+import { listAvailableTemplates } from '@/core/orchestrator/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { apiLogger } from '@/utils/logger';
@@ -119,27 +119,14 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     },
   )
 
-  // Get built-in pipeline type configuration (retry settings, stages)
+  // List available pipeline templates (user's + presets) with stage info
   .get(
     '/types',
     async ({ user }) => {
       if (!user) return { error: 'Not authenticated' };
-      const types = ['development', 'research', 'general'].map(type => {
-        const template = getPipelineTemplate(type);
-        return {
-          type,
-          stages: template.stages.map((s, i) => ({
-            index: i,
-            name: s.name,
-            role: s.role,
-            requiresApproval: s.requiresApproval,
-            stageType: s.stageType,
-            maxRetries: s.maxRetries,
-            retryTargetStage: s.retryTargetStage,
-          })),
-        };
-      });
-      return { types };
+      const userId = user.id === 'system' ? undefined : user.id;
+      const templates = await listAvailableTemplates(userId);
+      return { types: templates };
     },
     { detail: { tags: ['pipelines'] } }
   )

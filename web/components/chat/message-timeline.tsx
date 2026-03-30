@@ -57,6 +57,7 @@ export interface TrackedAgent {
   error?: string;
   parentAgentId?: string;
   teamId?: string;
+  stageName?: string;
 }
 
 export interface TeamState {

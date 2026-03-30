@@ -198,11 +198,10 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
             type: 'string',
             description: 'Short title for the pipeline',
           },
-          type: {
+          templateName: {
             type: 'string',
-            enum: ['development', 'research', 'general'],
             description:
-              'Pipeline template type. development=full dev cycle (research→plan→code→review→qa), research=investigation+analysis, general=single worker',
+              'Name or ID of the pipeline template to use. Use list_pipeline_templates to see available templates.',
           },
           description: {
             type: 'string',
@@ -213,18 +212,39 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
             description: 'Max QA retry attempts before escalating (default 3)',
           },
         },
-        required: ['title', 'type', 'description'],
+        required: ['title', 'templateName', 'description'],
       },
       execute: async (args, context) => {
         if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
         delegationDone = true;
         return orchestrator.createAndRunPipeline(
           args.title as string,
-          args.type as string,
+          args.templateName as string,
           args.description as string,
           context,
           { maxRetries: args.maxRetries as number | undefined },
         );
+      },
+    },
+    {
+      name: 'list_pipeline_templates',
+      description:
+        'List available pipeline templates that can be used with create_pipeline. ' +
+        'Returns template names, descriptions, and stage counts.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async (_args, context) => {
+        const { listAvailableTemplates } = await import('./templates');
+        const userId = (context as any).userId;
+        const templates = await listAvailableTemplates(userId);
+        if (templates.length === 0) {
+          return 'No pipeline templates configured. Ask the user to create pipeline templates in the Pipelines page.';
+        }
+        return templates.map(t =>
+          `- **${t.name}**${t.isPreset ? ' (preset)' : ''}: ${t.description || 'No description'} (${t.stageCount} stages)`
+        ).join('\n');
       },
     },
     {

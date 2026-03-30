@@ -156,6 +156,25 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     detail: { tags: ['knowledge'] },
   })
 
+  // Cleanup history
+  .get('/cleanup-history', async ({ user, query, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+
+    const limit = query.limit ? parseInt(query.limit, 10) : 20;
+    const service = getEmbeddingService();
+    const history = await service.getCleanupHistory(limit);
+
+    return { history };
+  }, {
+    query: t.Object({
+      limit: t.Optional(t.String()),
+    }),
+    detail: { tags: ['knowledge'] },
+  })
+
   // Index file or directory
   .post('/index', async ({ user, body, set }) => {
     if (!user) {
