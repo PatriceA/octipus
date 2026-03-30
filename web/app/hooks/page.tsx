@@ -485,7 +485,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-[#1a1a1a] rounded-[1rem] shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-extrabold tracking-tighter text-white">Create Hook</h2>
+          <h2 className="text-lg font-extrabold tracking-tighter text-white">New Automation</h2>
           <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
             <X className="w-5 h-5" />
           </button>
@@ -756,7 +756,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               ) : (
                 <Plus className="w-4 h-4" />
               )}
-              Create Hook
+              {trigger === 'schedule' ? 'Create Task' : 'Create Hook'}
             </button>
           </div>
         </div>
@@ -781,6 +781,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [webhookPath, setWebhookPath] = useState((hook.triggerConfig?.webhookPath as string) || '');
   const [webhookSecret, setWebhookSecret] = useState((hook.triggerConfig?.webhookSecret as string) || '');
   const [cronExpression, setCronExpression] = useState((hook.triggerConfig?.cronExpression as string) || '');
+  const [editScheduledAt, setEditScheduledAt] = useState<string | null>((hook.triggerConfig?.scheduledAt as string) || null);
   const [messagePattern, setMessagePattern] = useState((hook.triggerConfig?.pattern as string) || '');
 
   // Action config — spawn_agent
@@ -827,7 +828,13 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
       cfg.webhookPath = webhookPath;
       if (webhookSecret) cfg.webhookSecret = webhookSecret;
     }
-    if (trigger === 'schedule') cfg.cronExpression = cronExpression;
+    if (trigger === 'schedule') {
+      if (editScheduledAt) {
+        cfg.scheduledAt = editScheduledAt;
+      } else {
+        cfg.cronExpression = cronExpression;
+      }
+    }
     if (trigger === 'message_received' && messagePattern) cfg.pattern = messagePattern;
     return cfg;
   };
@@ -946,17 +953,24 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Schedule</label>
-                <SchedulePicker value={cronExpression} onChange={setCronExpression} />
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={runOnce}
-                  onChange={e => setRunOnce(e.target.checked)}
-                  className="rounded accent-primary"
+                <SchedulePicker
+                  value={cronExpression}
+                  onChange={(cron) => { setCronExpression(cron); setEditScheduledAt(null); }}
+                  scheduledAt={editScheduledAt}
+                  onScheduledAtChange={(dt) => { setEditScheduledAt(dt); if (dt) setCronExpression(''); }}
                 />
-                <span className="text-sm text-white">Run once (single event, auto-disables after execution)</span>
-              </label>
+              </div>
+              {!editScheduledAt && (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={runOnce}
+                    onChange={e => setRunOnce(e.target.checked)}
+                    className="rounded accent-primary"
+                  />
+                  <span className="text-sm text-white">Run once (single event, auto-disables after execution)</span>
+                </label>
+              )}
             </div>
           )}
           {trigger === 'message_received' && (
@@ -1188,10 +1202,10 @@ export default function HooksPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container flex items-center gap-2 cursor-pointer"
+          className="px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
-          Create Hook
+          New Automation
         </button>
       </div>
 

@@ -418,29 +418,55 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
       )}
 
       {/* Datetime mode */}
-      {mode === 'datetime' && (
-        <div className="space-y-2">
-          <p className="text-sm text-on-surface-variant">Run once at a specific date and time:</p>
-          <input
-            type="datetime-local"
-            value={datetimeValue ? datetimeValue.slice(0, 16) : ''}
-            onChange={e => {
-              const val = e.target.value;
-              setDatetimeValue(val);
-              if (val && onScheduledAtChange) {
-                onScheduledAtChange(new Date(val).toISOString());
-              } else if (!val && onScheduledAtChange) {
-                onScheduledAtChange(null);
-              }
-            }}
-            min={new Date().toISOString().slice(0, 16)}
-            className={cn(inputCls, 'w-full')}
-          />
-          <p className="text-xs text-on-surface-variant">
-            The task will execute exactly once at this time, then auto-disable.
-          </p>
-        </div>
-      )}
+      {mode === 'datetime' && (() => {
+        // Parse datetimeValue into separate date and time parts
+        const dtDate = datetimeValue ? datetimeValue.slice(0, 10) : '';
+        const dtTime = datetimeValue ? datetimeValue.slice(11, 16) : '';
+
+        const emitDatetime = (date: string, time: string) => {
+          if (date && time) {
+            const combined = `${date}T${time}`;
+            setDatetimeValue(combined);
+            onScheduledAtChange?.(new Date(combined).toISOString());
+          } else if (date && !time) {
+            // Date selected but no time yet — store partial, don't emit
+            setDatetimeValue(`${date}T`);
+          } else {
+            setDatetimeValue('');
+            onScheduledAtChange?.(null);
+          }
+        };
+
+        return (
+          <div className="space-y-3">
+            <p className="text-sm text-on-surface-variant">Run once at a specific date and time:</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-on-surface-variant mb-1">Date</label>
+                <input
+                  type="date"
+                  value={dtDate}
+                  onChange={e => emitDatetime(e.target.value, dtTime || '09:00')}
+                  min={new Date().toISOString().slice(0, 10)}
+                  className={cn(inputCls, 'w-full')}
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-on-surface-variant mb-1">Time</label>
+                <input
+                  type="time"
+                  value={dtTime}
+                  onChange={e => emitDatetime(dtDate, e.target.value)}
+                  className={cn(inputCls, 'w-full')}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-on-surface-variant">
+              The task will execute exactly once at this time, then auto-disable.
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Preview */}
       {(value || (mode === 'datetime' && datetimeValue)) && (
