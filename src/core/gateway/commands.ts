@@ -19,6 +19,8 @@ export interface CommandContext {
   trustLevel: TrustLevel;
   args: Record<string, string>;
   rawArgs: string;
+  /** Connection metadata — can be mutated by commands (e.g., /expert stores activeExpertId) */
+  metadata?: Record<string, unknown>;
 }
 
 export interface CommandResult {
@@ -173,6 +175,10 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         }
 
         if (expertName.toLowerCase() === 'reset') {
+          if (ctx.metadata) {
+            delete ctx.metadata.activeExpertId;
+            delete ctx.metadata.activeExpertName;
+          }
           return { text: 'Expert reset to auto-routing. Next messages will be classified automatically.' };
         }
 
@@ -183,6 +189,12 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
           .limit(1);
         if (match.length === 0) {
           return { text: `Expert "${expertName}" not found. Use /expert to list available experts.` };
+        }
+
+        // Store active expert in connection metadata
+        if (ctx.metadata) {
+          ctx.metadata.activeExpertId = match[0].id;
+          ctx.metadata.activeExpertName = match[0].name;
         }
 
         return { text: `Switched to expert: ${match[0].name}. Next messages will be handled by this expert.` };

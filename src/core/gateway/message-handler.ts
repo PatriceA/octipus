@@ -69,12 +69,14 @@ async function handleChatSend(
 
     // Route through orchestrator (same as existing /ws chat handler)
     const userId = await resolveUserId(context.userId);
+    // Use expert from message, or from connection's active expert (/expert command)
+    const expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);
     const result = await orchestrator.handleMessage(
       message.sessionId,
       userId,
       message.content,
       context.clientType,
-      message.expertId,
+      expertId,
     );
 
     // Send response back through gateway
@@ -109,6 +111,7 @@ async function handleCommand(
     sessionId: context.sessionId,
     clientType: context.clientType,
     trustLevel: context.trustLevel,
+    metadata: context.metadata,
   });
 
   hub.connectionManager.sendToConnection(connectionId, {
