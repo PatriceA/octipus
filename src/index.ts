@@ -13,6 +13,9 @@ import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { loadRuntimeConfig } from '@/config';
 import { initializeHotReload } from '@/config/hot-reload';
 import { startCronLoop, stopCronLoop } from '@/core/cron-runner';
+import { getGatewayHub } from '@/core/gateway/hub';
+import { connectEventBridge } from '@/core/gateway/event-bridge';
+import { wireMessageHandler } from '@/core/gateway/message-handler';
 import { logger } from '@/utils/logger';
 
 async function main() {
@@ -73,6 +76,15 @@ async function main() {
     await initializeChannels();
     logger.info('Channels initialized');
 
+    // Start gateway hub (unified WebSocket protocol)
+    const gatewayHub = getGatewayHub();
+    await gatewayHub.start();
+    logger.info('Gateway hub started');
+
+    // Wire gateway message handler and bridge orchestrator/agent events
+    wireMessageHandler(gatewayHub);
+    const disconnectBridge = connectEventBridge(gatewayHub);
+
     // Start API server
     await startServer();
     logger.info('API server started');
@@ -98,6 +110,8 @@ async function main() {
       }
 
       stopCronLoop();
+      disconnectBridge();
+      await gatewayHub.stop();
       await mcpBridge.disconnectAll();
       await gateway.stop();
 

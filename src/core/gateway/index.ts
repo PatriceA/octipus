@@ -15,4 +15,7 @@ export {
   PROTOCOL_VERSION,
   SUPPORTED_VERSIONS,
 } from './protocol';
+export { PresenceTracker, type PresenceEntry, type PresenceStats } from './presence';
 export { GatewayHub, getGatewayHub } from './hub';
+export { connectEventBridge } from './event-bridge';
+export { wireMessageHandler } from './message-handler';

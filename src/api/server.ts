@@ -43,6 +43,7 @@ import { deviceRoutes } from './routes/devices';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { setupWebSocket } from './websocket';
+import { setupGatewayWebSocket } from './gateway-ws';
 
 export function createServer() {
   const config = getConfig();
@@ -210,6 +211,9 @@ export function createServer() {
 
   // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
   setupWebSocket(app as any);
+
+  // Gateway WebSocket hub (new unified protocol at /gateway)
+  setupGatewayWebSocket(app as any);
 
   return app;
 }
