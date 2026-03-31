@@ -71,13 +71,13 @@ function makeMockClient(
 }
 
 /** A minimal mock ModelProvider. */
-function makeMockProvider(name = 'test'): ModelProvider {
+function makeMockProvider(name = 'test', content = 'ok'): ModelProvider {
   return {
     name,
     type: 'direct',
     supportsModel: () => true,
     complete: async () => ({
-      content: 'ok',
+      content,
       finishReason: 'stop',
       usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       model: 'test-model',
@@ -181,7 +181,8 @@ describe('runConformanceTests', () => {
       model: 'test-model',
       latencyMs: 50,
     }));
-    const providers = new Map([['test', makeMockProvider()]]);
+    // Provider must also return '4' since non-litellm models route through provider.complete()
+    const providers = new Map([['test', makeMockProvider('test', '4')]]);
 
     const report = await runConformanceTests(client, [model], providers, {
       tests: ['basic-completion'],
@@ -274,10 +275,13 @@ describe('runConformanceTests', () => {
 
   test('error handling: provider that throws results in "failed", not a crash', async () => {
     const model = makeModel({ provider: 'test' });
-    const client = makeMockClient(async () => {
-      throw new Error('Simulated provider failure');
-    });
-    const providers = new Map([['test', makeMockProvider()]]);
+    const client = makeMockClient();
+    // Provider throws — since non-litellm models route through provider.complete()
+    const throwingProvider = {
+      ...makeMockProvider(),
+      complete: async () => { throw new Error('Simulated provider failure'); },
+    } as unknown as ModelProvider;
+    const providers = new Map([['test', throwingProvider]]);
 
     // Should not throw
     const report = await runConformanceTests(client, [model], providers, {
@@ -291,19 +295,22 @@ describe('runConformanceTests', () => {
 
   test('timeout handling: slow provider results in failure with timeout message', async () => {
     const model = makeModel({ provider: 'test' });
-
-    // Simulate a slow provider that resolves after 200ms
-    const client = makeMockClient(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      return {
-        content: '4',
-        finishReason: 'stop',
-        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
-        model: 'test-model',
-        latencyMs: 200,
-      };
-    });
-    const providers = new Map([['test', makeMockProvider()]]);
+    const client = makeMockClient();
+    // Provider is slow — since non-litellm models route through provider.complete()
+    const slowProvider = {
+      ...makeMockProvider(),
+      complete: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return {
+          content: '4',
+          finishReason: 'stop',
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+          model: 'test-model',
+          latencyMs: 200,
+        };
+      },
+    } as unknown as ModelProvider;
+    const providers = new Map([['test', slowProvider]]);
 
     // Set an aggressive timeout of 50ms so the provider times out
     const report = await runConformanceTests(client, [model], providers, {

@@ -2,17 +2,19 @@ import { mock } from 'bun:test';
 
 // Mock the provider router BEFORE importing evaluators (which import it transitively).
 // This prevents any real network calls or config reads.
+const mockComplete = async () => ({
+  content: '{"score": 8, "reasoning": "Good response"}',
+  usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+  finishReason: 'stop',
+  model: 'test',
+  latencyMs: 100,
+});
+
 mock.module('@/models/providers', () => ({
   getProviderRouter: () => ({
-    complete: async () => ({
-      content: '{"score": 8, "reasoning": "Good response"}',
-      usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
-      finishReason: 'stop',
-      model: 'test',
-      latencyMs: 100,
-    }),
+    complete: mockComplete,
     stream: async function* () {},
-    resolveProvider: async () => ({ name: 'test', type: 'direct' }),
+    resolveProvider: async () => ({ name: 'test', type: 'direct', complete: mockComplete }),
   }),
 }));
 
@@ -21,10 +23,12 @@ mock.module('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getModelForTopic: async () => ({
       modelId: 'test-model',
+      provider: 'test',
       metadata: { extraBody: {} },
     }),
     getDefaultModel: async () => ({
       modelId: 'test-model',
+      provider: 'test',
       metadata: { extraBody: {} },
     }),
   }),
@@ -297,12 +301,12 @@ describe('LLM-as-judge evaluators (mocked provider)', () => {
     });
   }
 
-  test('faithfulness with no context returns UNKNOWN 0.5', async () => {
+  test('faithfulness with no context returns UNKNOWN with -1 (non-applicable)', async () => {
     const ev = getEvaluator('faithfulness');
     const dp = makeDataPoint({ context: undefined });
     const score = await ev.evaluate(dp);
     expect(score.status).toBe('UNKNOWN');
-    expect(score.score).toBe(0.5);
+    expect(score.score).toBe(-1);
   });
 
   test('instruction-following with no system prompt and no constraints returns UNKNOWN', async () => {

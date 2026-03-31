@@ -283,7 +283,7 @@ export class GitTool extends BaseTool {
 
     for (const line of lines) {
       if (line.startsWith('##')) {
-        const match = line.match(/## (\S+)(?:\.\.\.(\S+) \[ahead (\d+)(?:, behind (\d+))?\])?/);
+        const match = line.match(/## ([^\s.]+)(?:\.\.\.(\S+?)(?:\s+\[ahead (\d+)(?:, behind (\d+))?\])?)?\s*$/);
         if (match) {
           result.branch = match[1];
           if (match[3]) (result as any).ahead = parseInt(match[3]);
