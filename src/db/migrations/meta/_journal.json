@@ -148,6 +148,13 @@
       "when": 1711800000000,
       "tag": "0020_gateway_audit_events",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1711900000000,
+      "tag": "0021_roles_table",
+      "breakpoints": true
     }
   ]
 }

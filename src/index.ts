@@ -7,6 +7,7 @@ import { getMCPBridge } from '@/mcp/bridge';
 import { getHookManager } from '@/hooks/manager';
 import { initializeVault } from '@/security/vault';
 import { seedPresetTemplates } from '@/db/seed-presets';
+import { seedRoles, loadRolesFromDb } from '@/db/seed-roles';
 import { seedExperts } from '@/db/seed-experts';
 import { getSettingsService } from '@/config/settings-service';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
@@ -30,6 +31,8 @@ async function main() {
     await seedPresetTemplates();
     await seedSkills();
     await seedExperts();
+    await seedRoles();
+    await loadRolesFromDb();
     logger.info('System data seeded');
 
     // Initialize vault (needs master key from .env)

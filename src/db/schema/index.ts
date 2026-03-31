@@ -19,3 +19,4 @@ export * from './documents';
 export * from './profiles';
 export * from './evaluations';
 export * from './cleanup-log';
+export * from './roles';
