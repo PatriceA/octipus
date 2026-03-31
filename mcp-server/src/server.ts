@@ -17,6 +17,12 @@ import { registerMessagingTools } from './tools/messaging.js';
 import { registerSkillTools } from './tools/skills.js';
 import { registerProfileTools } from './tools/profiles.js';
 import { registerPluginTools } from './tools/plugins.js';
+import { registerPipelineTools } from './tools/pipelines.js';
+import { registerDocumentTools } from './tools/documents.js';
+import { registerSettingTools } from './tools/settings.js';
+import { registerGatewayTools } from './tools/gateway.js';
+import { registerHealthTools } from './tools/health.js';
+import { registerAuditTools } from './tools/audit.js';
 
 export function createServer(assistantUrl: string): McpServer {
   const server = new McpServer({
@@ -40,6 +46,12 @@ export function createServer(assistantUrl: string): McpServer {
   registerSkillTools(server, client);
   registerProfileTools(server, client);
   registerPluginTools(server, client);
+  registerPipelineTools(server, client);
+  registerDocumentTools(server, client);
+  registerSettingTools(server, client);
+  registerGatewayTools(server, client);
+  registerHealthTools(server, client);
+  registerAuditTools(server, client);
 
   return server;
 }

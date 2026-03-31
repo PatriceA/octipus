@@ -421,4 +421,109 @@ export class AssistantClient {
   async getHealth(): Promise<Record<string, unknown>> {
     return this.request('/api/health');
   }
+
+  // ─── Pipelines ───
+
+  async listPipelineTemplates(): Promise<any> {
+    return this.request('/api/pipelines/templates');
+  }
+
+  async createPipeline(templateName: string, description: string): Promise<any> {
+    return this.request('/api/pipelines', {
+      method: 'POST',
+      body: JSON.stringify({ templateName, description }),
+    });
+  }
+
+  async listPipelines(): Promise<any> {
+    return this.request('/api/pipelines');
+  }
+
+  async getPipeline(id: string): Promise<any> {
+    return this.request(`/api/pipelines/${id}`);
+  }
+
+  async stopPipeline(id: string): Promise<any> {
+    return this.request(`/api/pipelines/${id}/stop`, { method: 'POST' });
+  }
+
+  // ─── Documents ───
+
+  async listDocuments(): Promise<any> {
+    return this.request('/api/documents');
+  }
+
+  async getDocument(id: string): Promise<any> {
+    return this.request(`/api/documents/${id}`);
+  }
+
+  async deleteDocument(id: string): Promise<any> {
+    return this.request(`/api/documents/${id}`, { method: 'DELETE' });
+  }
+
+  async uploadDocument(path: string): Promise<any> {
+    return this.request('/api/knowledge/index', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  // ─── Settings ───
+
+  async listSettings(): Promise<any> {
+    return this.request('/api/settings');
+  }
+
+  async getSetting(key: string): Promise<any> {
+    return this.request(`/api/settings/${encodeURIComponent(key)}`);
+  }
+
+  async updateSetting(key: string, value: unknown): Promise<any> {
+    return this.request(`/api/settings/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+  }
+
+  async resetSetting(key: string): Promise<any> {
+    return this.request(`/api/settings/${encodeURIComponent(key)}/reset`, { method: 'POST' });
+  }
+
+  // ─── Gateway ───
+
+  async getGatewayStatus(): Promise<any> {
+    return this.request('/api/gateway/status');
+  }
+
+  async getGatewayConnections(): Promise<any> {
+    return this.request('/api/gateway/connections');
+  }
+
+  async getGatewayAdapters(): Promise<any> {
+    return this.request('/api/gateway/adapters');
+  }
+
+  // ─── Detailed Health ───
+
+  async getDetailedHealth(): Promise<any> {
+    return this.request('/api/health/detailed');
+  }
+
+  async getModelHealth2(): Promise<any> {
+    return this.request('/api/health/models');
+  }
+
+  async getChannelHealth(): Promise<any> {
+    return this.request('/api/health/channels');
+  }
+
+  async getServerTime(): Promise<any> {
+    return this.request('/api/health/time');
+  }
+
+  // ─── Audit ───
+
+  async listAuditLog(limit = 50): Promise<any> {
+    return this.request(`/api/audit?limit=${limit}`);
+  }
 }

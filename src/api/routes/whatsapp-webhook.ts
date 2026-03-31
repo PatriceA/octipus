@@ -62,8 +62,9 @@ export const whatsappWebhookRoutes = new Elysia({ prefix: '/channels/whatsapp' }
       // Verify signature using the raw body captured in onParse
       const rawBody = (request as any).__rawBody as string | undefined;
       const signatureHeader = request.headers.get('x-hub-signature-256');
-      if (rawBody && !whatsapp.verifySignature(rawBody, signatureHeader)) {
-        apiLogger.warn('WhatsApp webhook signature mismatch — allowing through (update app secret to enforce)');
+      if (rawBody && signatureHeader && !whatsapp.verifySignature(rawBody, signatureHeader)) {
+        apiLogger.warn({ ip: request.headers.get('x-forwarded-for') }, 'WhatsApp webhook signature mismatch — rejecting');
+        return new Response('Forbidden', { status: 403 });
       }
 
       // Process asynchronously — always return 200 quickly to Meta
