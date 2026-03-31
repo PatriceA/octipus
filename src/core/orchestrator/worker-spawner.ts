@@ -258,19 +258,39 @@ If the file doesn't exist, create it.`;
         systemPrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
       }
 
-      // For people-related queries, inject all stored profiles so CLI agents (which can't use
-      // the profiles tool) have the data in context
-      const peoplePatterns = /\b(who is|wife|husband|partner|mother|father|mom|dad|boss|friend|brother|sister|family|birthday|address|phone|email of)\b/i;
+      // For people-related queries, search for relevant profiles and inject matches.
+      // CLI agents can't call the profiles tool (registerTool is a no-op), so we
+      // resolve profile data here and put it in the prompt context.
+      const peoplePatterns = /\b(who is|wife|husband|partner|mother|father|mom|dad|boss|friend|brother|sister|family|birthday|address|phone|email of|tell me about)\b/i;
       if (peoplePatterns.test(task)) {
-        const allProfiles = await profileRepo.findByUserId(context.userId);
-        const otherProfiles = allProfiles.filter(p => p.id !== userProfile?.id);
-        if (otherProfiles.length > 0) {
-          const profileTexts = otherProfiles.map(p => {
+        // Extract search terms — strip common question words to get the relevant noun
+        const searchTerms = task
+          .replace(/\b(who is|what is|tell me about|what's|do you know about|my)\b/gi, '')
+          .trim()
+          .split(/\s+/)
+          .filter(w => w.length > 2 && !/^(the|and|for|with)$/i.test(w));
+
+        const matchedProfiles = new Map<string, Awaited<ReturnType<typeof profileRepo.search>>[0]>();
+        // Search for each meaningful term
+        for (const term of searchTerms.slice(0, 3)) {
+          const results = await profileRepo.search(context.userId, term);
+          for (const p of results) matchedProfiles.set(p.id, p);
+        }
+        // Also search for relationship keywords directly (wife, husband, etc.)
+        const relationshipMatch = task.match(/\b(wife|husband|partner|mother|father|mom|dad|boss|brother|sister|son|daughter)\b/i);
+        if (relationshipMatch) {
+          const results = await profileRepo.search(context.userId, relationshipMatch[1]);
+          for (const p of results) matchedProfiles.set(p.id, p);
+        }
+
+        const relevant = [...matchedProfiles.values()].filter(p => p.id !== userProfile?.id).slice(0, 5);
+        if (relevant.length > 0) {
+          const profileTexts = relevant.map(p => {
             const facts = (p.facts as ProfileFact[]) || [];
             const factsStr = facts.map(f => `  - ${f.key}: ${f.value}`).join('\n');
             return `**${p.name}** (${p.category || 'person'})${p.relationship ? ` — ${p.relationship}` : ''}\n${factsStr}`;
           });
-          systemPrompt += `\n\nSTORED PROFILES:\n${profileTexts.join('\n\n')}`;
+          systemPrompt += `\n\nRELEVANT PROFILES:\n${profileTexts.join('\n\n')}`;
         }
       }
     } catch {}
