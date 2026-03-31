@@ -47,7 +47,18 @@ export function setupGatewayWebSocket(app: Elysia): void {
       const connectionId = (ws.data as any).gatewayConnectionId as string;
       if (!connectionId) return;
 
-      const raw = typeof message === 'string' ? message : String(message);
+      // Elysia/Bun WS can deliver Buffer, ArrayBuffer, string, or object (auto-parsed)
+      let raw: string;
+      if (typeof message === 'string') {
+        raw = message;
+      } else if (typeof message === 'object' && message !== null && !(message instanceof Buffer) && !(message instanceof Uint8Array)) {
+        // Elysia may auto-parse JSON — re-stringify it
+        raw = JSON.stringify(message);
+      } else if (message instanceof Buffer || message instanceof Uint8Array) {
+        raw = new TextDecoder().decode(message);
+      } else {
+        raw = String(message);
+      }
       await hub.connectionManager.handleMessage(connectionId, raw);
     },
 
