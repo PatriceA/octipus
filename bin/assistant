@@ -9,6 +9,7 @@ set -o pipefail 2>/dev/null || true
 #   assistant start [--dev]    Start backend + web UI
 #   assistant stop             Stop all assistant processes
 #   assistant restart [--dev]  Restart everything
+#   assistant tui              Launch terminal chat interface
 #   assistant status           Show running state
 #   assistant logs             Tail backend logs
 #   assistant open             Open web UI in browser
@@ -711,6 +712,18 @@ cmd_open() {
   log_info "Opening http://localhost:$WEB_PORT"
 }
 
+cmd_tui() {
+  if ! curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
+    log_error "Backend is not running on port $API_PORT"
+    log_hint "Start it first: assistant start"
+    return 1
+  fi
+
+  log_info "Connecting TUI to gateway at localhost:$WEB_PORT..."
+  cd "$PROJECT_DIR"
+  PORT="$WEB_PORT" exec bun run src/tui/index.tsx
+}
+
 cmd_help() {
   print_banner
   echo -e "  ${BOLD}Usage:${NC} assistant <command> [options]"
@@ -719,6 +732,7 @@ cmd_help() {
   echo -e "    start [--dev]    Start backend and web UI"
   echo -e "    stop             Stop all assistant processes"
   echo -e "    restart [--dev]  Restart everything"
+  echo -e "    tui              Launch terminal chat interface"
   echo -e "    status           Show running state and service health"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
@@ -744,6 +758,7 @@ main() {
     start)   cmd_start "$@" ;;
     stop)    cmd_stop ;;
     restart) cmd_restart "$@" ;;
+    tui)     cmd_tui ;;
     status)  cmd_status ;;
     logs)    cmd_logs "$@" ;;
     open)    cmd_open ;;
