@@ -66,16 +66,44 @@ export async function handleExpertMessage(
   await sessionRepository.incrementMessageCount(sessionId);
 
   try {
-    let expertPrompt = SECURITY_PREAMBLE + (expert.systemPrompt || '');
+    // Build expert identity prompt — role config as base, then expert-specific overrides
+    const roleConfig = getRoleConfig(agentRole);
+    let expertPrompt = SECURITY_PREAMBLE;
+
+    // Expert identity: name, description, and role-specific system prompt
+    expertPrompt += `\nYou are **${expert.name}**${expert.description ? ` — ${expert.description}` : ''}.\n\n`;
+    expertPrompt += expert.systemPrompt || roleConfig.systemPromptTemplate;
+
+    // Critical rules
+    const criticalRules = (expert.criticalRules as string[]) || [];
+    if (criticalRules.length > 0) {
+      expertPrompt += '\n\n# Critical Rules\nYou MUST follow these rules:\n' +
+        criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
+    }
+
+    // Deliverable template
+    if (expert.deliverableTemplate) {
+      expertPrompt += '\n\n# Deliverable Template\nStructure your output as follows:\n' + expert.deliverableTemplate;
+    }
+
+    // Success metrics
+    const successMetrics = (expert.successMetrics as string[]) || [];
+    if (successMetrics.length > 0) {
+      expertPrompt += '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
+        successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
+    }
+
     if (guardFlags.length > 0) {
       expertPrompt += buildSecurityReminder(guardFlags);
     }
+
+    // Domain knowledge from skills
     const skillIds = (expert.skillIds as string[]) || [];
     if (skillIds.length > 0) {
       const { getSkillRegistry } = await import('@/skills/registry');
       const fragment = await getSkillRegistry().buildPromptFragment(skillIds);
       if (fragment) {
-        expertPrompt = (expertPrompt || '') + '\n\n# Domain Knowledge\n' + fragment;
+        expertPrompt += '\n\n# Domain Knowledge\n' + fragment;
       }
     }
 
