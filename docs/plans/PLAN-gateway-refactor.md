@@ -40,10 +40,11 @@ Target Architecture:
 4. [Channel Commands](#4-channel-commands)
 5. [Channel Feedback System](#5-channel-feedback-system)
 6. [TUI Client](#6-tui-client)
-7. [Self-Configuration](#7-self-configuration)
+7. [Self-Configuration (DB-Driven)](#7-self-configuration-db-driven)
 8. [Agent Communication Protocol](#8-agent-communication-protocol)
 9. [Monitor Dashboard Enhancements](#9-monitor-dashboard-enhancements)
-10. [Migration Strategy](#10-migration-strategy)
+10. [Migration Strategy](#10-migration-strategy) (Phases 0–8)
+11. [Validation & Test Suite](#11-validation--test-suite)
 
 ---
 
@@ -569,35 +570,61 @@ The `--tui` flag on `assistant start` suppresses the browser auto-open and launc
 
 ---
 
-## 7. Self-Configuration
+## 7. Self-Configuration (DB-Driven)
 
-### 7.1 Agent Workspace
+### 7.1 Current State — Already DB-Driven
 
-Create a workspace directory (`~/.assistant/workspace/`) where the agent can manage its own configuration:
+Self-configuration data **already lives in the database**, not in markdown files:
+
+| Data | Current Location | Table | Notes |
+|------|-----------------|-------|-------|
+| **Experts** (identity/personas) | PostgreSQL | `presets` | 11 system experts with systemPrompt, criticalRules, deliverableTemplate, skillIds, toolIds |
+| **Skills** (domain knowledge) | PostgreSQL | `skills` | 27 system skills with markdown content, principles, bestPractices, antiPatterns, frameworks |
+| **Tools** | In-memory ToolRegistry | (not persisted) | 18 built-in tools + plugin tools from `extensions/` dir |
+| **Role prompts** | Hardcoded in `roles.ts` | (not persisted) | 16 roles with system prompt templates + SECURITY_PREAMBLE |
+| **Project context** | File | `.assistant/project-summary.md` | Auto-updated per workspace after agent/pipeline runs |
+
+**No markdown file self-configuration is needed.** Adding IDENTITY.md / TOOLS.md / EXPERTS.md files would create a sync problem with the DB. Instead, extend the existing DB-driven pattern.
+
+### 7.2 Changes Needed
+
+#### Move role system prompts to DB
+
+The 16 role definitions in `src/core/orchestrator/roles.ts` are the last hardcoded identity configuration. Move them to the `presets` table (or a new `roles` table) so they're editable at runtime.
 
 ```
-~/.assistant/workspace/
-  ├─ IDENTITY.md          # Agent personality/behavior (editable by agent)
-  ├─ TOOLS.md             # Auto-generated tool descriptions
-  ├─ EXPERTS.md           # Auto-generated expert catalog
-  └─ skills/
-      ├─ coding/SKILL.md
-      ├─ research/SKILL.md
-      └─ ...
+Current: roles.ts → ROLE_CONFIGS hardcoded object → getRoleConfig(role)
+Target:  roles table (DB) → cached in memory → getRoleConfig(role)
+         Seed on startup, editable via API/UI, audit logged
 ```
 
-### 7.2 What the Agent Can Self-Configure
+The SECURITY_PREAMBLE remains hardcoded (it's a safety boundary, not configurable).
+
+#### Expose tool manifests via API
+
+Tool descriptions are available at runtime via `registry.getManifests()` but not persisted or user-viewable. Add:
+- `GET /tools/manifests` — returns all tool manifests (name, description, permissions, functions)
+- Display in dashboard under a "Tools" page
+
+#### Skill content editing in UI
+
+Skills already support markdown `content` field. The UI should allow editing skill content (currently only seeded at startup). The existing Skills page needs a content editor.
+
+### 7.3 What the Agent Can Self-Configure
 
 | Capability | How | Security Gate |
 |------------|-----|---------------|
-| Install skills from registry | Download SKILL.md files | User approval required (ASK permission) |
-| Modify own system prompt | Edit IDENTITY.md | Audit logged, user can review/revert |
-| Suggest new expert profiles | Create expert via API | Stored as user-created (not system) |
-| Switch own model | `/expert` or API | Bounded by available models in registry |
+| Create skills | Insert into `skills` table via scheduling/tool API | Stored as user-created (`isSystem: false`) |
+| Modify own system prompt | Update expert's `systemPrompt` via API | Audit logged, user can review/revert via UI |
+| Suggest new expert profiles | Insert into `presets` table | Stored as user-created (`isSystem: false`) |
+| Switch own model | `/expert` command or API | Bounded by available models in registry |
 | Compact own context | Automatic or `/compact` | No gate needed |
+| Update project summary | Write to `.assistant/project-summary.md` | Already implemented, auto-triggered |
 
-### 7.3 What the Agent CANNOT Self-Configure
+### 7.4 What the Agent CANNOT Self-Configure
 
+- System experts/skills (`isSystem: true` — read-only for agents)
+- SECURITY_PREAMBLE (hardcoded safety boundary)
 - Vault credentials (requires user auth)
 - Permission rules (requires admin)
 - Channel connections (requires user setup)
@@ -674,7 +701,8 @@ If future multi-machine agents are needed, agents would connect as gateway clien
 - [ ] Implement `GatewayEventBus` (typed pub/sub replacing scattered EventEmitters)
 - [ ] Implement `ProtocolHandler` (schema validation + routing)
 - [ ] Implement `PresenceTracker` (connection state)
-- [ ] Migrate WebChat `/ws` to use new gateway protocol (backward-compatible)
+- [ ] Migrate existing WebSocket endpoints to gateway protocol (3 endpoints: `/ws` main, `/ws/permissions`, `/ws/browser-bridge`)
+- [ ] Backward-compatible: existing WebChat clients continue to work during transition
 - [ ] Gateway connections dashboard page
 - [ ] Integration tests: event delivery, subscriptions, back-pressure
 
@@ -711,14 +739,16 @@ If future multi-machine agents are needed, agents would connect as gateway clien
 - [ ] `assistant tui` and `assistant start --tui` entry points
 - [ ] Tests: TUI rendering, command handling
 
-### Phase 5: Self-Configuration + Agent Protocol
-- [ ] Create workspace directory structure
-- [ ] Auto-generate TOOLS.md, EXPERTS.md on startup
-- [ ] Allow agent to edit IDENTITY.md (with audit)
-- [ ] Skill registry (install/list/remove)
+### Phase 5: Self-Configuration (DB-Driven) + Agent Protocol
+- [ ] Move role system prompts from hardcoded `roles.ts` to DB (new `roles` table or extend `presets`)
+- [ ] Seed role prompts on startup, cache in memory, reload on change
+- [ ] Add `GET /tools/manifests` API endpoint
+- [ ] Add skill content editor to Skills UI page
+- [ ] Allow agents to create user-scoped skills/experts via tool API (audit logged)
+- [ ] Protect `isSystem: true` records from agent modification
 - [ ] ACP-style IDE client support via gateway protocol
 - [ ] Agent-to-agent JWT auth for future multi-machine setup
-- [ ] Tests: self-config boundaries, permission enforcement
+- [ ] Tests: self-config boundaries, permission enforcement, role prompt loading
 
 ### Phase 6: Dashboard + Observability
 - [ ] Gateway connections page (real-time)
@@ -727,6 +757,104 @@ If future multi-machine agents are needed, agents would connect as gateway clien
 - [ ] Audit log viewer
 - [ ] Usage analytics (by expert, model, user)
 - [ ] Enhance home page with gateway metrics
+
+### Phase 7: Documentation & Architecture Updates
+- [ ] Update `README.md` — new architecture diagram, gateway setup instructions, TUI section
+- [ ] Update API documentation (Swagger/OpenAPI) — new gateway protocol, `/health/time`, `/tools/manifests`
+- [ ] Create `docs/architecture/gateway.md` — detailed gateway architecture with diagrams
+- [ ] Create `docs/architecture/channels.md` — adapter pattern, how to add a new channel
+- [ ] Create `docs/architecture/protocol.md` — full gateway protocol reference (client → gateway, gateway → client message types)
+- [ ] Create `docs/guides/tui.md` — TUI user guide, keybindings, commands
+- [ ] Create `docs/guides/self-configuration.md` — how experts, skills, roles are configured (DB-driven)
+- [ ] Create `docs/guides/channel-adapter.md` — how to build a custom channel adapter
+- [ ] Update `docs/guides/plugins.md` (if exists) — plugin tools + gateway integration
+- [ ] Update existing inline JSDoc/TSDoc in refactored modules
+- [ ] Update `CHANGELOG.md` with gateway refactor summary
+- [ ] Archive old architecture docs that no longer apply
+
+### Phase 8: Validation & Full Test Suite
+- [ ] Update all existing unit tests for refactored modules (gateway, websocket, UMI, channels)
+- [ ] New unit tests for: ConnectionManager, GatewayEventBus, ProtocolHandler, PresenceTracker, FeedbackManager, StallDetector
+- [ ] New unit tests for: command handlers, channel adapters (mocked gateway WS)
+- [ ] New unit tests for: TUI components (Ink test utilities), local-token auth
+- [ ] New unit tests for: DB-driven role loading, self-config permission enforcement
+- [ ] Integration tests: full auth flows (session token, HMAC, local-token, Cloudflare JWT)
+- [ ] Integration tests: channel adapter → gateway → orchestrator → response → adapter round trip
+- [ ] Integration tests: WebSocket protocol version negotiation, reconnection, event replay
+- [ ] Integration tests: rate limiting under load, connection budget enforcement
+- [ ] Integration tests: pipeline execution through new gateway event bus
+- [ ] E2E tests: update existing `scripts/test-e2e.ts` suite for new gateway protocol
+- [ ] E2E tests: TUI launch → connect → send message → receive response → disconnect
+- [ ] E2E tests: channel adapter process lifecycle (start, crash, auto-restart)
+- [ ] E2E tests: multi-client scenario (WebChat + TUI + channel adapter concurrent)
+- [ ] E2E tests: permission request → approval → tool execution through gateway
+- [ ] Run full test suite: `bun test` — **0 failures required**
+- [ ] Run E2E suite: `bun run test:e2e` — **0 failures required**
+- [ ] Run TypeScript check: `npx tsc --noEmit` — **0 errors on both backend and frontend**
+- [ ] Performance test: 100 concurrent WebSocket connections, measure event delivery latency
+- [ ] Security test: auth bypass attempts, rate limit enforcement, connection budget limits
+
+---
+
+## 11. Validation & Test Suite
+
+> This phase runs AFTER all other phases. No phase is considered complete until its tests pass. Phase 8 is the final gate.
+
+### Test Infrastructure
+
+**Runner:** Bun test (native, NOT Jest/Vitest)
+**Config:** `bunfig.test.toml` with preload `src/test-setup.ts`
+**Existing suites:** 18 test files across core, api, security, channels, hooks, models, mcp
+
+### Test Categories
+
+#### Unit Tests (per module, mocked dependencies)
+
+Each new module gets a co-located `.test.ts` file:
+
+```
+src/core/gateway.test.ts                    — ConnectionManager, auth handshake, rate limiter
+src/core/gateway-event-bus.test.ts          — Pub/sub, filtering, back-pressure, replay
+src/core/gateway-protocol.test.ts           — Schema validation, routing, version negotiation
+src/core/presence-tracker.test.ts           — Connection tracking, idle timeout, cleanup
+src/core/feedback-manager.test.ts           — Emoji mapping, debounce timing, stall detection
+src/core/command-handler.test.ts            — Command parsing, permission checks, all commands
+src/channels/adapters/telegram.test.ts      — Adapter ↔ gateway WS mock
+src/channels/adapters/slack.test.ts         — Adapter ↔ gateway WS mock
+src/tui/tui-client.test.ts                  — WS connection, local-token auth, reconnect
+```
+
+#### Integration Tests (real DB + Redis, no external services)
+
+```
+src/integration/gateway-auth.test.ts        — Full auth flows against real session manager
+src/integration/gateway-channels.test.ts    — Adapter → gateway → orchestrator round trip
+src/integration/gateway-events.test.ts      — Event delivery across multiple clients
+src/integration/gateway-permissions.test.ts — Permission request through gateway protocol
+src/integration/gateway-pipelines.test.ts   — Pipeline execution with event bus
+```
+
+#### E2E Tests (full system, `scripts/e2e/`)
+
+```
+scripts/e2e/gateway-protocol.ts             — WebSocket connect → auth → chat → events → disconnect
+scripts/e2e/channel-adapters.ts             — Start adapter process → send message → get response
+scripts/e2e/tui-lifecycle.ts                — Launch TUI → interact → exit
+scripts/e2e/multi-client.ts                 — Concurrent WebChat + TUI + adapter
+scripts/e2e/crash-recovery.ts               — Kill adapter → verify auto-restart
+```
+
+### Success Criteria
+
+| Check | Command | Required Result |
+|-------|---------|-----------------|
+| TypeScript (backend) | `npx tsc --noEmit` | 0 errors |
+| TypeScript (frontend) | `cd web && npx tsc --noEmit` | 0 errors |
+| Unit tests | `bun test` | 0 failures |
+| E2E tests | `bun run test:e2e` | 0 failures |
+| No regressions | All 18 existing test suites pass | 0 failures |
+
+**A phase is not complete until all tests written for that phase pass AND all pre-existing tests still pass.**
 
 ---
 
@@ -748,3 +876,7 @@ If future multi-machine agents are needed, agents would connect as gateway clien
 - **Cloudflare Tunnel** — already running with domain
 - **Existing security infrastructure** — vault, session manager, permission manager, audit trail all stay and get extended
 - **No new external services required** — gateway runs in the existing process, adapters are child processes
+- **Test runner:** Bun test (native) — config in `bunfig.test.toml`, preload `src/test-setup.ts`
+- **Existing test suites (18):** Must continue to pass throughout all phases
+- **Plugin tools:** `extensions/` directory plugin loading must be preserved in tool registry migration
+- **DB-driven config:** Experts (presets table), Skills (skills table), Pipeline Templates (pipeline_templates table) — all already in PostgreSQL, no file-based config needed

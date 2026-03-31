@@ -141,6 +141,13 @@
       "when": 1711600000000,
       "tag": "0019_cleanup_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1711800000000,
+      "tag": "0020_gateway_audit_events",
+      "breakpoints": true
     }
   ]
 }

@@ -25,6 +25,13 @@ export const auditActionEnum = pgEnum('audit_action', [
   'hook_triggered',
   'mcp_connected',
   'mcp_disconnected',
+  // Gateway events
+  'gateway_connection_open',
+  'gateway_connection_close',
+  'gateway_auth_success',
+  'gateway_auth_failure',
+  'gateway_rate_limit',
+  'gateway_connection_rejected',
 ]);
 
 export const auditLog = pgTable('audit_log', {
