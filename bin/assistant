@@ -719,9 +719,9 @@ cmd_tui() {
     return 1
   fi
 
-  log_info "Connecting TUI to gateway at localhost:$WEB_PORT..."
+  log_info "Connecting TUI to gateway at localhost:$API_PORT..."
   cd "$PROJECT_DIR"
-  PORT="$WEB_PORT" exec bun run src/tui/index.tsx
+  API_PORT="$API_PORT" exec bun run src/tui/index.tsx
 }
 
 cmd_help() {
