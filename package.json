@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "tui": "bun run src/tui/index.tsx",
     "start:all": "bin/assistant start",
     "stop:all": "bin/assistant stop",
     "build": "bun build src/index.ts --outdir dist --target bun",
