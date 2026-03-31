@@ -72,42 +72,6 @@ describe('CommandRegistry', () => {
     expect(result!.text).toContain('Unknown command');
   });
 
-  test('/think validates levels', async () => {
-    const result = await registry.execute('/think invalid', {
-      userId: 'user1',
-      clientType: 'webchat',
-      trustLevel: 'user',
-    });
-    expect(result!.text).toContain('Invalid level');
-  });
-
-  test('/think accepts valid level', async () => {
-    const result = await registry.execute('/think high', {
-      userId: 'user1',
-      clientType: 'webchat',
-      trustLevel: 'user',
-    });
-    expect(result!.text).toContain('high');
-  });
-
-  test('/usage validates modes', async () => {
-    const result = await registry.execute('/usage invalid', {
-      userId: 'user1',
-      clientType: 'webchat',
-      trustLevel: 'user',
-    });
-    expect(result!.text).toContain('Invalid mode');
-  });
-
-  test('/usage accepts valid mode', async () => {
-    const result = await registry.execute('/usage full', {
-      userId: 'user1',
-      clientType: 'webchat',
-      trustLevel: 'user',
-    });
-    expect(result!.text).toContain('full');
-  });
-
   test('/clear returns clear marker', async () => {
     const result = await registry.execute('/clear', {
       userId: 'user1',
@@ -117,13 +81,13 @@ describe('CommandRegistry', () => {
     expect(result!.text).toBe('[clear]');
   });
 
-  test('/verbose toggles', async () => {
-    const result = await registry.execute('/verbose off', {
+  test('/compact with no session returns message', async () => {
+    const result = await registry.execute('/compact', {
       userId: 'user1',
       clientType: 'webchat',
       trustLevel: 'user',
     });
-    expect(result!.text).toContain('off');
+    expect(result!.text).toContain('No active session');
   });
 
   test('getAvailable filters by trust level', () => {

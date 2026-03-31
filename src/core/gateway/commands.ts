@@ -145,15 +145,17 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         const db = getDb();
 
         if (!ctx.args.name) {
-          // List experts
+          // List experts — only filter by userId if it's a valid UUID
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ctx.userId);
+          const conditions = isUuid
+            ? or(eq(expertsTable.isSystem, true), eq(expertsTable.userId, ctx.userId), isNull(expertsTable.userId))
+            : or(eq(expertsTable.isSystem, true), isNull(expertsTable.userId));
           const experts = await db.select({
             name: expertsTable.name,
             icon: expertsTable.icon,
             description: expertsTable.description,
             role: expertsTable.role,
-          }).from(expertsTable).where(
-            or(eq(expertsTable.isSystem, true), eq(expertsTable.userId, ctx.userId), isNull(expertsTable.userId))
-          );
+          }).from(expertsTable).where(conditions);
           const lines = experts.map(e => `  ${e.icon || '🤖'} ${e.name} — ${e.description || e.role}`);
           return { text: `Available experts:\n${lines.join('\n')}\n\nUse /expert <name> to switch, /expert reset to auto-route.` };
         }
@@ -191,6 +193,23 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
+    name: 'compact',
+    aliases: [],
+    description: 'Compact session context — summarizes history and saves to session folder',
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      if (!ctx.sessionId) return { text: 'No active session to compact.' };
+      try {
+        const { maybeCompactSession } = await import('@/core/orchestrator/session-compaction');
+        await maybeCompactSession(ctx.sessionId);
+        return { text: 'Session compacted. Older messages summarized, recent messages preserved.' };
+      } catch (err) {
+        return { text: `Compaction failed: ${(err as Error).message}` };
+      }
+    },
+  });
+
+  registry.register({
     name: 'clear',
     aliases: ['cls'],
     description: 'Clear conversation display',
@@ -200,59 +219,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     },
   });
 
-  registry.register({
-    name: 'compact',
-    aliases: [],
-    description: 'Compact session context (summarize history)',
-    minTrustLevel: 'user',
-    handler: async (ctx) => {
-      return { text: 'Session context compaction requested. The next message will use a summarized context.' };
-    },
-  });
-
-  registry.register({
-    name: 'think',
-    aliases: [],
-    description: 'Set thinking depth (off/low/medium/high)',
-    args: [{ name: 'level', required: false, description: 'off, low, medium, or high' }],
-    minTrustLevel: 'user',
-    handler: async (ctx) => {
-      const level = ctx.args.level || 'medium';
-      const valid = ['off', 'low', 'medium', 'high'];
-      if (!valid.includes(level)) {
-        return { text: `Invalid level: ${level}. Use: ${valid.join(', ')}` };
-      }
-      return { text: `Thinking depth set to: ${level}` };
-    },
-  });
-
-  registry.register({
-    name: 'verbose',
-    aliases: ['v'],
-    description: 'Toggle verbose output (on/off)',
-    args: [{ name: 'state', required: false, description: 'on or off' }],
-    minTrustLevel: 'user',
-    handler: async (ctx) => {
-      const state = ctx.args.state || 'toggle';
-      return { text: `Verbose mode: ${state === 'off' ? 'off' : 'on'}` };
-    },
-  });
-
-  registry.register({
-    name: 'usage',
-    aliases: [],
-    description: 'Set usage display (off/tokens/full)',
-    args: [{ name: 'mode', required: false, description: 'off, tokens, or full' }],
-    minTrustLevel: 'user',
-    handler: async (ctx) => {
-      const mode = ctx.args.mode || 'tokens';
-      const valid = ['off', 'tokens', 'full'];
-      if (!valid.includes(mode)) {
-        return { text: `Invalid mode: ${mode}. Use: ${valid.join(', ')}` };
-      }
-      return { text: `Usage display set to: ${mode}` };
-    },
-  });
 }
 
 // ── Singleton ─────────────────────────────────────────────────────

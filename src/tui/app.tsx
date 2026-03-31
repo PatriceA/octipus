@@ -27,6 +27,11 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       setMessages(prev => [...prev, { role: 'assistant', content: response, timestamp: new Date() }]);
     },
     onCommandResult: (name, result, error) => {
+      // /clear: actually clear the message history
+      if (name === 'clear' && !error) {
+        setMessages([{ role: 'system', content: 'Chat cleared.', timestamp: new Date() }]);
+        return;
+      }
       const content = error || (typeof result === 'string' ? result : JSON.stringify(result));
       setMessages(prev => [...prev, { role: 'system', content: `/${name}: ${content}`, timestamp: new Date() }]);
     },
@@ -106,13 +111,13 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
         {visibleMessages.map((msg, i) => (
           <Box key={i}>
-            <Text
-              color={msg.role === 'user' ? 'green' : msg.role === 'assistant' ? 'white' : 'gray'}
-              dimColor={msg.role === 'system'}
-            >
-              {msg.role === 'user' ? '> ' : msg.role === 'assistant' ? '  ' : '  '}
-              {msg.content}
-            </Text>
+            {msg.role === 'user' ? (
+              <Text color="green" bold>{'> '}{msg.content}</Text>
+            ) : msg.role === 'assistant' ? (
+              <Text color="white">{'  '}{msg.content}</Text>
+            ) : (
+              <Text color="cyan">{'  '}{msg.content}</Text>
+            )}
           </Box>
         ))}
       </Box>
