@@ -402,11 +402,24 @@ cmd_start() {
     log_info "Embedded mode (PGlite + in-memory cache)"
   fi
 
-  # Build MCP server (so CLI clients get latest tools)
+  # Build MCP server and register with CLI tools
   if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
     log_step "Building MCP server..."
     cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
+
+    # Auto-register with Gemini CLI (if installed, idempotent)
+    if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
+      if ! gemini mcp list 2>/dev/null | grep -q "assistant:"; then
+        local _mkey="${MASTER_KEY:-}"
+        gemini mcp add assistant node "$PROJECT_DIR/mcp-server/dist/index.js" \
+          -s user --trust \
+          -e "ASSISTANT_URL=http://127.0.0.1:${API_PORT}" \
+          ${_mkey:+-e "ASSISTANT_API_KEY=${_mkey}"} >/dev/null 2>&1 \
+          && log_info "Gemini CLI: MCP server registered" \
+          || true
+      fi
+    fi
   fi
 
   # Start backend
@@ -568,11 +581,24 @@ cmd_restart() {
     log_info "Embedded mode (PGlite + in-memory cache)"
   fi
 
-  # Build MCP server (so CLI clients get latest tools)
+  # Build MCP server and register with CLI tools
   if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
     log_step "Building MCP server..."
     cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
+
+    # Auto-register with Gemini CLI (if installed, idempotent)
+    if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
+      if ! gemini mcp list 2>/dev/null | grep -q "assistant:"; then
+        local _mkey="${MASTER_KEY:-}"
+        gemini mcp add assistant node "$PROJECT_DIR/mcp-server/dist/index.js" \
+          -s user --trust \
+          -e "ASSISTANT_URL=http://127.0.0.1:${API_PORT}" \
+          ${_mkey:+-e "ASSISTANT_API_KEY=${_mkey}"} >/dev/null 2>&1 \
+          && log_info "Gemini CLI: MCP server registered" \
+          || true
+      fi
+    fi
   fi
 
   # Start backend
