@@ -245,15 +245,33 @@ If the file doesn't exist, create it.`;
     }
   }
 
-  // Inject user profile context
+  // Inject user profile context + related profiles for people-related queries
   if (context.userId) {
     try {
       const { ProfileRepository } = await import('@/db/repositories/profile-repository');
       const profileRepo = new ProfileRepository();
+
+      // Always inject the user's own profile
       const userProfile = await profileRepo.findUserProfile(context.userId);
       if (userProfile && (userProfile.facts as ProfileFact[])?.length > 0) {
         const facts = (userProfile.facts as ProfileFact[]).map(f => `- ${f.key}: ${f.value}`).join('\n');
         systemPrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
+      }
+
+      // For people-related queries, inject all stored profiles so CLI agents (which can't use
+      // the profiles tool) have the data in context
+      const peoplePatterns = /\b(who is|wife|husband|partner|mother|father|mom|dad|boss|friend|brother|sister|family|birthday|address|phone|email of)\b/i;
+      if (peoplePatterns.test(task)) {
+        const allProfiles = await profileRepo.findByUserId(context.userId);
+        const otherProfiles = allProfiles.filter(p => p.id !== userProfile?.id);
+        if (otherProfiles.length > 0) {
+          const profileTexts = otherProfiles.map(p => {
+            const facts = (p.facts as ProfileFact[]) || [];
+            const factsStr = facts.map(f => `  - ${f.key}: ${f.value}`).join('\n');
+            return `**${p.name}** (${p.category || 'person'})${p.relationship ? ` — ${p.relationship}` : ''}\n${factsStr}`;
+          });
+          systemPrompt += `\n\nSTORED PROFILES:\n${profileTexts.join('\n\n')}`;
+        }
       }
     } catch {}
   }

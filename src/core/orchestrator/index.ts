@@ -1,6 +1,5 @@
 export { OrchestratorService, getOrchestratorService } from './service';
 export type { OrchestratorEvent } from './service';
-export { MessageDispatcher, getMessageDispatcher } from './dispatcher';
 export { PipelineManager, getPipelineManager } from './pipeline-manager';
 export { getPipelineTemplate, buildStagesFromTemplate, expandPromptTemplate } from './templates';
 export { classifyMessage } from './classifier';

@@ -21,36 +21,6 @@ export interface PipelineTemplate {
 }
 
 /**
- * QA validation prompt template — instructs the agent to output structured JSON.
- */
-export const QA_VALIDATION_PROMPT_TEMPLATE = `Test the implementation thoroughly. Run unit tests, integration tests, and if applicable, UI tests.
-
-Task: {{description}}
-
-Implementation and review:
-{{previousOutput}}
-
-After testing, you MUST output your result as a JSON object with this exact structure (no other text outside the JSON):
-
-\`\`\`json
-{
-  "passed": true/false,
-  "issues": ["issue 1 description", "issue 2 description"],
-  "feedback": "Overall summary of the QA findings and what needs to change"
-}
-\`\`\`
-
-Check for:
-1. Test results (pass/fail for each test)
-2. Any bugs found
-3. UI/UX issues (if applicable)
-4. Performance observations
-5. Missing edge cases
-
-Set "passed" to true ONLY if all tests pass and no critical issues are found.
-If there are issues, list each one in the "issues" array and provide actionable feedback.`;
-
-/**
  * Convert a DB PipelineStepConfig to a StageTemplate.
  */
 function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
