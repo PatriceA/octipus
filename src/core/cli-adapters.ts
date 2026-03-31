@@ -1,12 +1,58 @@
 import { agentLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 import type { CLIAgentConfig } from '@/db/schema/models';
-import { writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { join, resolve } from 'path';
+import { tmpdir, homedir } from 'os';
 import { randomBytes } from 'crypto';
 
 const IS_WIN = process.platform === 'win32';
+
+/**
+ * Generate a temporary MCP config file that points CLI tools to the assistant's MCP server.
+ * Returns the path to the generated config file, or null if the MCP server isn't available.
+ */
+function getOrCreateMcpConfig(): string | null {
+  const dir = join(tmpdir(), 'assistant-cli');
+  const configPath = join(dir, 'mcp-config.json');
+
+  // Reuse existing if fresh (< 1 hour old)
+  try {
+    if (existsSync(configPath)) {
+      const stat = Bun.file(configPath);
+      if (Date.now() - stat.lastModified < 3600_000) return configPath;
+    }
+  } catch {}
+
+  // Build MCP server path — resolve from project root
+  const projectRoot = resolve(join(import.meta.dir, '../..'));
+  const mcpServerEntry = join(projectRoot, 'mcp-server/dist/index.js');
+  const mcpServerSrc = join(projectRoot, 'mcp-server/src/index.ts');
+
+  // Determine entry point — prefer compiled, fall back to source (bun can run .ts)
+  const entry = existsSync(mcpServerEntry) ? mcpServerEntry : mcpServerSrc;
+  const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
+
+  const apiPort = process.env.API_PORT || process.env.PORT || '3005';
+  const apiKey = process.env.MASTER_KEY || '';
+
+  const config = {
+    mcpServers: {
+      assistant: {
+        command: runtime,
+        args: [entry],
+        env: {
+          ASSISTANT_URL: `http://127.0.0.1:${apiPort}`,
+          ...(apiKey ? { ASSISTANT_API_KEY: apiKey } : {}),
+        },
+      },
+    },
+  };
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  return configPath;
+}
 
 /** Detect a more descriptive tool name from a shell command */
 function detectToolFromCommand(command: string): string {
@@ -95,8 +141,10 @@ export class CLIArgumentBuilder {
       }
     }
 
-    if (settings.mcpConfigPath) {
-      args.push('--mcp-config', settings.mcpConfigPath);
+    // MCP config: prefer explicit setting, otherwise auto-generate
+    const mcpConfig = settings.mcpConfigPath || getOrCreateMcpConfig();
+    if (mcpConfig) {
+      args.push('--mcp-config', mcpConfig);
     }
 
     if (settings.allowedTools?.length) {
@@ -124,6 +172,12 @@ export class CLIArgumentBuilder {
 
     const approvalMode = settings.permissionMode || 'yolo';
     args.push('--approval-mode', approvalMode);
+
+    // MCP config for Gemini CLI
+    const mcpConfig = settings.mcpConfigPath || getOrCreateMcpConfig();
+    if (mcpConfig) {
+      args.push('--mcp-config', mcpConfig);
+    }
 
     if (settings.extraArgs?.length) {
       args.push(...settings.extraArgs);

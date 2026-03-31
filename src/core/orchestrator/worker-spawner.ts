@@ -325,6 +325,16 @@ If the file doesn't exist, create it.`;
     systemPrompt += workspaceHint;
   }
 
+  // Inform CLI agents about the assistant MCP server tools
+  systemPrompt += `\n\nASSISTANT MCP TOOLS: You have access to the "assistant" MCP server which provides tools for:
+- **People & profiles**: Search/retrieve stored information about people the user knows (assistant_search_profiles, assistant_get_profile)
+- **Knowledge base**: Search the user's knowledge base (assistant_search_knowledge)
+- **Web search**: Search the web (assistant_search) and fetch pages (assistant_fetch_page)
+- **Messaging**: Send messages to the user's channels — Telegram, Slack, etc. (assistant_send_channel_message)
+- **Scheduling**: Create/manage scheduled tasks and automations (assistant_create_recurring_task)
+- **Documents**: Upload and index documents (assistant_upload_document)
+Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
+
   const worker = await agentManager.spawn({
     sessionId: context.sessionId,
     userId: context.userId,
