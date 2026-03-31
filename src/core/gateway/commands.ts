@@ -141,10 +141,13 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       try {
         const { getDb } = await import('@/db/postgres');
         const { experts: expertsTable } = await import('@/db/schema/experts');
-        const { or, eq, isNull } = await import('drizzle-orm');
+        const { or, eq, isNull, sql } = await import('drizzle-orm');
         const db = getDb();
 
-        if (!ctx.args.name) {
+        // Use rawArgs for the full expert name (e.g., "Data Analyst" not just "Data")
+        const expertName = ctx.rawArgs.trim();
+
+        if (!expertName) {
           // List experts — only filter by userId if it's a valid UUID
           const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ctx.userId);
           const conditions = isUuid
@@ -169,11 +172,20 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
           return { text: `Available experts:\n${lines.join('\n')}\n\nUse /expert <name> to switch, /expert reset to auto-route.` };
         }
 
-        if (ctx.args.name === 'reset') {
+        if (expertName.toLowerCase() === 'reset') {
           return { text: 'Expert reset to auto-routing. Next messages will be classified automatically.' };
         }
 
-        return { text: `Switched to expert: ${ctx.args.name}. Next messages will be handled by this expert.` };
+        // Verify the expert exists
+        const match = await db.select({ id: expertsTable.id, name: expertsTable.name })
+          .from(expertsTable)
+          .where(sql`LOWER(${expertsTable.name}) = LOWER(${expertName})`)
+          .limit(1);
+        if (match.length === 0) {
+          return { text: `Expert "${expertName}" not found. Use /expert to list available experts.` };
+        }
+
+        return { text: `Switched to expert: ${match[0].name}. Next messages will be handled by this expert.` };
       } catch (err) {
         return { text: `Error: ${(err as Error).message}` };
       }

@@ -4,6 +4,26 @@ import type { ConnectionContext, ClientMessage } from './protocol';
 import { getCommandRegistry } from './commands';
 
 /**
+ * Resolve a gateway userId to a real DB user ID.
+ * Local auth gives 'local', system auth gives 'system' — these aren't DB UUIDs.
+ */
+async function resolveUserId(userId: string): Promise<string> {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    return userId; // Already a UUID
+  }
+  // Resolve to the first admin user (same as MASTER_KEY auth in REST API)
+  try {
+    const { getDb } = await import('@/db/postgres');
+    const { users } = await import('@/db/schema/users');
+    const { eq } = await import('drizzle-orm');
+    const db = getDb();
+    const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.isAdmin, true)).limit(1);
+    if (admin) return admin.id;
+  } catch {}
+  return userId; // Fallback
+}
+
+/**
  * Wire the gateway hub's message handler to route authenticated messages
  * to the appropriate backend services (orchestrator, permissions, agents).
  */
@@ -48,9 +68,10 @@ async function handleChatSend(
     const orchestrator = getOrchestratorService();
 
     // Route through orchestrator (same as existing /ws chat handler)
+    const userId = await resolveUserId(context.userId);
     const result = await orchestrator.handleMessage(
       message.sessionId,
-      context.userId,
+      userId,
       message.content,
       context.clientType,
       message.expertId,
