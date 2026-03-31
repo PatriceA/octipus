@@ -204,11 +204,26 @@ curl -X POST https://your-host/api/hooks \
 
 A scheduled task is a hook with `trigger: "schedule"`. The cron runner checks every 60 seconds for due hooks and executes them. In the UI, these appear under the "Scheduled Tasks" tab.
 
+### Schedule Types
+
+**Recurring (cron):** Runs on a repeating schedule using cron expressions. The schedule picker offers presets, interval, daily, weekly, and raw cron modes.
+
+**One-time (datetime):** Runs exactly once at a specific date and time, then auto-disables. Set `triggerConfig.scheduledAt` instead of `cronExpression`. In the UI, use the "Date & Time" tab in the schedule picker.
+
+### Calendar View
+
+The **Calendar tab** in the Hooks & Tasks page shows a weekly grid of scheduled tasks:
+- **Recurring tasks** appear on their next run day (green)
+- **Datetime tasks** appear on their exact scheduled day (blue)
+- Navigate weeks with arrow buttons, "Today" resets to current week
+- Server timezone is displayed for reference
+
 ### Schedule-Specific Fields
 
 | Field | Purpose |
 |-------|---------|
-| `triggerConfig.cronExpression` | Cron schedule |
+| `triggerConfig.cronExpression` | Cron schedule (for recurring tasks) |
+| `triggerConfig.scheduledAt` | ISO 8601 datetime (for one-time tasks) |
 | `triggerConfig.timezone` | Timezone (default: UTC) |
 | `nextRunAt` | Computed next execution time |
 | `lastError` | Last execution error (null on success) |

@@ -35,6 +35,7 @@ import { testBrowserExt } from './tests/browser-ext';
 import { testMessaging } from './tests/messaging';
 import { testKnowledge } from './tests/knowledge';
 import { testChannels } from './tests/channels';
+import { testGateway } from './tests/gateway';
 
 export async function run() {
   const runner = new TestRunner();
@@ -68,6 +69,7 @@ export async function run() {
     await testMessaging(runner, client);
     await testKnowledge(runner, client);
     await testChannels(runner, client);
+    await testGateway(runner, client);
   } catch (err) {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);
   }

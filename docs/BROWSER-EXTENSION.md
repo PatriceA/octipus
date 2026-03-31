@@ -24,6 +24,7 @@ BrowserExtTool (src/tools/browser-ext/)
     ▼
 BrowserBridgeService (src/api/browser-bridge.ts)
     │ WebSocket (ws://localhost:3005/ws/browser-bridge)
+    │ (dedicated bridge, separate from /gateway protocol)
     ▼
 Chrome Extension (browser-extension/)
     │

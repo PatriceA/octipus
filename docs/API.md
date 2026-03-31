@@ -155,11 +155,75 @@ Interactive documentation available at `http://localhost:3005/swagger`.
 |--------|----------|-------------|
 | POST | `/api/voice/transcribe` | Transcribe audio (base64) to text |
 
-## WebSocket
+## Gateway WebSocket
 
-Connect to `/ws?token=<jwt>` for real-time events:
-- `subscribe` / `unsubscribe` — manage event subscriptions
-- `message` — send chat message
-- `agent.status` — agent status changes
-- `agent.message` — agent responses
-- `agent.tool_call` — tool execution events
+Connect to `/gateway` for real-time communication. All messages are JSON, Zod-validated.
+
+### Authentication
+
+First message must be `auth` within 5 seconds:
+```json
+{
+  "type": "auth",
+  "method": "session_token",
+  "credentials": { "token": "<jwt>" },
+  "clientType": "webchat"
+}
+```
+
+Auth methods: `session_token`, `local` (TUI), `hmac` (adapters), `api_key`.
+
+### Client → Gateway Messages
+
+| Type | Description |
+|------|-------------|
+| `auth` | Authentication handshake |
+| `chat.send` | Send chat message (requires `sessionId`, `content`) |
+| `command` | Execute gateway command (`name`, optional `args`) |
+| `subscribe` | Subscribe to event patterns (e.g., `["agent.*"]`) |
+| `unsubscribe` | Remove event subscriptions |
+| `permission.respond` | Approve/deny permission request |
+| `approval.respond` | Approve/deny pipeline approval |
+| `agent.stop` | Stop a running agent (admin/local only) |
+| `ping` | Heartbeat |
+
+### Gateway → Client Messages
+
+| Type | Description |
+|------|-------------|
+| `auth_ok` | Auth success (includes `connectionId`, `capabilities`, `serverTime`) |
+| `auth_error` | Auth failure |
+| `event` | Gateway event (agent lifecycle, chat response, etc.) |
+| `command.result` | Result of a command |
+| `error` | Error with `code` and `message` |
+| `pong` | Heartbeat response with server time |
+
+### Gateway Commands
+
+Available via `{ "type": "command", "name": "<cmd>" }`:
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List available commands |
+| `/status` | Session status and running agents |
+| `/expert [name]` | Switch expert or list available |
+| `/abort` | Cancel all running agents |
+| `/clear` | Clear conversation |
+| `/compact` | Compact session context |
+| `/think [level]` | Set thinking depth (off/low/medium/high) |
+| `/verbose [on\|off]` | Toggle verbose output |
+| `/usage [mode]` | Usage display (off/tokens/full) |
+
+### Gateway REST API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/gateway/status` | Hub status (connections, events) |
+| GET | `/api/gateway/connections` | Active connections (admin) |
+| GET | `/api/gateway/events/stats` | Event bus metrics |
+| GET | `/api/gateway/adapters` | Channel adapter status |
+| GET | `/api/health/time` | Server time and timezone |
+
+### Legacy WebSocket (deprecated)
+
+The old `/ws?token=<jwt>` endpoint still works during migration but will be removed. Use `/gateway` for new integrations.
