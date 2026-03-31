@@ -261,7 +261,7 @@ If the file doesn't exist, create it.`;
       // For people-related queries, search for relevant profiles and inject matches.
       // CLI agents can't call the profiles tool (registerTool is a no-op), so we
       // resolve profile data here and put it in the prompt context.
-      const peoplePatterns = /\b(who is|wife|husband|partner|mother|father|mom|dad|boss|friend|brother|sister|family|birthday|address|phone|email of|tell me about)\b/i;
+      const peoplePatterns = /\b(who is|wife|husband|partner|mother|father|mom|dad|boss|friend|brother|sister|family|birthday|address|phone|email of|tell me about|remember|my dog|my cat|my pet|company|organization)\b/i;
       if (peoplePatterns.test(task)) {
         // Extract search terms — strip common question words to get the relevant noun
         const searchTerms = task
