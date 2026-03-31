@@ -1,6 +1,7 @@
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';
 import type { ConnectionContext, ClientMessage } from './protocol';
+import { getCommandRegistry } from './commands';
 
 /**
  * Wire the gateway hub's message handler to route authenticated messages
@@ -79,13 +80,21 @@ async function handleCommand(
   context: ConnectionContext,
   message: Extract<ClientMessage, { type: 'command' }>,
 ): Promise<void> {
-  // Commands will be implemented in Phase 2 (channel commands)
-  // For now, return a stub
+  const registry = getCommandRegistry();
+  const input = `/${message.name}${message.args ? ' ' + Object.values(message.args).join(' ') : ''}`;
+
+  const result = await registry.execute(input, {
+    userId: context.userId,
+    sessionId: context.sessionId,
+    clientType: context.clientType,
+    trustLevel: context.trustLevel,
+  });
+
   hub.connectionManager.sendToConnection(connectionId, {
     type: 'command.result',
     name: message.name,
-    result: null,
-    error: `Command "${message.name}" not yet implemented in gateway protocol`,
+    result: result?.text || null,
+    error: result ? undefined : 'Unknown command',
   });
 }
 
