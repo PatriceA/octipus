@@ -67,7 +67,10 @@ async function handleChatSend(
     const { getOrchestratorService } = await import('@/core/orchestrator');
     const orchestrator = getOrchestratorService();
 
-    // Route through orchestrator (same as existing /ws chat handler)
+    // Track the session on the connection for /status command
+    context.sessionId = message.sessionId;
+
+    // Route through orchestrator
     const userId = await resolveUserId(context.userId);
     // Use expert from message, or from connection's active expert (/expert command)
     const expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);

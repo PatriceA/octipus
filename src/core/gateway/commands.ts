@@ -117,18 +117,30 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'status',
     aliases: ['s'],
-    description: 'Show current session status',
+    description: 'Show current session status, agents, and expert',
     minTrustLevel: 'user',
     handler: async (ctx) => {
       try {
         const { getAgentManager } = await import('@/core/agent-manager');
         const agentManager = getAgentManager();
-        const running = agentManager.getRunningCount();
-        return {
-          text: `Session: ${ctx.sessionId || 'none'}\nRunning agents: ${running}`,
-        };
+        const agents = agentManager.list();
+        const running = agents.filter(a => a.status === 'running');
+        const expert = ctx.metadata?.activeExpertName as string | undefined;
+
+        let text = `Session: ${ctx.sessionId?.slice(0, 8) || 'none'}`;
+        if (expert) text += `  |  Expert: ${expert}`;
+        text += `\nAgents: ${running.length} running / ${agents.length} total`;
+
+        if (running.length > 0) {
+          text += '\n';
+          for (const a of running) {
+            const elapsed = Math.round((Date.now() - new Date(a.createdAt).getTime()) / 1000);
+            text += `\n  ${a.role} (${a.model || 'default'}) — ${a.topic || 'general'} — ${elapsed}s — iter ${a.iteration}`;
+          }
+        }
+        return { text };
       } catch {
-        return { text: `Session: ${ctx.sessionId || 'none'}` };
+        return { text: `Session: ${ctx.sessionId?.slice(0, 8) || 'none'}` };
       }
     },
   });

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import TextInput from 'ink-text-input';
 import { GatewayClient, type ConnectionStatus } from './gateway-client';
+import { randomBytes } from 'crypto';
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -20,6 +21,14 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
   ]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
+  const [activeExpert, setActiveExpert] = useState<string | null>(null);
+
+  // Generate a real UUID for this TUI session
+  const [sessionId] = useState(() => {
+    const hex = randomBytes(16).toString('hex');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-4${hex.slice(13,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
+  });
+
   const [client] = useState(() => new GatewayClient({
     url: gatewayUrl,
     onStatusChange: (s) => setStatus(s),
@@ -27,30 +36,61 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       setMessages(prev => [...prev, { role: 'assistant', content: response, timestamp: new Date() }]);
     },
     onCommandResult: (name, result, error) => {
-      // /clear: actually clear the message history
       if (name === 'clear' && !error) {
         setMessages([{ role: 'system', content: 'Chat cleared.', timestamp: new Date() }]);
         return;
       }
       const content = error || (typeof result === 'string' ? result : JSON.stringify(result));
       setMessages(prev => [...prev, { role: 'system', content: `/${name}: ${content}`, timestamp: new Date() }]);
+
+      // Track expert switch from command result
+      if (name === 'expert' && !error && typeof result === 'string') {
+        if (result.includes('Switched to')) {
+          const match = result.match(/Switched to expert: (.+)\./);
+          setActiveExpert(match ? match[1] : null);
+        } else if (result.includes('reset')) {
+          setActiveExpert(null);
+        }
+      }
     },
     onEvent: (event) => {
+      const payload = event.payload as any;
+
+      // Agent lifecycle
       if (event.type === 'agent.spawned') {
+        const role = payload?.role || payload?.data?.role || 'worker';
+        const model = payload?.model || payload?.data?.model || '';
         setMessages(prev => [...prev, {
           role: 'system',
-          content: `Agent spawned: ${event.payload?.role || 'worker'}`,
+          content: `Agent spawned: ${role}${model ? ` (${model})` : ''}`,
           timestamp: new Date(),
         }]);
+      }
+      if (event.type === 'agent.completed') {
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: 'Agent completed.',
+          timestamp: new Date(),
+        }]);
+      }
+
+      // Chat responses (published by orchestrator/gateway after agent finishes)
+      if (event.type === 'chat.response') {
+        const text = payload?.response?.response || payload?.response || '';
+        if (text && typeof text === 'string') {
+          setMessages(prev => {
+            // Avoid duplicate if onResponse already added it
+            const last = prev[prev.length - 1];
+            if (last?.role === 'assistant' && last?.content === text) return prev;
+            return [...prev, { role: 'assistant', content: text, timestamp: new Date() }];
+          });
+        }
       }
     },
     onError: (error) => {
       setMessages(prev => [...prev, { role: 'system', content: `Error: ${error}`, timestamp: new Date() }]);
     },
   }));
-
-  // Session ID — for now use a fixed one, could be made selectable
-  const [sessionId] = useState('00000000-0000-0000-0000-000000000000');
 
   useEffect(() => {
     client.connect();
@@ -61,10 +101,8 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     if (!value.trim()) return;
     setInput('');
 
-    // Add user message to display
     setMessages(prev => [...prev, { role: 'user', content: value, timestamp: new Date() }]);
 
-    // Check if it's a command
     if (value.startsWith('/')) {
       const parts = value.slice(1).split(/\s+/);
       const cmdName = parts[0];
@@ -83,7 +121,6 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     }
   }, [client, sessionId, exit]);
 
-  // Ctrl+C to exit
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       client.disconnect();
@@ -95,8 +132,7 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     : status === 'connecting' || status === 'authenticating' ? 'yellow'
     : 'red';
 
-  // Show last N messages
-  const visibleMessages = messages.slice(-20);
+  const visibleMessages = messages.slice(-30);
 
   return (
     <Box flexDirection="column" height="100%">
@@ -105,6 +141,13 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         <Text bold color="cyan">Assistant TUI</Text>
         <Text> | </Text>
         <Text color={statusColor}>{status}</Text>
+        {activeExpert && (
+          <>
+            <Text> | </Text>
+            <Text color="yellow">{activeExpert}</Text>
+          </>
+        )}
+        <Text color="gray"> | {sessionId.slice(0, 8)}</Text>
       </Box>
 
       {/* Chat messages */}
