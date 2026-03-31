@@ -343,9 +343,11 @@ diagnose_backend_failure() {
 
 cmd_start() {
   local dev_mode=false
+  local use_tui=false
   for arg in "$@"; do
     case "$arg" in
       --dev|-d) dev_mode=true ;;
+      --tui|-t) use_tui=true ;;
     esac
   done
 
@@ -430,48 +432,57 @@ cmd_start() {
     return 1
   fi
 
-  # Clear Next.js cache so code changes take effect
-  log_step "Clearing web UI cache..."
-  rm -rf "$PROJECT_DIR/web/.next"
-  rm -rf "$PROJECT_DIR/web/node_modules/.cache"
-
-  # Start web UI only after backend is confirmed healthy
-  cd "$PROJECT_DIR/web"
-  if [[ "$dev_mode" == true ]]; then
-    log_step "Starting web UI (dev mode)..."
-    nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+  if [[ "$use_tui" == true ]]; then
+    # TUI mode — skip web UI, launch terminal interface
+    echo ""
+    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo ""
+    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+    echo ""
+    log_step "Launching TUI..."
+    cd "$PROJECT_DIR"
+    API_PORT="$API_PORT" exec bun run src/tui/index.tsx
   else
-    log_step "Building web UI..."
-    if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
-      log_warn "Production build failed, using dev mode instead"
+    # Web UI mode
+    log_step "Clearing web UI cache..."
+    rm -rf "$PROJECT_DIR/web/.next"
+    rm -rf "$PROJECT_DIR/web/node_modules/.cache"
+
+    cd "$PROJECT_DIR/web"
+    if [[ "$dev_mode" == true ]]; then
+      log_step "Starting web UI (dev mode)..."
       nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
     else
-      log_step "Starting web UI..."
-      nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+      log_step "Building web UI..."
+      if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
+        log_warn "Production build failed, using dev mode instead"
+        nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+      else
+        log_step "Starting web UI..."
+        nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+      fi
     fi
+    echo $! > "$PID_FILE_WEB"
+
+    sleep 2
+    log_info "Web UI starting on port $WEB_PORT"
+
+    log_step "Opening browser..."
+    open_browser "http://localhost:$WEB_PORT"
+
+    echo ""
+    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo ""
+    echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
+    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+    echo ""
+    echo -e "  ${BOLD}Commands:${NC}"
+    echo -e "  assistant status    Show running state"
+    echo -e "  assistant logs      View backend logs"
+    echo -e "  assistant stop      Stop everything"
+    echo ""
   fi
-  echo $! > "$PID_FILE_WEB"
-
-  # Wait briefly for web UI
-  sleep 2
-  log_info "Web UI starting on port $WEB_PORT"
-
-  # Open browser
-  log_step "Opening browser..."
-  open_browser "http://localhost:$WEB_PORT"
-
-  echo ""
-  echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
-  echo ""
-  echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
-  echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-  echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
-  echo ""
-  echo -e "  ${BOLD}Commands:${NC}"
-  echo -e "  assistant status    Show running state"
-  echo -e "  assistant logs      View backend logs"
-  echo -e "  assistant stop      Stop everything"
-  echo ""
 }
 
 cmd_stop() {
@@ -500,9 +511,11 @@ cmd_restart() {
   print_banner
 
   local dev_mode=false
+  local use_tui=false
   for arg in "$@"; do
     case "$arg" in
       --dev|-d) dev_mode=true ;;
+      --tui|-t) use_tui=true ;;
     esac
   done
 
@@ -583,36 +596,46 @@ cmd_restart() {
     return 1
   fi
 
-  # Start web UI (cache already cleared above)
-  cd "$PROJECT_DIR/web"
-  if [[ "$dev_mode" == true ]]; then
-    log_step "Starting web UI (dev mode)..."
-    nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+  if [[ "$use_tui" == true ]]; then
+    echo ""
+    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo ""
+    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+    echo ""
+    log_step "Launching TUI..."
+    cd "$PROJECT_DIR"
+    API_PORT="$API_PORT" exec bun run src/tui/index.tsx
   else
-    log_step "Building web UI..."
-    if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
-      log_warn "Production build failed, using dev mode instead"
+    cd "$PROJECT_DIR/web"
+    if [[ "$dev_mode" == true ]]; then
+      log_step "Starting web UI (dev mode)..."
       nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
     else
-      log_step "Starting web UI..."
-      nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+      log_step "Building web UI..."
+      if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
+        log_warn "Production build failed, using dev mode instead"
+        nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+      else
+        log_step "Starting web UI..."
+        nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+      fi
     fi
+    echo $! > "$PID_FILE_WEB"
+
+    sleep 2
+    log_info "Web UI starting on port $WEB_PORT"
+
+    log_step "Opening browser..."
+    open_browser "http://localhost:$WEB_PORT"
+
+    echo ""
+    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo ""
+    echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
+    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+    echo ""
   fi
-  echo $! > "$PID_FILE_WEB"
-
-  sleep 2
-  log_info "Web UI starting on port $WEB_PORT"
-
-  log_step "Opening browser..."
-  open_browser "http://localhost:$WEB_PORT"
-
-  echo ""
-  echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
-  echo ""
-  echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
-  echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-  echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
-  echo ""
 }
 
 cmd_status() {
@@ -729,10 +752,10 @@ cmd_help() {
   echo -e "  ${BOLD}Usage:${NC} assistant <command> [options]"
   echo ""
   echo -e "  ${BOLD}Commands:${NC}"
-  echo -e "    start [--dev]    Start backend and web UI"
+  echo -e "    start [options]  Start backend + web UI (or TUI)"
   echo -e "    stop             Stop all assistant processes"
-  echo -e "    restart [--dev]  Restart everything"
-  echo -e "    tui              Launch terminal chat interface"
+  echo -e "    restart [options] Restart everything"
+  echo -e "    tui              Launch terminal chat (backend must be running)"
   echo -e "    status           Show running state and service health"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
@@ -740,6 +763,7 @@ cmd_help() {
   echo ""
   echo -e "  ${BOLD}Options:${NC}"
   echo -e "    --dev, -d        Start in development mode (hot reload)"
+  echo -e "    --tui, -t        Launch TUI instead of web UI"
   echo -e "    --web, -w        Show web UI logs instead of backend"
   echo ""
   echo -e "  ${BOLD}Environment:${NC}"
