@@ -156,7 +156,16 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
             description: expertsTable.description,
             role: expertsTable.role,
           }).from(expertsTable).where(conditions);
-          const lines = experts.map(e => `  ${e.icon || '🤖'} ${e.name} — ${e.description || e.role}`);
+          const iconToEmoji: Record<string, string> = {
+            code: '💻', eye: '👁️', search: '🔍', palette: '🎨', server: '⚙️',
+            shield: '🛡️', database: '🗄️', brain: '🧠', 'check-circle': '✅',
+            'trending-up': '📈', workflow: '🔄', clipboard: '📋', 'book-open': '📖',
+            mail: '✉️', bot: '🤖', 'file-text': '📄', 'bar-chart': '📊',
+          };
+          const lines = experts.map(e => {
+            const emoji = iconToEmoji[e.icon || ''] || '🤖';
+            return `  ${emoji} ${e.name} — ${e.description || e.role}`;
+          });
           return { text: `Available experts:\n${lines.join('\n')}\n\nUse /expert <name> to switch, /expert reset to auto-route.` };
         }
 
