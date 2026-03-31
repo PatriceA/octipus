@@ -173,11 +173,9 @@ export class CLIArgumentBuilder {
     const approvalMode = settings.permissionMode || 'yolo';
     args.push('--approval-mode', approvalMode);
 
-    // MCP config for Gemini CLI
-    const mcpConfig = settings.mcpConfigPath || getOrCreateMcpConfig();
-    if (mcpConfig) {
-      args.push('--mcp-config', mcpConfig);
-    }
+    // Note: Gemini CLI does NOT support --mcp-config flag.
+    // It uses its own `gemini mcp` subcommand to manage MCP servers.
+    // The assistant MCP server must be added via: gemini mcp add assistant
 
     if (settings.extraArgs?.length) {
       args.push(...settings.extraArgs);
