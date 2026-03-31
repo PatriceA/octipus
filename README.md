@@ -50,12 +50,24 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Scheduling** — create and manage cron tasks, hooks, and event automations from within agent conversations
 - **Cross-Channel Messaging** — send messages across any connected channel
 
+### Gateway Hub — Unified WebSocket Protocol
+- **Single entry point** — all clients connect to `/gateway` with typed protocol (Zod-validated)
+- **Multi-client auth** — session tokens (web), local file tokens (TUI), HMAC keys (adapters), API keys (system)
+- **Central event bus** — replaces scattered EventEmitters with typed pub/sub, pattern matching, per-session replay buffer
+- **9 gateway commands** — `/help`, `/status`, `/expert`, `/abort`, `/clear`, `/compact`, `/think`, `/verbose`, `/usage`
+- **Feedback system** — emoji reaction mapping from agent lifecycle events with debounce and stall detection (10s/30s)
+- **Rate limiting** — sliding window per-connection per-action (30/min chat, 60/min commands, configurable per trust level)
+- **Connection budgets** — max 10 per user, 50 per IP, 5s auth timeout
+- **TUI** — Ink-based terminal interface with local-token auth, auto-reconnect, and full command support
+- **Dashboard API** — `/api/gateway/status`, `/connections`, `/events/stats`, `/adapters`
+
 ### Reach Users Everywhere
-- **Telegram** — full bot with slash commands and inline responses
-- **Slack** — Socket Mode with slash commands and threading
+- **Telegram** — full bot with slash commands and inline responses (gateway adapter)
+- **Slack** — Socket Mode with slash commands and threading (gateway adapter)
 - **Microsoft Teams** — bot mention-based interaction
 - **WhatsApp** — Meta Cloud API with webhook-based messaging, media support, HMAC signature verification, and message deduplication
 - **WebChat** — real-time WebSocket interface via the web UI
+- **TUI** — terminal chat interface with gateway protocol, local auth, auto-reconnect
 
 ### Enterprise-Grade Security
 - **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor, HttpOnly session cookies

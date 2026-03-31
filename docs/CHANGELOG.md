@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-31
+
+### Gateway Hub — Unified WebSocket Architecture
+- **Gateway protocol**: Typed WebSocket protocol (Zod-validated) at `/gateway` — replaces ad-hoc `/ws` message handling. 10 client message types, 7 gateway response types, versioned protocol (v1.0)
+- **ConnectionManager**: Auth handshake with 5s timeout, session token / local token / HMAC / API key auth, connection budgets (per-user: 10, per-IP: 50), graceful drain on shutdown
+- **GatewayEventBus**: Central typed pub/sub replacing scattered EventEmitters. Pattern-based subscriptions (`agent.*`, `*`), per-session replay buffer (200 events), error isolation between handlers
+- **RateLimiter**: Sliding window per-connection per-action with trust-level-aware limits (user: 30/min chat, system: 200/min)
+- **PresenceTracker**: Tracks who's connected from where with per-client-type idle timeouts (30min remote, none for local/system)
+- **CommandRegistry**: 9 built-in commands (`/help`, `/status`, `/expert`, `/abort`, `/clear`, `/compact`, `/think`, `/verbose`, `/usage`) with alias support and trust-level permission gating
+- **FeedbackManager**: Maps agent lifecycle events to emoji reactions with debounce (700ms intermediate, immediate terminal). Tool-specific emojis (filesystem, shell, browser, etc.)
+- **StallDetector**: Fires soft (10s) and hard (30s) stall notifications for agents with no progress
+- **Event bridge**: Orchestrator + AgentManager + PermissionManager events → gateway event bus
+- **Channel adapters**: GatewayAdapter base class with adapter↔gateway protocol. Transitional Telegram + Slack adapters wrapping existing implementations
+- **TUI**: Ink-based terminal UI with gateway WS client, local-token auth, exponential backoff reconnect, chat + commands
+- **DB-driven roles**: System prompt templates moved from hardcoded `roles.ts` to `roles` database table. Seeded on startup, editable at runtime via API
+- **Dashboard API**: `GET /api/gateway/status`, `/connections`, `/events/stats`, `/adapters`
+- **56 new tests**: Protocol validation, rate limiting, event bus pub/sub, command handlers, stall detection — all passing
+- **6 pre-existing test failures fixed**: conformance (mock routing), evaluators (mock provider), git parseStatus (regex)
+- **Migration**: 0020 (gateway audit enum values), 0021 (roles table)
+
+### Scheduled Tasks & Calendar
+- **Datetime tasks**: One-time scheduled hooks at specific date/time (auto-disable after firing)
+- **Calendar tab**: Weekly view in Hooks & Tasks with week navigation, cron + datetime task display
+- **Server time display**: `GET /health/time` endpoint, shown in calendar and tasks tabs
+- **Schedule picker**: Separate date + time pickers for datetime mode
+
+### Pipeline System
+- **DB-driven templates**: Removed hardcoded pipeline templates, orchestrator uses DB templates
+- **Retry config in UI**: stageType, maxRetries, retryTargetStage exposed in pipeline editor
+- **Dynamic template selection**: `list_pipeline_templates` meta-tool for orchestrator
+
+### Settings & UI
+- **Settings audit**: Removed duplicate workspace path from Configuration tab, wired Notifications tab to backend
+- **Automation UX**: Renamed "Create Hook" to "New Automation", smart button labels, hidden redundant checkboxes
+
 ## 2026-03-27
 
 ### Model Evaluation & Provider Testing Framework
