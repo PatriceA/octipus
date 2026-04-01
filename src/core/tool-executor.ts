@@ -180,14 +180,8 @@ export class ToolExecutor {
           if (!approved) {
             agentLogger.info(
               { agentId: this.context.id, tool: toolCall.name, requestId },
-              'Tool call denied by user'
+              'Tool call denied by user — aborting agent'
             );
-
-            results.push({
-              toolCallId: toolCall.id,
-              result: null,
-              error: 'Permission denied: the user rejected this action. Do NOT retry the same action. STOP and ask the user what they would like you to do differently.',
-            });
 
             await auditRepository.logToolDenied(
               this.context.userId,
@@ -196,7 +190,11 @@ export class ToolExecutor {
               toolId,
               { args: toolCall.arguments, reason: 'user_denied', requestId }
             );
-            continue;
+
+            // Abort the agent entirely — don't let it retry or try alternatives.
+            // The orchestrator will handle follow-up with the user.
+            throw new Error(`Permission denied for "${toolCall.name}". The user rejected this action.`);
+          }
           }
         } else {
           agentLogger.info(

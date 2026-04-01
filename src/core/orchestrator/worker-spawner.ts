@@ -132,9 +132,23 @@ export async function handleExpertMessage(
       metadata: { latencyMs: Date.now() - startTime },
     };
   } catch (error) {
+    const errMsg = (error as Error).message || '';
     coreLogger.error({ error, expertId, role: agentRole }, 'Expert worker failed');
+
+    // Permission denial or user abort → friendly message, let user decide next step
+    if (errMsg.includes('Permission denied') || errMsg.includes('stopped by user') || errMsg.includes('aborted')) {
+      const response = `The agent was stopped because a required action was denied.\n\nOriginal request: "${message.slice(0, 200)}"\n\nWould you like me to try a different approach, or is there something else I can help with?`;
+      await messageRepository.create({ sessionId, role: 'assistant', content: response });
+      return {
+        response,
+        sessionId,
+        classification: { type: 'task', confidence: 1, topic: expert.role },
+        metadata: { latencyMs: Date.now() - startTime },
+      };
+    }
+
     return {
-      response: `Expert worker failed: ${(error as Error).message}`,
+      response: `Expert worker failed: ${errMsg}`,
       sessionId,
       classification: { type: 'task', confidence: 1 },
     };
@@ -510,6 +524,20 @@ async function handleWorkerFailure(
   }
 
   const errorMsg = error.message || '';
+
+  // Permission denied → don't retry, don't fallback. Propagate cleanly.
+  if (errorMsg.includes('Permission denied')) {
+    coreLogger.info({ workerId, role: agentRole }, 'Worker stopped due to permission denial');
+    deps.emit({
+      type: 'worker_completed',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: { workerId, role: agentRole, status: 'denied', totalTokens: failedTokens, durationMs: Date.now() - startTime },
+      timestamp: new Date(),
+    });
+    throw error; // Propagate to caller (handleExpertMessage or orchestrator)
+  }
+
   const wasUserStopped = errorMsg.includes('aborted') || errorMsg.includes('stopped')
     || worker.getStatus() === 'stopped';
   if (wasUserStopped) {
