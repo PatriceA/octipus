@@ -334,8 +334,12 @@ If the file doesn't exist, create it.`;
     systemPrompt += workspaceHint;
   }
 
-  // Inform CLI agents about the assistant MCP server tools
-  systemPrompt += `\n\nASSISTANT MCP TOOLS: You have access to the "assistant" MCP server which provides tools for:
+  // Inform agents about the assistant MCP server tools.
+  // CLI agents (Claude Code, Gemini, Codex) use tool names directly (assistant_*).
+  // LLM agents use meta-tools: mcp_call_tool(server_id: "assistant", tool_name: "...", arguments: {...})
+  const isCLIModel = finalModel?.startsWith('cli/');
+  if (isCLIModel) {
+    systemPrompt += `\n\nASSISTANT MCP TOOLS: You have access to the "assistant" MCP server which provides tools for:
 - **People & profiles**: Search/retrieve stored information about people the user knows (assistant_search_profiles, assistant_get_profile)
 - **Knowledge base**: Search the user's knowledge base (assistant_search_knowledge)
 - **Web search**: Search the web (assistant_search) and fetch pages (assistant_fetch_page)
@@ -343,6 +347,13 @@ If the file doesn't exist, create it.`;
 - **Scheduling**: Create/manage scheduled tasks and automations (assistant_create_recurring_task)
 - **Documents**: Upload and index documents (assistant_upload_document)
 Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
+  } else {
+    systemPrompt += `\n\nEXTERNAL TOOLS VIA MCP: You can access external tools from the "assistant" MCP server.
+To use them, first call mcp_list_tools() to discover available tools and their parameters.
+Then call mcp_call_tool(server_id: "assistant", tool_name: "<tool>", arguments: {...}) to invoke one.
+Available capabilities: people/profiles, knowledge base, web search, messaging (Telegram/Slack), scheduling, documents.
+Use these when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
+  }
 
   const worker = await agentManager.spawn({
     sessionId: context.sessionId,
