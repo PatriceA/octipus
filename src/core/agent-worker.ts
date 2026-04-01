@@ -328,6 +328,22 @@ export class AgentWorker extends BaseAgentWorker {
       if (completion.toolCalls?.length && !this.toolExecutor.toolsDisabled) {
         const toolNames = completion.toolCalls.map(tc => tc.name);
 
+        // Detect hallucinated "respond" tools — smaller models sometimes invent
+        // a tool to deliver their answer instead of returning plain text.
+        // Extract the message and treat it as the final response.
+        const RESPOND_TOOLS = new Set(['respond', 'reply', 'answer', 'send_response', 'final_answer']);
+        if (completion.toolCalls.length === 1 && RESPOND_TOOLS.has(completion.toolCalls[0].name)) {
+          const args = completion.toolCalls[0].arguments as Record<string, unknown>;
+          const msg = (args.message || args.text || args.content || args.response) as string | undefined;
+          if (msg) {
+            agentLogger.info(
+              { agentId: this.context.id, tool: completion.toolCalls[0].name },
+              'Intercepted hallucinated respond tool, using message as final response',
+            );
+            return msg;
+          }
+        }
+
         // Detect repetitive tool call loops (same tool + same args N times in a row)
         const callSignature = completion.toolCalls
           .map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`)
