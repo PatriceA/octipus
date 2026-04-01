@@ -185,9 +185,7 @@ export class CLIArgumentBuilder {
       args.push(...settings.extraArgs);
     }
 
-    // When we have a system prompt, pipe it via stdin and put user prompt in -p.
-    // Gemini reads stdin first, then appends -p — so the system instruction
-    // comes before the user message and is treated as project context.
+    // Pass system prompt via stdin (Gemini appends -p after stdin content).
     if (systemPrompt) {
       args.push('-p', prompt);
       return { binary: 'gemini', args, stdinPrompt: systemPrompt };

@@ -272,6 +272,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Gemini reads GEMINI.md, Codex reads AGENTS.md from the cwd.
     // These are cleaned up after the CLI process exits.
     const tempContextFiles: string[] = [];
+    agentLogger.info(
+      { tool: toolConfig.name, hasSystemPrompt: !!systemPrompt, systemPromptLen: systemPrompt?.length || 0, cwd: workspaceCwd },
+      'CLI agent context check',
+    );
     if (systemPrompt) {
       const contextFileMap: Record<string, string> = {
         'Gemini CLI': 'GEMINI.md',
@@ -281,12 +285,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
       if (contextFileName) {
         const contextFilePath = joinPath(workspaceCwd, contextFileName);
         // Only write if no existing file (don't overwrite user's own)
-        const existingContent = existsSync(contextFilePath) ? Bun.file(contextFilePath).size : 0;
-        if (!existingContent) {
+        if (!existsSync(contextFilePath)) {
           try {
             writeFileSync(contextFilePath, systemPrompt, 'utf-8');
             tempContextFiles.push(contextFilePath);
-            agentLogger.debug({ tool: toolConfig.name, file: contextFileName }, 'Wrote temp context file for CLI agent');
+            agentLogger.info({ tool: toolConfig.name, file: contextFileName, path: contextFilePath }, 'Wrote temp context file for CLI agent');
           } catch (err) {
             agentLogger.debug({ err, file: contextFileName }, 'Failed to write temp context file');
           }
