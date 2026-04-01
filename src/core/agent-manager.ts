@@ -141,11 +141,6 @@ export class AgentManager {
       worker.registerTools(options.tools);
     }
 
-    // Add system prompt if provided
-    if (options.systemPrompt) {
-      worker.addSystemMessage(options.systemPrompt);
-    }
-
     // Subscribe to events: buffer for polling + forward to manager handlers
     worker.onEvent((event) => {
       // Buffer the event for polling
@@ -167,8 +162,14 @@ export class AgentManager {
       }
     });
 
-    // Load conversation history
+    // Load conversation history BEFORE adding system prompt
+    // (loadHistory replaces this.messages, so system prompt must come after)
     await worker.loadHistory();
+
+    // Add system prompt if provided
+    if (options.systemPrompt) {
+      worker.addSystemMessage(options.systemPrompt);
+    }
 
     // Store the worker
     this.agents.set(agentId, worker);
