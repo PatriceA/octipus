@@ -273,7 +273,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // These are cleaned up after the CLI process exits.
     const tempContextFiles: string[] = [];
     agentLogger.info(
-      { tool: toolConfig.name, hasSystemPrompt: !!systemPrompt, systemPromptLen: systemPrompt?.length || 0, cwd: workspaceCwd },
+      {
+        tool: toolConfig.name,
+        hasSystemPrompt: !!systemPrompt,
+        systemPromptLen: systemPrompt?.length || 0,
+        cwd: workspaceCwd,
+        messageRoles: this.messages.map(m => m.role),
+        systemMessagesCount: this.systemMessages.length,
+      },
       'CLI agent context check',
     );
     if (systemPrompt) {
