@@ -174,10 +174,10 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
             role: expertsTable.role,
           }).from(expertsTable).where(conditions);
           const iconToEmoji: Record<string, string> = {
-            code: '💻', eye: '👁️', search: '🔍', palette: '🎨', server: '⚙️',
-            shield: '🛡️', database: '🗄️', brain: '🧠', 'check-circle': '✅',
+            code: '💻', eye: '👀', search: '🔍', palette: '🎨', server: '🔧',
+            shield: '🔒', database: '🗃', brain: '🧠', 'check-circle': '✅',
             'trending-up': '📈', workflow: '🔄', clipboard: '📋', 'book-open': '📖',
-            mail: '✉️', bot: '🤖', 'file-text': '📄', 'bar-chart': '📊',
+            mail: '📩', bot: '🤖', 'file-text': '📄', 'bar-chart': '📊',
           };
           const lines = experts.map(e => {
             const emoji = iconToEmoji[e.icon || ''] || '🤖';
