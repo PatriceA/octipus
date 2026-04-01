@@ -408,6 +408,35 @@ cmd_start() {
     cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
 
+    # Read MASTER_KEY from .env if not already in environment
+    if [[ -z "${MASTER_KEY:-}" && -f "$PROJECT_DIR/.env" ]]; then
+      MASTER_KEY=$(grep -E '^MASTER_KEY=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
+    fi
+
+    # Generate .mcp.json with current MASTER_KEY and correct paths (cross-platform)
+    if [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
+      local _mcp_entry="$PROJECT_DIR/mcp-server/dist/index.js"
+      local _mcp_key="${MASTER_KEY:-}"
+      local _env_block=""
+      if [[ -n "$_mcp_key" ]]; then
+        _env_block=",\"ASSISTANT_API_KEY\":\"${_mcp_key}\""
+      fi
+      cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
+{
+  "mcpServers": {
+    "assistant": {
+      "command": "node",
+      "args": ["${_mcp_entry}"],
+      "env": {
+        "ASSISTANT_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
+      }
+    }
+  }
+}
+MCPEOF
+      log_info ".mcp.json generated with current API key"
+    fi
+
     # Auto-register with Gemini CLI (if installed, idempotent)
     if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
       if ! gemini mcp list 2>/dev/null | grep -q "assistant:"; then
@@ -586,6 +615,35 @@ cmd_restart() {
     log_step "Building MCP server..."
     cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
+
+    # Read MASTER_KEY from .env if not already in environment
+    if [[ -z "${MASTER_KEY:-}" && -f "$PROJECT_DIR/.env" ]]; then
+      MASTER_KEY=$(grep -E '^MASTER_KEY=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
+    fi
+
+    # Generate .mcp.json with current MASTER_KEY and correct paths (cross-platform)
+    if [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
+      local _mcp_entry="$PROJECT_DIR/mcp-server/dist/index.js"
+      local _mcp_key="${MASTER_KEY:-}"
+      local _env_block=""
+      if [[ -n "$_mcp_key" ]]; then
+        _env_block=",\"ASSISTANT_API_KEY\":\"${_mcp_key}\""
+      fi
+      cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
+{
+  "mcpServers": {
+    "assistant": {
+      "command": "node",
+      "args": ["${_mcp_entry}"],
+      "env": {
+        "ASSISTANT_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
+      }
+    }
+  }
+}
+MCPEOF
+      log_info ".mcp.json generated with current API key"
+    fi
 
     # Auto-register with Gemini CLI (if installed, idempotent)
     if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then

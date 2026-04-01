@@ -59,7 +59,7 @@ export async function handleExpertMessage(
     status: 'running',
     createdAt: new Date(),
     updatedAt: new Date(),
-    metadata: { expertId },
+    metadata: { expertId, isExpert: true },
   };
 
   await messageRepository.create({ sessionId, role: 'user', content: message });
@@ -92,6 +92,15 @@ export async function handleExpertMessage(
       expertPrompt += '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
         successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
     }
+
+    // Expert-specific tool guidance — prevents looping and over-engineering
+    expertPrompt += '\n\n# Response Guidelines\n'
+      + '- For conversational messages (greetings, "what can you do", introductions): respond directly with text. Do NOT call any tools.\n'
+      + '- Only use tools when the task genuinely requires external data, file operations, or actions.\n'
+      + '- Think step-by-step before deciding whether to use a tool. If you can answer from your domain knowledge, do so directly.\n'
+      + '- Never call the same tool twice with identical arguments.\n'
+      + '- After at most 5 tool calls, synthesize your findings and respond.\n'
+      + '- PREFER built-in tools over writing code/scripts. For recurring tasks use the scheduling tool (create_hook). For notifications use the messaging tool (send_message). Do NOT create standalone scripts, plugins, or services when a built-in tool exists.';
 
     if (guardFlags.length > 0) {
       expertPrompt += buildSecurityReminder(guardFlags);

@@ -34,7 +34,7 @@ function getOrCreateMcpConfig(): string | null {
   const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
 
   const apiPort = process.env.API_PORT || process.env.PORT || '3005';
-  const apiKey = process.env.MASTER_KEY || '';
+  const apiKey = process.env.MASTER_KEY || process.env.ASSISTANT_API_KEY || '';
 
   const config = {
     mcpServers: {

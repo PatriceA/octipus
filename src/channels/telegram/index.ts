@@ -120,6 +120,27 @@ export class TelegramChannel extends BaseChannel {
     return lastMessageId;
   }
 
+  override async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    if (!this.bot) return;
+    try {
+      await this.bot.api.setMessageReaction(parseInt(channelId, 10), parseInt(messageId, 10), [
+        { type: 'emoji', emoji: emoji as any },
+      ]);
+    } catch (err: any) {
+      // Silently ignore — reaction failures are non-critical (bot may lack permissions)
+      channelLogger.debug({ err: err?.message, channelId, messageId, emoji }, 'Failed to set Telegram reaction');
+    }
+  }
+
+  override async sendTyping(channelId: string, _active: boolean = true): Promise<void> {
+    if (!this.bot) return;
+    try {
+      await this.bot.api.sendChatAction(parseInt(channelId, 10), 'typing');
+    } catch {
+      // Silently ignore
+    }
+  }
+
   private async handleMessage(ctx: Context, attachmentType?: string): Promise<void> {
     const userId = String(ctx.from?.id);
     const chatId = String(ctx.chat?.id);

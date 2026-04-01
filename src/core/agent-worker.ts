@@ -394,7 +394,11 @@ export class AgentWorker extends BaseAgentWorker {
         agentLogger.warn({ agentId: this.context.id }, 'Max empty retries reached, returning fallback');
       }
 
-      const response = completion.content || 'I was unable to generate a response.';
+      let response = completion.content || 'I was unable to generate a response.';
+
+      // Strip raw tool call JSON that some models (e.g. Ollama/qwen3) emit as text
+      response = response.replace(/\{"id":\s*"call_[^"]*",\s*"type":\s*"function",\s*"function":\s*\{[^}]*\}\s*\}/g, '').trim();
+      if (!response) response = 'I was unable to generate a response.';
 
       // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
       if (this.context.role === 'orchestrator') {
@@ -434,11 +438,16 @@ export class AgentWorker extends BaseAgentWorker {
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
     // Respect the model's configured extraBody (e.g. think:false for Qwen).
-    // Forcing think:true on tool-use models can cause thinking tokens to consume
-    // the entire output budget, leaving nothing for tool calls.
-    const extraBody = metadata?.extraBody && Object.keys(metadata.extraBody).length > 0
-      ? metadata.extraBody
+    // Exception: expert mode enables thinking so the model reasons before acting,
+    // which prevents tool-call loops on smaller models.
+    let extraBody = metadata?.extraBody && Object.keys(metadata.extraBody).length > 0
+      ? { ...metadata.extraBody }
       : undefined;
+
+    if (this.context.metadata?.isExpert && extraBody && 'think' in extraBody) {
+      delete extraBody.think; // Let the model think in expert mode
+      if (Object.keys(extraBody).length === 0) extraBody = undefined;
+    }
 
     // Resolve API key from vault for custom/direct providers
     let apiKey: string | undefined;

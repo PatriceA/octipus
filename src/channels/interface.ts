@@ -40,6 +40,25 @@ export abstract class BaseChannel extends EventEmitter {
   abstract send(channelId: string, response: ChannelResponse): Promise<string>;
 
   /**
+   * Set an emoji reaction on a message. Override in subclasses that support reactions.
+   * @param channelId - The channel/chat ID
+   * @param messageId - The platform message ID to react to
+   * @param emoji - The emoji to set (e.g. '✅', '🔧')
+   */
+  async setReaction(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
+    // No-op by default — channels that support reactions override this
+  }
+
+  /**
+   * Send a typing indicator. Override in subclasses that support typing.
+   * @param channelId - The channel/chat ID
+   * @param active - true to start typing, false to stop
+   */
+  async sendTyping(_channelId: string, _active: boolean = true): Promise<void> {
+    // No-op by default — channels that support typing override this
+  }
+
+  /**
    * Check if the channel is connected
    */
   isConnected(): boolean {
@@ -212,6 +231,26 @@ export class UnifiedMessageInterface extends EventEmitter {
     }
 
     return channel.send(channelId, response);
+  }
+
+  /**
+   * Set an emoji reaction on a message
+   */
+  async setReaction(channelType: ChannelType, channelId: string, messageId: string, emoji: string): Promise<void> {
+    const channel = this.channels.get(channelType);
+    if (channel?.isConnected()) {
+      await channel.setReaction(channelId, messageId, emoji);
+    }
+  }
+
+  /**
+   * Send a typing indicator
+   */
+  async sendTyping(channelType: ChannelType, channelId: string, active: boolean = true): Promise<void> {
+    const channel = this.channels.get(channelType);
+    if (channel?.isConnected()) {
+      await channel.sendTyping(channelId, active);
+    }
   }
 
   /**

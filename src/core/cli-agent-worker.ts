@@ -178,11 +178,34 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   private buildPrompt(): string {
     const parts: string[] = [];
+    const systemParts: string[] = [];
+    const conversationParts: string[] = [];
+
     for (const msg of this.messages) {
-      if (msg.role === 'system') parts.push(`[System] ${msg.content}`);
-      else if (msg.role === 'user') parts.push(msg.content);
-      else if (msg.role === 'assistant') parts.push(`[Assistant] ${msg.content}`);
+      if (msg.role === 'system') {
+        systemParts.push(msg.content);
+      } else if (msg.role === 'user') {
+        conversationParts.push(msg.content);
+      } else if (msg.role === 'assistant') {
+        conversationParts.push(`[Assistant] ${msg.content}`);
+      }
     }
+
+    // Place system instructions prominently at the top with strong framing
+    if (systemParts.length > 0) {
+      parts.push(
+        '=== MANDATORY INSTRUCTIONS — YOU MUST FOLLOW THESE ===\n\n'
+        + systemParts.join('\n\n')
+        + '\n\n=== END MANDATORY INSTRUCTIONS ===\n\n'
+        + 'IMPORTANT: You are NOT a generic AI assistant. You MUST adopt the identity, role, and constraints described above. '
+        + 'Do NOT introduce yourself as Gemini, Claude, or any other AI — use the expert persona above.',
+      );
+    }
+
+    if (conversationParts.length > 0) {
+      parts.push(conversationParts.join('\n\n'));
+    }
+
     return parts.join('\n\n');
   }
 

@@ -172,6 +172,29 @@ export class SlackChannel extends BaseChannel {
     return result.ts || '';
   }
 
+  override async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    if (!this.app) return;
+    // Slack reactions use short names without colons, e.g. 'white_check_mark'
+    // Map common emojis to Slack reaction names
+    const emojiMap: Record<string, string> = {
+      '✅': 'white_check_mark', '❌': 'x', '🤔': 'thinking_face',
+      '🧠': 'brain', '🔧': 'wrench', '💻': 'computer',
+      '🔍': 'mag', '📖': 'book', '⏳': 'hourglass_flowing_sand',
+      '🛑': 'octagonal_sign', '😐': 'neutral_face', '😬': 'grimacing',
+      '🐳': 'whale', '💬': 'speech_balloon', '📄': 'page_facing_up',
+    };
+    const name = emojiMap[emoji] || 'eyes';
+    try {
+      await this.app.client.reactions.add({ channel: channelId, timestamp: messageId, name });
+    } catch {
+      // Silently ignore — may already have this reaction
+    }
+  }
+
+  override async sendTyping(_channelId: string, _active: boolean = true): Promise<void> {
+    // Slack doesn't have a direct "typing" indicator API for bots
+  }
+
   private async handleMessage(
     message: SlackMessage,
     say: SayFn,

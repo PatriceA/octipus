@@ -337,6 +337,25 @@ export class WhatsAppChannel extends BaseChannel {
     }
   }
 
+  override async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    if (!this.accessToken || !this.phoneNumberId) return;
+    try {
+      await this.callApi('messages', {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: channelId,
+        type: 'reaction',
+        reaction: { message_id: messageId, emoji },
+      });
+    } catch {
+      // Silently ignore — reaction failures are non-critical
+    }
+  }
+
+  override async sendTyping(_channelId: string, _active: boolean = true): Promise<void> {
+    // WhatsApp Cloud API doesn't have a typing indicator endpoint
+  }
+
   private async callApi(endpoint: string, payload: Record<string, unknown>): Promise<any> {
     const url = `https://graph.facebook.com/v21.0/${this.phoneNumberId}/${endpoint}`;
 

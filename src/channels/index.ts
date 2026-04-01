@@ -379,11 +379,36 @@ export async function initializeChannels(): Promise<void> {
       channelId,
     });
 
-    // Send permission request message to the channel
+    // Send permission request message to the channel — include tool details
     const toolName = request.toolName || request.action || 'unknown';
+    const args = request.args as Record<string, unknown> | undefined;
+    let detail = '';
+    if (args) {
+      // Extract the most relevant detail based on tool type
+      const path = args.path || args.file_path || args.filename || args.directory;
+      const command = args.command;
+      const url = args.url;
+      const query = args.query;
+      const target = args.target || args.channel;
+      const message = args.message;
+
+      if (path) {
+        detail = `\nFile: ${path}`;
+      } else if (command) {
+        const cmd = String(command);
+        detail = `\nCommand: ${cmd.length > 120 ? cmd.slice(0, 120) + '…' : cmd}`;
+      } else if (url) {
+        detail = `\nURL: ${url}`;
+      } else if (query) {
+        detail = `\nQuery: ${query}`;
+      } else if (target && message) {
+        const msg = String(message);
+        detail = `\nTo: ${target}\nMessage: ${msg.length > 100 ? msg.slice(0, 100) + '…' : msg}`;
+      }
+    }
     try {
       await umi.send(channelType, channelId, {
-        content: `Permission required: the agent wants to use "${toolName}".\n\nReply "yes" to allow or "no" to deny.`,
+        content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
       });
     } catch (error) {
       channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel');
@@ -419,53 +444,55 @@ export async function initializeChannels(): Promise<void> {
       const { resolveSession } = await import('@/core/orchestrator/session-resolver');
       const resolvedSessionId = await resolveSession(channelSessionId, message.userId, message.channelType);
 
-      // Subscribe to orchestrator events for progress feedback on non-webchat channels
+      // Subscribe to orchestrator events for progress feedback via emoji reactions
       const isExternalChannel = message.channelType !== 'webchat';
       let unsubscribe: (() => void) | null = null;
-      const sentStatuses = new Set<string>();
 
-      if (isExternalChannel) {
+      // Send typing indicator immediately
+      if (isExternalChannel && platformMessageId) {
+        umi.sendTyping(message.channelType, message.channelId).catch(() => {});
+        // Acknowledge receipt with 👀
+        umi.setReaction(message.channelType, message.channelId, platformMessageId, '👀').catch(() => {});
+      }
+
+      if (isExternalChannel && platformMessageId) {
         unsubscribe = orchestrator.onEvent((event) => {
           if (event.sessionId !== resolvedSessionId) return;
 
-          let statusMsg: string | null = null;
-
           switch (event.type) {
             case 'worker_spawned': {
-              const d = event.data as { role?: string; workerId?: string };
-              const role = d.role === 'orchestrator' ? null : d.role;
-              if (role) {
-                const key = `spawned-${role}`;
-                if (!sentStatuses.has(key)) {
-                  sentStatuses.add(key);
-                  statusMsg = `Working on it — started a *${role}* agent.`;
-                }
-              } else if (!sentStatuses.has('ack')) {
-                sentStatuses.add('ack');
-                statusMsg = 'Got it, working on it.';
-              }
+              const d = event.data as { role?: string };
+              // Use role-specific emoji
+              const roleEmojis: Record<string, string> = {
+                coding: '💻', research: '🔍', writing: '✍️', automation: '⏰',
+                review: '🔍', security: '🔒', devops: '🐳', design: '🎨',
+                data: '📊', qa: '🧪', orchestrator: '🤔',
+              };
+              const emoji = roleEmojis[d.role || ''] || '🧠';
+              umi.setReaction(message.channelType, message.channelId, platformMessageId, emoji).catch(() => {});
+              break;
+            }
+            case 'worker_completed': {
+              const d = event.data as { status?: string; error?: string };
+              const emoji = d.status === 'failed' || d.error ? '❌' : '✅';
+              umi.setReaction(message.channelType, message.channelId, platformMessageId, emoji).catch(() => {});
               break;
             }
             case 'team_started': {
-              const d = event.data as { members?: Array<{ role: string }> };
-              const roles = d.members?.map(m => m.role).join(', ') || 'multiple';
-              statusMsg = `Started a team of agents (${roles}), waiting for results.`;
+              umi.setReaction(message.channelType, message.channelId, platformMessageId, '🧠').catch(() => {});
+              break;
+            }
+            case 'team_completed': {
+              umi.setReaction(message.channelType, message.channelId, platformMessageId, '✅').catch(() => {});
               break;
             }
             case 'status_update': {
-              const d = event.data as { message?: string; stage?: string };
-              if (d.message && (d.stage === 'budget_warning' || d.stage === 'command' || d.stage === 'Starting')) {
-                statusMsg = d.message;
+              const d = event.data as { stage?: string };
+              if (d.stage === 'budget_warning') {
+                umi.setReaction(message.channelType, message.channelId, platformMessageId, '⚠️').catch(() => {});
               }
               break;
             }
-          }
-
-          if (statusMsg) {
-            umi.send(message.channelType, message.channelId, {
-              content: statusMsg,
-              replyTo: platformMessageId,
-            }).catch(() => {});
           }
         });
       }

@@ -208,6 +208,21 @@ export class TeamsChannel extends BaseChannel {
     return activityId;
   }
 
+  override async sendTyping(channelId: string, _active: boolean = true): Promise<void> {
+    if (!this.adapter) return;
+    const reference = this.conversationReferences.get(channelId);
+    if (!reference) return;
+    try {
+      await this.adapter.continueConversation(reference as Partial<Activity>, async (context) => {
+        await context.sendActivity({ type: 'typing' });
+      });
+    } catch {
+      // Silently ignore
+    }
+  }
+
+  // Teams doesn't natively support emoji reactions on bot messages via Bot Framework SDK
+
   private mapContentType(contentType: string): Attachment['type'] {
     if (contentType.startsWith('image/')) return 'image';
     if (contentType.startsWith('video/')) return 'video';

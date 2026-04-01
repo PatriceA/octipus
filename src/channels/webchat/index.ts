@@ -182,12 +182,25 @@ export class WebChatChannel extends BaseChannel {
   }
 
   /**
-   * Send typing indicator
+   * BaseChannel override: send typing indicator by channelId (sessionId)
    */
-  sendTyping(connectionId: string): void {
-    const connection = this.connections.get(connectionId);
-    if (connection) {
-      connection.send({ type: 'typing' });
+  override async sendTyping(channelId: string, active: boolean = true): Promise<void> {
+    // WebChat channelId is the sessionId — find connections for this session
+    for (const [, connection] of this.connections) {
+      if ((connection as any).sessionId === channelId) {
+        connection.send({ type: active ? 'typing' : 'typing_stop' });
+      }
+    }
+  }
+
+  /**
+   * BaseChannel override: send emoji reaction by channelId
+   */
+  override async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    for (const [, connection] of this.connections) {
+      if ((connection as any).sessionId === channelId) {
+        connection.send({ type: 'reaction', messageId, emoji });
+      }
     }
   }
 
