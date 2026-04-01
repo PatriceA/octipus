@@ -375,6 +375,16 @@ export class AgentWorker extends BaseAgentWorker {
           phase: 'handleToolCalls', toolCount: completion.toolCalls.length, tools: toolNames,
         }, 'Tool execution starting');
 
+        // Emit tool_call action so channels can show tool-specific emojis
+        for (const tc of completion.toolCalls) {
+          this.emit('action', {
+            type: 'tool_call',
+            toolName: tc.name,
+            toolId: this.toolExecutor.getToolId(tc.name),
+            sessionId: this.context.sessionId,
+          });
+        }
+
         const toolStart = Date.now();
         // Final/delegation tools (spawn_worker, create_pipeline) manage their own timeouts.
         // Don't race the orchestrator timeout against them — a pipeline can legitimately

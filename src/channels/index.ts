@@ -447,50 +447,113 @@ export async function initializeChannels(): Promise<void> {
       // Subscribe to orchestrator events for progress feedback via emoji reactions
       const isExternalChannel = message.channelType !== 'webchat';
       let unsubscribe: (() => void) | null = null;
+      let unsubAgentEvents: (() => void) | null = null;
+      let typingInterval: ReturnType<typeof setInterval> | null = null;
+      let stallTimer: ReturnType<typeof setTimeout> | null = null;
+      let lastEventTime = Date.now();
+      let isTerminal = false;
 
-      // Send typing indicator immediately
+      const react = (emoji: string) => {
+        if (isTerminal) return; // Don't overwrite terminal states
+        umi.setReaction(message.channelType, message.channelId, platformMessageId!, emoji).catch(() => {});
+      };
+
+      const stopTypingAndStall = () => {
+        if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
+        if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+      };
+
+      const resetStallTimer = () => {
+        lastEventTime = Date.now();
+        if (stallTimer) clearTimeout(stallTimer);
+        if (isTerminal) return;
+        // Soft stall at 15s, hard stall at 45s
+        stallTimer = setTimeout(() => {
+          if (!isTerminal) react('😐'); // soft stall
+          stallTimer = setTimeout(() => {
+            if (!isTerminal) react('😬'); // hard stall
+          }, 30_000);
+        }, 15_000);
+      };
+
       if (isExternalChannel && platformMessageId) {
-        umi.sendTyping(message.channelType, message.channelId).catch(() => {});
         // Acknowledge receipt with 👀
-        umi.setReaction(message.channelType, message.channelId, platformMessageId, '👀').catch(() => {});
-      }
+        react('👀');
 
-      if (isExternalChannel && platformMessageId) {
+        // Repeating typing indicator — Telegram expires after 5s, so resend every 4s
+        umi.sendTyping(message.channelType, message.channelId).catch(() => {});
+        typingInterval = setInterval(() => {
+          if (!isTerminal) {
+            umi.sendTyping(message.channelType, message.channelId).catch(() => {});
+          }
+        }, 4_000);
+
+        // Start stall detection
+        resetStallTimer();
+
+        // Role-specific emoji mapping
+        const roleEmojis: Record<string, string> = {
+          coding: '💻', research: '🔍', writing: '✍️', automation: '⏰',
+          review: '🔍', security: '🔒', devops: '🐳', design: '🎨',
+          data: '📊', qa: '🧪', orchestrator: '🤔',
+        };
+
+        // Subscribe to agent-level events for tool-specific emojis
+        const toolEmojis: Record<string, string> = {
+          filesystem: '📖', shell: '💻', git: '💻', browser: '🔍',
+          websearch: '🔍', knowledge: '📖', docker: '🐳',
+          github: '💻', messaging: '💬', scheduling: '⏰', mcp: '🔌',
+        };
+        try {
+          const { getAgentManager } = await import('@/core/agent-manager');
+          const agentManager = getAgentManager();
+          unsubAgentEvents = agentManager.onEvent((event: any) => {
+            if (isTerminal) return;
+            // Match events from agents in this session
+            const data = event.data || event;
+            if (data?.sessionId !== resolvedSessionId && event.sessionId !== resolvedSessionId) return;
+            if (event.type === 'action' && data?.type === 'tool_call') {
+              resetStallTimer();
+              const toolId = data.toolId || '';
+              react(toolEmojis[toolId] || '🔧');
+            }
+          });
+        } catch { /* agent manager not ready */ }
+
         unsubscribe = orchestrator.onEvent((event) => {
           if (event.sessionId !== resolvedSessionId) return;
+          resetStallTimer();
 
           switch (event.type) {
             case 'worker_spawned': {
               const d = event.data as { role?: string };
-              // Use role-specific emoji
-              const roleEmojis: Record<string, string> = {
-                coding: '💻', research: '🔍', writing: '✍️', automation: '⏰',
-                review: '🔍', security: '🔒', devops: '🐳', design: '🎨',
-                data: '📊', qa: '🧪', orchestrator: '🤔',
-              };
-              const emoji = roleEmojis[d.role || ''] || '🧠';
-              umi.setReaction(message.channelType, message.channelId, platformMessageId, emoji).catch(() => {});
+              react(roleEmojis[d.role || ''] || '🧠');
               break;
             }
             case 'worker_completed': {
               const d = event.data as { status?: string; error?: string };
-              const emoji = d.status === 'failed' || d.error ? '❌' : '✅';
-              umi.setReaction(message.channelType, message.channelId, platformMessageId, emoji).catch(() => {});
+              isTerminal = true;
+              stopTypingAndStall();
+              react(d.status === 'failed' || d.error ? '❌' : '✅');
               break;
             }
             case 'team_started': {
-              umi.setReaction(message.channelType, message.channelId, platformMessageId, '🧠').catch(() => {});
+              react('🧠');
               break;
             }
             case 'team_completed': {
-              umi.setReaction(message.channelType, message.channelId, platformMessageId, '✅').catch(() => {});
+              isTerminal = true;
+              stopTypingAndStall();
+              react('✅');
+              break;
+            }
+            case 'approval_required': {
+              react('⏳');
               break;
             }
             case 'status_update': {
               const d = event.data as { stage?: string };
-              if (d.stage === 'budget_warning') {
-                umi.setReaction(message.channelType, message.channelId, platformMessageId, '⚠️').catch(() => {});
-              }
+              if (d.stage === 'budget_warning') react('⚠️');
               break;
             }
           }
@@ -516,7 +579,7 @@ export async function initializeChannels(): Promise<void> {
           });
           // Subscribe to document queue completions to send summary back
           subscribeToDocumentResults(message, umi, platformMessageId);
-          if (unsubscribe) unsubscribe();
+          if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
           return;
         }
 
@@ -535,7 +598,7 @@ export async function initializeChannels(): Promise<void> {
             replyTo: platformMessageId,
           });
           subscribeToDocumentResults(message, umi, platformMessageId);
-          if (unsubscribe) unsubscribe();
+          if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
           return;
         }
       }
@@ -559,7 +622,7 @@ export async function initializeChannels(): Promise<void> {
       );
 
       // Unsubscribe from events
-      if (unsubscribe) unsubscribe();
+      if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
 
       // Send final reply back through the same channel
       if (result.response) {

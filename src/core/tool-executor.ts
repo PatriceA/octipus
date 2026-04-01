@@ -46,6 +46,10 @@ export class ToolExecutor {
     return this.tools;
   }
 
+  getToolId(toolName: string): string | undefined {
+    return this.tools.get(toolName)?.toolId;
+  }
+
   /** Check if any of the given tool calls target a final (delegation) tool */
   hasFinalToolCall(toolCalls: ToolCall[]): boolean {
     return toolCalls.some(tc => this.tools.get(tc.name)?.final === true);
