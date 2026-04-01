@@ -540,11 +540,22 @@ export async function initializeChannels(): Promise<void> {
         }
       }
 
+      // Check if session has an active expert (set via /expert command)
+      let channelExpertId: string | undefined;
+      try {
+        const session = await sessionRepository.findById(resolvedSessionId);
+        const sessionCtx = session?.context as Record<string, unknown> | undefined;
+        if (sessionCtx?.activeExpertId) {
+          channelExpertId = sessionCtx.activeExpertId as string;
+        }
+      } catch { /* ignore — no expert override */ }
+
       const result = await orchestrator.handleMessage(
         resolvedSessionId,
         message.userId,
         messageContent,
         message.channelType,
+        channelExpertId,
       );
 
       // Unsubscribe from events
