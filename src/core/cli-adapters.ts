@@ -107,7 +107,7 @@ export class CLIArgumentBuilder {
       case 'Gemini CLI':
         return this.buildGeminiArgs(prompt, settings, systemPrompt);
       case 'Codex CLI':
-        return this.buildCodexArgs(prompt);
+        return this.buildCodexArgs(prompt, systemPrompt);
       default:
         throw new Error(`Unknown CLI tool: ${toolName}`);
     }
@@ -214,12 +214,21 @@ export class CLIArgumentBuilder {
     return filePath;
   }
 
-  private buildCodexArgs(prompt: string): { binary: string; args: string[]; stdinPrompt?: string } {
-    // Codex: positional prompt or '-' to read from stdin
-    if (IS_WIN) {
-      return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', '--ephemeral', '-'], stdinPrompt: prompt };
+  private buildCodexArgs(prompt: string, systemPrompt?: string | null): { binary: string; args: string[]; stdinPrompt?: string } {
+    // Codex: positional prompt or '-' to read from stdin.
+    // When we have a system prompt (expert identity), combine it with the user prompt
+    // and pipe via stdin so it's treated as the full instruction context.
+    const baseArgs = ['exec', '--skip-git-repo-check', '--json', '--ephemeral'];
+
+    if (systemPrompt) {
+      const combined = systemPrompt + '\n\n---\n\n' + prompt;
+      return { binary: 'codex', args: [...baseArgs, '-'], stdinPrompt: combined };
     }
-    return { binary: 'codex', args: ['exec', '--skip-git-repo-check', '--json', '--ephemeral', prompt] };
+
+    if (IS_WIN) {
+      return { binary: 'codex', args: [...baseArgs, '-'], stdinPrompt: prompt };
+    }
+    return { binary: 'codex', args: [...baseArgs, prompt] };
   }
 }
 
