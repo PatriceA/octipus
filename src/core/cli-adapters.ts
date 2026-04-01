@@ -99,12 +99,13 @@ export class CLIArgumentBuilder {
     prompt: string,
     settings: CLIAgentConfig,
     systemMessages: string[],
+    systemPrompt?: string | null,
   ): { binary: string; args: string[]; stdinPrompt?: string } {
     switch (toolName) {
       case 'Claude Code':
         return this.buildClaudeArgs(prompt, settings, systemMessages);
       case 'Gemini CLI':
-        return this.buildGeminiArgs(prompt, settings);
+        return this.buildGeminiArgs(prompt, settings, systemPrompt);
       case 'Codex CLI':
         return this.buildCodexArgs(prompt);
       default:
@@ -165,15 +166,18 @@ export class CLIArgumentBuilder {
   private buildGeminiArgs(
     prompt: string,
     settings: CLIAgentConfig,
+    systemPrompt?: string | null,
   ): { binary: string; args: string[]; stdinPrompt?: string } {
-    // Gemini: -p/--prompt takes a string value, stdin is appended to it
-    // On Windows: use --prompt=. (minimal placeholder), pipe real prompt via stdin
+    // Gemini CLI: -p is "Appended to input on stdin (if any)".
+    // So stdin runs FIRST as context, then -p is the user prompt.
+    // This lets us pipe the system/expert prompt via stdin so Gemini treats
+    // it as authoritative context, not just part of the user message.
     const args = ['-o', 'stream-json'];
 
     const approvalMode = settings.permissionMode || 'yolo';
     args.push('--approval-mode', approvalMode);
 
-    // Note: Gemini CLI does NOT support --mcp-config flag.
+    // Note: Gemini CLI does NOT support --mcp-config or --system-instruction flags.
     // It uses its own `gemini mcp` subcommand to manage MCP servers.
     // The assistant MCP server must be added via: gemini mcp add assistant
 
@@ -181,13 +185,21 @@ export class CLIArgumentBuilder {
       args.push(...settings.extraArgs);
     }
 
-    if (IS_WIN) {
-      args.push('--prompt=.');
-    } else {
+    // When we have a system prompt, pipe it via stdin and put user prompt in -p.
+    // Gemini reads stdin first, then appends -p — so the system instruction
+    // comes before the user message and is treated as project context.
+    if (systemPrompt) {
       args.push('-p', prompt);
+      return { binary: 'gemini', args, stdinPrompt: systemPrompt };
     }
 
-    return { binary: 'gemini', args, stdinPrompt: IS_WIN ? prompt : undefined };
+    if (IS_WIN) {
+      args.push('--prompt=.');
+      return { binary: 'gemini', args, stdinPrompt: prompt };
+    }
+
+    args.push('-p', prompt);
+    return { binary: 'gemini', args };
   }
 
   /**

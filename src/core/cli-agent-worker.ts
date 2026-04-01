@@ -176,37 +176,40 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   // ── Private implementation ────────────────────────────────────────
 
+  /**
+   * Build the conversation prompt (user + assistant messages only).
+   * System messages are handled separately via buildSystemPrompt().
+   */
   private buildPrompt(): string {
     const parts: string[] = [];
-    const systemParts: string[] = [];
-    const conversationParts: string[] = [];
 
     for (const msg of this.messages) {
-      if (msg.role === 'system') {
-        systemParts.push(msg.content);
-      } else if (msg.role === 'user') {
-        conversationParts.push(msg.content);
+      if (msg.role === 'user') {
+        parts.push(msg.content);
       } else if (msg.role === 'assistant') {
-        conversationParts.push(`[Assistant] ${msg.content}`);
+        parts.push(`[Assistant] ${msg.content}`);
       }
-    }
-
-    // Place system instructions prominently at the top with strong framing
-    if (systemParts.length > 0) {
-      parts.push(
-        '=== MANDATORY INSTRUCTIONS — YOU MUST FOLLOW THESE ===\n\n'
-        + systemParts.join('\n\n')
-        + '\n\n=== END MANDATORY INSTRUCTIONS ===\n\n'
-        + 'IMPORTANT: You are NOT a generic AI assistant. You MUST adopt the identity, role, and constraints described above. '
-        + 'Do NOT introduce yourself as Gemini, Claude, or any other AI — use the expert persona above.',
-      );
-    }
-
-    if (conversationParts.length > 0) {
-      parts.push(conversationParts.join('\n\n'));
+      // System messages are excluded — they go through buildSystemPrompt()
     }
 
     return parts.join('\n\n');
+  }
+
+  /**
+   * Build the system instruction from all system messages.
+   * This is passed separately to CLI tools (--append-system-prompt for Claude,
+   * stdin for Gemini) so it's treated as authoritative context rather than
+   * user-level prompt text.
+   */
+  private buildSystemPrompt(): string | null {
+    const systemParts: string[] = [];
+    for (const msg of this.messages) {
+      if (msg.role === 'system') {
+        systemParts.push(msg.content);
+      }
+    }
+    if (systemParts.length === 0) return null;
+    return systemParts.join('\n\n');
   }
 
   private async getCLISettings(): Promise<CLIAgentConfig> {
@@ -231,8 +234,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
     }
 
     const prompt = this.buildPrompt();
+    const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args, stdinPrompt } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages);
+    const { binary, args, stdinPrompt } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt);
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
