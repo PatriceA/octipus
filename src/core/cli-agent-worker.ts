@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { resolve as resolvePath } from 'path';
+import { resolve as resolvePath, join as joinPath } from 'path';
+import { writeFileSync, unlinkSync, existsSync } from 'fs';
 import { getModelRegistry } from '@/models/model-registry';
 import { getConfig } from '@/config';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -267,6 +268,39 @@ export class CLIAgentWorker extends BaseAgentWorker {
       workspaceCwd = process.cwd();
     }
 
+    // Write temporary project context files so CLI tools pick up the expert identity.
+    // Gemini reads GEMINI.md, Codex reads AGENTS.md from the cwd.
+    // These are cleaned up after the CLI process exits.
+    const tempContextFiles: string[] = [];
+    if (systemPrompt) {
+      const contextFileMap: Record<string, string> = {
+        'Gemini CLI': 'GEMINI.md',
+        'Codex CLI': 'AGENTS.md',
+      };
+      const contextFileName = contextFileMap[toolConfig.name];
+      if (contextFileName) {
+        const contextFilePath = joinPath(workspaceCwd, contextFileName);
+        // Only write if no existing file (don't overwrite user's own)
+        const existingContent = existsSync(contextFilePath) ? Bun.file(contextFilePath).size : 0;
+        if (!existingContent) {
+          try {
+            writeFileSync(contextFilePath, systemPrompt, 'utf-8');
+            tempContextFiles.push(contextFilePath);
+            agentLogger.debug({ tool: toolConfig.name, file: contextFileName }, 'Wrote temp context file for CLI agent');
+          } catch (err) {
+            agentLogger.debug({ err, file: contextFileName }, 'Failed to write temp context file');
+          }
+        }
+      }
+    }
+
+    // Cleanup helper
+    const cleanupContextFiles = () => {
+      for (const f of tempContextFiles) {
+        try { unlinkSync(f); } catch { /* already gone */ }
+      }
+    };
+
     // On Windows: shell: true is required for .cmd wrappers, and prompts are piped
     // via stdin (set up by CLIArgumentBuilder) to avoid shell argument mangling.
     return new Promise<string>((resolve, reject) => {
@@ -337,6 +371,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       proc.on('close', async (code) => {
         clearTimeout(hardTimeout);
+        cleanupContextFiles();
         this.process = null;
 
         // Process remaining buffer
@@ -396,6 +431,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       proc.on('error', (err) => {
         clearTimeout(hardTimeout);
+        cleanupContextFiles();
         this.process = null;
         reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
       });
