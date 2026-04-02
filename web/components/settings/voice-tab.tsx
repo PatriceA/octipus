@@ -44,14 +44,14 @@ export function VoiceTab() {
 
   const { data: vaultData } = useQuery({
     queryKey: ['vault'],
-    queryFn: () => api.get<{ credentials: Array<{ key: string }> }>('/vault'),
+    queryFn: () => api.get<{ credentials: Array<{ name: string }> }>('/vault'),
   });
 
   const voiceSettings = settingsData?.settings?.voice || [];
   const currentProvider = voiceSettings.find(s => s.key === 'voice.telephonyProvider')?.value as string || 'disabled';
   const publicUrl = voiceSettings.find(s => s.key === 'voice.publicUrl')?.value as string || '';
 
-  const existingVaultKeys = new Set((vaultData?.credentials || []).map(c => c.key));
+  const existingVaultKeys = new Set((vaultData?.credentials || []).map(c => c.name));
   const providerConfig = PROVIDER_VAULT_KEYS[currentProvider];
 
   const testConnection = async () => {
