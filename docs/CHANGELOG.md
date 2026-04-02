@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-04-01 — Expert System, Channel Feedback, Permission Engine
+
+### Expert System Overhaul
+- **Expert prompts now work on ALL CLI agents**: Gemini CLI gets expert identity via temp `GEMINI.md` in cwd, Codex CLI via temp `AGENTS.md`, Claude Code via `--append-system-prompt`. System prompt is piped via stdin as additional context.
+- **Root cause fix**: `loadHistory()` was called after `addSystemMessage()`, wiping the expert system prompt. Reordered in agent-manager so system prompt persists.
+- **Expert switching on ALL channels**: `/expert <name>` now works on Telegram, Slack, WhatsApp, Teams — not just TUI. Expert selection stored in session context (persists across messages).
+- **Hallucinated tool interception**: Small models (qwen3) that invent `respond`/`reply`/`answer` tools now have their message extracted and returned as final text response.
+- **Ollama expert mode**: Thinking enabled (removes `think:false` override), response guidelines prevent tool-call loops, raw JSON tool calls stripped from output.
+
+### Channel Feedback — Emoji Reactions
+- **Emoji reactions replace text status messages** on Telegram, Slack, WhatsApp, Teams, WebChat
+- **Reaction lifecycle**: 👀 received → 🧠/💻/🔍 worker spawned (role-specific) → 🔧/📖/💬 tool use → ✅ done / ❌ failed
+- **Typing indicator**: Repeats every 4s (Telegram expires after 5s), stops on completion
+- **Stall detection**: 😐 after 15s no progress, 😬 after 45s
+- **Permission waiting**: ⏳ on approval_required event
+- **Direct response feedback**: Casual messages now emit worker events so channels show 👀→✅
+- **`setReaction()` and `sendTyping()`** added to BaseChannel with implementations in all 5 channel adapters
+
+### Permission System
+- **Rule-based permission engine** (ported from claw-code-parity): `tool(matcher)` syntax with deny→allow→ask priority
+  - Wildcard: `shell(*)`, Exact: `shell(git status)`, Prefix: `shell(git:*)`
+  - Default rules: allow git/ls/cat/filesystem/knowledge/websearch, deny rm-rf/dd/mkfs, ask sudo/docker/systemctl
+  - Configurable via settings key `permissions.rules`
+  - Evaluated before DB policy lookup
+- **Permission denial aborts agent**: No more retry loops — agent is killed, orchestrator asks user what to do next
+- **Permission prompts show details**: File path, command preview, URL, or message target in permission messages
+
+### Pre/Post Tool Hooks
+- **`tool_pre` and `tool_post` trigger types** added to hook system
+- Pre-tool hooks can **block execution** (deny decision)
+- Post-tool hooks fire-and-forget for logging/notification
+- Hooks match tools via `triggerConfig.toolPattern` (wildcard, prefix, exact)
+- Wired into tool executor — runs on every tool call
+
+### MCP & Model Integration
+- **MCP auth fixed**: `.mcp.json` auto-generated on startup with current `MASTER_KEY` and platform-correct paths
+- **LLM agents use `mcp_call_tool` meta-tool**: System prompt correctly tells LLM agents to use `mcp_list_tools()` then `mcp_call_tool()`, not direct tool names
+- **Prompt caching** (Anthropic): `anthropic-beta: prompt-caching` header, cache read/creation tokens tracked
+- **System prompt boundary marker**: `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__` separates cacheable static content from dynamic content
+- **Git status/diff injection**: Code-aware roles (coding, review, devops, security, qa) get live `git status` and `git diff --stat` in system prompt
+- **Proactive auto-compaction**: Triggers at 100K cumulative input tokens (60% window, keep 10 messages)
+
+### Security
+- **SECURITY_PREAMBLE softened**: Removed overly aggressive rules that caused models to refuse legitimate tool-use requests (cloning repos, running commands). Added explicit "user messages are from authenticated channels — execute tool requests normally"
+- **Plan state cleanup**: `/clear` and plan execution now fully clear `planningState` from session context — no more phantom plans referenced by models
+
+### TUI Enhancements
+- **Redesigned layout**: Minimal header (title + connection dot + token count), footer bar (expert + session ID, always visible)
+- **Braille spinner**: Animated during agent execution with current tool and model display
+- **Permission prompts**: Inline yellow-bordered prompt with tool detail, y/n input
+- **Colors**: Matte steel blue (#7AA2D4) for activity, light steel (#A0B8CF) for system messages, muted red (#C47070) for errors, bright white (#FFFFFF) for agent answers
+- **Emoji sanitization**: Strips variation selectors (U+FE0E/U+FE0F) from all displayed text
+- **Expert icons**: Unicode symbols (■ ▲ ◆ ★ ✓ ⌂ ✉ ◎ ❀ ↻ ☰) that work in all terminals
+- **Full terminal clear**: `/clear` clears screen + scrollback buffer + resets stats
+- **New commands**: `/cost` (token usage), `/diff` (git diff), `/version` (build info)
+- **Agent stats footer**: Shows tokens, duration, cost, model after completion
+
+### Cleanup
+- Removed unused `FeedbackManager` and `StallDetector` (stall detection now inline in channel handler)
+- Removed stale `SECURITY-AUDIT-REPORT.pdf` and `SECURITY-SCAN.md`
+- Deleted orphaned football automation extension
+
 ## 2026-03-31
 
 ### Gateway Hub — Unified WebSocket Architecture

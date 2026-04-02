@@ -54,17 +54,17 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Single entry point** — all clients connect to `/gateway` with typed protocol (Zod-validated)
 - **Multi-client auth** — session tokens (web), local file tokens (TUI), HMAC keys (adapters), API keys (system)
 - **Central event bus** — replaces scattered EventEmitters with typed pub/sub, pattern matching, per-session replay buffer
-- **9 gateway commands** — `/help`, `/status`, `/expert`, `/abort`, `/clear`, `/compact`, `/think`, `/verbose`, `/usage`
-- **Feedback system** — emoji reaction mapping from agent lifecycle events with debounce and stall detection (10s/30s)
+- **12 gateway commands** — `/help`, `/status`, `/expert`, `/abort`, `/clear`, `/compact`, `/think`, `/verbose`, `/usage`, `/cost`, `/diff`, `/version`
+- **Channel feedback** — real-time emoji reactions on user messages across all channels: 👀 received → role-specific emoji → tool-specific emoji → ✅/❌ done. Typing indicator repeats every 4s. Stall detection (15s/45s).
 - **Rate limiting** — sliding window per-connection per-action (30/min chat, 60/min commands, configurable per trust level)
 - **Connection budgets** — max 10 per user, 50 per IP, 5s auth timeout
-- **TUI** — Ink-based terminal interface with local-token auth, auto-reconnect, and full command support
+- **TUI** — Ink-based terminal interface with braille spinner, permission prompts, token/cost tracking, expert/session footer bar, matte color theme
 - **Dashboard API** — `/api/gateway/status`, `/connections`, `/events/stats`, `/adapters`
 
 ### Reach Users Everywhere
-- **Telegram** — full bot with slash commands and inline responses (gateway adapter)
-- **Slack** — Socket Mode with slash commands and threading (gateway adapter)
-- **Microsoft Teams** — bot mention-based interaction
+- **Telegram** — full bot with emoji reactions, typing indicator, `/expert` switching, permission prompts with tool details
+- **Slack** — Socket Mode with emoji reactions, `/expert` switching, permission prompts
+- **Microsoft Teams** — bot mention-based interaction with typing indicators
 - **WhatsApp** — Meta Cloud API with webhook-based messaging, media support, HMAC signature verification, and message deduplication
 - **WebChat** — real-time WebSocket interface via the web UI
 - **TUI** — terminal chat interface with gateway protocol, local auth, auto-reconnect
@@ -72,9 +72,12 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 ### Enterprise-Grade Security
 - **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor, HttpOnly session cookies
 - **Rate limiting** — Redis sliding-window rate limiter with account lockout (exponential backoff)
+- **Rule-based permission engine** — `tool(matcher)` syntax: `shell(git:*)` allow, `shell(rm -rf:*)` deny, `shell(sudo:*)` ask. Deny→allow→ask evaluation order. Wildcard, prefix, and exact matching. Configurable via settings API.
 - **Three-tier permissions** — ALLOW / ASK / DENY per tool action with path patterns, rate limits, and time windows
+- **Pre/post tool hooks** — `tool_pre` hooks can block tool execution, `tool_post` hooks log/notify. Match tools by pattern.
+- **Permission denial kills agent** — no retry loops, orchestrator asks user what to do next
 - **Prompt injection defense** — three-layer defense-in-depth against adversarial inputs:
-  - **System prompt hardening** — 8-rule security preamble prepended to every LLM system prompt (no admin modes, no credential fabrication, no destructive compliance, user messages treated as untrusted data)
+  - **System prompt hardening** — 7-rule security preamble prepended to every LLM system prompt. Balanced: blocks meta-instructions but explicitly allows legitimate tool use from authenticated channels
   - **Input guard** (pre-LLM) — 39 regex patterns across 6 categories (prompt extraction, mode escalation, command injection, secret fishing, harmful requests, safety override). Destructive shell injections are blocked before reaching the model; other attacks append per-request security reminders to the system prompt
   - **Output guard** (post-LLM) — validates responses for system prompt leakage, fake admin mode activation, fabricated credentials, destructive compliance, and harmful content compliance. Compromised responses are replaced with safe canned messages
 - **Input validation** — SSRF protection, command injection prevention, ReDoS-safe regex, WebSocket content sanitization
