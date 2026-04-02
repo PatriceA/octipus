@@ -205,6 +205,22 @@ export class ToolExecutor {
       }
 
       // ALLOW path (or approved ASK) — execute tool
+
+      // Pre-tool hook check
+      try {
+        const { getHookManager } = await import('@/hooks/manager');
+        const hookManager = getHookManager();
+        const preHookResult = await hookManager.triggerToolHooks('tool_pre', toolCall.name, toolId, toolCall.arguments);
+        if (preHookResult.decision === 'deny') {
+          results.push({
+            toolCallId: toolCall.id,
+            result: null,
+            error: `Blocked by hook: ${preHookResult.message || 'pre-tool hook denied execution'}`,
+          });
+          continue;
+        }
+      } catch { /* hooks not ready, allow by default */ }
+
       try {
         const toolExecStart = Date.now();
         const result = await tool.execute(toolCall.arguments, this.context);
@@ -247,6 +263,15 @@ export class ToolExecutor {
           toolId,
           { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs }
         );
+
+        // Post-tool hook (fire-and-forget, can't block after execution)
+        try {
+          const { getHookManager } = await import('@/hooks/manager');
+          const hookManager = getHookManager();
+          hookManager.triggerToolHooks('tool_post', toolCall.name, toolId, toolCall.arguments, {
+            output: resultStr.slice(0, 2000),
+          }).catch(() => {});
+        } catch { /* hooks not ready */ }
       } catch (error) {
         agentLogger.error(
           { error, agentId: this.context.id, tool: toolCall.name },

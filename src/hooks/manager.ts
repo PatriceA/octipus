@@ -152,6 +152,65 @@ export class HookManager extends EventEmitter {
   }
 
   /**
+   * Trigger pre/post tool-use hooks.
+   * Returns 'allow' if all hooks pass, 'deny' if any hook blocks, with optional message.
+   * Hooks with trigger type 'tool_pre' or 'tool_post' are evaluated.
+   *
+   * Inspired by claw-code-parity's hook system:
+   * - Pre-tool hooks can block execution (action: 'deny')
+   * - Post-tool hooks can log/notify
+   */
+  async triggerToolHooks(
+    phase: 'tool_pre' | 'tool_post',
+    toolName: string,
+    toolId: string,
+    args: Record<string, unknown>,
+    result?: { output?: unknown; error?: string },
+  ): Promise<{ decision: 'allow' | 'deny'; message?: string }> {
+    const hooks = this.hookCache.get(phase) || [];
+    if (hooks.length === 0) return { decision: 'allow' };
+
+    for (const hook of hooks) {
+      // Check if hook matches this tool (triggerConfig.toolPattern)
+      const pattern = hook.triggerConfig?.toolPattern as string | undefined;
+      if (pattern && pattern !== '*') {
+        if (pattern.endsWith(':*')) {
+          if (!toolId.startsWith(pattern.slice(0, -2)) && !toolName.startsWith(pattern.slice(0, -2))) continue;
+        } else if (pattern !== toolId && pattern !== toolName) {
+          continue;
+        }
+      }
+
+      if (!hook.isEnabled) continue;
+
+      // Execute hook action
+      const context: TriggerContext = {
+        sessionId: '',
+        metadata: { toolName, toolId, args, phase, ...result },
+      };
+
+      try {
+        const actionResult = await executeAction(hook, context);
+
+        // Update stats
+        await this.db.update(hooks).set({
+          executionCount: hook.executionCount + 1,
+          lastExecutedAt: new Date(),
+        }).where(eq(hooksTable.id, hook.id));
+
+        // If the hook action is 'deny' or returns a deny signal, block the tool
+        if (hook.action === 'deny' || (actionResult.data as any)?.deny) {
+          return { decision: 'deny', message: actionResult.error || (actionResult.data as any)?.message || `Blocked by hook: ${hook.name}` };
+        }
+      } catch (err) {
+        coreLogger.error({ err, hookId: hook.id, tool: toolName, phase }, 'Tool hook execution failed');
+      }
+    }
+
+    return { decision: 'allow' };
+  }
+
+  /**
    * Get webhook hooks that match a given path.
    * Returns matched hooks so callers can inspect triggerConfig (e.g. webhookSecret).
    */
