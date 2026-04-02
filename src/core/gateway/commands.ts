@@ -264,6 +264,67 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     },
   });
 
+  registry.register({
+    name: 'cost',
+    aliases: [],
+    description: 'Show cumulative token usage and cost for this session',
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      try {
+        const { getCostTracker } = await import('@/models/cost-tracker');
+        const costTracker = getCostTracker();
+        const usage = await costTracker.getSessionStats(ctx.sessionId);
+        if (!usage || (usage.totalInputTokens === 0 && usage.totalOutputTokens === 0)) {
+          return { text: 'No token usage recorded for this session yet.' };
+        }
+        const total = usage.totalInputTokens + usage.totalOutputTokens;
+        let text = `📊 Session token usage:\n  Input: ${usage.totalInputTokens.toLocaleString()} tokens\n  Output: ${usage.totalOutputTokens.toLocaleString()} tokens\n  Total: ${total.toLocaleString()} tokens\n  Requests: ${usage.requestCount}`;
+        if (usage.totalCost) {
+          text += `\n  Cost: $${usage.totalCost.toFixed(4)}`;
+        }
+        return { text };
+      } catch {
+        return { text: 'Token usage tracking not available.' };
+      }
+    },
+  });
+
+  registry.register({
+    name: 'diff',
+    aliases: [],
+    description: 'Show git diff for workspace changes',
+    minTrustLevel: 'user',
+    handler: async () => {
+      try {
+        const { execSync } = await import('child_process');
+        const { getConfig } = await import('@/config');
+        const cwd = getConfig().workspace?.rootPath || process.cwd();
+        const diff = execSync('git diff --stat', { cwd, timeout: 10_000, encoding: 'utf-8' });
+        return { text: diff.trim() || 'No unstaged changes.' };
+      } catch {
+        return { text: 'Not a git repository or git not available.' };
+      }
+    },
+  });
+
+  registry.register({
+    name: 'version',
+    aliases: ['v'],
+    description: 'Show assistant version and build info',
+    minTrustLevel: 'user',
+    handler: async () => {
+      try {
+        const { readFileSync } = await import('fs');
+        const { resolve } = await import('path');
+        const pkgPath = resolve(process.cwd(), 'package.json');
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        return { text: `Assistant v${pkg.version || '0.0.0'} (Bun ${Bun.version})` };
+      } catch {
+        return { text: `Assistant (Bun ${Bun.version})` };
+      }
+    },
+  });
+
 }
 
 // ── Singleton ─────────────────────────────────────────────────────

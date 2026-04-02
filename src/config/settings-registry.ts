@@ -600,6 +600,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Notify on agent or pipeline errors',
     isSecret: false,
   },
+  {
+    key: 'permissions.rules',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: null,
+    description: 'Permission rules for tool access control. Format: { allow: ["shell(git:*)"], deny: ["shell(rm -rf:*)"], ask: ["shell(sudo:*)"] }. Rules use tool(matcher) syntax with wildcards.',
+    isSecret: false,
+  },
 ];
 
 /** Get a setting definition by key */
