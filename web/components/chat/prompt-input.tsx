@@ -259,6 +259,20 @@ export default function PromptInput({
     [addFiles]
   );
 
+  // Voice input supported if browser has SpeechRecognition OR MediaRecorder (fallback to server STT)
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [useServerSTT, setUseServerSTT] = useState(false);
+  useEffect(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SR) {
+      setSpeechSupported(true);
+    } else if (typeof MediaRecorder !== 'undefined') {
+      // Fallback: record audio and send to server for transcription
+      setSpeechSupported(true);
+      setUseServerSTT(true);
+    }
+  }, []);
+
   // Voice input via Web Speech API
   const toggleVoice = useCallback(() => {
     if (isListening) {
@@ -267,14 +281,55 @@ export default function PromptInput({
       return;
     }
 
+    // Fallback: use MediaRecorder + server-side STT (/api/voice/transcribe)
+    if (useServerSTT) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        const chunks: Blob[] = [];
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const buffer = await blob.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+          try {
+            const res = await fetch('/api/voice/transcribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ audio: base64, format: 'webm' }),
+              credentials: 'include',
+            });
+            const data = await res.json();
+            if (data.text) setText((prev: string) => prev + data.text);
+          } catch (err) {
+            console.error('Server STT failed:', err);
+          }
+          setIsListening(false);
+        };
+        recognitionRef.current = { stop: () => mediaRecorder.stop() };
+        mediaRecorder.start();
+        setIsListening(true);
+        // Auto-stop after 10 seconds
+        setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 10_000);
+      } catch (err) {
+        alert('Microphone access denied.');
+        setIsListening(false);
+      }
+      return;
+    }
+
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+    if (!SpeechRecognition) {
+      alert('Speech recognition is not supported in this browser. Use Chrome or Edge.');
+      return;
+    }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = navigator.language || 'en-US';
 
     let finalTranscript = text;
 
@@ -291,8 +346,15 @@ export default function PromptInput({
       setText(finalTranscript + interim);
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
       setIsListening(false);
+      if (event.error === 'not-allowed') {
+        alert('Microphone access denied. Allow microphone permissions in your browser settings.');
+      } else if (event.error === 'no-speech') {
+        // Silent timeout — not an error worth showing
+      } else {
+        console.error('Speech recognition error:', event.error);
+      }
     };
 
     recognition.onend = () => {
@@ -300,8 +362,13 @@ export default function PromptInput({
     };
 
     recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
+    try {
+      recognition.start();
+      setIsListening(true);
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err);
+      setIsListening(false);
+    }
   }, [isListening, text]);
 
   // Cleanup speech recognition on unmount
@@ -418,8 +485,8 @@ export default function PromptInput({
           <Paperclip className="h-4 w-4" />
         </button>
 
-        {/* Mic button */}
-        <button
+        {/* Mic button — only shown in browsers that support Web Speech API */}
+        {speechSupported && <button
           type="button"
           onClick={toggleVoice}
           className={cn(
@@ -438,7 +505,7 @@ export default function PromptInput({
           ) : (
             <Mic className="h-4 w-4" />
           )}
-        </button>
+        </button>}
 
         {/* Send button */}
         <button
