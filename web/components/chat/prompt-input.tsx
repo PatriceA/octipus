@@ -285,12 +285,21 @@ export default function PromptInput({
     if (useServerSTT) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        // Try audio/webm first, fall back to whatever the browser supports
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+          : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg'
+          : '';
+        const mediaRecorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
+        const format = mimeType.split('/')[1] || 'wav';
         const chunks: Blob[] = [];
         mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
         mediaRecorder.onstop = async () => {
           stream.getTracks().forEach(t => t.stop());
-          const blob = new Blob(chunks, { type: 'audio/webm' });
+          // Show processing indicator
+          setText((prev: string) => prev ? prev : 'Transcribing...');
+          const blob = new Blob(chunks, { type: mimeType || 'audio/wav' });
           const buffer = await blob.arrayBuffer();
           const bytes = new Uint8Array(buffer);
           let binary = '';
@@ -300,23 +309,31 @@ export default function PromptInput({
             const res = await fetch('/api/voice/transcribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ audio: base64, format: 'webm' }),
+              body: JSON.stringify({ audio: base64, format }),
               credentials: 'include',
             });
             const data = await res.json();
-            if (data.text) setText((prev: string) => prev + data.text);
+            if (data.text) {
+              setText((prev: string) => prev === 'Transcribing...' ? data.text : prev + ' ' + data.text);
+            } else if (data.error) {
+              setText((prev: string) => prev === 'Transcribing...' ? '' : prev);
+              console.error('Transcription error:', data.error);
+            } else {
+              setText((prev: string) => prev === 'Transcribing...' ? '' : prev);
+            }
           } catch (err) {
+            setText((prev: string) => prev === 'Transcribing...' ? '' : prev);
             console.error('Server STT failed:', err);
           }
           setIsListening(false);
         };
-        recognitionRef.current = { stop: () => mediaRecorder.stop() };
+        recognitionRef.current = { stop: () => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); } };
         mediaRecorder.start();
         setIsListening(true);
-        // Auto-stop after 10 seconds
-        setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 10_000);
+        // Auto-stop after 15 seconds
+        setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 15_000);
       } catch (err) {
-        alert('Microphone access denied.');
+        alert('Microphone access denied. Check browser permissions.');
         setIsListening(false);
       }
       return;

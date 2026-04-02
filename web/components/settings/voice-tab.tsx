@@ -58,10 +58,17 @@ export function VoiceTab() {
     setTestingHealth(true);
     setHealthResult(null);
     try {
-      const result = await api.get<{ configured: boolean; provider: string; healthy: boolean; error?: string }>('/voice/telephony/health');
-      setHealthResult(result);
+      const result = await api.get<{ configured?: boolean; provider?: string; healthy?: boolean; error?: string }>('/voice/telephony/health');
+      if (!result.configured) {
+        setHealthResult({ healthy: false, error: `Provider "${currentProvider}" not configured. Check vault credentials.` });
+      } else if (!result.healthy) {
+        setHealthResult({ healthy: false, error: result.error || `Connection to ${result.provider || currentProvider} failed. Verify credentials are correct.`, provider: result.provider });
+      } else {
+        setHealthResult({ healthy: true, provider: result.provider });
+      }
     } catch (err) {
-      setHealthResult({ healthy: false, error: (err as Error).message });
+      const msg = (err as Error).message;
+      setHealthResult({ healthy: false, error: msg.includes('401') ? 'Authentication failed — check your API credentials in the vault.' : msg });
     }
     setTestingHealth(false);
   };
@@ -148,10 +155,12 @@ export function VoiceTab() {
               {testingHealth ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Test Connection'}
             </button>
             {healthResult && (
-              <span className={`flex items-center gap-1 text-sm ${healthResult.healthy ? 'text-green-400' : 'text-red-400'}`}>
-                {healthResult.healthy ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                {healthResult.healthy ? `Connected to ${healthResult.provider}` : healthResult.error}
-              </span>
+              <div className={`flex items-start gap-2 text-sm ${healthResult.healthy ? 'text-green-400' : 'text-red-400'}`}>
+                {healthResult.healthy ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+                <span className="break-all">
+                  {healthResult.healthy ? `Connected to ${healthResult.provider}` : healthResult.error || 'Connection failed — unknown error'}
+                </span>
+              </div>
             )}
           </div>
         </div>
