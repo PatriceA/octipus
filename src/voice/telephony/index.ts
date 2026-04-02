@@ -25,17 +25,20 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
   const { getVault } = await import('@/security/vault');
   const vault = getVault();
 
-  // Helper: search system scope first, then all users (credentials might be stored under user ID)
+  // Helper: search system scope first, then admin user's vault
   async function getSecret(key: string): Promise<string | null> {
     const systemVal = await vault.getByName('system', key);
     if (systemVal) return systemVal;
-    // Search across all vault entries by listing system + checking first admin
+    // Credentials stored via the web UI are under the user's ID, not 'system'.
+    // Search the first real admin user's vault (exclude test users).
     try {
       const { getDb } = await import('@/db/postgres');
       const { users } = await import('@/db/schema/users');
-      const { eq } = await import('drizzle-orm');
+      const { eq, and, not, like } = await import('drizzle-orm');
       const db = getDb();
-      const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.isAdmin, true)).limit(1);
+      const [admin] = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.isAdmin, true), not(like(users.username, 'e2e_test_%'))))
+        .limit(1);
       if (admin) {
         const userVal = await vault.getByName(admin.id, key);
         if (userVal) return userVal;
