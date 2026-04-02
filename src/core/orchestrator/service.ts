@@ -184,9 +184,10 @@ export class OrchestratorService {
           return { response, sessionId: resolvedSessionId, classification: { type: 'casual' as const, confidence: 1 } };
         }
 
-        // Mark as executed BEFORE spawning to prevent race conditions
+        // Clear planningState entirely — the brief is passed to the orchestrator below.
+        // Keeping stale plan data in session context causes models to reference it in future messages.
         await sessionRepository.update(resolvedSessionId, {
-          context: { ...sessionCtx, planningState: { ...planState, executed: true } },
+          context: { ...sessionCtx, planningState: undefined },
         });
         coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via orchestrator');
 
@@ -235,6 +236,15 @@ export class OrchestratorService {
       );
 
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
+        // Emit worker_spawned so channel feedback shows a reaction (even for direct responses)
+        this.emit({
+          type: 'worker_spawned',
+          sessionId: resolvedSessionId,
+          userId,
+          data: { role: 'general', workerId: `direct-${Date.now()}`, model: 'direct' },
+          timestamp: new Date(),
+        });
+
         const { response, metadata } = await directResponse(
           message, resolvedSessionId, userId, this.modelSelector, classification.complexity, inputGuard.flags,
         );
@@ -244,6 +254,15 @@ export class OrchestratorService {
         if (outputCheck.action === 'replace') {
           coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced casual response');
         }
+
+        // Emit worker_completed so channel feedback shows ✅
+        this.emit({
+          type: 'worker_completed',
+          sessionId: resolvedSessionId,
+          userId,
+          data: { role: 'general', result: finalResponse },
+          timestamp: new Date(),
+        });
 
         maybeCompactSession(resolvedSessionId).catch(err =>
           coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),

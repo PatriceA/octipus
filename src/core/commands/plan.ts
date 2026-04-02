@@ -228,11 +228,13 @@ registerCommand({
     state.active = false;
     await saveState(ctx.sessionId, state);
 
-    // Clear activeCommand — the plan is done
+    // Clear activeCommand — the plan is done.
+    // Keep planningState briefly so user can say "go" to execute,
+    // but mark it clearly as pending-execution.
     const sessionData = await sessionRepository.findById(ctx.sessionId);
     const sessionCtx = (sessionData?.context as SessionContext) || {};
     await sessionRepository.update(ctx.sessionId, {
-      context: { ...sessionCtx, activeCommand: undefined },
+      context: { ...sessionCtx, activeCommand: undefined, planningState: { brief, active: false, executed: false } },
     });
 
     return {
