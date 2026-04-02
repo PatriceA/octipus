@@ -239,6 +239,8 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
               <Text color="green" bold>{'\u276F '}{sanitizeEmoji(msg.content)}</Text>
             ) : msg.role === 'assistant' ? (
               <Text color="#FFFFFF" wrap="wrap">{'  '}{sanitizeEmoji(msg.content)}</Text>
+            ) : msg.content.startsWith('Error') || msg.content.includes('failed') || msg.content.includes('error:') ? (
+              <Text color="#C47070">{'  '}{sanitizeEmoji(msg.content)}</Text>
             ) : (
               <Text color="#A0B8CF">{'  '}{sanitizeEmoji(msg.content)}</Text>
             )}
