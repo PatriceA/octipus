@@ -282,10 +282,10 @@ export default function PromptInput({
     }
 
     // Fallback: use MediaRecorder + server-side STT (/api/voice/transcribe)
+    // UX: tap mic to start recording, tap again to stop (like Telegram/WhatsApp voice messages)
     if (useServerSTT) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // Try audio/webm first, fall back to whatever the browser supports
         const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
           : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg'
           : '';
@@ -294,17 +294,28 @@ export default function PromptInput({
           : new MediaRecorder(stream);
         const format = mimeType.split('/')[1] || 'wav';
         const chunks: Blob[] = [];
+        const startTime = Date.now();
+
         mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
         mediaRecorder.onstop = async () => {
           stream.getTracks().forEach(t => t.stop());
-          // Show processing indicator
-          setText((prev: string) => prev ? prev : 'Transcribing...');
+          const durationSec = Math.round((Date.now() - startTime) / 1000);
+
+          // Skip if too short (accidental tap)
+          if (durationSec < 1 || chunks.length === 0) {
+            setIsListening(false);
+            return;
+          }
+
+          setText('Transcribing...');
           const blob = new Blob(chunks, { type: mimeType || 'audio/wav' });
           const buffer = await blob.arrayBuffer();
           const bytes = new Uint8Array(buffer);
           let binary = '';
           for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
           const base64 = btoa(binary);
+
           try {
             const res = await fetch('/api/voice/transcribe', {
               method: 'POST',
@@ -314,24 +325,24 @@ export default function PromptInput({
             });
             const data = await res.json();
             if (data.text) {
-              setText((prev: string) => prev === 'Transcribing...' ? data.text : prev + ' ' + data.text);
-            } else if (data.error) {
-              setText((prev: string) => prev === 'Transcribing...' ? '' : prev);
-              console.error('Transcription error:', data.error);
+              setText(data.text);
             } else {
-              setText((prev: string) => prev === 'Transcribing...' ? '' : prev);
+              setText('');
+              if (data.error) console.error('Transcription error:', data.error);
             }
           } catch (err) {
-            setText((prev: string) => prev === 'Transcribing...' ? '' : prev);
+            setText('');
             console.error('Server STT failed:', err);
           }
           setIsListening(false);
         };
+
         recognitionRef.current = { stop: () => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); } };
         mediaRecorder.start();
         setIsListening(true);
-        // Auto-stop after 15 seconds
-        setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 15_000);
+
+        // Safety limit: 2 minutes max
+        setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 120_000);
       } catch (err) {
         alert('Microphone access denied. Check browser permissions.');
         setIsListening(false);

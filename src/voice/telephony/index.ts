@@ -25,13 +25,31 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
   const { getVault } = await import('@/security/vault');
   const vault = getVault();
 
+  // Helper: search system scope first, then all users (credentials might be stored under user ID)
+  async function getSecret(key: string): Promise<string | null> {
+    const systemVal = await vault.getByName('system', key);
+    if (systemVal) return systemVal;
+    // Search across all vault entries by listing system + checking first admin
+    try {
+      const { getDb } = await import('@/db/postgres');
+      const { users } = await import('@/db/schema/users');
+      const { eq } = await import('drizzle-orm');
+      const db = getDb();
+      const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.isAdmin, true)).limit(1);
+      if (admin) {
+        const userVal = await vault.getByName(admin.id, key);
+        if (userVal) return userVal;
+      }
+    } catch { /* fallback failed */ }
+    return null;
+  }
+
   switch (name) {
     case 'twilio': {
-      const accountSid = await vault.getByName('system', 'twilio_account_sid');
-      const authToken = await vault.getByName('system', 'twilio_auth_token');
+      const accountSid = await getSecret('twilio_account_sid');
+      const authToken = await getSecret('twilio_auth_token');
       if (!accountSid || !authToken) return null;
-      // Phone number auto-detected from Twilio API on first health check
-      const fromNumber = await vault.getByName('system', 'twilio_phone_number') || '';
+      const fromNumber = await getSecret('twilio_phone_number') || '';
 
       const { TwilioProvider } = await import('./twilio');
       cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber });
@@ -39,10 +57,10 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
     }
 
     case 'telnyx': {
-      const apiKey = await vault.getByName('system', 'telnyx_api_key');
-      const connectionId = await vault.getByName('system', 'telnyx_connection_id') || '';
-      const fromNumber = await vault.getByName('system', 'telnyx_phone_number') || '';
-      const publicKey = await vault.getByName('system', 'telnyx_public_key') || undefined;
+      const apiKey = await getSecret('telnyx_api_key');
+      const connectionId = await getSecret('telnyx_connection_id') || '';
+      const fromNumber = await getSecret('telnyx_phone_number') || '';
+      const publicKey = await getSecret('telnyx_public_key') || undefined;
       if (!apiKey) return null;
 
       const { TelnyxProvider } = await import('./telnyx');
@@ -51,9 +69,9 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
     }
 
     case 'plivo': {
-      const authId = await vault.getByName('system', 'plivo_auth_id');
-      const authToken = await vault.getByName('system', 'plivo_auth_token');
-      const fromNumber = await vault.getByName('system', 'plivo_phone_number') || '';
+      const authId = await getSecret('plivo_auth_id');
+      const authToken = await getSecret('plivo_auth_token');
+      const fromNumber = await getSecret('plivo_phone_number') || '';
       if (!authId || !authToken) return null;
 
       const { PlivoProvider } = await import('./plivo');
