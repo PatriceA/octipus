@@ -71,7 +71,11 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     },
     onCommandResult: (name, result, error) => {
       if (name === 'clear' && !error) {
+        // Clear terminal scrollback + screen, then reset messages
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
         setMessages([{ role: 'system', content: 'Chat cleared.', timestamp: new Date() }]);
+        setAgentStats({});
+        setCumulativeStats({ tokens: 0, cost: 0, turns: 0 });
         return;
       }
       if (name === 'cost') {
