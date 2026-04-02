@@ -18,8 +18,8 @@ const SERVER_CATEGORIES = new Set([
   'orchestrator',
   'api',
   'logging',
-  'voice',
   'security',
+  // 'voice' — has its own dedicated tab in Settings > Voice & Calls
 ]);
 
 /** Visual grouping of categories into sections */

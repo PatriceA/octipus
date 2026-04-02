@@ -37,21 +37,21 @@ export function VoiceTab() {
   const [testingHealth, setTestingHealth] = useState(false);
   const [healthResult, setHealthResult] = useState<{ healthy: boolean; error?: string; provider?: string } | null>(null);
 
-  const { data: settings } = useQuery({
+  const { data: settingsData } = useQuery({
     queryKey: ['settings'],
-    queryFn: () => api.get<SettingItem[]>('/settings'),
+    queryFn: () => api.get<{ settings: Record<string, SettingItem[]>; categories: string[] }>('/settings'),
   });
 
-  const { data: vaultKeys } = useQuery({
+  const { data: vaultData } = useQuery({
     queryKey: ['vault'],
     queryFn: () => api.get<{ credentials: Array<{ key: string }> }>('/vault'),
   });
 
-  const voiceSettings = (settings || []).filter((s) => s.category === 'voice');
+  const voiceSettings = settingsData?.settings?.voice || [];
   const currentProvider = voiceSettings.find(s => s.key === 'voice.telephonyProvider')?.value as string || 'disabled';
   const publicUrl = voiceSettings.find(s => s.key === 'voice.publicUrl')?.value as string || '';
 
-  const existingVaultKeys = new Set((vaultKeys?.credentials || []).map(c => c.key));
+  const existingVaultKeys = new Set((vaultData?.credentials || []).map(c => c.key));
   const providerConfig = PROVIDER_VAULT_KEYS[currentProvider];
 
   const testConnection = async () => {
