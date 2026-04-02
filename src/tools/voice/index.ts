@@ -54,6 +54,7 @@ export class VoiceCallTool extends BaseTool {
           to: { type: 'string', description: 'Phone number (E.164, e.g., +1234567890)' },
           message: { type: 'string', description: 'Message to speak when answered' },
           mode: { type: 'string', enum: ['notify', 'conversation'], description: 'notify=one-way, conversation=interactive' },
+          model: { type: 'string', description: 'Model for conversation mode (use a fast model for low latency)' },
         },
         required: ['to', 'message'],
       },
@@ -71,6 +72,18 @@ export class VoiceCallTool extends BaseTool {
         const publicUrl = (await settings.get('voice.publicUrl') as string) || `http://localhost:${process.env.API_PORT || 3005}`;
         const webhookUrl = `${publicUrl}/api/voice/webhook/${provider.name}`;
 
+        // Resolve expert prompt for voice conversations (if expert is active)
+        let expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
+        const voiceModel = args.model as string | undefined;
+
+        // If the agent has an expert context, extract its system prompt for the voice call
+        // so the conversation loop uses the expert identity directly
+        try {
+          const { getSettingsService: getS } = await import('@/config/settings-service');
+          const voiceExpertPrompt = await getS().get('voice.expertPrompt') as string | null;
+          if (voiceExpertPrompt) expertPrompt = voiceExpertPrompt;
+        } catch { /* use default */ }
+
         try {
           const session = await provider.initiateCall({
             to, message,
@@ -78,6 +91,12 @@ export class VoiceCallTool extends BaseTool {
             webhookUrl,
             streamUrl: mode === 'conversation' ? `${publicUrl.replace('http', 'ws')}/api/voice/stream` : undefined,
           });
+
+          // Store expert prompt and model in call metadata for the webhook's direct LLM path
+          session.metadata.expertPrompt = expertPrompt;
+          if (voiceModel) session.metadata.voiceModel = voiceModel;
+          session.metadata.conversationHistory = [];
+
           getCallManager().create(session);
           log.info({ callId: session.id, to, mode }, 'Call initiated');
           return { callId: session.id, status: session.status, to, mode };

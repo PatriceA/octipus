@@ -66,28 +66,53 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
     }
   }
 
-  // Speech gathered (conversation mode) — transcribed speech from caller
+  // Speech gathered (conversation mode) — transcribed speech from caller.
+  // FAST PATH: direct LLM call with expert system prompt, no orchestrator.
   const speechResult = (body.SpeechResult || body.speech || body.Speech || '') as string;
   if (speechResult && session) {
     apiLogger.info({ callId: session.id, speech: speechResult.slice(0, 200) }, 'Voice speech received');
 
-    // Use the orchestrator to get a response
     try {
-      const { getOrchestratorService } = await import('@/core/orchestrator/service');
-      const orchestrator = getOrchestratorService();
-      const result = await orchestrator.handleMessage(
-        session.metadata.sessionId as string || `voice-${session.id}`,
-        session.metadata.userId as string || 'system',
-        speechResult,
-        'voice',
-      );
+      const { getLiteLLMClient } = await import('@/models/litellm-client');
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const client = getLiteLLMClient();
+      const registry = getModelRegistry();
 
-      // Extract spoken text from the response
-      let spoken = result.response;
-      try {
-        const parsed = JSON.parse(spoken);
-        if (parsed.spoken) spoken = parsed.spoken;
-      } catch { /* not JSON, use as-is */ }
+      // Use the voice model (fast, small) or the session's expert model
+      const voiceModelId = session.metadata.voiceModel as string
+        || (await registry.getDefaultModel())?.modelId
+        || 'qwen3:14b';
+
+      // Build conversation history (kept in session metadata for speed — no DB round-trip)
+      const history = (session.metadata.conversationHistory || []) as Array<{ role: string; content: string }>;
+      history.push({ role: 'user', content: speechResult });
+
+      // Expert system prompt — kept lean for speed
+      const expertPrompt = (session.metadata.expertPrompt as string)
+        || 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. Respond as if speaking — no markdown, no lists, no code blocks.';
+
+      const startTime = Date.now();
+      const result = await client.complete({
+        model: voiceModelId,
+        messages: [
+          { role: 'system', content: expertPrompt, timestamp: new Date() },
+          ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: new Date() })),
+        ],
+        temperature: 0.7,
+        maxTokens: 256, // Short responses for voice
+      });
+
+      const spoken = result.content || 'I didn\'t catch that.';
+      history.push({ role: 'assistant', content: spoken });
+
+      // Keep last 20 turns to limit context size
+      if (history.length > 40) history.splice(0, history.length - 40);
+      session.metadata.conversationHistory = history;
+
+      apiLogger.info(
+        { callId: session.id, latencyMs: Date.now() - startTime, model: voiceModelId, tokens: result.usage.totalTokens },
+        'Voice LLM response (direct)',
+      );
 
       return telephonyProvider.generateAnswerResponse({
         message: spoken,
@@ -95,7 +120,7 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
         callbackUrl: url,
       });
     } catch (error) {
-      apiLogger.error({ error, callId: session.id }, 'Failed to get voice response');
+      apiLogger.error({ error, callId: session.id }, 'Voice LLM call failed');
       return telephonyProvider.generateAnswerResponse({
         message: 'I had trouble processing that. Could you repeat?',
         gatherSpeech: true,
