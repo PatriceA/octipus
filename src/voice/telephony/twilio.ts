@@ -187,6 +187,34 @@ export class TwilioProvider implements TelephonyProvider {
     }
   }
 
+  /**
+   * Auto-detect the first available phone number from the Twilio account.
+   * Called when no fromNumber is configured.
+   */
+  async autoDetectPhoneNumber(): Promise<string | null> {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/Accounts/${this.accountSid}/IncomingPhoneNumbers.json?PageSize=1`,
+        {
+          headers: {
+            'Authorization': `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64')}`,
+          },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!response.ok) return null;
+      const data = await response.json() as { incoming_phone_numbers: Array<{ phone_number: string }> };
+      const number = data.incoming_phone_numbers?.[0]?.phone_number;
+      if (number) {
+        this.fromNumber = number;
+        log.info({ phoneNumber: number }, 'Auto-detected Twilio phone number');
+      }
+      return number || null;
+    } catch {
+      return null;
+    }
+  }
+
   async checkHealth(): Promise<{ healthy: boolean; error?: string }> {
     if (!this.accountSid || !this.authToken) {
       return { healthy: false, error: 'Twilio credentials not configured' };
@@ -202,6 +230,12 @@ export class TwilioProvider implements TelephonyProvider {
           signal: AbortSignal.timeout(10_000),
         },
       );
+
+      // Auto-detect phone number if not configured
+      if (response.ok && !this.fromNumber) {
+        await this.autoDetectPhoneNumber();
+      }
+
       return response.ok ? { healthy: true } : { healthy: false, error: `HTTP ${response.status}` };
     } catch (error) {
       return { healthy: false, error: (error as Error).message };

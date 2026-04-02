@@ -29,8 +29,9 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
     case 'twilio': {
       const accountSid = await vault.getByName('system', 'twilio_account_sid');
       const authToken = await vault.getByName('system', 'twilio_auth_token');
-      const fromNumber = await vault.getByName('system', 'twilio_phone_number') || '';
       if (!accountSid || !authToken) return null;
+      // Phone number auto-detected from Twilio API on first health check
+      const fromNumber = await vault.getByName('system', 'twilio_phone_number') || '';
 
       const { TwilioProvider } = await import('./twilio');
       cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber });

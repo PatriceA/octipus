@@ -78,21 +78,45 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       const client = getLiteLLMClient();
       const registry = getModelRegistry();
 
-      // Model priority: per-call override → voice.model setting → system default
-      const { getSettingsService } = await import('@/config/settings-service');
-      const settings = getSettingsService();
-      const voiceModelId = (session.metadata.voiceModel as string)
-        || (await settings.get('voice.model') as string | null)
-        || (await registry.getDefaultModel())?.modelId
-        || 'qwen3:14b';
+      // Model: per-call override → topic "voice" routing → system default
+      let voiceModelId = session.metadata.voiceModel as string | undefined;
+      if (!voiceModelId) {
+        try {
+          // Use the model assigned to the "voice" topic in the model registry
+          const { ModelSelector } = await import('@/core/orchestrator/model-selector');
+          const selector = new ModelSelector();
+          const routing = await selector.selectForWorker('voice', false);
+          voiceModelId = routing.model;
+        } catch { /* fallback below */ }
+      }
+      if (!voiceModelId) {
+        voiceModelId = (await registry.getDefaultModel())?.modelId || 'qwen3:14b';
+      }
 
       // Build conversation history (kept in session metadata for speed — no DB round-trip)
       const history = (session.metadata.conversationHistory || []) as Array<{ role: string; content: string }>;
       history.push({ role: 'user', content: speechResult });
 
-      // Expert system prompt — kept lean for speed
-      const expertPrompt = (session.metadata.expertPrompt as string)
-        || 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. Respond as if speaking — no markdown, no lists, no code blocks.';
+      // Expert prompt: per-call override → expert assigned to "voice" topic → default
+      let expertPrompt = session.metadata.expertPrompt as string | undefined;
+      if (!expertPrompt) {
+        try {
+          const { getDb } = await import('@/db/postgres');
+          const { experts } = await import('@/db/schema/experts');
+          const { eq } = await import('drizzle-orm');
+          const db = getDb();
+          // Find expert with role matching communication (which has the voice tool)
+          const [voiceExpert] = await db.select().from(experts)
+            .where(eq(experts.role, 'communication'))
+            .limit(1);
+          if (voiceExpert?.systemPrompt) {
+            expertPrompt = voiceExpert.systemPrompt + '\n\nIMPORTANT: You are on a live phone call. Keep responses short (1-3 sentences), natural, conversational. No markdown, no lists, no code.';
+          }
+        } catch { /* use default */ }
+      }
+      if (!expertPrompt) {
+        expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
+      }
 
       const startTime = Date.now();
       const result = await client.complete({
