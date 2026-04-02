@@ -34,6 +34,8 @@ export interface CompletionResult {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    cacheReadTokens?: number;
+    cacheCreationTokens?: number;
   };
   model: string;
   latencyMs: number;

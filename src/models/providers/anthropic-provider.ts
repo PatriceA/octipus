@@ -27,9 +27,11 @@ export class AnthropicProvider implements ModelProvider {
     const client = await this.createClient();
     const startTime = Date.now();
 
+    const formatted = this.formatMessages(options.messages);
+
     const params: ChatCompletionCreateParams = {
       model: options.model,
-      messages: this.formatMessages(options.messages),
+      messages: formatted,
       temperature: options.temperature,
       max_tokens: options.maxTokens || 4096,
       top_p: options.topP,
@@ -48,15 +50,29 @@ export class AnthropicProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
+    // Enable prompt caching for Anthropic models.
+    // Mark the system message (first message) with cache_control for efficient caching
+    // of the static portion of the system prompt across requests.
+    const anthropicHeaders: Record<string, string> = {
+      'anthropic-beta': 'prompt-caching-2024-07-31',
+    };
+
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
       'Sending completion request to Anthropic'
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, {
+        headers: anthropicHeaders,
+      });
       const latencyMs = Date.now() - startTime;
       const choice = response.choices[0];
+
+      // Extract cache stats from Anthropic's response (available via extra fields)
+      const rawUsage = response.usage as Record<string, unknown> | undefined;
+      const cacheReadTokens = (rawUsage?.cache_read_input_tokens || rawUsage?.prompt_tokens_details?.cached_tokens || 0) as number;
+      const cacheCreationTokens = (rawUsage?.cache_creation_input_tokens || 0) as number;
 
       const result: CompletionResult = {
         content: choice.message.content || '',
@@ -65,6 +81,8 @@ export class AnthropicProvider implements ModelProvider {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
+          cacheReadTokens: cacheReadTokens || undefined,
+          cacheCreationTokens: cacheCreationTokens || undefined,
         },
         model: response.model,
         latencyMs,

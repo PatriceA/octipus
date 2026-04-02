@@ -237,6 +237,11 @@ export async function spawnWorker(
 
   let systemPrompt = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
 
+  // === DYNAMIC BOUNDARY ===
+  // Everything above is static (role, rules, identity) — cacheable across requests.
+  // Everything below is dynamic (date, project, profiles) — changes per request.
+  systemPrompt += '\n\n__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__';
+
   // Inject current date/time context so agents know "today"
   const now = new Date();
   systemPrompt += `\n\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
@@ -266,6 +271,22 @@ If the file doesn't exist, create it.`;
     if (projectSummary) {
       systemPrompt += `\n\n--- Existing Project Summary ---\n${projectSummary}`;
     }
+  }
+
+  // Inject git status/diff for code-aware roles (gives agents awareness of pending changes)
+  const GIT_AWARE_ROLES = new Set(['coding', 'review', 'devops', 'security', 'qa']);
+  if (GIT_AWARE_ROLES.has(agentRole)) {
+    try {
+      const { execSync } = await import('child_process');
+      const gitCwd = devProjectPath || getConfig().workspace?.rootPath || process.cwd();
+      const gitStatus = execSync('git status --short 2>/dev/null | head -20', { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8' }).trim();
+      const gitDiff = execSync('git diff --stat 2>/dev/null | tail -5', { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8' }).trim();
+      if (gitStatus || gitDiff) {
+        systemPrompt += '\n\n--- Git Status ---';
+        if (gitStatus) systemPrompt += `\n${gitStatus}`;
+        if (gitDiff) systemPrompt += `\n\nDiff summary:\n${gitDiff}`;
+      }
+    } catch { /* not a git repo or git unavailable */ }
   }
 
   // Inject user profile context + related profiles for people-related queries

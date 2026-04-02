@@ -235,7 +235,26 @@ export class AgentWorker extends BaseAgentWorker {
         throw new Error(`Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`);
       }
 
-      // Compact messages if needed
+      // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
+      // This prevents context window overflow before it happens (inspired by claw-code-parity's 100K threshold)
+      const AUTO_COMPACT_THRESHOLD = 100_000;
+      if (this.totalTokensUsed > AUTO_COMPACT_THRESHOLD && this.messages.length > 10) {
+        const { messages: proactiveCompacted, removed: proactiveRemoved } = await compactMessagesWithSummary(this.messages, {
+          maxTokens: Math.floor(this.config.contextWindowSize * 0.6),
+          preserveSystemMessages: true,
+          preserveRecentCount: 10,
+          summaryModel: this.context.model,
+        });
+        if (proactiveRemoved > 0) {
+          this.messages = proactiveCompacted;
+          agentLogger.info({
+            agentId: this.context.id, iteration: this.iteration,
+            messagesRemoved: proactiveRemoved, totalTokens: this.totalTokensUsed,
+          }, 'Proactive compaction triggered (token threshold)');
+        }
+      }
+
+      // Regular compaction: compact if messages approach context window limit
       const { messages: compactedMessages, removed } = await compactMessagesWithSummary(this.messages, {
         maxTokens: this.config.contextWindowSize,
         preserveSystemMessages: true,
