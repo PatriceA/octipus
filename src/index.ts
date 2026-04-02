@@ -51,6 +51,11 @@ async function main() {
     await loadRuntimeConfig();
     logger.info('Runtime configuration loaded');
 
+    // Initialize permission rule engine (deny→allow→ask patterns)
+    const { initPermissionRules } = await import('@/security/permission-rules');
+    await initPermissionRules();
+    logger.info('Permission rules initialized');
+
     // Subscribe to settings changes for hot-reload
     initializeHotReload();
 

@@ -46,7 +46,8 @@ export class PermissionManager {
   }
 
   /**
-   * Check if an action is permitted
+   * Check if an action is permitted.
+   * Evaluation order: rule engine (deny→allow→ask) → DB policy → tool default.
    */
   async check(
     userId: string,
@@ -54,7 +55,26 @@ export class PermissionManager {
     action: string,
     context?: Record<string, unknown>
   ): Promise<PermissionCheckResult> {
-    // Get permission configuration
+    // 1. Check rule engine first (deny→allow→ask pattern matching)
+    try {
+      const { getPermissionRuleEngine } = await import('./permission-rules');
+      const ruleEngine = getPermissionRuleEngine();
+      if (ruleEngine.getRuleCount() > 0) {
+        const ruleResult = ruleEngine.evaluate(toolId, action, context);
+        if (ruleResult) {
+          switch (ruleResult.decision) {
+            case 'deny':
+              return { allowed: false, level: 'DENY', requiresApproval: false, reason: `Denied by rule: ${ruleResult.rule}` };
+            case 'allow':
+              return { allowed: true, level: 'ALLOW', requiresApproval: false };
+            case 'ask':
+              return { allowed: false, level: 'ASK', requiresApproval: true, reason: `Requires approval: ${ruleResult.rule}` };
+          }
+        }
+      }
+    } catch { /* rule engine not initialized */ }
+
+    // 2. Get permission configuration from DB
     const permission = await this.db
       .select()
       .from(toolPermissions)
