@@ -218,9 +218,9 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
   return (
     <Box flexDirection="column" height="100%">
       {/* Header */}
-      <Box borderStyle="single" borderColor="cyan" paddingX={1} justifyContent="space-between">
+      <Box borderStyle="single" borderColor="#A0B8CF" paddingX={1} justifyContent="space-between">
         <Box>
-          <Text bold color="cyan">Assistant</Text>
+          <Text bold color="#A0B8CF">Assistant</Text>
           <Text> </Text>
           <Text color={statusColor}>●</Text>
           {activeExpert && (
@@ -250,7 +250,7 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
             ) : msg.role === 'assistant' ? (
               <Text color="white" wrap="wrap">{'  '}{sanitizeEmoji(msg.content)}</Text>
             ) : (
-              <Text color="cyan" dimColor>{'  '}{sanitizeEmoji(msg.content)}</Text>
+              <Text color="#A0B8CF">{'  '}{sanitizeEmoji(msg.content)}</Text>
             )}
           </Box>
         ))}
