@@ -9,6 +9,7 @@ import {
   Shield,
   Sliders,
   Smartphone,
+  Phone,
 } from 'lucide-react';
 import { GeneralTab } from '@/components/settings/general-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
@@ -17,6 +18,7 @@ import { ChannelsTab } from '@/components/settings/channels-tab';
 import { SecurityTab } from '@/components/settings/security-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { MobileTab } from '@/components/settings/mobile-tab';
+import { VoiceTab } from '@/components/settings/voice-tab';
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('general');
@@ -27,6 +29,7 @@ export default function SettingsPage() {
     { id: 'integrations', label: 'Integrations', icon: Plug },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'security', label: 'Security', icon: Shield },
+    { id: 'voice', label: 'Voice & Calls', icon: Phone },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'mobile', label: 'Mobile App', icon: Smartphone },
   ];
@@ -67,6 +70,7 @@ export default function SettingsPage() {
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'channels' && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}
+          {activeTab === 'voice' && <VoiceTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'mobile' && <MobileTab />}
         </div>
