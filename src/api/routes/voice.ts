@@ -78,8 +78,11 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       const client = getLiteLLMClient();
       const registry = getModelRegistry();
 
-      // Use the voice model (fast, small) or the session's expert model
-      const voiceModelId = session.metadata.voiceModel as string
+      // Model priority: per-call override → voice.model setting → system default
+      const { getSettingsService } = await import('@/config/settings-service');
+      const settings = getSettingsService();
+      const voiceModelId = (session.metadata.voiceModel as string)
+        || (await settings.get('voice.model') as string | null)
         || (await registry.getDefaultModel())?.modelId
         || 'qwen3:14b';
 

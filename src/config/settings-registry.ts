@@ -601,6 +601,22 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'voice.model',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: null,
+    description: 'Model to use for voice call conversations. Use a fast model for low latency (e.g., a local Ollama model). Falls back to the system default model if not set.',
+    isSecret: false,
+  },
+  {
+    key: 'voice.expertPrompt',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: null,
+    description: 'System prompt for voice call conversations. Defaults to a short conversational prompt if not set. Tip: keep it brief — long prompts add latency.',
+    isSecret: false,
+  },
+  {
     key: 'voice.telephonyProvider',
     category: 'voice',
     valueType: 'string',
