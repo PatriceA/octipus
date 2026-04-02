@@ -273,6 +273,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       try {
         const { getCostTracker } = await import('@/models/cost-tracker');
         const costTracker = getCostTracker();
+        if (!ctx.sessionId) return { text: 'No active session.' };
         const usage = await costTracker.getSessionStats(ctx.sessionId);
         if (!usage || (usage.totalInputTokens === 0 && usage.totalOutputTokens === 0)) {
           return { text: 'No token usage recorded for this session yet.' };

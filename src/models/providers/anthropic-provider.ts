@@ -71,7 +71,7 @@ export class AnthropicProvider implements ModelProvider {
 
       // Extract cache stats from Anthropic's response (available via extra fields)
       const rawUsage = response.usage as Record<string, unknown> | undefined;
-      const cacheReadTokens = (rawUsage?.cache_read_input_tokens || rawUsage?.prompt_tokens_details?.cached_tokens || 0) as number;
+      const cacheReadTokens = (rawUsage?.cache_read_input_tokens || (rawUsage?.prompt_tokens_details as any)?.cached_tokens || 0) as number;
       const cacheCreationTokens = (rawUsage?.cache_creation_input_tokens || 0) as number;
 
       const result: CompletionResult = {

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { eq, and, desc } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { hooks, type Hook, type NewHook } from '@/db/schema/hooks';
+import { hooks, hooks as hooksSchema, type Hook, type NewHook } from '@/db/schema/hooks';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { matchesTrigger, checkConditions, type TriggerEvent, type TriggerContext } from './triggers';
 import { executeAction, type ActionResult } from './actions';
@@ -167,15 +167,17 @@ export class HookManager extends EventEmitter {
     args: Record<string, unknown>,
     result?: { output?: unknown; error?: string },
   ): Promise<{ decision: 'allow' | 'deny'; message?: string }> {
-    const hooks = this.hookCache.get(phase) || [];
-    if (hooks.length === 0) return { decision: 'allow' };
+    const matchingHooks = this.hookCache.get(phase) || [];
+    if (matchingHooks.length === 0) return { decision: 'allow' };
 
-    for (const hook of hooks) {
+    for (const hook of matchingHooks) {
       // Check if hook matches this tool (triggerConfig.toolPattern)
-      const pattern = hook.triggerConfig?.toolPattern as string | undefined;
+      const config = hook.triggerConfig as Record<string, unknown> | null;
+      const pattern = config?.toolPattern as string | undefined;
       if (pattern && pattern !== '*') {
         if (pattern.endsWith(':*')) {
-          if (!toolId.startsWith(pattern.slice(0, -2)) && !toolName.startsWith(pattern.slice(0, -2))) continue;
+          const prefix = pattern.slice(0, -2);
+          if (!toolId.startsWith(prefix) && !toolName.startsWith(prefix)) continue;
         } else if (pattern !== toolId && pattern !== toolName) {
           continue;
         }
@@ -183,23 +185,21 @@ export class HookManager extends EventEmitter {
 
       if (!hook.isEnabled) continue;
 
-      // Execute hook action
       const context: TriggerContext = {
-        sessionId: '',
-        metadata: { toolName, toolId, args, phase, ...result },
+        tool: { name: toolName, toolId, args, result: result?.output },
       };
 
       try {
         const actionResult = await executeAction(hook, context);
 
-        // Update stats
-        await this.db.update(hooks).set({
+        // Update execution stats
+        await this.db.update(hooksSchema).set({
           executionCount: hook.executionCount + 1,
           lastExecutedAt: new Date(),
-        }).where(eq(hooksTable.id, hook.id));
+        }).where(eq(hooksSchema.id, hook.id));
 
         // If the hook action is 'deny' or returns a deny signal, block the tool
-        if (hook.action === 'deny' || (actionResult.data as any)?.deny) {
+        if ((actionResult.data as any)?.deny) {
           return { decision: 'deny', message: actionResult.error || (actionResult.data as any)?.message || `Blocked by hook: ${hook.name}` };
         }
       } catch (err) {

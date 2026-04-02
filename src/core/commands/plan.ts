@@ -234,7 +234,7 @@ registerCommand({
     const sessionData = await sessionRepository.findById(ctx.sessionId);
     const sessionCtx = (sessionData?.context as SessionContext) || {};
     await sessionRepository.update(ctx.sessionId, {
-      context: { ...sessionCtx, activeCommand: undefined, planningState: { brief, active: false, executed: false } },
+      context: { ...sessionCtx, activeCommand: undefined, planningState: { brief, active: false, executed: false } as any },
     });
 
     return {

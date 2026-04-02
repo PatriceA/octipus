@@ -143,6 +143,8 @@ export type TriggerType =
   | 'agent_completed'
   | 'agent_failed'
   | 'tool_executed'
+  | 'tool_pre'
+  | 'tool_post'
   | 'permission_requested'
   | 'schedule'
   | 'webhook';

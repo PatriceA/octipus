@@ -195,7 +195,6 @@ export class ToolExecutor {
             // The orchestrator will handle follow-up with the user.
             throw new Error(`Permission denied for "${toolCall.name}". The user rejected this action.`);
           }
-          }
         } else {
           agentLogger.info(
             { agentId: this.context.id, tool: toolCall.name, role: this.context.role },
