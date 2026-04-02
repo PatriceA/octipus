@@ -11,6 +11,11 @@ interface ChatMessage {
   collapsed?: boolean; // for collapsible tool output
 }
 
+/** Strip variation selectors (U+FE0E, U+FE0F) that break terminal emoji rendering */
+function sanitizeEmoji(text: string): string {
+  return text.replace(/[\uFE0E\uFE0F]/g, '');
+}
+
 interface AgentStats {
   model?: string;
   role?: string;
@@ -241,11 +246,11 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         {visibleMessages.map((msg, i) => (
           <Box key={i} flexDirection="column">
             {msg.role === 'user' ? (
-              <Text color="green" bold>{'❯ '}{msg.content}</Text>
+              <Text color="green" bold>{'❯ '}{sanitizeEmoji(msg.content)}</Text>
             ) : msg.role === 'assistant' ? (
-              <Text color="white" wrap="wrap">{'  '}{msg.content}</Text>
+              <Text color="white" wrap="wrap">{'  '}{sanitizeEmoji(msg.content)}</Text>
             ) : (
-              <Text color="cyan" dimColor>{'  '}{msg.content}</Text>
+              <Text color="cyan" dimColor>{'  '}{sanitizeEmoji(msg.content)}</Text>
             )}
           </Box>
         ))}
@@ -254,8 +259,8 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       {/* Status bar — shows agent activity */}
       {agentRunning && (
         <Box paddingX={1}>
-          <Text color="blue">{SPINNER_FRAMES[spinnerFrame]} </Text>
-          <Text color="blue">
+          <Text color="#7AA2D4">{SPINNER_FRAMES[spinnerFrame]} </Text>
+          <Text color="#7AA2D4">
             {currentTool ? `Running ${currentTool}` : 'Thinking'}
             {agentStats.model ? ` · ${agentStats.model}` : ''}
           </Text>
@@ -276,7 +281,7 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       )}
 
       {/* Input */}
-      <Box borderStyle="single" borderColor={agentRunning ? 'blue' : 'gray'} paddingX={1}>
+      <Box borderStyle="single" borderColor={agentRunning ? '#7AA2D4' : 'gray'} paddingX={1}>
         <Text color="green">{'❯ '}</Text>
         <TextInput
           value={input}
