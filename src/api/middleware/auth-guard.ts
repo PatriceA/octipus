@@ -17,6 +17,8 @@ function isPublicPath(path: string): boolean {
   if (path.startsWith('/api/webhooks/')) return true;
   // Incoming webhooks use per-hook webhookSecret for authentication
   if (path.startsWith('/api/hooks/incoming/')) return true;
+  // Voice telephony webhooks use provider-specific signature verification (Twilio HMAC, Telnyx Ed25519, Plivo HMAC)
+  if (path.startsWith('/api/voice/webhook/')) return true;
   // WhatsApp webhook — Meta calls directly with signature verification
   if (path.startsWith('/api/channels/whatsapp/webhook')) return true;
   // Mobile device pairing — code-based auth
