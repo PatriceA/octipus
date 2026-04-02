@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import TextInput from 'ink-text-input';
 import { GatewayClient, type ConnectionStatus } from './gateway-client';
@@ -8,12 +8,6 @@ interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
-  collapsed?: boolean; // for collapsible tool output
-}
-
-/** Strip variation selectors (U+FE0E, U+FE0F) that break terminal emoji rendering */
-function sanitizeEmoji(text: string): string {
-  return text.replace(/[\uFE0E\uFE0F]/g, '');
 }
 
 interface AgentStats {
@@ -22,11 +16,21 @@ interface AgentStats {
   tokens?: number;
   durationMs?: number;
   costUsd?: number;
-  iterations?: number;
 }
 
-// Braille spinner frames (from claw-code-parity)
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+interface PendingPermission {
+  requestId: string;
+  toolName: string;
+  detail: string;
+}
+
+/** Strip variation selectors (U+FE0E, U+FE0F) that break terminal emoji rendering */
+function sanitizeEmoji(text: string): string {
+  return text.replace(/[\uFE0E\uFE0F]/g, '');
+}
+
+// Braille spinner frames
+const SPINNER = ['\u280B', '\u2819', '\u2839', '\u2838', '\u283C', '\u2834', '\u2826', '\u2827', '\u2807', '\u280F'];
 
 interface TuiAppProps {
   gatewayUrl?: string;
@@ -35,7 +39,7 @@ interface TuiAppProps {
 export function TuiApp({ gatewayUrl }: TuiAppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'system', content: 'Welcome to the Assistant TUI. Type a message or use /help for commands.', timestamp: new Date() },
+    { role: 'system', content: 'Welcome to the Assistant TUI. Type a message or /help for commands.', timestamp: new Date() },
   ]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
@@ -45,8 +49,8 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
   const [agentStats, setAgentStats] = useState<AgentStats>({});
   const [cumulativeStats, setCumulativeStats] = useState({ tokens: 0, cost: 0, turns: 0 });
   const [currentTool, setCurrentTool] = useState<string | null>(null);
+  const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
 
-  // Generate a real UUID for this TUI session
   const [sessionId] = useState(() => {
     const hex = randomBytes(16).toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
@@ -55,9 +59,7 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
   // Spinner animation
   useEffect(() => {
     if (!agentRunning) return;
-    const interval = setInterval(() => {
-      setSpinnerFrame(f => (f + 1) % SPINNER_FRAMES.length);
-    }, 80);
+    const interval = setInterval(() => setSpinnerFrame(f => (f + 1) % SPINNER.length), 80);
     return () => clearInterval(interval);
   }, [agentRunning]);
 
@@ -72,19 +74,15 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         setMessages([{ role: 'system', content: 'Chat cleared.', timestamp: new Date() }]);
         return;
       }
-
-      // Handle /cost command locally
       if (name === 'cost') {
-        const content = `Token usage: ${cumulativeStats.tokens.toLocaleString()} tokens · ${cumulativeStats.turns} turns` +
-          (cumulativeStats.cost > 0 ? ` · $${cumulativeStats.cost.toFixed(4)}` : '');
+        const content = `Token usage: ${cumulativeStats.tokens.toLocaleString()} tokens \u00B7 ${cumulativeStats.turns} turns` +
+          (cumulativeStats.cost > 0 ? ` \u00B7 $${cumulativeStats.cost.toFixed(4)}` : '');
         setMessages(prev => [...prev, { role: 'system', content, timestamp: new Date() }]);
         return;
       }
-
       const content = error || (typeof result === 'string' ? result : JSON.stringify(result));
       setMessages(prev => [...prev, { role: 'system', content: `/${name}: ${content}`, timestamp: new Date() }]);
 
-      // Track expert switch from command result
       if (name === 'expert' && !error && typeof result === 'string') {
         if (result.includes('Switched to')) {
           const match = result.match(/Switched to expert: (.+)\./);
@@ -96,6 +94,24 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     },
     onEvent: (event) => {
       const payload = event.payload as any;
+
+      // Permission request
+      if (event.type === 'permission.request') {
+        const toolName = payload?.toolName || payload?.action || 'unknown';
+        const args = payload?.args as Record<string, unknown> | undefined;
+        let detail = toolName;
+        if (args) {
+          const path = args.path || args.file_path || args.filename;
+          const command = args.command;
+          if (path) detail = `${toolName} \u2192 ${path}`;
+          else if (command) {
+            const cmd = String(command);
+            detail = `${toolName} \u2192 ${cmd.length > 80 ? cmd.slice(0, 77) + '...' : cmd}`;
+          }
+        }
+        setPendingPermission({ requestId: payload?.requestId, toolName, detail });
+        return;
+      }
 
       // Agent lifecycle
       if (event.type === 'agent.spawned') {
@@ -116,39 +132,20 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         if (stats) {
           const tokens = stats.totalTokens || stats.total_tokens || 0;
           const cost = stats.totalCostUsd || stats.total_cost_usd || 0;
-          setAgentStats(prev => ({
-            ...prev,
-            tokens,
-            durationMs: stats.durationMs || stats.duration_ms,
-            costUsd: cost,
-            iterations: stats.iterations || stats.numTurns || stats.num_turns,
-          }));
-          setCumulativeStats(prev => ({
-            tokens: prev.tokens + tokens,
-            cost: prev.cost + cost,
-            turns: prev.turns + 1,
-          }));
+          setAgentStats(prev => ({ ...prev, tokens, durationMs: stats.durationMs || stats.duration_ms, costUsd: cost }));
+          setCumulativeStats(prev => ({ tokens: prev.tokens + tokens, cost: prev.cost + cost, turns: prev.turns + 1 }));
         }
-        setMessages(prev => [...prev, {
-          role: 'system',
-          content: 'Agent completed.',
-          timestamp: new Date(),
-        }]);
+        setMessages(prev => [...prev, { role: 'system', content: 'Agent completed.', timestamp: new Date() }]);
       }
 
-      // Agent tool use
+      // Tool use
       if (event.type === 'agent.action') {
         const data = payload?.data || payload;
-        if (data?.type === 'tool_call' || data?.type === 'cli_tool_use') {
-          const toolName = data.toolName || data.tool_name || 'tool';
-          setCurrentTool(toolName);
-        }
-        if (data?.type === 'cli_tool_result' || data?.type === 'tool_result') {
-          setCurrentTool(null);
-        }
+        if (data?.type === 'tool_call' || data?.type === 'cli_tool_use') setCurrentTool(data.toolName || data.tool_name || 'tool');
+        if (data?.type === 'cli_tool_result' || data?.type === 'tool_result') setCurrentTool(null);
       }
 
-      // Chat responses
+      // Chat response
       if (event.type === 'chat.response') {
         const text = payload?.response?.response || payload?.response || '';
         if (text && typeof text === 'string') {
@@ -174,6 +171,23 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     if (!value.trim()) return;
     setInput('');
 
+    // Handle permission response
+    if (pendingPermission) {
+      const lower = value.trim().toLowerCase();
+      const approved = /^(y|yes|ok|allow|approve|sure|go)$/i.test(lower);
+      const denied = /^(n|no|deny|reject|cancel|abort)$/i.test(lower);
+      if (approved || denied) {
+        client.respondPermission(pendingPermission.requestId, approved);
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: approved ? `Approved: ${pendingPermission.toolName}` : `Denied: ${pendingPermission.toolName}`,
+          timestamp: new Date(),
+        }]);
+        setPendingPermission(null);
+        return;
+      }
+    }
+
     setMessages(prev => [...prev, { role: 'user', content: value, timestamp: new Date() }]);
 
     if (value.startsWith('/')) {
@@ -182,63 +196,39 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       const args: Record<string, string> = {};
       if (parts.length > 1) args.value = parts.slice(1).join(' ');
 
-      if (cmdName === 'exit' || cmdName === 'quit') {
-        client.disconnect();
-        exit();
-        return;
-      }
-
-      // Handle /cost locally
+      if (cmdName === 'exit' || cmdName === 'quit') { client.disconnect(); exit(); return; }
       if (cmdName === 'cost') {
-        const content = `Token usage: ${cumulativeStats.tokens.toLocaleString()} tokens · ${cumulativeStats.turns} turns` +
-          (cumulativeStats.cost > 0 ? ` · $${cumulativeStats.cost.toFixed(4)}` : '');
+        const content = `Token usage: ${cumulativeStats.tokens.toLocaleString()} tokens \u00B7 ${cumulativeStats.turns} turns` +
+          (cumulativeStats.cost > 0 ? ` \u00B7 $${cumulativeStats.cost.toFixed(4)}` : '');
         setMessages(prev => [...prev, { role: 'system', content: `/cost: ${content}`, timestamp: new Date() }]);
         return;
       }
-
       client.sendCommand(cmdName, Object.keys(args).length > 0 ? args : undefined);
     } else {
       client.sendChat(sessionId, value);
     }
-  }, [client, sessionId, exit, cumulativeStats]);
+  }, [client, sessionId, exit, cumulativeStats, pendingPermission]);
 
   useInput((input, key) => {
-    if (key.ctrl && input === 'c') {
-      client.disconnect();
-      exit();
-    }
+    if (key.ctrl && input === 'c') { client.disconnect(); exit(); }
   });
 
-  const statusColor = status === 'connected' ? 'green'
-    : status === 'connecting' || status === 'authenticating' ? 'yellow'
-    : 'red';
+  const statusDot = status === 'connected' ? '\x1b[32m\u25CF\x1b[0m'
+    : status === 'connecting' || status === 'authenticating' ? '\x1b[33m\u25CF\x1b[0m'
+    : '\x1b[31m\u25CF\x1b[0m';
 
   const visibleMessages = messages.slice(-30);
 
   return (
     <Box flexDirection="column" height="100%">
-      {/* Header */}
-      <Box borderStyle="single" borderColor="#A0B8CF" paddingX={1} justifyContent="space-between">
-        <Box>
-          <Text bold color="#A0B8CF">Assistant</Text>
-          <Text> </Text>
-          <Text color={statusColor}>●</Text>
-          {activeExpert && (
-            <>
-              <Text> </Text>
-              <Text color="yellow">⟨{activeExpert}⟩</Text>
-            </>
-          )}
-        </Box>
-        <Box>
-          {cumulativeStats.tokens > 0 && (
-            <Text color="gray">{cumulativeStats.tokens.toLocaleString()} tok</Text>
-          )}
-          {cumulativeStats.cost > 0 && (
-            <Text color="gray"> · ${cumulativeStats.cost.toFixed(4)}</Text>
-          )}
-          <Text color="gray"> {sessionId.slice(0, 8)}</Text>
-        </Box>
+      {/* Minimal header — just title + connection */}
+      <Box paddingX={1}>
+        <Text bold color="#A0B8CF">Assistant</Text>
+        <Text> </Text>
+        <Text color={status === 'connected' ? 'green' : status === 'error' ? 'red' : 'yellow'}>{'\u25CF'}</Text>
+        {cumulativeStats.tokens > 0 && (
+          <Text color="gray"> {'\u00B7'} {cumulativeStats.tokens.toLocaleString()} tok</Text>
+        )}
       </Box>
 
       {/* Chat messages */}
@@ -246,7 +236,7 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         {visibleMessages.map((msg, i) => (
           <Box key={i} flexDirection="column">
             {msg.role === 'user' ? (
-              <Text color="green" bold>{'❯ '}{sanitizeEmoji(msg.content)}</Text>
+              <Text color="green" bold>{'\u276F '}{sanitizeEmoji(msg.content)}</Text>
             ) : msg.role === 'assistant' ? (
               <Text color="#FFFFFF" wrap="wrap">{'  '}{sanitizeEmoji(msg.content)}</Text>
             ) : (
@@ -256,38 +246,58 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         ))}
       </Box>
 
-      {/* Status bar — shows agent activity */}
+      {/* Activity bar — spinner when agent running */}
       {agentRunning && (
         <Box paddingX={1}>
-          <Text color="#7AA2D4">{SPINNER_FRAMES[spinnerFrame]} </Text>
+          <Text color="#7AA2D4">{SPINNER[spinnerFrame]} </Text>
           <Text color="#7AA2D4">
             {currentTool ? `Running ${currentTool}` : 'Thinking'}
-            {agentStats.model ? ` · ${agentStats.model}` : ''}
+            {agentStats.model ? ` \u00B7 ${agentStats.model}` : ''}
           </Text>
         </Box>
       )}
 
-      {/* Last agent stats (shown briefly after completion) */}
+      {/* Last agent stats */}
       {!agentRunning && agentStats.tokens && agentStats.tokens > 0 && (
         <Box paddingX={1}>
           <Text color="gray" dimColor>
-            {'  '}📊 {agentStats.tokens?.toLocaleString()} tokens
-            {agentStats.durationMs ? ` · ${(agentStats.durationMs / 1000).toFixed(1)}s` : ''}
-            {agentStats.costUsd ? ` · $${agentStats.costUsd.toFixed(4)}` : ''}
-            {agentStats.model ? ` · ${agentStats.model}` : ''}
-            {agentStats.role ? ` · ${agentStats.role}` : ''}
+            {'  '}{agentStats.tokens?.toLocaleString()} tok
+            {agentStats.durationMs ? ` \u00B7 ${(agentStats.durationMs / 1000).toFixed(1)}s` : ''}
+            {agentStats.costUsd ? ` \u00B7 $${agentStats.costUsd.toFixed(4)}` : ''}
+            {agentStats.model ? ` \u00B7 ${agentStats.model}` : ''}
           </Text>
         </Box>
       )}
 
+      {/* Permission prompt */}
+      {pendingPermission && (
+        <Box paddingX={1} borderStyle="single" borderColor="yellow">
+          <Text color="yellow" bold>{'\u26A0'} Permission: </Text>
+          <Text color="#FFFFFF">{pendingPermission.detail}</Text>
+          <Text color="gray">  (y/n)</Text>
+        </Box>
+      )}
+
+      {/* Footer — expert + session (always visible below chat) */}
+      <Box paddingX={1} justifyContent="space-between">
+        <Box>
+          {activeExpert ? (
+            <Text color="yellow">{'\u27E8'}{activeExpert}{'\u27E9'}</Text>
+          ) : (
+            <Text color="gray">auto-route</Text>
+          )}
+        </Box>
+        <Text color="gray">{sessionId.slice(0, 8)}</Text>
+      </Box>
+
       {/* Input */}
-      <Box borderStyle="single" borderColor={agentRunning ? '#7AA2D4' : 'gray'} paddingX={1}>
-        <Text color="green">{'❯ '}</Text>
+      <Box borderStyle="single" borderColor={pendingPermission ? 'yellow' : agentRunning ? '#7AA2D4' : 'gray'} paddingX={1}>
+        <Text color="green">{'\u276F '}</Text>
         <TextInput
           value={input}
           onChange={setInput}
           onSubmit={handleSubmit}
-          placeholder={agentRunning ? 'Agent working...' : 'Type a message or /command...'}
+          placeholder={pendingPermission ? 'Type yes or no...' : agentRunning ? 'Agent working...' : 'Type a message or /command...'}
         />
       </Box>
     </Box>

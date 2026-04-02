@@ -108,6 +108,13 @@ export class GatewayClient {
   }
 
   /**
+   * Respond to a permission request.
+   */
+  respondPermission(requestId: string, approved: boolean): void {
+    this.send({ type: 'approval.respond', requestId, response: approved ? 'yes' : 'no', approved });
+  }
+
+  /**
    * Subscribe to event patterns.
    */
   subscribe(patterns: string[]): void {
