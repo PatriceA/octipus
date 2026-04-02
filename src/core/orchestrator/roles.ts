@@ -84,7 +84,7 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
   },
   communication: {
     role: 'communication',
-    toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'email-processor'],
+    toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'email-processor', 'voice'],
     defaultTopic: 'communication',
     systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, and documents via Google Workspace and Microsoft 365. Always confirm actions that send messages or modify data before executing them.
 
