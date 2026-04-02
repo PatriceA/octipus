@@ -274,7 +274,7 @@ export default function PromptInput({
   }, []);
 
   // Voice input via Web Speech API
-  const toggleVoice = useCallback(() => {
+  const toggleVoice = useCallback(async () => {
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
