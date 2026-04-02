@@ -344,23 +344,28 @@ export class OllamaProvider implements ModelProvider {
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
     return messages.map((msg) => {
       if (msg.role === 'tool') {
+        // Ollama's OpenAI-compat endpoint requires tool_call_id to match the
+        // assistant's tool_calls[].id exactly, and content must be a string.
+        // Ensure content is always a plain string (not undefined/null).
         return {
           role: 'tool' as const,
-          content: msg.content,
-          tool_call_id: msg.toolCallId || '',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+          tool_call_id: msg.toolCallId || 'call_0',
         };
       }
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        // Ollama requires content to be null (not empty string) when tool_calls are present.
+        // Some Ollama versions reject the message if content is '' alongside tool_calls.
         return {
           role: 'assistant' as const,
-          content: msg.content || null,
-          tool_calls: msg.toolCalls.map((tc) => ({
-            id: tc.id,
+          content: msg.content?.trim() || null,
+          tool_calls: msg.toolCalls.map((tc, i) => ({
+            id: tc.id || `call_${i}`,
             type: 'function' as const,
             function: {
               name: tc.name,
-              arguments: JSON.stringify(tc.arguments),
+              arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
             },
           })),
         };
