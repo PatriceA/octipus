@@ -1,10 +1,23 @@
 import { registerCommand } from './registry';
 
 const iconToEmoji: Record<string, string> = {
-  code: '💻', eye: '👀', search: '🔍', palette: '🎨', server: '🔧',
-  shield: '🔒', database: '🗃', brain: '🧠', 'check-circle': '✅',
-  'trending-up': '📈', workflow: '🔄', clipboard: '📋', 'book-open': '📖',
-  mail: '📩', bot: '🤖', 'file-text': '📄', 'bar-chart': '📊',
+  'file-text': '\u25A0',  // Summarizer — ■
+  'bar-chart': '\u25B2',  // Data Analyst — ▲
+  search: '\u25C6',       // Researcher — ◆
+  shield: '\u25C8',       // Security — ◈
+  'book-open': '\u25B6',  // Technical Writer — ▶
+  bot: '\u25CF',          // General — ●
+  server: '\u25A1',       // DevOps — □
+  database: '\u25A3',     // Data Engineer — ▣
+  brain: '\u2605',        // AI Engineer — ★
+  'check-circle': '\u2713', // QA Engineer — ✓
+  'trending-up': '\u25B3', // Financial — △
+  code: '\u2302',         // Coder — ⌂
+  mail: '\u2709',         // Communicator — ✉
+  eye: '\u25CE',          // Reviewer — ◎
+  palette: '\u2740',      // UI/UX Designer — ❀
+  workflow: '\u21BB',      // Automation — ↻
+  clipboard: '\u2630',    // PM — ☰
 };
 
 async function handleExpert(ctx: import('./registry').CommandContext): Promise<import('./registry').CommandResult> {

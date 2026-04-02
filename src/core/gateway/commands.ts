@@ -174,13 +174,15 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
             role: expertsTable.role,
           }).from(expertsTable).where(conditions);
           const iconToEmoji: Record<string, string> = {
-            code: '💻', eye: '👀', search: '🔍', palette: '🎨', server: '🔧',
-            shield: '🔒', database: '🗃', brain: '🧠', 'check-circle': '✅',
-            'trending-up': '📈', workflow: '🔄', clipboard: '📋', 'book-open': '📖',
-            mail: '📩', bot: '🤖', 'file-text': '📄', 'bar-chart': '📊',
+            'file-text': '\u25A0', 'bar-chart': '\u25B2', search: '\u25C6',
+            shield: '\u25C8', 'book-open': '\u25B6', bot: '\u25CF',
+            server: '\u25A1', database: '\u25A3', brain: '\u2605',
+            'check-circle': '\u2713', 'trending-up': '\u25B3', code: '\u2302',
+            mail: '\u2709', eye: '\u25CE', palette: '\u2740',
+            workflow: '\u21BB', clipboard: '\u2630',
           };
           const lines = experts.map(e => {
-            const emoji = iconToEmoji[e.icon || ''] || '🤖';
+            const emoji = iconToEmoji[e.icon || ''] || '\u25CF';
             return `  ${emoji} ${e.name} — ${e.description || e.role}`;
           });
           return { text: `Available experts:\n${lines.join('\n')}\n\nUse /expert <name> to switch, /expert reset to auto-route.` };

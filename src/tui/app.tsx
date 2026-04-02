@@ -248,7 +248,7 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
             {msg.role === 'user' ? (
               <Text color="green" bold>{'❯ '}{sanitizeEmoji(msg.content)}</Text>
             ) : msg.role === 'assistant' ? (
-              <Text color="white" wrap="wrap">{'  '}{sanitizeEmoji(msg.content)}</Text>
+              <Text color="#FFFFFF" wrap="wrap">{'  '}{sanitizeEmoji(msg.content)}</Text>
             ) : (
               <Text color="#A0B8CF">{'  '}{sanitizeEmoji(msg.content)}</Text>
             )}
