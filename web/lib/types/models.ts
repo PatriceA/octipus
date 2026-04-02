@@ -67,6 +67,7 @@ export const AVAILABLE_TOPICS = [
   { value: 'automation', label: 'Automation', description: 'Workflows, process orchestration' },
   { value: 'pm', label: 'Project Mgmt', description: 'Project planning, tracking, coordination' },
   { value: 'writing', label: 'Writing', description: 'Documentation, technical writing' },
+  { value: 'voice', label: 'Voice', description: 'Phone call conversations — use a fast model for low latency' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */
