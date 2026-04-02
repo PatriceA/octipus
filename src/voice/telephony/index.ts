@@ -49,7 +49,9 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
       const accountSid = await getSecret('twilio_account_sid');
       const authToken = await getSecret('twilio_auth_token');
       if (!accountSid || !authToken) return null;
-      const fromNumber = await getSecret('twilio_phone_number') || '';
+      // Phone number: setting first, vault fallback, auto-detect last
+      const fromNumber = (await settings.get('voice.phoneNumber') as string | null)
+        || await getSecret('twilio_phone_number') || '';
 
       const { TwilioProvider } = await import('./twilio');
       cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber });
@@ -59,7 +61,8 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
     case 'telnyx': {
       const apiKey = await getSecret('telnyx_api_key');
       const connectionId = await getSecret('telnyx_connection_id') || '';
-      const fromNumber = await getSecret('telnyx_phone_number') || '';
+      const fromNumber = (await settings.get('voice.phoneNumber') as string | null)
+        || await getSecret('telnyx_phone_number') || '';
       const publicKey = await getSecret('telnyx_public_key') || undefined;
       if (!apiKey) return null;
 
@@ -71,7 +74,8 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
     case 'plivo': {
       const authId = await getSecret('plivo_auth_id');
       const authToken = await getSecret('plivo_auth_token');
-      const fromNumber = await getSecret('plivo_phone_number') || '';
+      const fromNumber = (await settings.get('voice.phoneNumber') as string | null)
+        || await getSecret('plivo_phone_number') || '';
       if (!authId || !authToken) return null;
 
       const { PlivoProvider } = await import('./plivo');

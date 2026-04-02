@@ -609,6 +609,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'voice.phoneNumber',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: null,
+    description: 'Your phone number (E.164 format, e.g., +1234567890). Auto-detected from Twilio if not set.',
+    isSecret: false,
+  },
+  {
     key: 'voice.publicUrl',
     category: 'voice',
     valueType: 'string',
