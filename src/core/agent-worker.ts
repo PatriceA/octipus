@@ -443,6 +443,14 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Strip raw tool call JSON that some models (e.g. Ollama/qwen3) emit as text
       response = response.replace(/\{"id":\s*"call_[^"]*",\s*"type":\s*"function",\s*"function":\s*\{[^}]*\}\s*\}/g, '').trim();
+
+      // Strip thinking/reasoning JSON blocks that some models (e.g. gemma4) emit as text
+      response = response.replace(/\{"(?:thought|thinking|reasoning)"\s*:\s*"[\s\S]*?"\s*\}/g, '').trim();
+
+      // Strip repetitive text loops (e.g. "A task orchestrator. A task orchestrator. A task...")
+      // Detect any phrase repeated 5+ times and truncate
+      response = response.replace(/(.{10,}?)\1{4,}/g, '$1').trim();
+
       if (!response) response = 'I was unable to generate a response.';
 
       // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
@@ -489,9 +497,14 @@ export class AgentWorker extends BaseAgentWorker {
       ? { ...metadata.extraBody }
       : undefined;
 
+    // Only enable thinking for expert mode on models that handle it well (Qwen3).
+    // Gemma4 and other models output raw JSON thinking that pollutes the response.
     if (this.context.metadata?.isExpert && extraBody && 'think' in extraBody) {
-      delete extraBody.think; // Let the model think in expert mode
-      if (Object.keys(extraBody).length === 0) extraBody = undefined;
+      const modelLower = litellmModel.toLowerCase();
+      if (modelLower.includes('qwen')) {
+        delete extraBody.think; // Let Qwen think in expert mode
+        if (Object.keys(extraBody).length === 0) extraBody = undefined;
+      }
     }
 
     // Resolve API key from vault for custom/direct providers
