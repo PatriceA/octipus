@@ -509,16 +509,30 @@ export async function initializeChannels(): Promise<void> {
           const agentManager = getAgentManager();
           unsubAgentEvents = agentManager.onEvent((event: any) => {
             if (isTerminal) return;
-            // Match events from agents in this session
-            const data = event.data || event;
-            if (data?.sessionId !== resolvedSessionId && event.sessionId !== resolvedSessionId) return;
-            if (event.type === 'action' && data?.type === 'tool_call') {
+            // Match events from agents in this session (check multiple possible locations)
+            const data = event.data || {};
+            const eventSessionId = data.sessionId || event.sessionId || data.context?.sessionId;
+            if (eventSessionId !== resolvedSessionId) return;
+
+            if (event.type === 'action') {
+              const actionType = data.type || '';
+              if (actionType === 'tool_call' || actionType === 'cli_tool_use') {
+                resetStallTimer();
+                const toolId = data.toolId || '';
+                const toolName = data.toolName || '';
+                react(toolEmojis[toolId] || toolEmojis[toolName] || '🔧');
+              }
+            }
+            // Keep typing alive on any agent event
+            if (event.type === 'thought' || event.type === 'action' || event.type === 'observation') {
               resetStallTimer();
-              const toolId = data.toolId || '';
-              react(toolEmojis[toolId] || '🔧');
             }
           });
         } catch { /* agent manager not ready */ }
+
+        // Track spawned workers to know when the LAST one completes
+        let activeWorkers = 0;
+        const sentStatuses = new Set<string>();
 
         unsubscribe = orchestrator.onEvent((event) => {
           if (event.sessionId !== resolvedSessionId) return;
@@ -526,19 +540,47 @@ export async function initializeChannels(): Promise<void> {
 
           switch (event.type) {
             case 'worker_spawned': {
-              const d = event.data as { role?: string };
-              react(roleEmojis[d.role || ''] || '🧠');
+              const d = event.data as { role?: string; model?: string; workerId?: string };
+              const role = d.role === 'orchestrator' ? null : d.role;
+              activeWorkers++;
+
+              if (role) {
+                react(roleEmojis[role] || '🧠');
+                // Send text feedback for non-orchestrator workers (once per role)
+                const key = `spawned-${role}`;
+                if (!sentStatuses.has(key)) {
+                  sentStatuses.add(key);
+                  const model = d.model && d.model !== 'direct' ? ` (${d.model})` : '';
+                  umi.send(message.channelType, message.channelId, {
+                    content: `Working on it \u2014 started *${role}* agent${model}.`,
+                    replyTo: platformMessageId,
+                  }).catch(() => {});
+                }
+              } else if (!sentStatuses.has('ack')) {
+                sentStatuses.add('ack');
+                react('🤔');
+              }
               break;
             }
             case 'worker_completed': {
-              const d = event.data as { status?: string; error?: string };
-              isTerminal = true;
-              stopTypingAndStall();
-              react(d.status === 'failed' || d.error ? '❌' : '✅');
+              activeWorkers = Math.max(0, activeWorkers - 1);
+              const d = event.data as { status?: string; error?: string; role?: string };
+              // Only mark terminal when ALL workers are done
+              if (activeWorkers <= 0) {
+                isTerminal = true;
+                stopTypingAndStall();
+                react(d.status === 'failed' || d.error ? '❌' : '✅');
+              }
               break;
             }
             case 'team_started': {
+              const d = event.data as { members?: Array<{ role: string }> };
+              const roles = d.members?.map(m => m.role).join(', ') || 'multiple';
               react('🧠');
+              umi.send(message.channelType, message.channelId, {
+                content: `Started a team of agents (${roles}).`,
+                replyTo: platformMessageId,
+              }).catch(() => {});
               break;
             }
             case 'team_completed': {
@@ -552,8 +594,16 @@ export async function initializeChannels(): Promise<void> {
               break;
             }
             case 'status_update': {
-              const d = event.data as { stage?: string };
+              const d = event.data as { stage?: string; message?: string };
               if (d.stage === 'budget_warning') react('⚠️');
+              // Forward pipeline stage updates as text
+              if (d.message && d.stage && !sentStatuses.has(`status-${d.stage}`)) {
+                sentStatuses.add(`status-${d.stage}`);
+                umi.send(message.channelType, message.channelId, {
+                  content: d.message,
+                  replyTo: platformMessageId,
+                }).catch(() => {});
+              }
               break;
             }
           }
