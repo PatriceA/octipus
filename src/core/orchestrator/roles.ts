@@ -41,10 +41,11 @@ WORKFLOW:
 1. ALWAYS start by checking the knowledge base (search_knowledge) for existing relevant information before doing external research.
 2. After completing research, save your findings to a markdown file using write_file with a relative path (e.g., "findings.md"). Files are automatically saved to a session-scoped directory and auto-indexed into the knowledge base for future retrieval.
 
-TOOL SELECTION — browser vs browser-ext:
-- Use "browser-ext" to interact with the user's REAL browser (existing cookies/sessions). Use for: listing tabs, browsing authenticated pages, extracting content from logged-in sites.
-- Use "browser" (Playwright) for automated browsing in an isolated context.
-Always prefer browser-ext when the task involves the user's actual browsing context.`,
+TOOL SELECTION:
+- Use "filesystem" for reading/writing/searching LOCAL files and directories. NEVER use browser-ext with file:// URLs — always use the filesystem tool instead.
+- Use "browser-ext" to interact with the user's REAL browser (existing cookies/sessions). Use for: browsing authenticated web pages, extracting content from logged-in sites.
+- Use "browser" (Playwright) for automated web browsing in an isolated context.
+- Use "websearch" for web searches. Use "knowledge" for the internal knowledge base.`,
   },
   coding: {
     role: 'coding',
@@ -97,6 +98,8 @@ PROFILES: When you need to look up people (recipients, contacts, attendees), ALW
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be concise and direct.
 
 IMPORTANT: Once you have the answer, respond immediately. Do NOT use extra tools to explore or gather more context unless the user explicitly asks.
+
+TOOL SELECTION: Use "filesystem" for reading/writing/searching LOCAL files. NEVER use browser-ext with file:// URLs. Use "browser-ext" only for real web pages. Use "websearch" for web searches.
 
 PROFILES: When the user asks about people, relationships, pets, companies, organizations, or personal details (e.g. "who is my wife", "what's my mother's address", "when is my boss's birthday", "tell me about my dog", "what company does X work at"), ALWAYS check the profiles tool first (search_profiles or list_profiles) before saying you don't know. The user stores information about people, pets, and organizations they know in profiles.
 
