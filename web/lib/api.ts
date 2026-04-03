@@ -3,22 +3,22 @@ const API_PORT = process.env.NEXT_PUBLIC_API_PORT || '3005';
 /**
  * Get the API URL. Resolution order:
  *   1. NEXT_PUBLIC_API_URL env var (explicit full URL, build-time)
- *   2. Auto-detect from browser hostname + API_PORT (works across LAN)
+ *   2. Same-origin /api proxy (works in Docker and reverse-proxy setups)
+ *   3. Auto-detect from browser hostname + API_PORT (direct access, LAN-friendly)
  *
- * When accessing http://192.168.1.100:3007, the API URL becomes
- * http://192.168.1.100:3005/api automatically — no config needed.
+ * The Next.js rewrite in next.config.mjs proxies /api/* to the backend,
+ * so browser requests stay on the same origin — no cross-port issues.
  */
 export function getApiUrl(): string {
   // Explicit env override takes priority
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
   }
-  // In browser: derive from current hostname
+  // In browser: use same-origin proxy (Next.js rewrites handle routing)
   if (typeof window !== 'undefined') {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:${API_PORT}/api`;
+    return '/api';
   }
-  // SSR fallback
+  // SSR fallback (direct internal access)
   return `http://localhost:${API_PORT}/api`;
 }
 
@@ -100,10 +100,18 @@ class ApiClient {
 
 export const api = new ApiClient();
 
-// WebSocket connection
+// WebSocket connection (direct to backend — can't be proxied through Next.js rewrites)
 export function createWebSocket(path: string = '/ws'): WebSocket {
   const token = api.getToken();
-  const apiUrl = getApiUrl();
-  const wsUrl = apiUrl.replace(/^http/, 'ws').replace('/api', '');
+  let wsUrl: string;
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    wsUrl = process.env.NEXT_PUBLIC_API_URL.replace(/^http/, 'ws').replace('/api', '');
+  } else if (typeof window !== 'undefined') {
+    const { hostname } = window.location;
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    wsUrl = `${wsProtocol}//${hostname}:${API_PORT}`;
+  } else {
+    wsUrl = `ws://localhost:${API_PORT}`;
+  }
   return new WebSocket(`${wsUrl}${path}?token=${token}`);
 }

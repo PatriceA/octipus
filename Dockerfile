@@ -13,6 +13,9 @@ COPY mcp-server/ mcp-server/
 COPY tsconfig.json ./
 
 # Build web frontend
+# NEXT_PUBLIC_API_PORT is baked into client JS at build time (used for WebSocket)
+ARG NEXT_PUBLIC_API_PORT=3005
+ENV NEXT_PUBLIC_API_PORT=${NEXT_PUBLIC_API_PORT}
 RUN cd web && bun install && bun run build
 
 # ---- Runtime stage ----
@@ -20,10 +23,28 @@ FROM oven/bun:1.3-slim
 WORKDIR /app
 
 # Install runtime system dependencies
+# Core: curl, git, ca-certificates (networking & version control)
+# CLI tools: jq, make, wget, tree, less, file, procps, rsync, ripgrep
+# Archives: zip, unzip
+# Remote access: openssh-client
+# Scripting: python3-minimal
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     git \
+    jq \
+    make \
+    wget \
+    tree \
+    less \
+    file \
+    procps \
+    rsync \
+    ripgrep \
+    zip \
+    unzip \
+    openssh-client \
+    python3-minimal \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built app

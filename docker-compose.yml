@@ -1,6 +1,9 @@
 services:
   assistant:
-    build: .
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_PORT: ${ASSISTANT_API_PORT:-3015}
     container_name: assistant-app
     restart: unless-stopped
     env_file:
@@ -34,6 +37,11 @@ services:
       - assistant-workspace:/data/workspace
       - assistant-documents:/data/documents
       - assistant-extensions:/data/extensions
+      # Docker socket: allows the assistant to spawn sibling containers
+      # for running tools not installed in the main container image.
+      # On Linux/macOS: /var/run/docker.sock:/var/run/docker.sock
+      # On Windows (Docker Desktop): //var/run/docker.sock:/var/run/docker.sock
+      - //var/run/docker.sock:/var/run/docker.sock
     depends_on:
       assistant-db:
         condition: service_healthy

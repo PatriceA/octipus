@@ -8,7 +8,7 @@ describe('Config (Unit)', () => {
     test('has required server config', () => {
       const serverConfig = {
         port: 3000,
-        host: '0.0.0.0',
+        host: '127.0.0.1',
         corsOrigins: ['http://localhost:3000'],
         enableSwagger: true,
       };
