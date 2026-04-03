@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Send,
   Mic,
-  MicOff,
+  Square,
   Paperclip,
   X,
   FileText,
@@ -13,6 +13,7 @@ import {
   ArrowUp,
   ArrowDown,
 } from 'lucide-react';
+import { AudioWaveform } from './audio-waveform';
 import { cn } from '@/lib/utils';
 
 export interface Attachment {
@@ -68,6 +69,8 @@ export default function PromptInput({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [browsingHistory, setBrowsingHistory] = useState(false);
@@ -281,11 +284,12 @@ export default function PromptInput({
       return;
     }
 
-    // Fallback: use MediaRecorder + server-side STT (/api/voice/transcribe)
-    // UX: tap mic to start recording, tap again to stop (like Telegram/WhatsApp voice messages)
+    // MediaRecorder + server-side STT (/api/voice/transcribe)
+    // UX: tap mic → waveform + stop button → tap stop → transcribing → result in input
     if (useServerSTT) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setMediaStream(stream);
         const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
           : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg'
           : '';
@@ -294,21 +298,18 @@ export default function PromptInput({
           : new MediaRecorder(stream);
         const format = mimeType.split('/')[1] || 'wav';
         const chunks: Blob[] = [];
-        const startTime = Date.now();
 
         mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
         mediaRecorder.onstop = async () => {
           stream.getTracks().forEach(t => t.stop());
-          const durationSec = Math.round((Date.now() - startTime) / 1000);
+          setMediaStream(null);
+          setIsListening(false);
 
-          // Skip if too short (accidental tap)
-          if (durationSec < 1 || chunks.length === 0) {
-            setIsListening(false);
-            return;
-          }
+          if (chunks.length === 0) return;
 
-          setText('Transcribing...');
+          // Phase: transcribing
+          setIsTranscribing(true);
           const blob = new Blob(chunks, { type: mimeType || 'audio/wav' });
           const buffer = await blob.arrayBuffer();
           const bytes = new Uint8Array(buffer);
@@ -325,16 +326,14 @@ export default function PromptInput({
             });
             const data = await res.json();
             if (data.text) {
-              setText(data.text);
-            } else {
-              setText('');
-              if (data.error) console.error('Transcription error:', data.error);
+              setText((prev: string) => prev ? prev + ' ' + data.text : data.text);
+            } else if (data.error) {
+              console.error('Transcription error:', data.error);
             }
           } catch (err) {
-            setText('');
             console.error('Server STT failed:', err);
           }
-          setIsListening(false);
+          setIsTranscribing(false);
         };
 
         recognitionRef.current = { stop: () => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); } };
@@ -346,6 +345,7 @@ export default function PromptInput({
       } catch (err) {
         alert('Microphone access denied. Check browser permissions.');
         setIsListening(false);
+        setMediaStream(null);
       }
       return;
     }
@@ -516,27 +516,56 @@ export default function PromptInput({
           <Paperclip className="h-4 w-4" />
         </button>
 
-        {/* Mic button — only shown in browsers that support Web Speech API */}
-        {speechSupported && <button
-          type="button"
-          onClick={toggleVoice}
-          className={cn(
-            'relative rounded-lg p-2 transition-colors',
-            isListening
-              ? 'text-error hover:bg-error/10'
-              : 'text-on-surface-variant hover:bg-surface-container-high hover:text-white'
-          )}
-          title={isListening ? 'Stop listening' : 'Voice input'}
-        >
-          {isListening ? (
-            <>
-              <MicOff className="h-4 w-4" />
-              <span className="absolute inset-0 animate-ping rounded-lg border border-error opacity-30" />
-            </>
-          ) : (
+        {/* Voice input — mic button / waveform+stop / transcribing */}
+        {speechSupported && !isListening && !isTranscribing && (
+          <button
+            type="button"
+            onClick={toggleVoice}
+            className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-white"
+            title="Voice input"
+          >
             <Mic className="h-4 w-4" />
-          )}
-        </button>}
+          </button>
+        )}
+
+        {/* Recording: waveform + stop button */}
+        {isListening && mediaStream && (
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-lg bg-error/10 px-2 py-1">
+              <span className="h-2 w-2 rounded-full bg-error animate-pulse" />
+              <AudioWaveform stream={mediaStream} className="h-8 w-32 opacity-80" />
+            </div>
+            <button
+              type="button"
+              onClick={() => recognitionRef.current?.stop()}
+              className="rounded-lg bg-error/20 p-2 text-error transition-colors hover:bg-error/30"
+              title="Stop recording"
+            >
+              <Square className="h-4 w-4 fill-current" />
+            </button>
+          </div>
+        )}
+
+        {/* Browser SpeechRecognition active (Chrome) — simpler indicator */}
+        {isListening && !mediaStream && (
+          <button
+            type="button"
+            onClick={toggleVoice}
+            className="relative rounded-lg p-2 text-error hover:bg-error/10"
+            title="Stop listening"
+          >
+            <Mic className="h-4 w-4" />
+            <span className="absolute inset-0 animate-ping rounded-lg border border-error opacity-30" />
+          </button>
+        )}
+
+        {/* Transcribing indicator */}
+        {isTranscribing && (
+          <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs text-primary animate-pulse">Transcribing...</span>
+          </div>
+        )}
 
         {/* Send button */}
         <button
