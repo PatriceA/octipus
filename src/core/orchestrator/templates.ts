@@ -3,7 +3,7 @@ import { getRoleConfig } from './roles';
 import { getDb } from '@/db/postgres';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
-import { eq, or, isNull } from 'drizzle-orm';
+import { eq, or, isNull, sql } from 'drizzle-orm';
 
 export interface StageTemplate {
   name: string;
@@ -41,21 +41,37 @@ function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
  */
 export async function getPipelineTemplate(nameOrId: string): Promise<PipelineTemplate> {
   const db = getDb();
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId);
 
-  // Try by name first, then by ID
+  // 1. Exact match by name or UUID
+  const exactConditions = isUUID
+    ? or(eq(pipelineTemplates.name, nameOrId), eq(pipelineTemplates.id, nameOrId))
+    : eq(pipelineTemplates.name, nameOrId);
+
   const results = await db
     .select()
     .from(pipelineTemplates)
-    .where(
-      or(
-        eq(pipelineTemplates.name, nameOrId),
-        eq(pipelineTemplates.id, nameOrId),
-      ),
-    )
+    .where(exactConditions)
     .limit(1);
 
   if (results.length > 0) {
     const template = results[0];
+    const steps = template.steps as PipelineStepConfig[];
+    return {
+      type: template.name,
+      stages: steps.map(stepConfigToStageTemplate),
+    };
+  }
+
+  // 2. Fuzzy match: case-insensitive LIKE search (handles "Full Development Cycle" → "full-development-cycle")
+  const fuzzyResults = await db
+    .select()
+    .from(pipelineTemplates)
+    .where(sql`LOWER(${pipelineTemplates.name}) LIKE LOWER(${'%' + nameOrId.replace(/\s+/g, '%') + '%'})`)
+    .limit(1);
+
+  if (fuzzyResults.length > 0) {
+    const template = fuzzyResults[0];
     const steps = template.steps as PipelineStepConfig[];
     return {
       type: template.name,
