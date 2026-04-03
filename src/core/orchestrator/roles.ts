@@ -92,7 +92,7 @@ PROFILES: When you need to look up people (recipients, contacts, attendees), ALW
   },
   general: {
     role: 'general',
-    toolIds: ['browser-ext', 'messaging', 'knowledge', 'scheduling', 'profiles', 'email-processor', 'mcp'],
+    toolIds: ['filesystem', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'scheduling', 'profiles', 'email-processor', 'mcp'],
     defaultTopic: 'general',
     systemPromptTemplate: `You are a general-purpose assistant. Help the user with their request using the tools available to you. Be concise and direct.
 
