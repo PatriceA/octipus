@@ -490,21 +490,19 @@ export class AgentWorker extends BaseAgentWorker {
 
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
-    // Respect the model's configured extraBody (e.g. think:false for Qwen).
-    // Exception: expert mode enables thinking so the model reasons before acting,
-    // which prevents tool-call loops on smaller models.
+    // Respect the model's configured extraBody (e.g. think:false).
+    // The user controls thinking via the model configuration — we never override it
+    // for the orchestrator. For expert workers only, remove think:false so the model
+    // can reason before acting (prevents tool-call loops on smaller models).
     let extraBody = metadata?.extraBody && Object.keys(metadata.extraBody).length > 0
       ? { ...metadata.extraBody }
       : undefined;
 
-    // Only enable thinking for expert mode on models that handle it well (Qwen3).
-    // Gemma4 and other models output raw JSON thinking that pollutes the response.
-    if (this.context.metadata?.isExpert && extraBody && 'think' in extraBody) {
-      const modelLower = litellmModel.toLowerCase();
-      if (modelLower.includes('qwen')) {
-        delete extraBody.think; // Let Qwen think in expert mode
-        if (Object.keys(extraBody).length === 0) extraBody = undefined;
-      }
+    const isExpertWorker = this.context.metadata?.isExpert === true;
+    const isOrchestrator = this.context.role === 'orchestrator';
+    if (isExpertWorker && !isOrchestrator && extraBody && 'think' in extraBody) {
+      delete extraBody.think;
+      if (Object.keys(extraBody).length === 0) extraBody = undefined;
     }
 
     // Resolve API key from vault for custom/direct providers
