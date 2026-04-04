@@ -369,6 +369,9 @@ If the file doesn't exist, create it.`;
     systemPrompt += workspaceHint;
   }
 
+  // Workers must return results to the orchestrator, not message the user directly
+  systemPrompt += `\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`;
+
   // Inform agents about the assistant MCP server tools.
   // CLI agents (Claude Code, Gemini, Codex) use tool names directly (assistant_*).
   // LLM agents use meta-tools: mcp_call_tool(server_id: "assistant", tool_name: "...", arguments: {...})
