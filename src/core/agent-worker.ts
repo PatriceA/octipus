@@ -434,6 +434,45 @@ export class AgentWorker extends BaseAgentWorker {
         continue;
       }
 
+      // Some models (e.g. Gemma4 via LiteLLM) emit tool calls as JSON text instead of structured tool_calls.
+      // Detect and parse these so they execute properly.
+      if (completion.content && !completion.toolCalls?.length) {
+        const textToolCalls = this.parseTextToolCalls(completion.content);
+        if (textToolCalls.length > 0) {
+          completion.toolCalls = textToolCalls;
+          // Re-run the tool call handling above
+          agentLogger.info({
+            agentId: this.context.id, iteration: this.iteration,
+            tools: textToolCalls.map(tc => tc.name),
+          }, 'Recovered tool calls from text output');
+
+          const assistantMsg: AgentMessage = {
+            role: 'assistant',
+            content: '',
+            toolCalls: textToolCalls,
+            timestamp: new Date(),
+          };
+          this.messages.push(assistantMsg);
+
+          this.emit('action', {
+            toolCalls: textToolCalls.map(tc => ({
+              id: tc.id, name: tc.name,
+              argsSummary: JSON.stringify(tc.arguments).slice(0, 80),
+            })),
+          });
+
+          const isFinalTool = this.toolExecutor.hasFinalToolCall(textToolCalls);
+          const toolMessages = isFinalTool
+            ? await this.toolExecutor.handleToolCalls(textToolCalls)
+            : await this.raceTimeout(
+                this.toolExecutor.handleToolCalls(textToolCalls),
+                'handleToolCalls',
+              );
+          this.messages.push(...toolMessages);
+          continue;
+        }
+      }
+
       // No tool calls — treat as final response
       // If content is empty (e.g. thinking tokens consumed entire output), retry up to 3 times
       if (!completion.content?.trim()) {
@@ -476,6 +515,39 @@ export class AgentWorker extends BaseAgentWorker {
     }
 
     throw new Error(`Max iterations (${this.config.maxIterations}) reached`);
+  }
+
+  /**
+   * Parse tool calls emitted as JSON text by models that don't use structured tool calling.
+   * Supports formats: {"call":"tool_name","arguments":{...}} and {"name":"tool_name","arguments":{...}}
+   */
+  private parseTextToolCalls(content: string): Array<{ id: string; name: string; arguments: Record<string, unknown> }> {
+    const results: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+    const registeredTools = new Set(Array.from(this.toolExecutor.getTools().keys()));
+
+    // Try to parse JSON objects from the content
+    const jsonMatches = content.match(/\{[\s\S]*?\}/g);
+    if (!jsonMatches) return results;
+
+    for (const jsonStr of jsonMatches) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const toolName = parsed.call || parsed.name || parsed.function;
+        const args = parsed.arguments || parsed.args || parsed.parameters || {};
+
+        if (toolName && typeof toolName === 'string' && registeredTools.has(toolName)) {
+          results.push({
+            id: `call_text_${Date.now()}_${results.length}`,
+            name: toolName,
+            arguments: typeof args === 'object' ? args : {},
+          });
+        }
+      } catch {
+        // Not valid JSON, skip
+      }
+    }
+
+    return results;
   }
 
   private async getCompletion(): Promise<CompletionResult> {

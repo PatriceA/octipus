@@ -586,9 +586,18 @@ export default function ChatPage() {
       case 'worker_spawned': {
         const d = data.data as any;
         const agentId = d.workerId || d.agentId;
-        // Use server timestamp to keep ordering consistent with DB-sourced messages
+        // Use server timestamp, but ensure agent always sorts AFTER the latest user message
         const serverTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
         updateSessionState(sessionId, (prev) => {
+          // Find the latest user message timestamp to guarantee correct ordering
+          let latestUserMsgTime = 0;
+          for (const msg of prev.messages) {
+            if (msg.role === 'user') {
+              const t = new Date(msg.timestamp).getTime();
+              if (t > latestUserMsgTime) latestUserMsgTime = t;
+            }
+          }
+          const agentStartTime = Math.max(serverTime, latestUserMsgTime + 1);
           const next = new Map(prev.trackedAgents);
           next.set(agentId, {
             id: agentId,
@@ -596,7 +605,7 @@ export default function ChatPage() {
             model: d.model,
             status: 'running',
             toolCalls: [],
-            startTime: serverTime,
+            startTime: agentStartTime,
             parentAgentId: d.parentAgentId,
             stageName: d.stageName,
           });
