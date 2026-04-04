@@ -90,14 +90,14 @@ export class ProfileRepository {
   }
 
   async search(userId: string, query: string): Promise<Profile[]> {
-    // Search by name (ILIKE) or by fact values (cast jsonb to text and ILIKE)
+    // Search across name, relationship, category, and fact values
     return this.db
       .select()
       .from(profiles)
       .where(
         and(
           eq(profiles.userId, userId),
-          sql`(${profiles.name} ILIKE ${'%' + query + '%'} OR ${profiles.facts}::text ILIKE ${'%' + query + '%'})`,
+          sql`(${profiles.name} ILIKE ${'%' + query + '%'} OR ${profiles.relationship} ILIKE ${'%' + query + '%'} OR ${profiles.category} ILIKE ${'%' + query + '%'} OR ${profiles.facts}::text ILIKE ${'%' + query + '%'})`,
         ),
       )
       .orderBy(desc(profiles.updatedAt));
