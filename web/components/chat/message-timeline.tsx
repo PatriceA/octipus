@@ -679,6 +679,15 @@ export default function MessageTimeline({
     });
   }
 
+  // Find the latest user message time — agents must always sort after it
+  let latestUserMsgTime = 0;
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      const t = new Date(msg.timestamp).getTime();
+      if (t > latestUserMsgTime) latestUserMsgTime = t;
+    }
+  }
+
   // Agents that are not part of a team
   const teamMemberIds = new Set<string>();
   Array.from(teams.values()).forEach((team) => {
@@ -689,10 +698,12 @@ export default function MessageTimeline({
 
   Array.from(trackedAgents.values()).forEach((agent) => {
     if (!agent.teamId && !teamMemberIds.has(agent.id)) {
+      // Ensure agent always sorts after the latest user message
+      const sortKey = Math.max(agent.startTime, latestUserMsgTime + 1);
       timeline.push({
         kind: 'agent',
         data: agent,
-        sortKey: agent.startTime,
+        sortKey,
       });
     }
   });

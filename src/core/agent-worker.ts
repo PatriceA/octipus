@@ -525,11 +525,30 @@ export class AgentWorker extends BaseAgentWorker {
     const results: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
     const registeredTools = new Set(Array.from(this.toolExecutor.getTools().keys()));
 
-    // Try to parse JSON objects from the content
-    const jsonMatches = content.match(/\{[\s\S]*?\}/g);
-    if (!jsonMatches) return results;
+    // Extract balanced JSON objects, skipping over string contents
+    const jsonBlocks: string[] = [];
+    for (let i = 0; i < content.length; i++) {
+      if (content[i] !== '{') continue;
+      // Found a '{', try to find the matching '}' respecting strings
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      let j = i;
+      for (; j < content.length; j++) {
+        const ch = content[j];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\' && inString) { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) { jsonBlocks.push(content.slice(i, j + 1)); break; }
+        }
+      }
+    }
 
-    for (const jsonStr of jsonMatches) {
+    for (const jsonStr of jsonBlocks) {
       try {
         const parsed = JSON.parse(jsonStr);
         const toolName = parsed.call || parsed.name || parsed.function;
