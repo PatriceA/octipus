@@ -504,7 +504,21 @@ export class AgentWorker extends BaseAgentWorker {
       // Detect any phrase repeated 5+ times and truncate
       response = response.replace(/(.{10,}?)\1{4,}/g, '$1').trim();
 
-      if (!response) response = 'I was unable to generate a response.';
+      // Treat trivial JSON responses ({}, [], "") as empty — the model failed to produce text
+      if (/^\s*(\{\s*\}|\[\s*\]|"\s*")\s*$/.test(response)) {
+        response = '';
+      }
+
+      if (!response) {
+        // If we haven't exhausted retries, nudge the model to produce a real answer
+        this.emptyRetries = (this.emptyRetries || 0) + 1;
+        if (this.emptyRetries <= 3) {
+          agentLogger.warn({ agentId: this.context.id, emptyRetry: this.emptyRetries }, 'Trivial/empty response after stripping, retrying');
+          this.messages.push({ role: 'user', content: 'Your previous response was empty. Please answer the question using plain text, not JSON. Summarize what you found and provide the answer directly.', timestamp: new Date() });
+          continue;
+        }
+        response = 'I was unable to generate a response.';
+      }
 
       // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
       if (this.context.role === 'orchestrator') {
