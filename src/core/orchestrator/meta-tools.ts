@@ -190,7 +190,8 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         'Each stage runs a specialist worker in sequence, with optional approval checkpoints. ' +
         'Use this ONLY for tasks that explicitly need multiple stages (research → plan → code → review → test). ' +
         'For simple single-role tasks, prefer spawn_worker instead. ' +
-        'You may only delegate ONCE per request.',
+        'You may only delegate ONCE per request. ' +
+        'IMPORTANT: You MUST call list_pipeline_templates first to get valid template names. Do NOT invent template names.',
       parameters: {
         type: 'object',
         properties: {
@@ -201,7 +202,7 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
           templateName: {
             type: 'string',
             description:
-              'Name or ID of the pipeline template to use. Use list_pipeline_templates to see available templates.',
+              'Exact name or ID of an existing pipeline template. Call list_pipeline_templates first to see available templates.',
           },
           description: {
             type: 'string',
@@ -216,10 +217,27 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
       },
       execute: async (args, context) => {
         if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
+
+        // Validate template exists before creating pipeline
+        const templateName = args.templateName as string;
+        const { listAvailableTemplates } = await import('./templates');
+        const userId = (context as any).userId;
+        const templates = await listAvailableTemplates(userId);
+        const templateNames = templates.map(t => t.name);
+        const match = templates.find(t =>
+          t.name.toLowerCase() === templateName.toLowerCase() || t.id === templateName
+        );
+        if (!match) {
+          return `Template "${templateName}" not found. Available templates: ${templateNames.join(', ') || 'none'}. ` +
+            (templateNames.length === 0
+              ? 'No templates exist. Use spawn_worker instead, or ask the user to create a pipeline template.'
+              : 'Use one of the listed templates, or use spawn_worker for simpler tasks.');
+        }
+
         delegationDone = true;
         return orchestrator.createAndRunPipeline(
           args.title as string,
-          args.templateName as string,
+          match.name,
           args.description as string,
           context,
           { maxRetries: args.maxRetries as number | undefined },
