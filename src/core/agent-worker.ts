@@ -510,14 +510,21 @@ export class AgentWorker extends BaseAgentWorker {
       }
 
       if (!response) {
-        // If we haven't exhausted retries, nudge the model to produce a real answer
-        this.emptyRetries = (this.emptyRetries || 0) + 1;
-        if (this.emptyRetries <= 3) {
-          agentLogger.warn({ agentId: this.context.id, emptyRetry: this.emptyRetries }, 'Trivial/empty response after stripping, retrying');
-          this.messages.push({ role: 'user', content: 'Your previous response was empty. Please answer the question using plain text, not JSON. Summarize what you found and provide the answer directly.', timestamp: new Date() });
-          continue;
+        // Try to salvage a response from tool results already in the conversation
+        // instead of retrying (retries bloat context and cause timeouts on local models)
+        const lastToolResult = [...this.messages].reverse().find(m => m.role === 'tool');
+        if (lastToolResult?.content) {
+          agentLogger.warn({ agentId: this.context.id }, 'Empty response after tool calls — returning last tool result as fallback');
+          try {
+            const parsed = JSON.parse(typeof lastToolResult.content === 'string' ? lastToolResult.content : JSON.stringify(lastToolResult.content));
+            // Extract meaningful data from tool result
+            response = `Here's what I found:\n\n${JSON.stringify(parsed, null, 2)}`;
+          } catch {
+            response = `Here's what I found:\n\n${lastToolResult.content}`;
+          }
+        } else {
+          response = 'I was unable to generate a response.';
         }
-        response = 'I was unable to generate a response.';
       }
 
       // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
