@@ -296,7 +296,9 @@ function TemplateEditor({
     const newSteps = [...steps];
     [newSteps[index], newSteps[newIndex]] = [newSteps[newIndex], newSteps[index]];
     setSteps(newSteps);
-    setExpandedStep(newIndex);
+    // If the moved step was expanded, follow it to its new position
+    if (expandedStep === index) setExpandedStep(newIndex);
+    else if (expandedStep === newIndex) setExpandedStep(index);
   };
 
   const handleSubmit = () => {

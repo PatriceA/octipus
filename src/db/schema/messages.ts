@@ -32,6 +32,9 @@ export interface MessageMetadata {
   tokenCount?: number;
   model?: string;
   latencyMs?: number;
+  pipelineId?: string;
+  stageId?: string;
+  pipelineEvent?: string;
 }
 
 export interface AttachmentData {

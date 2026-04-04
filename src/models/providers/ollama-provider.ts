@@ -59,8 +59,9 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    // Ollama's /v1 endpoint doesn't support think:false — use native /api/chat when thinking is disabled
-    if (options.extraBody?.think === false && !options.tools?.length) {
+    // Ollama's /v1 endpoint doesn't properly support think:false — use native /api/chat
+    // when thinking is disabled (with or without tools)
+    if (options.extraBody?.think === false) {
       return this.completeNative(options);
     }
 
@@ -83,7 +84,7 @@ export class OllamaProvider implements ModelProvider {
       params.tool_choice = 'auto';
     }
 
-    // Merge extra body parameters
+    // Merge extra body parameters (but NOT think:false — that goes to native endpoint)
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
@@ -144,15 +145,25 @@ export class OllamaProvider implements ModelProvider {
   /**
    * Use Ollama's native /api/chat endpoint which properly supports think:false.
    * The OpenAI-compatible /v1 endpoint ignores this parameter.
+   * Supports tools via Ollama's native tool calling format.
    */
   private async completeNative(options: CompletionOptions): Promise<CompletionResult> {
     const resolvedEndpoint = options.endpoint || this.endpoint;
     const startTime = Date.now();
 
-    const messages = this.formatMessages(options.messages).map((m) => ({
-      role: m.role,
-      content: typeof m.content === 'string' ? m.content : '',
-    }));
+    // Format messages for native API — include tool_call_id for tool responses
+    const messages = this.formatMessages(options.messages).map((m) => {
+      const native: Record<string, unknown> = { role: m.role };
+      if (m.role === 'tool') {
+        native.content = typeof (m as any).content === 'string' ? (m as any).content : '';
+      } else if (m.role === 'assistant' && (m as any).tool_calls?.length) {
+        native.content = (m as any).content || '';
+        native.tool_calls = (m as any).tool_calls;
+      } else {
+        native.content = typeof (m as any).content === 'string' ? (m as any).content : '';
+      }
+      return native;
+    });
 
     const body: Record<string, unknown> = {
       model: options.model,
@@ -167,8 +178,20 @@ export class OllamaProvider implements ModelProvider {
       },
     };
 
+    // Add tools in Ollama's native format
+    if (options.tools?.length) {
+      body.tools = options.tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters,
+        },
+      }));
+    }
+
     modelLogger.debug(
-      { model: options.model, messageCount: messages.length, provider: this.name, native: true },
+      { model: options.model, messageCount: messages.length, provider: this.name, native: true, hasTools: !!options.tools?.length },
       'Sending native completion request to Ollama (think:false)'
     );
 
@@ -188,7 +211,7 @@ export class OllamaProvider implements ModelProvider {
     }
 
     const data = await response.json() as {
-      message: { role: string; content: string };
+      message: { role: string; content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
       done: boolean;
       done_reason?: string;
       prompt_eval_count?: number;
@@ -209,12 +232,22 @@ export class OllamaProvider implements ModelProvider {
       latencyMs,
     };
 
+    // Parse tool calls from native response
+    if (data.message.tool_calls?.length) {
+      result.toolCalls = data.message.tool_calls.map((tc, i) => ({
+        id: `call_${i}`,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      }));
+    }
+
     modelLogger.debug(
       {
         model: options.model,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         latencyMs,
+        hasToolCalls: !!result.toolCalls?.length,
         provider: this.name,
         native: true,
       },

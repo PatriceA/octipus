@@ -744,7 +744,13 @@ export default function MessageTimeline({
     }
   }
 
-  timeline.sort((a, b) => a.sortKey - b.sortKey);
+  // Stable sort: by timestamp, then messages before agents (agents respond to messages)
+  const kindOrder: Record<string, number> = { message: 0, agent: 1, team: 1, file_changes: 2 };
+  timeline.sort((a, b) => {
+    const diff = a.sortKey - b.sortKey;
+    if (diff !== 0) return diff;
+    return (kindOrder[a.kind] ?? 1) - (kindOrder[b.kind] ?? 1);
+  });
 
   // Auto-scroll
   const scrollToBottom = useCallback(() => {

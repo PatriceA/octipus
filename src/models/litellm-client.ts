@@ -178,7 +178,8 @@ export class LiteLLMClient {
       params.tool_choice = 'auto';
     }
 
-    // Merge extra body parameters (e.g. { think: false } for Ollama Qwen3)
+    // Merge extra body parameters (e.g. { think: false } for Ollama/Qwen3/Gemma4)
+    // Pass via both top-level merge and extra_body to ensure params reach LiteLLM proxy
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
@@ -190,10 +191,15 @@ export class LiteLLMClient {
       const latencyMs = Date.now() - startTime;
       const choice = response.choices[0];
 
-      // Strip <think>...</think> blocks from models that include reasoning tokens
+      // Strip thinking/reasoning blocks from models that include them as content
       let content = choice.message.content || '';
-      if (content.includes('<think>')) {
-        content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      // XML-style: <think>...</think>, <thinking>...</thinking>
+      content = content.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/g, '').trim();
+      // JSON-style: {"thought":"..."} or {"thinking":"..."}  (gemma4, etc.)
+      content = content.replace(/\{"(?:thought|thinking|reasoning)"\s*:\s*"[\s\S]*?"\s*\}/g, '').trim();
+      // Partial/malformed thinking JSON at start of response (e.g. {"thought": "<channel|>{")
+      if (/^\s*\{"(?:thought|thinking|reasoning)"\s*:/.test(content)) {
+        content = '';
       }
 
       const result: CompletionResult = {

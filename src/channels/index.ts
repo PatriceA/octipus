@@ -591,6 +591,19 @@ export async function initializeChannels(): Promise<void> {
             }
             case 'approval_required': {
               react('⏳');
+              const ad = event.data as { requestId?: string; summary?: string; question?: string; options?: string[] };
+              const approvalText = [
+                '⏳ **Approval Required**',
+                ad.summary || '',
+                '',
+                ad.question || 'Proceed?',
+                ad.options?.length ? `\nOptions: ${ad.options.join(' / ')}` : '',
+                '\nReply **yes/approve** to continue, or **no/stop** to cancel.',
+              ].filter(Boolean).join('\n');
+              umi.send(message.channelType, message.channelId, {
+                content: approvalText,
+                replyTo: platformMessageId,
+              }).catch(() => {});
               break;
             }
             case 'status_update': {

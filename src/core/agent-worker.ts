@@ -147,6 +147,15 @@ export class AgentWorker extends BaseAgentWorker {
         output: typeof result === 'string' ? result : JSON.stringify(result),
       }).catch(() => {}); // Never block on indexing failures
 
+      // Auto-update project summary for coding/research/review/general tasks
+      const summaryRoles = ['coding', 'research', 'review', 'general'];
+      if (summaryRoles.includes(this.context.role) && typeof result === 'string' && result.length > 50) {
+        import('@/core/orchestrator/project-summary').then(({ autoUpdateProjectSummary }) => {
+          const title = `${this.context.role} — ${this.context.topic || 'task'}`;
+          autoUpdateProjectSummary(this.context, title, result).catch(() => {});
+        }).catch(() => {});
+      }
+
       return result;
     } catch (error) {
       this.context.status = 'failed';
@@ -434,6 +443,8 @@ export class AgentWorker extends BaseAgentWorker {
             agentId: this.context.id, iteration: this.iteration,
             outputTokens: completion.usage.outputTokens, emptyRetry: this.emptyRetries,
           }, 'Empty response (likely thinking-only output), retrying');
+          // Add a nudge to help the model produce visible output
+          this.messages.push({ role: 'user', content: 'Please provide a direct response to the question. Do not think silently — output your answer as text.', timestamp: new Date() });
           continue;
         }
         agentLogger.warn({ agentId: this.context.id }, 'Max empty retries reached, returning fallback');
@@ -444,7 +455,10 @@ export class AgentWorker extends BaseAgentWorker {
       // Strip raw tool call JSON that some models (e.g. Ollama/qwen3) emit as text
       response = response.replace(/\{"id":\s*"call_[^"]*",\s*"type":\s*"function",\s*"function":\s*\{[^}]*\}\s*\}/g, '').trim();
 
-      // Strip thinking/reasoning JSON blocks that some models (e.g. gemma4) emit as text
+      // Strip thinking/reasoning blocks in various formats (gemma4, qwen3, etc.)
+      // XML-style: <think>...</think>, <thinking>...</thinking>
+      response = response.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/g, '').trim();
+      // JSON-style: {"thought":"..."} or {"thinking":"..."}
       response = response.replace(/\{"(?:thought|thinking|reasoning)"\s*:\s*"[\s\S]*?"\s*\}/g, '').trim();
 
       // Strip repetitive text loops (e.g. "A task orchestrator. A task orchestrator. A task...")

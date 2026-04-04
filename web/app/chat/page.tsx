@@ -561,49 +561,19 @@ export default function ChatPage() {
           case 'stage_started': {
             const stageNum = (pe.index ?? 0) + 1;
             setStatusMessage(`Stage ${stageNum}: ${pe.name}...`);
-            if (sessionId) {
-              updateSessionState(sessionId, (prev) => ({
-                ...prev,
-                messages: [...prev.messages, {
-                  id: `stage-start-${pe.stageId || Date.now()}`,
-                  role: 'system' as const,
-                  content: `**Stage ${stageNum}: ${pe.name}** (${pe.role || 'agent'}) started`,
-                  timestamp: new Date(),
-                }],
-              }));
-            }
+            // Stage messages are persisted to DB by the backend — reload to pick them up
+            if (sessionId) loadSessionMessages(sessionId);
             break;
           }
           case 'stage_completed': {
             const note = pe.note ? ` (${pe.note})` : '';
             setStatusMessage(`Stage "${pe.name}" completed${note}`);
-            // Add summary as a system message so it persists in the timeline
-            if (pe.summary && sessionId) {
-              updateSessionState(sessionId, (prev) => ({
-                ...prev,
-                messages: [...prev.messages, {
-                  id: `stage-${pe.stageId || Date.now()}`,
-                  role: 'system' as const,
-                  content: `**${pe.name}** (${pe.role || 'agent'}) completed${note}: ${pe.summary}`,
-                  timestamp: new Date(),
-                }],
-              }));
-            }
+            // Stage messages are persisted to DB by the backend — reload to pick them up
+            if (sessionId) loadSessionMessages(sessionId);
             break;
           }
           case 'qa_retry': {
             setStatusMessage(`QA found issues — retrying implementation (attempt ${pe.attempt}/${pe.maxRetries})`);
-            if (sessionId) {
-              updateSessionState(sessionId, (prev) => ({
-                ...prev,
-                messages: [...prev.messages, {
-                  id: `qa-retry-${pe.attempt}-${Date.now()}`,
-                  role: 'system' as const,
-                  content: `**QA Retry** (${pe.attempt}/${pe.maxRetries}): ${pe.issues?.join(', ') || 'Issues found, retrying implementation...'}`,
-                  timestamp: new Date(),
-                }],
-              }));
-            }
             break;
           }
           case 'pipeline_completed':
@@ -616,6 +586,8 @@ export default function ChatPage() {
       case 'worker_spawned': {
         const d = data.data as any;
         const agentId = d.workerId || d.agentId;
+        // Use server timestamp to keep ordering consistent with DB-sourced messages
+        const serverTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           next.set(agentId, {
@@ -624,7 +596,7 @@ export default function ChatPage() {
             model: d.model,
             status: 'running',
             toolCalls: [],
-            startTime: Date.now(),
+            startTime: serverTime,
             parentAgentId: d.parentAgentId,
             stageName: d.stageName,
           });
@@ -658,14 +630,15 @@ export default function ChatPage() {
           } else {
             // Agent wasn't tracked via worker_spawned (race condition or missed event)
             // Create a completed entry so the duration is still visible
+            const now = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
             next.set(agentId, {
               id: agentId,
               role: d.role || 'unknown',
               model: d.model || '',
               status: workerStatus,
               toolCalls: [],
-              startTime: d.durationMs ? Date.now() - d.durationMs : Date.now(),
-              endTime: Date.now(),
+              startTime: d.durationMs ? now - d.durationMs : now,
+              endTime: now,
               durationMs: d.durationMs ?? 0,
               totalTokens: d.totalTokens,
               iterations: d.iterations,

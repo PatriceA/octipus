@@ -66,6 +66,14 @@ async function main() {
       logger.info({ staleCount }, 'Cleaned up stale agent records from previous run');
     }
 
+    // Clean up agent events older than 1 day
+    const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
+    const eventCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const deletedEvents = await agentEventRepository.deleteOlderThan(eventCutoff).catch(() => 0);
+    if (deletedEvents > 0) {
+      logger.info({ deletedEvents }, 'Cleaned up old agent events (>1 day)');
+    }
+
     // Register built-in tools
     await registerBuiltinTools();
     logger.info('Tools registered');

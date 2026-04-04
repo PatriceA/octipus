@@ -315,25 +315,39 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       const agentManager = getAgentManager();
       const agent = agentManager.get(params.id);
 
-      if (!agent) {
-        return { error: 'Agent not found' };
+      // Try in-memory events first (live agents)
+      if (agent) {
+        const context = agent.getContext();
+        if (!user.isAdmin && context.userId !== user.id) {
+          return { error: 'Not authorized' };
+        }
+
+        const afterSeq = query.after ? parseInt(query.after, 10) : 0;
+        const buffered = agentManager.getEvents(params.id, afterSeq);
+
+        return {
+          events: buffered.map(b => ({
+            seq: b.seq,
+            type: b.event.type,
+            agentId: b.event.agentId,
+            data: b.event.data,
+            timestamp: b.event.timestamp,
+          })),
+        };
       }
 
-      const context = agent.getContext();
-      if (!user.isAdmin && context.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
-      const afterSeq = query.after ? parseInt(query.after, 10) : 0;
-      const buffered = agentManager.getEvents(params.id, afterSeq);
+      // Fall back to DB events (after restart or for completed agents)
+      const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
+      const afterId = query.after ? parseInt(query.after, 10) : undefined;
+      const dbEvents = await agentEventRepository.findByAgent(params.id, afterId);
 
       return {
-        events: buffered.map(b => ({
-          seq: b.seq,
-          type: b.event.type,
-          agentId: b.event.agentId,
-          data: b.event.data,
-          timestamp: b.event.timestamp,
+        events: dbEvents.map(e => ({
+          seq: e.id,
+          type: e.type,
+          agentId: e.agentId,
+          data: e.data,
+          timestamp: e.createdAt,
         })),
       };
     },

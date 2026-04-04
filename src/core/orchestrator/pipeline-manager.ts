@@ -13,6 +13,7 @@ import { getNotificationService } from '@/core/notification-service';
 import { getOrchestratorService } from './service';
 import { getPipelineTemplate, expandPromptTemplate, buildStagesFromTemplate } from './templates';
 import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
+import { messageRepository } from '@/db/repositories/message-repository';
 import type { PipelineStatus, StageStatus } from './types';
 
 export class PipelineManager {
@@ -107,6 +108,14 @@ export class PipelineManager {
         data: { event: 'stage_started', pipelineId: pipeline.id, stageId: stage.id, name: stage.name, index: i },
         timestamp: new Date(),
       });
+
+      // Persist stage start as system message so it survives page reloads
+      messageRepository.create({
+        sessionId,
+        role: 'system',
+        content: `**Stage ${i + 1}: ${stage.name}** (${stage.role || 'agent'}) started`,
+        metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_started' },
+      }).catch(() => {});
 
       // Check if this stage requires approval
       if (stage.requiresApproval && previousOutput) {
@@ -204,6 +213,14 @@ export class PipelineManager {
           },
           timestamp: new Date(),
         });
+
+        // Persist stage completion as system message
+        messageRepository.create({
+          sessionId,
+          role: 'system',
+          content: `**${stage.name}** (${stage.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
+          metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_completed' },
+        }).catch(() => {});
 
         // --- QA Validation retry loop ---
         if (builtStage.stageType === 'qa_validation') {
@@ -502,6 +519,22 @@ export class PipelineManager {
       await this.updateStage(stage.id, { input, status: 'running' });
       await this.updatePipeline(pipeline.id, { currentStageIndex: i, status: 'running' });
 
+      // Emit stage_started event for UI
+      orchestrator['emit']({
+        type: 'pipeline_event',
+        sessionId,
+        data: { event: 'stage_started', pipelineId: pipeline.id, stageId: stage.id, name: stage.name, role: stage.role, index: i },
+        timestamp: new Date(),
+      });
+
+      // Persist stage start as system message
+      messageRepository.create({
+        sessionId,
+        role: 'system',
+        content: `**Stage ${i + 1}: ${stage.name}** (${stage.role || 'agent'}) started`,
+        metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_started' },
+      }).catch(() => {});
+
       if (stage.requiresApproval && previousOutput) {
         await this.updateStage(stage.id, { status: 'awaiting_approval' });
         await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
@@ -559,6 +592,33 @@ export class PipelineManager {
           });
           handoffChain.push(handoff);
         }
+
+        // Emit stage_completed event for UI
+        const stageSummary = previousOutput.length > 300
+          ? previousOutput.slice(0, 300).replace(/\n/g, ' ').trim() + '...'
+          : previousOutput.replace(/\n/g, ' ').trim();
+
+        orchestrator['emit']({
+          type: 'pipeline_event',
+          sessionId,
+          data: {
+            event: 'stage_completed',
+            pipelineId: pipeline.id,
+            stageId: stage.id,
+            name: stage.name,
+            role: stage.role,
+            summary: stageSummary.slice(0, 200),
+          },
+          timestamp: new Date(),
+        });
+
+        // Persist stage completion as system message
+        messageRepository.create({
+          sessionId,
+          role: 'system',
+          content: `**${stage.name}** (${stage.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
+          metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_completed' },
+        }).catch(() => {});
 
         // --- QA Validation retry loop for DB template pipelines ---
         if (stepConfig?.stageType === 'qa_validation') {
@@ -664,6 +724,20 @@ export class PipelineManager {
 
     const summary = `Pipeline "${pipeline.title}" completed.\n\n${previousOutput}`;
     await this.updatePipeline(pipeline.id, { status: 'completed', summary, completedAt: new Date() });
+
+    // Emit pipeline_completed event for UI
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId,
+      data: { event: 'pipeline_completed', pipelineId: pipeline.id, title: pipeline.title },
+      timestamp: new Date(),
+    });
+
+    // Auto-update project summary after pipeline completion
+    try {
+      const { autoUpdateProjectSummary } = await import('./project-summary');
+      autoUpdateProjectSummary(context, pipeline.title, previousOutput).catch(() => {});
+    } catch {}
 
     getNotificationService().notify(
       pipeline.userId,

@@ -7,6 +7,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { agentRepository } from '@/db/repositories/agent-repository';
+import { agentEventRepository } from '@/db/repositories/agent-event-repository';
 import { getConfig } from '@/config';
 import { agentLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
@@ -141,7 +142,7 @@ export class AgentManager {
       worker.registerTools(options.tools);
     }
 
-    // Subscribe to events: buffer for polling + forward to manager handlers
+    // Subscribe to events: buffer for polling + persist to DB + forward to manager handlers
     worker.onEvent((event) => {
       // Buffer the event for polling
       const buffered: BufferedEvent = { seq: ++this.eventSeqCounter, event };
@@ -155,6 +156,14 @@ export class AgentManager {
       if (buf.length > AgentManager.MAX_BUFFERED_EVENTS) {
         buf.splice(0, buf.length - AgentManager.MAX_BUFFERED_EVENTS);
       }
+
+      // Persist to DB (fire-and-forget) — survives server restarts
+      agentEventRepository.create({
+        agentId: event.agentId,
+        sessionId: context.sessionId,
+        type: event.type,
+        data: event.data,
+      }).catch(() => {});
 
       // Forward to WebSocket / other handlers
       for (const handler of this.eventHandlers) {
