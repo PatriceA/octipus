@@ -185,8 +185,7 @@ export function MobileTab() {
         <p className="text-sm text-on-surface-variant">
           By default, pairing works over your local network. To use the mobile app outside your home network,
           set your public URL on the <strong className="text-white">Integrations</strong> tab
-          (field: <strong className="text-white">Public URL for OAuth callbacks</strong>),
-          e.g. <code className="text-xs bg-surface-container-highest px-1 py-0.5 rounded">https://app.the-assistant.app</code>.
+          (field: <strong className="text-white">Public URL for OAuth callbacks</strong>).
           The QR code will then include the public URL so the app can connect remotely.
         </p>
       </div>
