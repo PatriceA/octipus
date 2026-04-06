@@ -183,9 +183,11 @@ export class AgentManager {
     // Store the worker
     this.agents.set(agentId, worker);
 
-    // Update session context
+    // Merge into session context (preserve devMode, projectPath, etc.)
+    const existingSession = await sessionRepository.findById(options.sessionId);
+    const existingCtx = (existingSession?.context as Record<string, unknown>) || {};
     await sessionRepository.update(options.sessionId, {
-      context: { activeAgentId: agentId, currentTopic: routedTopic },
+      context: { ...existingCtx, activeAgentId: agentId, currentTopic: routedTopic },
     });
 
     // Log audit

@@ -148,7 +148,7 @@ export class AgentWorker extends BaseAgentWorker {
       }).catch(() => {}); // Never block on indexing failures
 
       // Auto-update project summary for roles that work on projects
-      const summaryRoles = ['coding', 'research', 'review', 'general', 'qa', 'devops'];
+      const summaryRoles = ['coding', 'research', 'review', 'general', 'qa', 'devops', 'analysis', 'design', 'security', 'data', 'ai'];
       if (summaryRoles.includes(this.context.role) && typeof result === 'string' && result.length > 50) {
         import('@/core/orchestrator/project-summary').then(({ autoUpdateProjectSummary }) => {
           const title = `${this.context.role} — ${this.context.topic || 'task'}`;

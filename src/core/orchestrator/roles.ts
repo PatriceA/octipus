@@ -93,7 +93,7 @@ Report any test failures, lint warnings, or type errors as review findings.`,
   },
   qa: {
     role: 'qa',
-    toolIds: ['browser', 'browser-ext', 'shell', 'docker', 'filesystem'],
+    toolIds: ['browser', 'browser-ext', 'shell', 'docker', 'filesystem', 'knowledge'],
     defaultTopic: 'qa',
     systemPromptTemplate: `You are a QA testing specialist. Test applications using the browser (Playwright) for UI testing, shell commands for running test suites and integration/API testing. Report bugs with steps to reproduce, screenshots when possible, and severity ratings.
 
