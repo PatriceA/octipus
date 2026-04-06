@@ -5,6 +5,7 @@ import { getSessionManager } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';
 import { randomBytes } from 'crypto';
 import { getRedis } from '@/db/redis';
+import { getSettingsService } from '@/config/settings-service';
 
 /** Get the first non-internal IPv4 address */
 function getLanIp(): string | null {
@@ -47,10 +48,14 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       apiLogger.info({ userId: user.id }, 'Device pairing code generated');
 
       const lanIp = getLanIp();
-      const port = process.env.PORT || 3005;
-      const serverUrl = lanIp ? `http://${lanIp}:${port}` : null;
+      const port = process.env.PORT || process.env.API_PORT || 3005;
+      const lanUrl = lanIp ? `http://${lanIp}:${port}` : null;
 
-      return { code, expiresIn: PAIRING_CODE_TTL, serverUrl };
+      // Include public URL for remote connections (Cloudflare Tunnel etc.)
+      const settings = getSettingsService();
+      const publicUrl = (await settings.get('oauth.publicUrl') as string) || null;
+
+      return { code, expiresIn: PAIRING_CODE_TTL, serverUrl: lanUrl, publicUrl };
     },
     { detail: { tags: ['devices'] } }
   )

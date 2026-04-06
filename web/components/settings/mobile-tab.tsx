@@ -9,6 +9,7 @@ interface PairingData {
   code: string;
   expiresIn: number;
   serverUrl?: string;
+  publicUrl?: string;
 }
 
 export function MobileTab() {
@@ -33,13 +34,17 @@ export function MobileTab() {
       setPairing(data);
       setSecondsLeft(data.expiresIn);
 
-      // Use server-provided LAN URL, fall back to current hostname
+      // QR contains LAN URL for local pairing + public URL for remote access after pairing
       const backendUrl = data.serverUrl
         || (typeof window !== 'undefined'
           ? `${window.location.protocol}//${window.location.hostname}:3005`
           : 'http://localhost:3005');
 
-      const qrPayload = JSON.stringify({ url: backendUrl, code: data.code });
+      const qrPayload = JSON.stringify({
+        url: backendUrl,
+        code: data.code,
+        ...(data.publicUrl ? { publicUrl: data.publicUrl } : {}),
+      });
       const dataUrl = await QRCode.toDataURL(qrPayload, {
         width: 280,
         margin: 2,
@@ -173,6 +178,17 @@ export function MobileTab() {
           <li>Point your phone camera at the QR code</li>
           <li>The app will connect automatically</li>
         </ol>
+      </div>
+
+      <div className="bg-surface-container rounded-xl p-6 border border-outline-variant/10">
+        <h3 className="text-sm font-medium text-white mb-2">Remote Access</h3>
+        <p className="text-sm text-on-surface-variant">
+          By default, pairing works over your local network. To use the mobile app outside your home network,
+          set your public URL on the <strong className="text-white">Integrations</strong> tab
+          (field: <strong className="text-white">Public URL for OAuth callbacks</strong>),
+          e.g. <code className="text-xs bg-surface-container-highest px-1 py-0.5 rounded">https://app.the-assistant.app</code>.
+          The QR code will then include the public URL so the app can connect remotely.
+        </p>
       </div>
     </div>
   );
