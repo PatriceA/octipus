@@ -25,41 +25,41 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 ### Every Model Provider, One Interface
 - **Local models** via Ollama — complete privacy, zero cost
 - **Cloud providers** — OpenAI, Anthropic, Google Gemini with automatic failover
+- **OpenRouter** — direct access to 200+ models with credit tracking
 - **CLI model access** — Claude Code, Gemini CLI, Codex CLI (free tier supported)
 - **LiteLLM proxy** — unified gateway to 100+ model providers
 - **Smart routing** — topic-based model selection, quota tracking, cost monitoring, health checks
-- **Adaptive rate limiting** — per-provider concurrency semaphores, token bucket RPM, adaptive concurrency adjustment, priority request queuing, and exponential backoff. Circuit breaker per provider (closed/open/half-open) with automatic failover to LiteLLM. Redis-backed state
-- **Provider conformance testing** — automated test suite validates all providers (completion, streaming, tools, vision, embeddings) with capability-gated skipping
-- **Model evaluation** — 8 quality evaluators (relevance, coherence, completeness, tool-accuracy, etc.) with standard datasets and cross-model comparison
+- **Adaptive rate limiting** — per-provider concurrency semaphores, token bucket RPM, circuit breaker with automatic failover. Redis-backed state
+- **Provider conformance testing** — automated test suite validates all providers with capability-gated skipping
+- **Model evaluation** — 8 quality evaluators with standard datasets and cross-model comparison
 
 ### Tools That Actually Do Things
-- **Filesystem** — read, write, search, organize files and directories
-- **Shell** — execute commands, run scripts, manage processes
-- **Git** — full version control: commit, branch, push, pull, diff
-- **Browser** — navigate, click, type, hover, drag, screenshot, PDF generation via Playwright
-- **Web Search** — SearXNG meta-search with Playwright fallback
-- **Docker** — manage containers, images, exec commands
-- **Google Workspace** — Gmail (with pagination and batch processing), Calendar, Drive, Docs, Sheets, Contacts, Tasks
-- **Microsoft 365** — Outlook Mail (with pagination and batch processing), Calendar, OneDrive, To Do, Contacts
-- **Email Processor** — provider-agnostic batch email processing: iterate emails one-by-one with per-email classification and actions, pagination with continuation tokens, works with both Gmail and Outlook
-- **Browser Extension** — control the user's real browser via Chrome extension with 24 commands: navigate, click, hover, scroll, drag, type, tabs, cookies, storage, console, network monitoring, dialog handling (existing cookies/auth, no bot detection)
-- **Knowledge Base** — hybrid search (BM25 full-text + pgvector cosine similarity + Reciprocal Rank Fusion) with tiered content loading (L0 abstract / L1 overview / L2 full), automatic weekly cleanup of orphaned/stale/duplicate entries
-- **Document Processing** — upload, dual-model OCR + vision analysis (deepseek-ocr for text extraction, vision model for image description), PDF text extraction via poppler, LLM categorization, and automatic knowledge base indexing
-- **People & Profiles** — store and recall information about people, organizations, and relationships. Facts accumulate over time (location, birthday, preferences). User's own profile is automatically injected into agent system prompts for personalized responses
-- **GitHub/GitLab** — repository management, issues, PRs, reviews, and webhook integration
-- **Scheduling** — create and manage cron tasks, hooks, and event automations from within agent conversations
-- **Cross-Channel Messaging** — send messages across any connected channel
+- **Filesystem** — read, write, search files
+- **Shell** — execute commands and scripts
+- **Git** — commit, branch, push, diff
+- **Browser** — navigate, interact, screenshot via Playwright
+- **Web Search** — SearXNG meta-search
+- **Docker** — manage containers and images
+- **Google Workspace** — Gmail, Calendar, Drive, Docs, Sheets
+- **Microsoft 365** — Outlook, Calendar, OneDrive, To Do
+- **Email Processor** — batch email classification and actions
+- **Browser Extension** — control user's real Chrome browser
+- **Knowledge Base** — hybrid RAG search (BM25 + vector)
+- **Document Processing** — OCR, PDF extraction, auto-indexing
+- **People & Profiles** — store facts about people and orgs
+- **GitHub/GitLab** — repos, issues, PRs, webhooks
+- **Scheduling** — cron tasks, hooks, automations
+- **Voice & Phone** — STT (Whisper), TTS (Piper/Edge), wake word, phone calls
+- **Cross-Channel Messaging** — send messages across channels
 
 ### Gateway Hub — Unified WebSocket Protocol
-- **Single entry point** — all clients connect to `/gateway` with typed protocol (Zod-validated)
-- **Multi-client auth** — session tokens (web), local file tokens (TUI), HMAC keys (adapters), API keys (system)
-- **Central event bus** — replaces scattered EventEmitters with typed pub/sub, pattern matching, per-session replay buffer
-- **12 gateway commands** — `/help`, `/status`, `/expert`, `/abort`, `/clear`, `/compact`, `/think`, `/verbose`, `/usage`, `/cost`, `/diff`, `/version`
-- **Channel feedback** — real-time emoji reactions on user messages across all channels: 👀 received → role-specific emoji → tool-specific emoji → ✅/❌ done. Typing indicator repeats every 4s. Stall detection (15s/45s).
-- **Rate limiting** — sliding window per-connection per-action (30/min chat, 60/min commands, configurable per trust level)
-- **Connection budgets** — max 10 per user, 50 per IP, 5s auth timeout
-- **TUI** — Ink-based terminal interface with braille spinner, permission prompts, token/cost tracking, expert/session footer bar, matte color theme
-- **Dashboard API** — `/api/gateway/status`, `/connections`, `/events/stats`, `/adapters`
+- **Single entry point** — all clients connect to `/gateway` with typed Zod-validated protocol
+- **Multi-client auth** — session tokens, local file tokens, HMAC keys, API keys
+- **Central event bus** — typed pub/sub with pattern matching and per-session replay
+- **12 gateway commands** — `/help`, `/status`, `/expert`, `/abort`, `/clear`, `/think`, `/cost`, and more
+- **Channel feedback** — real-time emoji reactions and typing indicators across all channels
+- **Rate limiting & budgets** — sliding window per-connection, connection limits per user/IP
+- **TUI** — Ink-based terminal interface with permission prompts and cost tracking
 
 ### Reach Users Everywhere
 - **Telegram** — full bot with emoji reactions, typing indicator, `/expert` switching, permission prompts with tool details
@@ -70,49 +70,31 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **TUI** — terminal chat interface with gateway protocol, local auth, auto-reconnect
 
 ### Enterprise-Grade Security
-- **Authentication** — JWT sessions, WebAuthn passkeys, TOTP two-factor, HttpOnly session cookies
-- **Rate limiting** — Redis sliding-window rate limiter with account lockout (exponential backoff)
-- **Rule-based permission engine** — `tool(matcher)` syntax: `shell(git:*)` allow, `shell(rm -rf:*)` deny, `shell(sudo:*)` ask. Deny→allow→ask evaluation order. Wildcard, prefix, and exact matching. Configurable via settings API.
-- **Three-tier permissions** — ALLOW / ASK / DENY per tool action with path patterns, rate limits, and time windows
-- **Pre/post tool hooks** — `tool_pre` hooks can block tool execution, `tool_post` hooks log/notify. Match tools by pattern.
-- **Permission denial kills agent** — no retry loops, orchestrator asks user what to do next
-- **Prompt injection defense** — three-layer defense-in-depth against adversarial inputs:
-  - **System prompt hardening** — 7-rule security preamble prepended to every LLM system prompt. Balanced: blocks meta-instructions but explicitly allows legitimate tool use from authenticated channels
-  - **Input guard** (pre-LLM) — 39 regex patterns across 6 categories (prompt extraction, mode escalation, command injection, secret fishing, harmful requests, safety override). Destructive shell injections are blocked before reaching the model; other attacks append per-request security reminders to the system prompt
-  - **Output guard** (post-LLM) — validates responses for system prompt leakage, fake admin mode activation, fabricated credentials, destructive compliance, and harmful content compliance. Compromised responses are replaced with safe canned messages
-- **Input validation** — SSRF protection, command injection prevention, ReDoS-safe regex, WebSocket content sanitization
+- **Authentication** — JWT sessions, WebAuthn passkeys, TOTP 2FA, HttpOnly cookies
+- **Rule-based permissions** — three-tier ALLOW / ASK / DENY with `tool(matcher)` syntax, pre/post hooks
+- **Prompt injection defense** — three-layer defense: system prompt hardening, input guard (39 regex patterns), output guard. Blocks adversarial inputs before and after LLM
+- **Input validation** — SSRF protection, command injection prevention, ReDoS-safe regex
 - **Encrypted vault** — AES-256-GCM credential storage with per-tool access control
 - **Audit logging** — every action tracked with user, resource, and context
-- **Hardened defaults** — HMAC webhook verification, generic error messages, restricted health endpoints, session limits
-
-### Model Evaluation & Testing
-- `/eval conformance` — run provider conformance tests from chat
-- `/eval quality <model>` — evaluate model quality with standard datasets
-- `/eval compare` — side-by-side cross-model comparison
-- **CLI:** `bun run src/models/testing/run.ts`
-- **Web UI:** Evaluations page with conformance matrix and score cards
 
 ### Evaluation & Testing
-- **Agent evaluation harness** — YAML-based test runner (`bun run eval`) for evaluating routing accuracy, tool usage, and response quality. 13 assertion types including `routes_to_role`, `classification`, `response_quality` (LLM-graded), `defense_held`, and `no_hallucination`. Supports unit and integration modes
-- **Red-team testing** — 5 attack plugins with 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift. Severity levels and defense assertions per test. The three-layer defense system (system prompt hardening + input guard + output guard) is applied during evaluation, matching the real message processing pipeline
-- **Model quality benchmarking** — results vary depending on the default orchestrator model. Use `bun run eval` and `bun run eval:red-team` to benchmark any model's quality and security resilience before deploying it. For example, `deepseek-chat` scores ~99% overall while local `qwen3.5:35b` scores ~92% — but both achieve 100% on red-team security tests thanks to the application-level defense layers
-- **Eval UI** — web dashboard at `/eval` with summary cards, pass rate charts, assertion breakdowns, latency histograms, run comparison matrix with regression detection, and red-team results grouped by attack category. Supports triggering eval runs directly from the UI
-- **112 E2E API tests** — 22 test modules covering health, auth, models, vault, sessions, agents, tools, MCP, pipelines, hooks, settings, experts, skills, recurring tasks, chat, documents, browser extension, messaging, knowledge, and channel webhooks
+- **Model eval** — `/eval conformance`, `/eval quality <model>`, `/eval compare` from chat. CLI: `bun run src/models/testing/run.ts`
+- **Agent eval harness** — YAML-based test runner (`bun run eval`) with 13 assertion types for routing accuracy, tool usage, and response quality
+- **Red-team testing** — 5 attack plugins, 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift
+- **Eval UI** — web dashboard at `/eval` with pass rate charts, run comparison, regression detection, and red-team results
+- **112 E2E API tests** — 22 test modules covering all major subsystems
 
 ### Full Web UI
 - **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, profiles, settings
 - **MCP server** — expose all capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients
 
 ### Automation and Extensibility
-- **Event hooks** — trigger actions on messages, agent events, tool calls, schedules, and incoming webhooks with HMAC verification
-- **Inbound webhooks** — external services POST to `/api/hooks/incoming/:hookId` with Bearer token or `X-Webhook-Secret` auth. Mustache-style payload templating (`{{body.repository.name}}`). Reuses the full hook pipeline (cooldown, max-execution, condition checks, execution logging). Connect GitHub pushes, Stripe events, smart home sensors, n8n workflows
+- **Event hooks & webhooks** — trigger actions on messages, tool calls, schedules, and inbound webhooks (GitHub, Stripe, n8n, etc.)
 - **Recurring tasks** — cron-based scheduling with full CRUD management
-- **Plugin system** — drop TypeScript/JS plugins into `extensions/` directory. Each plugin declares tools via `plugin.json` manifest and gets hot-loaded at startup. Plugin tools are registered with the tool registry and available to agents. API for listing and reloading plugins at runtime (`GET /api/plugins`, `POST /api/plugins/:name/reload`)
-- **Skill sharing** — export skills as JSON or markdown (with YAML frontmatter), import with validation and conflict handling. `GET /api/skills/export`, `POST /api/skills/import`
-- **Channel progress feedback** — real-time status updates ("Got it, working on it", "Started coding agent") sent to Telegram/Slack/Teams during long-running tasks
+- **Plugin system** — drop TypeScript/JS plugins into `extensions/`, hot-loaded at startup
+- **Skill sharing** — export/import skills as JSON or markdown
+- **Custom skills and experts** — create domain knowledge and expert personas via API
 - **N8N integration** — connect to workflow automation
-- **Custom skills and experts** — create your own domain knowledge and expert personas via API
-- **Voice interface** — STT (Whisper), TTS (Piper, Edge TTS), wake word detection
 
 ## Requirements
 
@@ -223,9 +205,10 @@ Make globally available: `bun link`
 │ Channels │  Tools   │ Security │  Models  │  Integrations   │
 │ Telegram │Filesystem│ Sessions │ Ollama   │ MCP Server      │
 │ Slack    │ Shell    │ Passkeys │ OpenAI   │ Hooks           │
-│ Teams    │ Git      │ TOTP 2FA │Anthropic │ Voice           │
+│ Teams    │ Git      │ TOTP 2FA │Anthropic │ Voice/Phone     │
 │ WhatsApp │ Browser  │ Vault    │ Gemini   │ Pipelines       │
-│ WebChat  │ Docker   │Permissions│LiteLLM  │ Notifications   │
+│ WebChat  │ Docker   │Permissions│OpenRouter│ Notifications   │
+│          │          │          │ LiteLLM  │                 │
 ├──────────┴──────────┴──────────┴──────────┴─────────────────┤
 │  PostgreSQL/PGlite + pgvector  ·  Redis/In-Memory  ·  ORM  │
 └─────────────────────────────────────────────────────────────┘
@@ -237,6 +220,7 @@ Make globally available: `bun link`
 
 | | |
 |---|---|
+| **[Tool & Expert Routing](docs/TOOL-ROUTING.md)** | What triggers which tool, role, and expert — with prompt examples |
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | How tools, skills, experts, and agents work together |
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat setup and configuration |
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands available in all channels (/help, /link, /status, /clear) |

@@ -412,10 +412,31 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         return { error: 'Admin access required' };
       }
 
-      const registry = getModelRegistry();
-      const model = await registry.registerModel(body as NewModelConfigEntry);
+      // Validate OpenRouter model IDs must contain a slash (provider/model format)
+      if (body.provider === 'openrouter' && !body.modelId.includes('/')) {
+        return {
+          error: `OpenRouter models require "provider/model" format (e.g., "minimax/minimax-01"), got "${body.modelId}"`,
+        };
+      }
 
-      return model;
+      const registry = getModelRegistry();
+
+      // Check for duplicate name before inserting
+      const existing = await registry.getModel(body.name);
+      if (existing) {
+        return { error: `A model with name "${body.name}" already exists` };
+      }
+
+      try {
+        const model = await registry.registerModel(body as NewModelConfigEntry);
+        return model;
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes('unique') || msg.includes('duplicate')) {
+          return { error: `A model with name "${body.name}" already exists` };
+        }
+        return { error: `Failed to register model: ${msg}` };
+      }
     },
     {
       body: t.Object({

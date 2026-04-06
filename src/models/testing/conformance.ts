@@ -421,6 +421,25 @@ export async function runConformanceTests(
       continue;
     }
 
+    // OpenRouter models must use "provider/model" format (e.g. "openai/gpt-4o").
+    // If the modelId is missing the slash, every API call will fail with a cryptic
+    // error.  Fail fast with a clear message instead of running all tests.
+    if (model.provider === 'openrouter' && !model.modelId.includes('/')) {
+      for (const tc of testCases) {
+        if (selectedTests && !selectedTests.includes(tc.name)) continue;
+        results.push({
+          model: model.modelId,
+          provider: model.provider,
+          test: tc.name,
+          status: 'failed',
+          details:
+            `OpenRouter modelId must use "provider/model" format (e.g. "openai/gpt-4o"), ` +
+            `but got "${model.modelId}". Update the model's modelId in the registry.`,
+        });
+      }
+      continue;
+    }
+
     const capabilities = capabilitiesFromModel(model);
 
     // Conformance tests verify provider connectivity — disable thinking to avoid
