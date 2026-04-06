@@ -65,6 +65,12 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'write a report', 'changelog',
     'write comprehensive', 'write detailed', 'error codes',
   ],
+  architecture: [
+    'architecture', 'system design', 'design the system', 'requirements',
+    'technical specification', 'component diagram', 'data flow',
+    'api contract', 'adr', 'architecture decision', 'design document',
+    'system architecture', 'microservices', 'monolith', 'event-driven',
+  ],
   design: [
     'ui design', 'ux design', 'user interface', 'user experience',
     'accessibility', 'color contrast', 'typography', 'wireframe',

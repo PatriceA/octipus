@@ -23,7 +23,7 @@ WORKFLOW — follow these steps exactly:
 CRITICAL RULES:
 - You may call spawn_worker, spawn_team, OR create_pipeline exactly ONCE. They are mutually exclusive.
 - After it returns, respond with the worker's result directly. Do NOT echo the task description, do NOT add "Here is what I found" wrappers, do NOT repeat the result with a summary. Just relay the answer.
-- Pick the single best role: research (web search, information gathering), coding (code/shell/git), review (code review + running tests/linters read-only), qa (running test suites, writing tests, automated UI testing, QA validation), communication (email/calendar/contacts/phone calls), design (UI/UX), devops (CI/CD/infra/containers/docker), security (security analysis), data (databases/data engineering), ai (ML/AI tasks), finance (financial analysis), automation (scheduling, recurring tasks, hooks, cron jobs, automated workflows), pm (project management), writing (documentation), general (multi-purpose: real browser interaction + messaging + knowledge — use when the task combines browsing with sending messages or doesn't fit a specialist).
+- Pick the single best role: research (web search, information gathering), coding (code/shell/git), review (code review + running tests/linters read-only), qa (running test suites, writing tests, automated UI testing, QA validation), communication (email/calendar/contacts/phone calls), design (UI/UX), devops (CI/CD/infra/containers/docker), security (security analysis), data (databases/data engineering), ai (ML/AI tasks), finance (financial analysis), automation (scheduling, recurring tasks, hooks, cron jobs, automated workflows), pm (project management), writing (documentation), architecture (system design, requirements, technical specifications, ADRs), general (multi-purpose: real browser interaction + messaging + knowledge — use when the task combines browsing with sending messages or doesn't fit a specialist).
 - BROWSER TASKS: When the user says "use my browser", "check this website", "browse to" — use **general** (has browser-ext + messaging). Use **research** for web search and information gathering. Use **qa** for automated testing of web applications AND for running project test suites. Never use qa for general browsing tasks.
 - TESTING TASKS: When the user asks to "run tests", "run the test suite", "check if tests pass", or "write tests" — use the **qa** role. It discovers project test frameworks and runs them. When the user asks to "review the code" or "check code quality" — use the **review** role, which also runs tests/linters as part of its review but does not modify code.
 - CALENDAR/EMAIL/VOICE TASKS: When the user mentions "gmail", "google calendar", "calendar event", "outlook", "email", "contacts", "drive", "call me", "phone call", "ring me", "dial" — use the **communication** role. It has Google Workspace, Microsoft 365, messaging, and voice call tools.
@@ -235,6 +235,18 @@ For non-scheduling automation work: design workflow automations, process orchest
     toolIds: ['filesystem', 'browser', 'websearch', 'knowledge', 'messaging'],
     defaultTopic: 'writing',
     systemPromptTemplate: `You are a technical writer. Produce clear, well-structured documentation including API docs, architecture decision records, runbooks, and user guides. Prioritize accuracy, clarity, and appropriate level of detail for the target audience.`,
+  },
+  architecture: {
+    role: 'architecture',
+    toolIds: ['filesystem', 'shell', 'knowledge', 'websearch', 'mcp'],
+    defaultTopic: 'architecture',
+    systemPromptTemplate: `You are a software architect. Analyze codebases, define requirements, design system architectures, and produce technical specifications. Evaluate trade-offs between approaches, define component boundaries, data flows, and API contracts. Produce clear architecture documents with diagrams described in text (Mermaid or ASCII), decision records (ADRs), and implementation roadmaps.
+
+WORKFLOW:
+1. Check the knowledge base (search_knowledge) for existing architecture docs and prior decisions.
+2. Check if .assistant/project-summary.md exists — it has context from previous sessions.
+3. Read existing code to understand the current architecture before proposing changes.
+4. Produce documents with clear sections: context, decision, consequences, alternatives considered.`,
   },
 };
 

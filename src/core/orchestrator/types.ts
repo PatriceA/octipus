@@ -2,7 +2,7 @@ export type AgentRole =
   | 'orchestrator' | 'research' | 'coding' | 'review' | 'qa'
   | 'communication' | 'general'
   | 'design' | 'devops' | 'security' | 'data' | 'ai'
-  | 'finance' | 'automation' | 'pm' | 'writing';
+  | 'finance' | 'automation' | 'pm' | 'writing' | 'architecture';
 
 export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_approval' | 'completed' | 'failed';
 
