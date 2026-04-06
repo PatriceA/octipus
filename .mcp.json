@@ -2,12 +2,9 @@
   "mcpServers": {
     "assistant": {
       "command": "node",
-      "args": [
-        "C:\\Users\\pallegue\\Github Reps\\the_assistant\\scripts/../mcp-server/dist/index.js"
-      ],
+      "args": ["/home/patrice/Github Rep/assistant/mcp-server/dist/index.js"],
       "env": {
-        "ASSISTANT_URL": "http://127.0.0.1:3005",
-        "ASSISTANT_API_KEY": "hwR1aOBLWPJPFN3Jnq2yW2QS2NKZyp60VN3lShl6WjM="
+        "ASSISTANT_URL": "http://127.0.0.1:3005","ASSISTANT_API_KEY":"6zOXuwgmlaTm4L8Hvz3YMAq7GbgKhaWXTcELssQmA7Y"
       }
     }
   }

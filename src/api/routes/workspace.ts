@@ -1,9 +1,10 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
-import { resolve } from 'path';
-import { existsSync, statSync } from 'fs';
+import { resolve, join } from 'path';
+import { existsSync, statSync, readdirSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
+import { execSync } from 'child_process';
 
 // System directories that must never be added as workspace paths
 const DENIED_PATHS = [
@@ -127,4 +128,73 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
   }, {
     body: t.Object({ path: t.String() }),
     detail: { tags: ['workspace'] },
+  })
+
+  .get('/repositories', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const config = getConfig();
+    const rootPath = resolve(config.workspace.rootPath);
+
+    if (!existsSync(rootPath)) {
+      return { repositories: [] };
+    }
+
+    const items = readdirSync(rootPath);
+    const repositories = items
+      .filter(item => {
+        const fullPath = join(rootPath, item);
+        try {
+          const stats = statSync(fullPath);
+          return stats.isDirectory() && !item.startsWith('.');
+        } catch {
+          return false;
+        }
+      })
+      .map(item => ({
+        name: item,
+        path: join(rootPath, item),
+        isGit: existsSync(join(rootPath, item, '.git')),
+      }));
+
+    return { repositories };
+  }, { detail: { tags: ['workspace'] } })
+
+  .post('/repositories', async ({ user, body, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const config = getConfig();
+    const rootPath = resolve(config.workspace.rootPath);
+    const repoPath = join(rootPath, body.name);
+
+    if (existsSync(repoPath)) {
+      set.status = 409;
+      return { error: 'Directory already exists' };
+    }
+
+    try {
+      mkdirSync(repoPath, { recursive: true });
+      if (body.initGit) {
+        execSync('git init', { cwd: repoPath });
+      }
+      return {
+        name: body.name,
+        path: repoPath,
+        isGit: body.initGit || false,
+      };
+    } catch (err) {
+      set.status = 500;
+      return { error: `Failed to create repository: ${(err as Error).message}` };
+    }
+  }, {
+    body: t.Object({
+      name: t.String({ minLength: 1 }),
+      initGit: t.Optional(t.Boolean()),
+    }),
+    detail: { tags: ['workspace'] },
   });
+

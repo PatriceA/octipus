@@ -24,9 +24,8 @@ export class VoiceCallTool extends BaseTool {
       version: this.version,
       description: this.description,
       permissions: [
-        { action: 'initiate_call', description: 'Start a phone call', defaultLevel: 'ASK' },
+        { action: 'initiate_call', description: 'Make a phone call', defaultLevel: 'ASK' },
         { action: 'end_call', description: 'End an active call', defaultLevel: 'ALLOW' },
-        { action: 'get_status', description: 'Check call status', defaultLevel: 'ALLOW' },
       ],
       tools: [],
     };
@@ -46,41 +45,36 @@ export class VoiceCallTool extends BaseTool {
 
   protected async registerTools(): Promise<void> {
     this.registerTool(
-      'initiate_call',
-      'Start a phone call. In "notify" mode, speaks a message and hangs up. In "conversation" mode, enables interactive voice exchange.',
+      'make_call',
+      'Make a phone call, deliver a message, and wait for the call to complete. Returns the full outcome including whether the recipient answered and any conversation that occurred. In "notify" mode, speaks a message and hangs up. In "conversation" mode, enables interactive voice exchange where the recipient can respond.',
       {
         type: 'object',
         properties: {
-          to: { type: 'string', description: 'Phone number (E.164, e.g., +1234567890)' },
-          message: { type: 'string', description: 'Message to speak when answered' },
-          mode: { type: 'string', enum: ['notify', 'conversation'], description: 'notify=one-way, conversation=interactive' },
-          model: { type: 'string', description: 'Model for conversation mode (use a fast model for low latency)' },
+          to: { type: 'string', description: 'Phone number in E.164 format (e.g., +1234567890)' },
+          message: { type: 'string', description: 'Message to speak when the call is answered' },
+          mode: { type: 'string', enum: ['notify', 'conversation'], description: 'notify = one-way message then hangup, conversation = interactive back-and-forth' },
+          timeout: { type: 'number', description: 'Max seconds to wait for the call to complete (default: 120)' },
         },
         required: ['to', 'message'],
       },
       async (args: Record<string, unknown>) => {
         const { getTelephonyProvider, getCallManager } = await import('@/voice/telephony');
         const provider = await getTelephonyProvider();
-        if (!provider) return { error: 'No telephony provider configured.' };
+        if (!provider) return { success: false, error: 'No telephony provider configured.' };
 
         const to = args.to as string;
         const message = args.message as string;
         const mode = (args.mode as string) || 'notify';
+        const timeout = Math.min((args.timeout as number) || 120, 300) * 1000;
 
         const { getSettingsService } = await import('@/config/settings-service');
         const settings = getSettingsService();
         const publicUrl = (await settings.get('voice.publicUrl') as string) || `http://localhost:${process.env.API_PORT || 3005}`;
         const webhookUrl = `${publicUrl}/api/voice/webhook/${provider.name}`;
 
-        // Resolve expert prompt for voice conversations (if expert is active)
         let expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
-        const voiceModel = args.model as string | undefined;
-
-        // If the agent has an expert context, extract its system prompt for the voice call
-        // so the conversation loop uses the expert identity directly
         try {
-          const { getSettingsService: getS } = await import('@/config/settings-service');
-          const voiceExpertPrompt = await getS().get('voice.expertPrompt') as string | null;
+          const voiceExpertPrompt = await settings.get('voice.expertPrompt') as string | null;
           if (voiceExpertPrompt) expertPrompt = voiceExpertPrompt;
         } catch { /* use default */ }
 
@@ -89,44 +83,64 @@ export class VoiceCallTool extends BaseTool {
             to, message,
             mode: mode as 'notify' | 'conversation',
             webhookUrl,
-            streamUrl: mode === 'conversation' ? `${publicUrl.replace('http', 'ws')}/api/voice/stream` : undefined,
           });
 
-          // Store the initial message and expert config for the webhook handler
           session.metadata.pendingMessage = message;
           session.metadata.expertPrompt = expertPrompt;
-          if (voiceModel) session.metadata.voiceModel = voiceModel;
           session.metadata.conversationHistory = [];
 
-          getCallManager().create(session);
-          log.info({ callId: session.id, to, mode }, 'Call initiated');
-          return { callId: session.id, status: session.status, to, mode };
+          const callManager = getCallManager();
+          callManager.create(session);
+          log.info({ callId: session.id, to, mode }, 'Call initiated, waiting for completion');
+
+          // Wait for the call to complete instead of returning immediately.
+          // The webhook handler updates the session status as events arrive.
+          const startTime = Date.now();
+          const pollInterval = 2000;
+          let finalStatus = session.status;
+
+          while (Date.now() - startTime < timeout) {
+            await new Promise(r => setTimeout(r, pollInterval));
+            const current = callManager.get(session.id);
+            if (!current) break;
+            finalStatus = current.status;
+            if (finalStatus === 'ended' || finalStatus === 'failed' || finalStatus === 'busy' || finalStatus === 'no-answer') {
+              break;
+            }
+          }
+
+          // Gather results
+          const current = callManager.get(session.id);
+          const history = (current?.metadata?.conversationHistory || []) as Array<{ role: string; content: string }>;
+          const recipientResponses = history.filter(m => m.role === 'user').map(m => m.content);
+          const durationMs = current?.endedAt ? current.endedAt.getTime() - current.startedAt.getTime() : Date.now() - startTime;
+
+          const answered = finalStatus === 'ended' || finalStatus === 'active';
+          const hasResponse = recipientResponses.length > 0;
+
+          log.info({ callId: session.id, finalStatus, answered, hasResponse, responses: recipientResponses.length, durationMs }, 'Call completed');
+
+          return {
+            success: answered,
+            callId: session.id,
+            to,
+            status: finalStatus,
+            answered,
+            recipientResponded: hasResponse,
+            recipientResponse: hasResponse ? recipientResponses.join(' ') : null,
+            conversationHistory: history.length > 0 ? history : null,
+            durationSeconds: Math.round(durationMs / 1000),
+            summary: !answered
+              ? `Call to ${to} was not answered (${finalStatus}).`
+              : hasResponse
+                ? `Call answered. Recipient said: "${recipientResponses.join(' ')}"`
+                : `Call answered but recipient hung up without responding. Message was delivered.`,
+          };
         } catch (error) {
-          return { error: `Call failed: ${(error as Error).message}` };
+          return { success: false, error: `Call failed: ${(error as Error).message}`, to };
         }
       },
       { requiresPermission: true, permissionAction: 'initiate_call' },
-    );
-
-    this.registerTool(
-      'continue_call',
-      'Send the next message in an active conversation call.',
-      {
-        type: 'object',
-        properties: {
-          call_id: { type: 'string', description: 'Call ID' },
-          message: { type: 'string', description: 'Message to speak' },
-        },
-        required: ['call_id', 'message'],
-      },
-      async (args: Record<string, unknown>) => {
-        const { getCallManager } = await import('@/voice/telephony');
-        const session = getCallManager().get(args.call_id as string);
-        if (!session) return { error: `Call ${args.call_id} not found` };
-        if (session.status === 'ended') return { error: 'Call has ended' };
-        session.metadata.pendingMessage = args.message as string;
-        return { callId: session.id, status: session.status, message: 'Queued for delivery' };
-      },
     );
 
     this.registerTool(
@@ -149,34 +163,6 @@ export class VoiceCallTool extends BaseTool {
         }
         callManager.updateStatus(session.id, 'ended');
         return { callId: session.id, status: 'ended' };
-      },
-    );
-
-    this.registerTool(
-      'get_status',
-      'Get the status of a phone call.',
-      {
-        type: 'object',
-        properties: { call_id: { type: 'string', description: 'Call ID' } },
-        required: ['call_id'],
-      },
-      async (args: Record<string, unknown>) => {
-        const { getCallManager } = await import('@/voice/telephony');
-        const session = getCallManager().get(args.call_id as string);
-        if (!session) return { error: `Call ${args.call_id} not found` };
-        return { callId: session.id, status: session.status, direction: session.direction, from: session.from, to: session.to, provider: session.provider };
-      },
-    );
-
-    this.registerTool(
-      'list_calls',
-      'List all active phone calls.',
-      { type: 'object', properties: {} },
-      async () => {
-        const { getCallManager } = await import('@/voice/telephony');
-        const active = getCallManager().getActive();
-        if (active.length === 0) return { calls: [], message: 'No active calls' };
-        return { calls: active.map(c => ({ callId: c.id, status: c.status, to: c.to, from: c.from })) };
       },
     );
   }

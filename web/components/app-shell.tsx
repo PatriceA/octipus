@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
+import { GlobalPermissionBanner } from './global-permission-banner';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
@@ -47,6 +48,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
         )}>{children}</main>
       </div>
+      <GlobalPermissionBanner />
     </div>
   );
 }

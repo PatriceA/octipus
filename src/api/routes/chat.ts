@@ -26,6 +26,11 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           channelType: channel || 'webchat',
           channelId: `chat-${generateId().slice(0, 8)}`,
           title: message.slice(0, 100),
+          context: {
+            devMode: body.devMode,
+            projectPath: body.projectPath,
+            projectName: body.projectPath ? body.projectPath.split('/').pop() : undefined,
+          },
         });
         sessionId = session.id;
       } else {
@@ -71,6 +76,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         sessionId: t.Optional(t.String()),
         channel: t.Optional(t.String()),
         expertId: t.Optional(t.String()),
+        devMode: t.Optional(t.Boolean()),
+        projectPath: t.Optional(t.String()),
       }),
       detail: { tags: ['chat'] },
     },

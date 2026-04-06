@@ -151,6 +151,7 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       if (!expertPrompt) {
         expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
       }
+      expertPrompt += '\n\nWhen the caller says goodbye, thanks you and wants to end the call, or clearly wants to hang up, respond with a brief farewell and include the exact marker [END_CALL] at the end of your response. Example: "Goodbye, have a great day! [END_CALL]"';
 
       const startTime = Date.now();
       const result = await client.complete({
@@ -163,7 +164,10 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
         maxTokens: 256, // Short responses for voice
       });
 
-      const spoken = result.content || 'I didn\'t catch that.';
+      let spoken = result.content || 'I didn\'t catch that.';
+      const shouldEndCall = spoken.includes('[END_CALL]');
+      spoken = spoken.replace(/\[END_CALL\]/g, '').trim();
+
       history.push({ role: 'assistant', content: spoken });
 
       // Keep last 20 turns to limit context size
@@ -171,9 +175,17 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       session.metadata.conversationHistory = history;
 
       apiLogger.info(
-        { callId: session.id, latencyMs: Date.now() - startTime, model: voiceModelId, tokens: result.usage.totalTokens },
+        { callId: session.id, latencyMs: Date.now() - startTime, model: voiceModelId, tokens: result.usage.totalTokens, endCall: shouldEndCall },
         'Voice LLM response (direct)',
       );
+
+      if (shouldEndCall) {
+        // Speak farewell then hang up
+        return telephonyProvider.generateAnswerResponse({
+          message: spoken,
+          gatherSpeech: false,
+        });
+      }
 
       return telephonyProvider.generateAnswerResponse({
         message: spoken,

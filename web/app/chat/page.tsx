@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Bot, CheckCircle, XCircle, PanelRightClose, PanelRight } from 'lucide-react';
+import { Loader2, Bot, PanelRightClose, PanelRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api, createWebSocket } from '@/lib/api';
+import { usePermissions } from '@/lib/permission-context';
 import MessageTimeline, {
   type ChatMessageData,
   type MessageMetadata,
@@ -14,20 +15,6 @@ import { SessionList, type SessionInfo } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
-
-interface ApprovalRequest {
-  requestId: string;
-  summary: string;
-  question: string;
-  options?: string[];
-}
-
-interface PermissionRequest {
-  requestId: string;
-  skillId: string;
-  action: string;
-  args?: Record<string, unknown>;
-}
 
 interface ToolCallInfo {
   id: string;
@@ -86,6 +73,7 @@ interface Preset {
 }
 
 export default function ChatPage() {
+  const { pushPermission, pushApproval } = usePermissions();
   const [mounted, setMounted] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const deletedSessionsRef = useRef<Set<string>>(new Set());
@@ -95,8 +83,6 @@ export default function ChatPage() {
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
-  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -326,22 +312,6 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [activeSessionId, loadSessionMessages, loadSessions]);
 
-  // Check for pending approvals (polling fallback when WebSocket reconnects or events are missed)
-  const checkPendingApprovals = useCallback(async () => {
-    try {
-      const res = await api.get<{ approvals: ApprovalRequest[] }>('/chat/approvals/pending');
-      if (res?.approvals?.length > 0 && !pendingApproval) {
-        const a = res.approvals[0];
-        setPendingApproval({
-          requestId: a.requestId,
-          summary: a.summary,
-          question: a.question,
-          options: a.options,
-        });
-      }
-    } catch { /* ignore */ }
-  }, [pendingApproval]);
-
   // WebSocket with auto-reconnection
   const reconnectDelay = useRef(1000);
 
@@ -373,8 +343,6 @@ export default function ChatPage() {
         ws.onopen = () => {
           setConnectionStatus('connected');
           reconnectDelay.current = 1000; // Reset backoff on successful connect
-          // Check for any approvals that arrived while disconnected
-          checkPendingApprovals();
         };
         ws.onmessage = (event) => {
           try { handleWsMessage(JSON.parse(event.data)); } catch {}
@@ -412,13 +380,6 @@ export default function ChatPage() {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
-
-  // Periodic approval poll (every 15s) as fallback for missed WebSocket events
-  useEffect(() => {
-    if (!mounted) return;
-    const interval = setInterval(checkPendingApprovals, 15_000);
-    return () => clearInterval(interval);
-  }, [mounted, checkPendingApprovals]);
 
   // WebSocket keepalive ping every 30s to prevent idle disconnection
   useEffect(() => {
@@ -526,13 +487,15 @@ export default function ChatPage() {
         break;
 
       case 'permission_request':
-        setPendingPermission({
+        // Forward to global permission context for banner display
+        pushPermission({
           requestId: data.requestId,
           skillId: data.skillId,
           action: data.action || data.toolName,
           args: data.args,
         });
         break;
+
     }
   };
 
@@ -545,7 +508,8 @@ export default function ChatPage() {
         break;
 
       case 'approval_required':
-        setPendingApproval({
+        // Forward to global permission context for banner display
+        pushApproval({
           requestId: (data.data as any).requestId,
           summary: (data.data as any).summary,
           question: (data.data as any).question,
@@ -812,8 +776,6 @@ export default function ChatPage() {
         setActiveSessionId(item.id);
         updateSessionState(item.id, () => newSessionState());
         setIsLoading(false);
-        setPendingApproval(null);
-        setPendingPermission(null);
         setStatusMessage(null);
       }
     } catch (error) {
@@ -826,8 +788,6 @@ export default function ChatPage() {
     setActiveSessionId(id);
     loadSessionMessages(id);
     setIsLoading(false);
-    setPendingApproval(null);
-    setPendingPermission(null);
     setStatusMessage(null);
 
     if (!sessionStates.has(id)) {
@@ -978,34 +938,6 @@ export default function ChatPage() {
     setStatusMessage(null);
   };
 
-  // Approval / Permission handling
-  const handleApproval = (approved: boolean, response?: string) => {
-    if (!pendingApproval) return;
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'approval_response',
-        requestId: pendingApproval.requestId,
-        approved,
-        response,
-      }));
-    } else {
-      api.post('/chat/approve', { requestId: pendingApproval.requestId, approved, response }).catch(console.error);
-    }
-    setPendingApproval(null);
-  };
-
-  const handlePermissionResponse = (approved: boolean) => {
-    if (!pendingPermission) return;
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'permission_response',
-        requestId: pendingPermission.requestId,
-        approved,
-      }));
-    }
-    setPendingPermission(null);
-  };
-
   return (
     <div className="h-full flex">
       {/* New session dialog */}
@@ -1029,70 +961,6 @@ export default function ChatPage() {
 
       {/* Center — Messages + Input */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Inline banners for approval/permission */}
-        {pendingPermission && (
-          <div className="bg-yellow-900/20 border-b border-yellow-800/40 px-4 py-3 flex items-center justify-between">
-            <div className="min-w-0 flex-1 mr-3">
-              <p className="text-sm font-medium text-yellow-200">Permission Required</p>
-              <p className="text-sm text-on-surface-variant">
-                <span className="font-mono font-medium">{pendingPermission.skillId}</span>
-                {' '}&middot;{' '}
-                <span className="font-mono">{pendingPermission.action}</span>
-              </p>
-              {pendingPermission.args && Object.keys(pendingPermission.args).length > 0 && (
-                <p className="text-xs text-on-surface-variant mt-1 font-mono truncate">
-                  {Object.entries(pendingPermission.args)
-                    .filter(([, v]) => v != null && String(v).length > 0)
-                    .slice(0, 3)
-                    .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
-                    .join(' · ')}
-                </p>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => handlePermissionResponse(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
-                <CheckCircle className="w-4 h-4" /> Allow
-              </button>
-              <button onClick={() => handlePermissionResponse(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-error text-white rounded-lg hover:bg-error/80 cursor-pointer">
-                <XCircle className="w-4 h-4" /> Deny
-              </button>
-            </div>
-          </div>
-        )}
-
-        {pendingApproval && (
-          <div className="bg-orange-900/20 border-b border-orange-800/40 px-4 py-3 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-orange-200">Approval Required</p>
-              <p className="text-sm text-on-surface-variant">{pendingApproval.summary}</p>
-              <p className="text-sm font-medium text-white mt-0.5">{pendingApproval.question}</p>
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {pendingApproval.options?.length ? (
-                <>
-                  {pendingApproval.options.map((option, i) => (
-                    <button key={i} onClick={() => handleApproval(true, option)} className="px-3 py-1.5 text-sm bg-surface-container-highest border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-white cursor-pointer">
-                      {option}
-                    </button>
-                  ))}
-                  <button onClick={() => handleApproval(false)} className="px-3 py-1.5 text-sm bg-error/20 border border-error/30 rounded-lg hover:bg-error/30 text-error cursor-pointer">
-                    Deny
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button onClick={() => handleApproval(true)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">
-                    <CheckCircle className="w-4 h-4" /> Approve
-                  </button>
-                  <button onClick={() => handleApproval(false)} className="flex items-center gap-1 px-3 py-1.5 text-sm bg-error text-white rounded-lg hover:bg-error/80 cursor-pointer">
-                    <XCircle className="w-4 h-4" /> Deny
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Message timeline */}
         <MessageTimeline
           messages={messages}

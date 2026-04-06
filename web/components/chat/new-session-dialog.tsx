@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Code2, MessageSquare, FolderOpen, Loader2, X, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Code2, MessageSquare, FolderOpen, Loader2, X, ChevronDown, Plus, GitBranch, Check } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +30,15 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+
+  // Create repository state
+  const [showCreateRepo, setShowCreateRepo] = useState(false);
+  const [newRepoName, setNewRepoName] = useState('');
+  const [initGit, setInitGit] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [createSuccess, setCreateSuccess] = useState('');
+  const repoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open && devMode) {
@@ -69,6 +78,51 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
       }
     } catch {}
     setLoading(false);
+  };
+
+  const handleCreateRepo = async () => {
+    const trimmed = newRepoName.trim();
+    if (!trimmed) return;
+
+    setCreating(true);
+    setCreateError('');
+    setCreateSuccess('');
+
+    try {
+      const result = await api.post<{ name: string; path: string; isGit: boolean }>(
+        '/workspace/repositories',
+        { name: trimmed, initGit },
+      );
+
+      if (result?.path) {
+        setCreateSuccess(`Created "${result.name}"`);
+        setProjectPath(result.path);
+
+        // Refresh project list so the new repo appears
+        await loadProjects();
+
+        // Reset form after a brief success flash
+        setTimeout(() => {
+          setShowCreateRepo(false);
+          setNewRepoName('');
+          setInitGit(true);
+          setCreateSuccess('');
+        }, 1500);
+      }
+    } catch (err: any) {
+      const msg = err?.message || err?.error || 'Failed to create repository';
+      setCreateError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const cancelCreateRepo = () => {
+    setShowCreateRepo(false);
+    setNewRepoName('');
+    setCreateError('');
+    setCreateSuccess('');
+    setInitGit(true);
   };
 
   const handleCreate = () => {
@@ -190,6 +244,88 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                   </div>
                 )}
               </div>
+
+              {/* Create new repository */}
+              {!showCreateRepo ? (
+                <button
+                  onClick={() => {
+                    setShowCreateRepo(true);
+                    setShowDropdown(false);
+                    setTimeout(() => repoInputRef.current?.focus(), 50);
+                  }}
+                  className="mt-2 flex items-center gap-1.5 text-xs text-primary hover:text-primary-container cursor-pointer transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Create new repository
+                </button>
+              ) : (
+                <div className="mt-2 p-3 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg space-y-3">
+                  {/* Repo name input */}
+                  <div>
+                    <input
+                      ref={repoInputRef}
+                      type="text"
+                      value={newRepoName}
+                      onChange={(e) => {
+                        setNewRepoName(e.target.value);
+                        setCreateError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newRepoName.trim()) handleCreateRepo();
+                        if (e.key === 'Escape') cancelCreateRepo();
+                      }}
+                      placeholder="Repository name..."
+                      className="w-full px-3 py-2 bg-[#0e0e0e] border border-outline-variant/10 rounded-lg text-sm text-white placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+
+                  {/* Init git checkbox */}
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <div
+                      onClick={() => setInitGit(!initGit)}
+                      className={cn(
+                        'w-4 h-4 rounded border flex items-center justify-center transition-colors',
+                        initGit
+                          ? 'bg-primary border-primary'
+                          : 'border-outline-variant/40 bg-transparent'
+                      )}
+                    >
+                      {initGit && <Check className="w-3 h-3 text-[#0e0e0e]" />}
+                    </div>
+                    <GitBranch className="w-3.5 h-3.5 text-on-surface-variant" />
+                    <span className="text-xs text-on-surface-variant">Initialize Git</span>
+                  </label>
+
+                  {/* Error message */}
+                  {createError && (
+                    <p className="text-xs text-red-400">{createError}</p>
+                  )}
+
+                  {/* Success message */}
+                  {createSuccess && (
+                    <p className="text-xs text-green-400">{createSuccess}</p>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCreateRepo}
+                      disabled={!newRepoName.trim() || creating}
+                      className="px-3 py-1.5 text-xs font-medium bg-primary text-[#0e0e0e] rounded-md hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                    >
+                      {creating && <Loader2 className="w-3 h-3 animate-spin" />}
+                      Create
+                    </button>
+                    <button
+                      onClick={cancelCreateRepo}
+                      disabled={creating}
+                      className="px-3 py-1.5 text-xs text-on-surface-variant hover:text-white cursor-pointer disabled:opacity-40"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

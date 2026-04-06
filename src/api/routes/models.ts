@@ -9,6 +9,61 @@ import { getConfig } from '@/config';
 import type { NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel } from '@/models/capabilities';
 
+// ── OpenRouter live model search cache ──────────────────────────────
+interface OpenRouterApiModel {
+  id: string;
+  name: string;
+  context_length: number;
+  pricing: { prompt: string; completion: string };
+  top_provider?: { max_completion_tokens?: number };
+  architecture?: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
+}
+
+let openRouterModelCache: { data: OpenRouterApiModel[]; fetchedAt: number } | null = null;
+const OPENROUTER_CACHE_TTL = 300_000; // 5 minutes
+
+async function fetchOpenRouterModels(apiKey: string): Promise<OpenRouterApiModel[]> {
+  // Return cached data if still fresh
+  if (openRouterModelCache && Date.now() - openRouterModelCache.fetchedAt < OPENROUTER_CACHE_TTL) {
+    return openRouterModelCache.data;
+  }
+
+  const res = await fetch('https://openrouter.ai/api/v1/models', {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`OpenRouter API returned ${res.status}`);
+  }
+
+  const json = await res.json() as { data: OpenRouterApiModel[] };
+  openRouterModelCache = { data: json.data || [], fetchedAt: Date.now() };
+  return openRouterModelCache.data;
+}
+
+function mapOpenRouterModel(m: OpenRouterApiModel) {
+  const promptPrice = parseFloat(m.pricing?.prompt || '0');
+  const completionPrice = parseFloat(m.pricing?.completion || '0');
+  const inputModalities = m.architecture?.input_modalities || [];
+  const outputModalities = m.architecture?.output_modalities || [];
+
+  return {
+    id: m.id,
+    label: m.name,
+    contextWindow: m.context_length || 0,
+    maxOutputTokens: m.top_provider?.max_completion_tokens || undefined,
+    // Convert per-token pricing to per-1M-tokens
+    costPerInputToken: +(promptPrice * 1_000_000).toFixed(2),
+    costPerOutputToken: +(completionPrice * 1_000_000).toFixed(2),
+    supportsVision: inputModalities.includes('image'),
+    supportsTools: outputModalities.includes('text'), // most text-output models support tools
+  };
+}
+
 // ── Known model catalog with specs & pricing ────────────────────────
 // Prices are per 1M tokens. Context/max output in tokens.
 interface KnownModel {
@@ -645,6 +700,71 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
     },
     { detail: { tags: ['models'] } }
+  )
+
+  // Search OpenRouter models (live API) — must be before :provider wildcard routes
+  .get(
+    '/providers/openrouter/search',
+    async ({ user, query }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const q = (query.q || '').trim().toLowerCase();
+      const limit = Math.min(Math.max(parseInt(query.limit || '20', 10) || 20, 1), 50);
+
+      // Get OpenRouter API key
+      let apiKey = process.env.OPENROUTER_API_KEY || '';
+      if (!apiKey) {
+        try {
+          const { getVault } = await import('@/security/vault');
+          const vault = getVault();
+          apiKey = (await vault.getByName('system', 'openrouter_api_key')) || '';
+        } catch {}
+      }
+
+      if (!apiKey) {
+        return {
+          configured: false,
+          error: 'OpenRouter API key not configured. Add it on the Secrets page or set OPENROUTER_API_KEY.',
+          models: [],
+        };
+      }
+
+      try {
+        const allModels = await fetchOpenRouterModels(apiKey);
+
+        let filtered: OpenRouterApiModel[];
+        if (q) {
+          filtered = allModels.filter(m =>
+            m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+          );
+        } else {
+          // No query — return the first N models (OpenRouter returns them by popularity)
+          filtered = allModels;
+        }
+
+        const results = filtered.slice(0, limit).map(mapOpenRouterModel);
+
+        return {
+          configured: true,
+          models: results,
+          total: filtered.length,
+          cached: openRouterModelCache ? Date.now() - openRouterModelCache.fetchedAt < 1000 ? false : true : false,
+        };
+      } catch (err) {
+        return {
+          configured: true,
+          error: `Failed to fetch OpenRouter models: ${(err as Error).message}`,
+          models: [],
+        };
+      }
+    },
+    {
+      query: t.Object({
+        q: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+      }),
+      detail: { tags: ['models'] },
+    }
   )
 
   // Known models for a provider (static list — kept for backwards compat)

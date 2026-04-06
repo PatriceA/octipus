@@ -96,9 +96,9 @@ Report what you implemented and any deviations from the plan.`,
       },
       {
         name: 'Testing',
-        description: 'Write and run tests for the implementation.',
-        topic: 'coding',
-        toolIds: ['filesystem', 'shell'],
+        description: 'Discover, write, and run tests for the implementation.',
+        topic: 'qa',
+        toolIds: ['filesystem', 'shell', 'browser'],
         requiresApproval: false,
         promptTemplate: `Write tests for the implementation and run them.
 
@@ -107,12 +107,22 @@ Task: {{description}}
 Implementation details:
 {{previousOutput}}
 
+TEST SUITE DISCOVERY — before writing tests, find the project's test framework:
+1. Check for package.json (npm/bun: look at "scripts" for test commands)
+2. Check for pubspec.yaml (Flutter: use "flutter test")
+3. Check for Cargo.toml (Rust: use "cargo test")
+4. Check for pyproject.toml/setup.py (Python: use "pytest")
+5. Check for go.mod (Go: use "go test ./...")
+6. Check for Makefile (use "make test")
+Run the existing test suite FIRST to see what's already covered.
+
 Instructions:
-1. Write unit tests covering the main functionality
-2. Write integration tests for API endpoints or inter-component communication
-3. Test edge cases identified in the architecture plan
-4. Run all tests and report results
-5. Fix any failing tests
+1. Run existing tests to establish a baseline
+2. Write unit tests covering the main functionality
+3. Write integration tests for API endpoints or inter-component communication
+4. Test edge cases identified in the architecture plan
+5. Run all tests and report results
+6. Fix any failing tests
 
 Report:
 - Tests written (file paths and descriptions)
@@ -122,9 +132,9 @@ Report:
       },
       {
         name: 'Code Review',
-        description: 'Review the implementation for quality, bugs, and security.',
-        topic: 'analysis',
-        toolIds: ['filesystem', 'git'],
+        description: 'Review the implementation for quality, bugs, and security. Run tests and linters.',
+        topic: 'review',
+        toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
         requiresApproval: false,
         promptTemplate: `Review the implementation and test results for quality, bugs, and security.
 
@@ -132,6 +142,8 @@ Task: {{description}}
 
 Implementation and test results:
 {{previousOutput}}
+
+FIRST: Run the project's test suite, linter, and type checker to verify everything passes. Check package.json scripts, Makefile, or equivalent for available commands.
 
 Review checklist:
 1. **Correctness** - Does the code do what it should? Are there logic errors?
@@ -141,15 +153,18 @@ Review checklist:
 5. **Code quality** - Is the code readable, maintainable, following conventions?
 6. **Test coverage** - Are critical paths tested? Are edge cases covered?
 7. **Dependencies** - Are new dependencies justified and up-to-date?
+8. **Test/lint/build results** - Do all tests pass? Any lint warnings or type errors?
+
+IMPORTANT: Do NOT modify any code files. Only READ source code. Use shell to run tests, linters, type checkers, and build checks — but do not fix issues yourself.
 
 Provide specific, actionable feedback with file paths and line numbers.
 Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
       },
       {
         name: 'QA Validation',
-        description: 'Validate the implementation works end-to-end.',
-        topic: 'analysis',
-        toolIds: ['browser', 'shell'],
+        description: 'Validate the implementation works end-to-end. Run full test suite and check for regressions.',
+        topic: 'qa',
+        toolIds: ['browser', 'browser-ext', 'shell', 'filesystem'],
         requiresApproval: false,
         promptTemplate: `Perform QA validation on the implementation. Test it end-to-end.
 
@@ -158,16 +173,25 @@ Task: {{description}}
 Code review results:
 {{previousOutput}}
 
+TEST SUITE DISCOVERY — find and run the project's test commands:
+1. Check for package.json (npm/bun: look at "scripts" for test/build commands)
+2. Check for pubspec.yaml (Flutter: use "flutter test", "flutter analyze")
+3. Check for Cargo.toml (Rust: use "cargo test")
+4. Check for pyproject.toml/setup.py (Python: use "pytest")
+5. Check for go.mod (Go: use "go test ./...")
+6. Check for Makefile (use "make test")
+
 Validation steps:
-1. Verify the feature works as described in the requirements
-2. Test the happy path end-to-end
-3. Test error scenarios and edge cases
-4. Check UI/UX if applicable (responsiveness, accessibility)
-5. Verify no regressions in existing functionality
+1. Run the FULL test suite to check for regressions
+2. Verify the feature works as described in the requirements
+3. Test the happy path end-to-end
+4. Test error scenarios and edge cases
+5. Check UI/UX if applicable (responsiveness, accessibility)
 6. Performance spot-check (response times, memory usage)
 
 Report:
 - Overall status: PASS / FAIL / PASS WITH NOTES
+- Test suite results (pass/fail counts)
 - Issues found (with severity: critical/major/minor)
 - Recommendations for improvement
 - Screenshots or evidence (if applicable)`,
@@ -318,7 +342,9 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
 
 /**
  * Seed preset pipeline templates into the database.
- * Idempotent — skips templates that already exist by name.
+ * Idempotent — inserts new templates and updates existing preset templates
+ * (description and steps) so code changes propagate on restart.
+ * Only updates templates with isPreset=true to preserve user-created templates.
  */
 export async function seedPresetTemplates(): Promise<void> {
   const db = getDb();
@@ -326,12 +352,23 @@ export async function seedPresetTemplates(): Promise<void> {
   for (const preset of PRESET_TEMPLATES) {
     // Check if this preset already exists
     const existing = await db
-      .select({ id: pipelineTemplates.id })
+      .select({ id: pipelineTemplates.id, isPreset: pipelineTemplates.isPreset })
       .from(pipelineTemplates)
       .where(eq(pipelineTemplates.name, preset.name))
       .limit(1);
 
     if (existing.length > 0) {
+      // Update existing preset templates so code changes propagate
+      if (existing[0].isPreset) {
+        await db
+          .update(pipelineTemplates)
+          .set({
+            description: preset.description,
+            steps: preset.steps,
+          })
+          .where(eq(pipelineTemplates.id, existing[0].id));
+        logger.info({ template: preset.name }, 'Updated preset pipeline template');
+      }
       continue;
     }
 

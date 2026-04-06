@@ -29,7 +29,13 @@ export async function autoUpdateProjectSummary(
     const summaryPath = resolve(summaryDir, 'project-summary.md');
     const { mkdirSync, existsSync, readFileSync, writeFileSync } = await import('fs');
 
-    mkdirSync(summaryDir, { recursive: true });
+    // Ensure .assistant/ directory exists — this is the most common failure point
+    try {
+      mkdirSync(summaryDir, { recursive: true });
+    } catch (dirErr) {
+      coreLogger.error({ err: dirErr, summaryDir }, 'Failed to create .assistant/ directory for project summary');
+      return;
+    }
 
     // Read existing summary
     let existing = '';
@@ -55,6 +61,6 @@ export async function autoUpdateProjectSummary(
 
     coreLogger.info({ projectRoot, title }, 'Project summary updated');
   } catch (err) {
-    coreLogger.warn({ err }, 'Failed to auto-update project summary');
+    coreLogger.error({ err, sessionId: context.sessionId, role: context.role, title }, 'Failed to auto-update project summary');
   }
 }

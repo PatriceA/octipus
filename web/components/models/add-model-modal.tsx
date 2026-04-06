@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil, ChevronDown, AlertCircle, Loader2 } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil, ChevronDown, AlertCircle, Loader2, Search } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   type LiteLLMModel,
@@ -69,6 +69,39 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   // Track which proxy providers (litellm, openrouter) are configured
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set());
 
+  // OpenRouter live search state
+  const [orSearchQuery, setOrSearchQuery] = useState('');
+  const [orSearchResults, setOrSearchResults] = useState<AvailableModel[]>([]);
+  const [orSearchLoading, setOrSearchLoading] = useState(false);
+  const [orSearchTotal, setOrSearchTotal] = useState(0);
+  const orDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const searchOpenRouter = useCallback(async (query: string) => {
+    setOrSearchLoading(true);
+    try {
+      const qs = query ? `?q=${encodeURIComponent(query)}&limit=20` : '?limit=20';
+      const data = await api.get<{
+        configured: boolean;
+        models?: AvailableModel[];
+        total?: number;
+        error?: string;
+      }>(`/models/providers/openrouter/search${qs}`);
+      if (data.configured === false) {
+        setProviderConfigured(false);
+        setProviderError(data.error || 'OpenRouter not configured');
+        setOrSearchResults([]);
+      } else {
+        setProviderConfigured(true);
+        setOrSearchResults(data.models || []);
+        setOrSearchTotal(data.total || 0);
+      }
+    } catch (err) {
+      setProviderError((err as Error).message);
+      setOrSearchResults([]);
+    }
+    setOrSearchLoading(false);
+  }, []);
+
   // Reset state when modal opens and check provider availability
   useEffect(() => {
     if (isOpen) {
@@ -79,6 +112,9 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       setAvailableModels([]);
       setProviderConfigured(null);
       setProviderError('');
+      setOrSearchQuery('');
+      setOrSearchResults([]);
+      setOrSearchTotal(0);
       // Check which providers are configured
       (async () => {
         const configured = new Set<string>();
@@ -117,6 +153,16 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       setProviderConfigured(null);
       return;
     }
+
+    // OpenRouter: use live search instead of static list
+    if (provider === 'openrouter') {
+      setAvailableModels([]);
+      setOrSearchQuery('');
+      setOrSearchResults([]);
+      searchOpenRouter('');
+      return;
+    }
+
     setLoadingAvailable(true);
     setProviderError('');
     setAvailableModels([]);
@@ -138,7 +184,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       setProviderError((err as Error).message);
     }
     setLoadingAvailable(false);
-  }, []);
+  }, [searchOpenRouter]);
 
   if (!isOpen) return null;
 
@@ -418,6 +464,9 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     const p = e.target.value;
                     setFormData({ ...formData, provider: p, modelId: '' });
                     setTestResult(null);
+                    setOrSearchQuery('');
+                    setOrSearchResults([]);
+                    setOrSearchTotal(0);
                     if (connectionType === 'direct') fetchAvailableModels(p);
                   }}
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
@@ -437,7 +486,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               </div>
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Model ID *</label>
-                {connectionType === 'direct' && !isCli && availableModels.length > 0 ? (
+                {connectionType === 'direct' && !isCli && formData.provider !== 'openrouter' && availableModels.length > 0 ? (
                   <select
                     value={formData.modelId}
                     onChange={(e) => {
@@ -464,6 +513,14 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                       </option>
                     ))}
                   </select>
+                ) : connectionType === 'direct' && formData.provider === 'openrouter' ? (
+                  <input
+                    type="text"
+                    value={formData.modelId}
+                    readOnly
+                    placeholder="Search below to select..."
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  />
                 ) : (
                   <input
                     type="text"
@@ -480,6 +537,79 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 )}
               </div>
             </div>
+
+            {/* OpenRouter live model search */}
+            {connectionType === 'direct' && formData.provider === 'openrouter' && (
+              <div className="border border-outline-variant/10 rounded-lg overflow-hidden">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
+                  <input
+                    type="text"
+                    value={orSearchQuery}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setOrSearchQuery(val);
+                      if (orDebounceRef.current) clearTimeout(orDebounceRef.current);
+                      orDebounceRef.current = setTimeout(() => searchOpenRouter(val), 300);
+                    }}
+                    placeholder="Search OpenRouter models (e.g., claude, gpt, llama)..."
+                    className="w-full pl-9 pr-3 py-2.5 bg-surface-container-high text-white text-sm border-b border-outline-variant/10 focus:outline-none focus:border-primary/30"
+                  />
+                  {orSearchLoading && (
+                    <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-on-surface-variant" />
+                  )}
+                </div>
+                <div className="max-h-48 overflow-y-auto">
+                  {orSearchResults.length > 0 ? (
+                    orSearchResults.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setFormData({
+                            ...formData,
+                            modelId: m.id,
+                            name: m.label || m.id,
+                            contextWindow: m.contextWindow || formData.contextWindow,
+                            maxTokens: m.maxOutputTokens || formData.maxTokens,
+                            supportsVision: m.supportsVision ?? formData.supportsVision,
+                            supportsTools: m.supportsTools ?? formData.supportsTools,
+                            costPerInputToken: m.costPerInputToken ?? formData.costPerInputToken,
+                            costPerOutputToken: m.costPerOutputToken ?? formData.costPerOutputToken,
+                          });
+                        }}
+                        className={`w-full text-left px-3 py-2 hover:bg-surface-container-highest transition-colors flex items-center justify-between group/or ${
+                          formData.modelId === m.id ? 'bg-primary/5 border-l-2 border-primary' : ''
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-sm text-white truncate">{m.id}</div>
+                          <div className="text-xs text-on-surface-variant flex items-center gap-2 mt-0.5">
+                            {m.contextWindow ? <span>{(m.contextWindow / 1000).toFixed(0)}k ctx</span> : null}
+                            {m.costPerInputToken ? <span>${m.costPerInputToken.toFixed(2)}/${m.costPerOutputToken?.toFixed(2)}</span> : null}
+                            {m.supportsVision && <span className="text-primary/70">vision</span>}
+                          </div>
+                        </div>
+                        {formData.modelId === m.id ? (
+                          <CheckCircle className="w-4 h-4 text-primary shrink-0" />
+                        ) : (
+                          <Plus className="w-4 h-4 text-on-surface-variant opacity-0 group-hover/or:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </button>
+                    ))
+                  ) : !orSearchLoading ? (
+                    <div className="px-3 py-4 text-center text-sm text-on-surface-variant">
+                      {providerConfigured === false ? providerError : orSearchQuery ? 'No models found' : 'Loading models...'}
+                    </div>
+                  ) : null}
+                </div>
+                {orSearchTotal > 20 && (
+                  <div className="px-3 py-1.5 text-xs text-on-surface-variant border-t border-outline-variant/10 bg-surface-container">
+                    Showing 20 of {orSearchTotal} results
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Provider not configured warning */}
             {connectionType === 'direct' && providerConfigured === false && providerError && (
@@ -545,7 +675,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             <div>
               <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
               <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 w-full">
                 {AVAILABLE_TOPICS.map((topic) => {
                   const selected = formData.topics.includes(topic.value);
                   return (
@@ -558,7 +688,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                           ? formData.topics.filter(t => t !== topic.value)
                           : [...formData.topics, topic.value],
                       })}
-                      className={`px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ${
+                      className={`px-2 py-1 rounded-lg text-xs cursor-pointer transition-colors ${
                         selected
                           ? 'bg-primary/10 text-primary ring-1 ring-primary/30'
                           : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'

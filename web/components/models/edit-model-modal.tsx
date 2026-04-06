@@ -139,35 +139,33 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
-              <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
-              <div className="flex flex-wrap gap-2">
-                {AVAILABLE_TOPICS.map((topic) => {
-                  const selected = formData.topics.includes(topic.value);
-                  return (
-                    <button
-                      key={topic.value}
-                      type="button"
-                      onClick={() => setFormData({
-                        ...formData,
-                        topics: selected
-                          ? formData.topics.filter(t => t !== topic.value)
-                          : [...formData.topics, topic.value],
-                      })}
-                      className={`px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ${
-                        selected
-                          ? 'bg-primary/10 text-primary ring-1 ring-primary/30'
-                          : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-                      }`}
-                      title={topic.description}
-                    >
-                      {topic.label}
-                    </button>
-                  );
-                })}
-              </div>
+          <div>
+            <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
+            <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 w-full">
+              {AVAILABLE_TOPICS.map((topic) => {
+                const selected = formData.topics.includes(topic.value);
+                return (
+                  <button
+                    key={topic.value}
+                    type="button"
+                    onClick={() => setFormData({
+                      ...formData,
+                      topics: selected
+                        ? formData.topics.filter(t => t !== topic.value)
+                        : [...formData.topics, topic.value],
+                    })}
+                    className={`px-2 py-1 rounded-lg text-xs cursor-pointer transition-colors ${
+                      selected
+                        ? 'bg-primary/10 text-primary ring-1 ring-primary/30'
+                        : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
+                    }`}
+                    title={topic.description}
+                  >
+                    {topic.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

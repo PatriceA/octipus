@@ -10,13 +10,11 @@ import {
   GripVertical,
   ChevronDown,
   ChevronUp,
-  Play,
-  CheckCircle,
   Shield,
   RotateCcw,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
+import { AVAILABLE_TOPICS } from '@/lib/types/models';
 
 interface PipelineStep {
   name: string;
@@ -40,16 +38,6 @@ interface PipelineTemplate {
   updatedAt: string;
 }
 
-const TOPICS = [
-  'coding',
-  'analysis',
-  'research',
-  'writing',
-  'review',
-  'testing',
-  'documentation',
-  'general',
-];
 
 export default function PipelinesPage() {
   const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
@@ -431,8 +419,8 @@ function TemplateEditor({
                               onChange={e => updateStep(i, { topic: e.target.value })}
                               className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
                             >
-                              {TOPICS.map(t => (
-                                <option key={t} value={t}>{t}</option>
+                              {AVAILABLE_TOPICS.map(t => (
+                                <option key={t.value} value={t.value}>{t.label}</option>
                               ))}
                             </select>
                           </div>

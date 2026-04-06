@@ -253,22 +253,29 @@ export async function spawnWorker(
   const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
   const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
 
-  // Inject project summary — dev mode: all roles from project path; normal: coding role from workspace root
+  // Inject project summary and maintenance instruction
+  const PROJECT_SUMMARY_INSTRUCTION = `\n\nCRITICAL — PROJECT DOCUMENTATION:
+Before starting work, check if .assistant/project-summary.md exists in the project root. If it does, read it to understand the project context.
+After completing your task, you MUST update .assistant/project-summary.md with:
+- Project structure overview (key directories, entry points)
+- Main technologies and frameworks used (e.g., Flutter, Bun, React)
+- Key files and their purposes
+- Available commands (test, build, lint, run)
+- Summary of what you changed
+If .assistant/ doesn't exist, create the directory first: mkdir -p .assistant
+Keep the summary under 4000 chars. This file is critical — it's injected into all future agents working on this project.`;
+
   if (isDevMode && devProjectPath) {
+    // Dev mode: inject instruction for ALL roles + load existing summary
+    systemPrompt += PROJECT_SUMMARY_INSTRUCTION;
     const projectSummary = await loadProjectSummary(devProjectPath);
     if (projectSummary) {
       const projectName = sessionCtx!.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
       systemPrompt += `\n\n--- Project Summary (${projectName}) ---\n${projectSummary}`;
     }
-    systemPrompt += `\n\nPROJECT SUMMARY MAINTENANCE:
-After completing your task, update .assistant/project-summary.md in the project root with:
-- Project structure overview (key directories, entry points)
-- Main technologies and frameworks used
-- Key files and their purposes
-- Summary of recent changes you made
-Keep it under 4000 chars — this summary is injected into all future agents working on this project.
-If the file doesn't exist, create it.`;
   } else if (agentRole === 'coding') {
+    // Normal mode coding agents: also maintain project summary
+    systemPrompt += PROJECT_SUMMARY_INSTRUCTION;
     const projectSummary = await loadProjectSummary();
     if (projectSummary) {
       systemPrompt += `\n\n--- Existing Project Summary ---\n${projectSummary}`;

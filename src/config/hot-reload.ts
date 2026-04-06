@@ -3,6 +3,7 @@ import { getSettingDefinition } from './settings-registry';
 import { refreshConfigKey } from './index';
 import { resetLiteLLMClient } from '@/models/litellm-client';
 import { reinitializeChannel } from '@/channels';
+import { resetTelephonyProvider } from '@/voice/telephony';
 import { getVault } from '@/security/vault';
 import { logger } from '@/utils/logger';
 import type { ChannelType } from '@/core/types';
@@ -63,7 +64,13 @@ export function initializeHotReload(): void {
           logger.info({ key, value: newValue }, 'Logging config updated');
           break;
 
-        // agent, orchestrator, workspace, voice, integrations —
+        case 'voice':
+          // Reset the cached telephony provider so new credentials/settings take effect
+          resetTelephonyProvider();
+          logger.info({ key }, 'Telephony provider cache reset');
+          break;
+
+        // agent, orchestrator, workspace, integrations —
         // these are read per-request from getConfig(), so no active reload needed.
         // The cached config was already updated by refreshConfigKey() above.
         default:

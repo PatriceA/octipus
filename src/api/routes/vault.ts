@@ -3,6 +3,21 @@ import { apiContext } from '@/api/context';
 import { getVault } from '@/security/vault';
 import { apiLogger } from '@/utils/logger';
 
+/** Secret names that, when changed, require a telephony provider cache reset. */
+const TELEPHONY_SECRET_NAMES = new Set([
+  'twilio_account_sid', 'twilio_auth_token', 'twilio_phone_number',
+  'telnyx_api_key', 'telnyx_connection_id', 'telnyx_phone_number', 'telnyx_public_key',
+  'plivo_auth_id', 'plivo_auth_token', 'plivo_phone_number',
+]);
+
+/** Reset telephony provider cache when a telephony credential changes. */
+function resetTelephonyIfNeeded(secretName: string): void {
+  if (TELEPHONY_SECRET_NAMES.has(secretName)) {
+    import('@/voice/telephony').then(m => m.resetTelephonyProvider()).catch(() => {});
+    apiLogger.info({ secretName }, 'Telephony provider cache reset after credential change');
+  }
+}
+
 export const vaultRoutes = new Elysia({ prefix: '/vault' })
   .use(apiContext)
   // List credentials (metadata only)
@@ -47,6 +62,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
             tags: body.tags,
           });
           if (updated) {
+            resetTelephonyIfNeeded(body.name);
             const { encryptedValue, encryptionIv, encryptionAuthTag, ...safe } = updated;
             return safe;
           }
@@ -61,6 +77,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         allowedAgents: body.allowedAgents,
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
       });
+
+      resetTelephonyIfNeeded(body.name);
 
       // Strip encryption fields
       const { encryptedValue, encryptionIv, encryptionAuthTag, ...safe } = entry;
@@ -112,6 +130,7 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         return { error: 'Credential not found' };
       }
 
+      resetTelephonyIfNeeded(entry.name);
       const { encryptedValue, encryptionIv, encryptionAuthTag, ...safe } = entry;
 
       return safe;
@@ -166,6 +185,14 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       }
 
       const vault = getVault();
+
+      // Look up the credential name before rotating (for cache invalidation)
+      const entries = await vault.list(user.id);
+      const credEntry = entries.find(e => e.id === params.id);
+      const systemEntries = user.isAdmin ? await vault.list('system') : [];
+      const systemEntry = systemEntries.find(e => e.id === params.id);
+      const secretName = credEntry?.name || systemEntry?.name;
+
       let rotated = await vault.rotate(user.id, params.id, body.value);
       if (!rotated && user.isAdmin) {
         rotated = await vault.rotate('system', params.id, body.value);
@@ -174,6 +201,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       if (!rotated) {
         return { error: 'Credential not found' };
       }
+
+      if (secretName) resetTelephonyIfNeeded(secretName);
 
       return { success: true };
     },
