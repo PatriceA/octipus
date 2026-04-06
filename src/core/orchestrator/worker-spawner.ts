@@ -171,6 +171,8 @@ export async function spawnWorker(
   const roleConfig = getRoleConfig(agentRole);
   const roleTools = getToolsForRole(agentRole);
 
+  coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
+
   // Auto-select a matching expert for this role
   let expertPrompt: string | undefined;
   let expertModel: string | undefined;

@@ -70,6 +70,19 @@ const KNOWN_PROVIDER_MODELS: Record<string, KnownModel[]> = {
     { id: 'deepseek-chat', label: 'DeepSeek V3.2 (Chat)', contextWindow: 128000, maxOutputTokens: 8192, costPerInputToken: 0.28, costPerOutputToken: 0.42, supportsTools: true },
     { id: 'deepseek-reasoner', label: 'DeepSeek V3.2 (Reasoner)', contextWindow: 128000, maxOutputTokens: 64000, costPerInputToken: 0.28, costPerOutputToken: 0.42 },
   ],
+  openrouter: [
+    // Popular models via OpenRouter (prices are OpenRouter's, may differ from direct)
+    { id: 'openai/gpt-4o', label: 'GPT-4o (via OpenRouter)', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 2.50, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
+    { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini (via OpenRouter)', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
+    { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (via OpenRouter)', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
+    { id: 'anthropic/claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (via OpenRouter)', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 1.00, costPerOutputToken: 5.00, supportsVision: true, supportsTools: true },
+    { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (via OpenRouter)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
+    { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro (via OpenRouter)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 1.25, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
+    { id: 'deepseek/deepseek-chat-v3-0324', label: 'DeepSeek V3 (via OpenRouter)', contextWindow: 128000, maxOutputTokens: 8192, costPerInputToken: 0.28, costPerOutputToken: 0.42, supportsTools: true },
+    { id: 'meta-llama/llama-4-scout', label: 'Llama 4 Scout (via OpenRouter)', contextWindow: 512000, maxOutputTokens: 32768, costPerInputToken: 0.15, costPerOutputToken: 0.40, supportsVision: true, supportsTools: true },
+    { id: 'meta-llama/llama-4-maverick', label: 'Llama 4 Maverick (via OpenRouter)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.25, costPerOutputToken: 0.75, supportsVision: true, supportsTools: true },
+    { id: 'qwen/qwen-3-235b-a22b', label: 'Qwen 3 235B (via OpenRouter)', contextWindow: 131072, maxOutputTokens: 32768, costPerInputToken: 0.30, costPerOutputToken: 1.20, supportsTools: true },
+  ],
   voyage: [
     // Primary models
     { id: 'voyage-4-large', label: 'Voyage 4 Large', contextWindow: 32000, costPerInputToken: 0.12 },

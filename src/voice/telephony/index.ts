@@ -56,8 +56,13 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
       const fromNumber = (await settings.get('voice.phoneNumber') as string | null)
         || await getSecret('twilio_phone_number') || '';
 
+      // Map short language codes to Twilio BCP-47 locale
+      const langSetting = (await settings.get('voice.language') as string | null) || 'en';
+      const langMap: Record<string, string> = { en: 'en-US', de: 'de-DE', fr: 'fr-FR', es: 'es-ES', it: 'it-IT', pt: 'pt-BR', nl: 'nl-NL', ja: 'ja-JP', ko: 'ko-KR', zh: 'zh-CN' };
+      const language = langMap[langSetting] || (langSetting.includes('-') ? langSetting : 'en-US');
+
       const { TwilioProvider } = await import('./twilio');
-      cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber });
+      cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber, language });
       break;
     }
 
@@ -98,4 +103,6 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
 export function resetTelephonyProvider(): void {
   cachedProvider = null;
   cachedProviderName = null;
+  // Also invalidate the tool availability cache so the voice tool is re-checked
+  import('@/tools/registry').then(m => m.getToolRegistry().invalidateAvailabilityCache()).catch(() => {});
 }

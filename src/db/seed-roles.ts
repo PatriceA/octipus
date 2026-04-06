@@ -16,13 +16,36 @@ export async function seedRoles(): Promise<void> {
   const db = getDb();
 
   for (const [roleName, config] of Object.entries(ROLE_CONFIGS)) {
-    const existing = await db
-      .select({ id: roles.id })
+    const [existing] = await db
+      .select()
       .from(roles)
       .where(eq(roles.role, roleName))
       .limit(1);
 
-    if (existing.length > 0) continue;
+    if (existing) {
+      const updates: Record<string, unknown> = {};
+
+      // Merge any new toolIds from code into the DB record (preserves user additions)
+      const dbToolIds = new Set((existing.toolIds as string[]) || []);
+      const codeToolIds = config.toolIds || [];
+      const newTools = codeToolIds.filter(id => !dbToolIds.has(id));
+      if (newTools.length > 0) {
+        updates.toolIds = [...dbToolIds, ...newTools];
+      }
+
+      // If the system prompt was never customized (matches an older hardcoded version),
+      // update it to the latest from code. Only sync if the existing prompt is the
+      // system default (isSystem flag) — user-edited prompts are preserved.
+      if (existing.isSystem && config.systemPromptTemplate !== existing.systemPromptTemplate) {
+        updates.systemPromptTemplate = config.systemPromptTemplate;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await db.update(roles).set(updates).where(eq(roles.role, roleName));
+        logger.info({ role: roleName, updatedFields: Object.keys(updates) }, 'Updated role from code');
+      }
+      continue;
+    }
 
     await db.insert(roles).values({
       role: roleName,

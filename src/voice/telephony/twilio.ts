@@ -21,12 +21,14 @@ export class TwilioProvider implements TelephonyProvider {
   private accountSid: string;
   private authToken: string;
   private fromNumber: string;
+  private language: string;
   private baseUrl = 'https://api.twilio.com/2010-04-01';
 
-  constructor(config: { accountSid: string; authToken: string; fromNumber: string }) {
+  constructor(config: { accountSid: string; authToken: string; fromNumber: string; language?: string }) {
     this.accountSid = config.accountSid;
     this.authToken = config.authToken;
     this.fromNumber = config.fromNumber;
+    this.language = config.language || 'en-US';
   }
 
   async initiateCall(options: InitiateCallOptions): Promise<CallSession> {
@@ -98,12 +100,16 @@ export class TwilioProvider implements TelephonyProvider {
 
     if (options.gatherSpeech && options.callbackUrl) {
       // Interactive mode: speak, then gather speech input
+      const lang = this.language || 'en-US';
       twiml += `  <Gather input="speech" action="${this.escapeXml(options.callbackUrl)}" `;
-      twiml += `speechTimeout="${options.gatherTimeout || 3}" language="en-US">\n`;
+      twiml += `speechTimeout="${options.gatherTimeout || 'auto'}" language="${lang}" enhanced="true">\n`;
       twiml += `    <Say voice="${voice}">${this.escapeXml(options.message)}</Say>\n`;
       twiml += '  </Gather>\n';
-      // Fallback if no speech detected
-      twiml += `  <Say voice="${voice}">I didn't hear anything. Goodbye.</Say>\n`;
+      // Fallback if no speech detected — re-prompt instead of hanging up
+      twiml += `  <Say voice="${voice}">I didn't catch that. Are you still there?</Say>\n`;
+      twiml += `  <Gather input="speech" action="${this.escapeXml(options.callbackUrl)}" speechTimeout="auto" language="${lang}" enhanced="true">\n`;
+      twiml += `    <Say voice="${voice}">Go ahead, I'm listening.</Say>\n`;
+      twiml += '  </Gather>\n';
       twiml += '  <Hangup/>\n';
     } else if (options.streamUrl) {
       // Media streaming mode: speak greeting, then start bidirectional stream
@@ -220,6 +226,15 @@ export class TwilioProvider implements TelephonyProvider {
       return { healthy: false, error: 'Twilio credentials not configured' };
     }
 
+    // Basic format validation — Account SIDs always start with "AC" and are 34 chars
+    if (!this.accountSid.startsWith('AC') || this.accountSid.length !== 34) {
+      return { healthy: false, error: `Invalid Account SID format (expected "AC" + 32 hex chars, got "${this.accountSid.slice(0, 6)}…" length ${this.accountSid.length}). Check vault secret "twilio_account_sid".` };
+    }
+
+    if (this.authToken.length !== 32) {
+      return { healthy: false, error: `Invalid Auth Token format (expected 32 hex chars, got length ${this.authToken.length}). Check vault secret "twilio_auth_token".` };
+    }
+
     try {
       const response = await fetch(
         `${this.baseUrl}/Accounts/${this.accountSid}.json`,
@@ -231,14 +246,43 @@ export class TwilioProvider implements TelephonyProvider {
         },
       );
 
-      // Auto-detect phone number if not configured
-      if (response.ok && !this.fromNumber) {
-        await this.autoDetectPhoneNumber();
+      if (response.ok) {
+        // Auto-detect phone number if not configured
+        if (!this.fromNumber) {
+          await this.autoDetectPhoneNumber();
+        }
+        return { healthy: true };
       }
 
-      return response.ok ? { healthy: true } : { healthy: false, error: `HTTP ${response.status}` };
+      // Parse the Twilio error response for a meaningful message
+      let detail = '';
+      try {
+        const body = await response.json() as { message?: string; code?: number; more_info?: string; status?: string };
+        if (body.message) detail = body.message;
+        if (body.code) detail += ` (code ${body.code})`;
+        // Surface account status issues (suspended, closed)
+        if (body.status && body.status !== 'active') detail += ` — account status: ${body.status}`;
+      } catch {
+        detail = await response.text().catch(() => '');
+      }
+
+      if (response.status === 401) {
+        return { healthy: false, error: `Authentication failed (HTTP 401). The Auth Token does not match the Account SID. Regenerate it in the Twilio Console → Account → API keys & tokens.${detail ? ' ' + detail : ''}` };
+      }
+      if (response.status === 403) {
+        return { healthy: false, error: `Permission denied (HTTP 403). Common causes: (1) account is suspended or closed, (2) Auth Token was regenerated and the old one is stored in the vault, (3) credentials belong to a sub-account but are used against the main account endpoint. Verify in the Twilio Console.${detail ? ' ' + detail : ''}` };
+      }
+      if (response.status === 404) {
+        return { healthy: false, error: `Account not found (HTTP 404). The Account SID "${this.accountSid.slice(0, 10)}…" does not exist. Double-check the vault secret "twilio_account_sid".${detail ? ' ' + detail : ''}` };
+      }
+
+      return { healthy: false, error: `HTTP ${response.status}${detail ? ': ' + detail : ''}` };
     } catch (error) {
-      return { healthy: false, error: (error as Error).message };
+      const msg = (error as Error).message;
+      if (msg.includes('timeout') || msg.includes('abort')) {
+        return { healthy: false, error: 'Connection to Twilio timed out (10s). Check network/firewall.' };
+      }
+      return { healthy: false, error: msg };
     }
   }
 

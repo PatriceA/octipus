@@ -38,6 +38,7 @@ export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
       { label: 'Anthropic', vaultName: 'anthropic_api_key', testProvider: 'anthropic', placeholder: 'sk-ant-...' },
       { label: 'Google Gemini', vaultName: 'gemini_api_key', testProvider: 'gemini' },
       { label: 'DeepSeek', vaultName: 'deepseek_api_key', testProvider: 'deepseek', placeholder: 'sk-...' },
+      { label: 'OpenRouter', vaultName: 'openrouter_api_key', testProvider: 'openrouter', placeholder: 'sk-or-...' },
       { label: 'Voyage AI (Embeddings)', vaultName: 'voyage_api_key', testProvider: 'voyage', placeholder: 'pa-...' },
       { label: 'Custom Provider', vaultName: 'custom_api_key', placeholder: 'API key for custom OpenAI-compatible providers' },
     ],

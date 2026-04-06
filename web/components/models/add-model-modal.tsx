@@ -66,7 +66,10 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   const [providerError, setProviderError] = useState('');
   const [loadingAvailable, setLoadingAvailable] = useState(false);
 
-  // Reset state when modal opens
+  // Track which proxy providers (litellm, openrouter) are configured
+  const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set());
+
+  // Reset state when modal opens and check provider availability
   useEffect(() => {
     if (isOpen) {
       setStep('choose-source');
@@ -76,6 +79,34 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       setAvailableModels([]);
       setProviderConfigured(null);
       setProviderError('');
+      // Check which providers are configured
+      (async () => {
+        const configured = new Set<string>();
+        // Always include providers that don't need configuration
+        configured.add('ollama');
+        configured.add('cli');
+        configured.add('custom');
+        try {
+          const settings = await api.get<{ settings: Record<string, Array<{ key: string; value: unknown }>> }>('/settings');
+          const all = Object.values(settings?.settings || {}).flat();
+          for (const s of all) {
+            if (s.key === 'litellm.proxyUrl' && s.value && String(s.value).trim()) configured.add('litellm');
+            if (s.key === 'openrouter.apiKey' && s.value && String(s.value) !== '' && String(s.value) !== '••••••••') configured.add('openrouter');
+          }
+          // Check vault-based providers by testing their health
+          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'openrouter'] as const;
+          const healthResults = await Promise.allSettled(
+            providerChecks.map(p => api.get<{ configured?: boolean }>(`/models/providers/${p}/available`))
+          );
+          providerChecks.forEach((p, i) => {
+            const result = healthResults[i];
+            if (result.status === 'fulfilled' && result.value?.configured) {
+              configured.add(p);
+            }
+          });
+        } catch { /* ignore — show all providers as fallback */ }
+        setConfiguredProviders(configured);
+      })();
     }
   }, [isOpen]);
 
@@ -263,23 +294,25 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               How should this model be connected?
             </p>
 
-            <button
-              type="button"
-              onClick={handleChooseLiteLLM}
-              className="w-full text-left p-4 border border-outline-variant/10 rounded-lg hover:border-primary/30 hover:bg-primary/5 transition-colors group"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                  <Cpu className="w-5 h-5 text-primary" />
-                </div>
-                <div>
-                  <div className="font-medium text-white">LiteLLM Proxy</div>
-                  <div className="text-xs text-on-surface-variant">
-                    Select from models configured in your LiteLLM proxy. Includes Ollama, OpenAI, Anthropic, and other providers.
+            {configuredProviders.has('litellm') && (
+              <button
+                type="button"
+                onClick={handleChooseLiteLLM}
+                className="w-full text-left p-4 border border-outline-variant/10 rounded-lg hover:border-primary/30 hover:bg-primary/5 transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <Cpu className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="font-medium text-white">LiteLLM Proxy</div>
+                    <div className="text-xs text-on-surface-variant">
+                      Select from models configured in your LiteLLM proxy. Includes Ollama, OpenAI, Anthropic, and other providers.
+                    </div>
                   </div>
                 </div>
-              </div>
-            </button>
+              </button>
+            )}
 
             <button
               type="button"
@@ -293,7 +326,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 <div>
                   <div className="font-medium text-white">Manual / Direct</div>
                   <div className="text-xs text-on-surface-variant">
-                    Enter model details manually. For models not in LiteLLM, custom endpoints, or CLI subscription tools.
+                    Configure a model directly via Ollama, OpenAI, Anthropic, OpenRouter, or any OpenAI-compatible endpoint.
                   </div>
                 </div>
               </div>
@@ -389,8 +422,16 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                   }}
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
                 >
-                  {Object.entries(PROVIDER_LABELS).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
+                  {Object.entries(PROVIDER_LABELS)
+                    .sort(([a], [b]) => {
+                      const aConf = configuredProviders.has(a) ? 0 : 1;
+                      const bConf = configuredProviders.has(b) ? 0 : 1;
+                      return aConf - bConf;
+                    })
+                    .map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}{configuredProviders.size > 0 && !configuredProviders.has(value) ? ' (not configured)' : ''}
+                    </option>
                   ))}
                 </select>
               </div>

@@ -43,6 +43,7 @@ export default function SetupPage() {
   const [litellmUrl, setLitellmUrl] = useState('http://localhost:4000');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
   const [litellmApiKey, setLitellmApiKey] = useState('');
+  const [openrouterApiKey, setOpenrouterApiKey] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [telegramToken, setTelegramToken] = useState('');
@@ -127,6 +128,7 @@ export default function SetupPage() {
               litellmUrl={litellmUrl} setLitellmUrl={setLitellmUrl}
               litellmApiKey={litellmApiKey} setLitellmApiKey={setLitellmApiKey}
               ollamaUrl={ollamaUrl} setOllamaUrl={setOllamaUrl}
+              openrouterApiKey={openrouterApiKey} setOpenrouterApiKey={setOpenrouterApiKey}
               availableModels={availableModels} setAvailableModels={setAvailableModels}
               saving={saving} setSaving={setSaving} setError={setError}
             />

@@ -66,6 +66,17 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     embeddings: false,
     structuredOutput: true,
   },
+  openrouter: {
+    // OpenRouter is a multi-provider proxy; capabilities depend on the
+    // underlying model. Default to all true (similar to litellm).
+    multiturn: true,
+    media: true,
+    tools: true,
+    streaming: true,
+    systemRole: true,
+    embeddings: false,
+    structuredOutput: true,
+  },
   voyage: {
     // Voyage AI is an embedding-only provider.
     multiturn: false,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Search, MessageSquare, Trash2, MoreHorizontal, Pencil, Code2 } from 'lucide-react';
+import { Plus, Search, MessageSquare, Trash2, MoreHorizontal, Pencil, Code2, Smartphone, Globe, Hash } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 
@@ -14,6 +14,7 @@ export interface SessionInfo {
   status: string;
   devMode?: boolean;
   projectName?: string;
+  channelType?: string;
 }
 
 interface SessionListProps {
@@ -243,6 +244,14 @@ export function SessionList({
                         )}
 
                         <div className="mt-0.5 flex items-center gap-2">
+                          {session.channelType && session.channelType !== 'webchat' && session.channelType !== 'api' && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] text-blue-400" title={session.channelType}>
+                              {session.channelType === 'telegram' ? <Smartphone className="h-2.5 w-2.5" /> :
+                               session.channelType === 'slack' ? <Hash className="h-2.5 w-2.5" /> :
+                               <Globe className="h-2.5 w-2.5" />}
+                              {session.channelType}
+                            </span>
+                          )}
                           {session.devMode && (
                             <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400" title={session.projectName}>
                               <Code2 className="h-2.5 w-2.5" />

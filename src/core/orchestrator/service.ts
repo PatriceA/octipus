@@ -339,6 +339,15 @@ export class OrchestratorService {
       systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
     }
 
+    // Load recent conversation history so the orchestrator can reference prior messages
+    const recentHistory = await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant']);
+    if (recentHistory.length > 0) {
+      const historyLines = recentHistory.map(m =>
+        `[${m.role}]: ${m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content}`
+      );
+      systemPrompt += `\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`;
+    }
+
     if (classification.topic) {
       systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for choosing the worker role. Prefer spawn_worker for most tasks — only use create_pipeline when the user explicitly asks for a multi-stage workflow (e.g., "research then implement then review").`;
     }
@@ -368,6 +377,7 @@ export class OrchestratorService {
       } catch {}
 
       wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
+      wsContext += `\n\nFor complex implementation tasks in this project, PREFER using the "Full Development Cycle" pipeline (via create_pipeline) to ensure thorough research, architecture planning, and testing.`;
       systemPrompt += wsContext;
     } else {
       // Normal mode: generic workspace awareness

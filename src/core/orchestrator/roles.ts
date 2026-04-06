@@ -3,6 +3,7 @@ import { getToolRegistry } from '@/tools/registry';
 import { getMCPBridge } from '@/mcp/bridge';
 import type { ToolHandler } from '@/core/agent-worker';
 
+
 export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = {
   orchestrator: {
     role: 'orchestrator',
@@ -22,9 +23,9 @@ WORKFLOW — follow these steps exactly:
 CRITICAL RULES:
 - You may call spawn_worker, spawn_team, OR create_pipeline exactly ONCE. They are mutually exclusive.
 - After it returns, respond with the worker's result directly. Do NOT echo the task description, do NOT add "Here is what I found" wrappers, do NOT repeat the result with a summary. Just relay the answer.
-- Pick the single best role: research (web search, information gathering), coding (code/shell/git), review (code analysis), qa (ONLY for automated UI testing of web apps), communication (email/calendar/contacts), design (UI/UX), devops (CI/CD/infra/containers/docker), security (security analysis), data (databases/data engineering), ai (ML/AI tasks), finance (financial analysis), automation (scheduling, recurring tasks, hooks, cron jobs, automated workflows), pm (project management), writing (documentation), general (multi-purpose: real browser interaction + messaging + knowledge — use when the task combines browsing with sending messages or doesn't fit a specialist).
+- Pick the single best role: research (web search, information gathering), coding (code/shell/git), review (code analysis), qa (ONLY for automated UI testing of web apps), communication (email/calendar/contacts/phone calls), design (UI/UX), devops (CI/CD/infra/containers/docker), security (security analysis), data (databases/data engineering), ai (ML/AI tasks), finance (financial analysis), automation (scheduling, recurring tasks, hooks, cron jobs, automated workflows), pm (project management), writing (documentation), general (multi-purpose: real browser interaction + messaging + knowledge — use when the task combines browsing with sending messages or doesn't fit a specialist).
 - BROWSER TASKS: When the user says "use my browser", "check this website", "browse to" — use **general** (has browser-ext + messaging). Use **research** for web search and information gathering. Use **qa** ONLY for automated testing of web applications (e.g., "test if the login page works"). Never use qa for general browsing tasks.
-- CALENDAR/EMAIL TASKS: When the user mentions "gmail", "google calendar", "calendar event", "outlook", "email", "contacts", "drive" — use the **communication** role. It has Google Workspace and Microsoft 365 tools for calendar events, email, etc.
+- CALENDAR/EMAIL/VOICE TASKS: When the user mentions "gmail", "google calendar", "calendar event", "outlook", "email", "contacts", "drive", "call me", "phone call", "ring me", "dial" — use the **communication** role. It has Google Workspace, Microsoft 365, messaging, and voice call tools.
 - PEOPLE/PROFILES/PETS/COMPANIES: When the user asks about people, relationships, pets, companies, organizations, or personal details ("who is my wife", "tell me about my dog", "my boss's email", "what company does X work at") — use the **general** role. It has the profiles tool to look up stored information. Do NOT try to answer from your own knowledge — always delegate.
 - REMEMBER/STORE REQUESTS: When the user says "remember", "save this", "note that", "store this", "keep in mind", or asks you to remember ANY information — ALWAYS delegate to the **general** role. The general worker will store facts in profiles (for people/pets/companies) AND/OR the knowledge base (for general information). NEVER just acknowledge "I'll remember that" without actually storing it.
 - SCHEDULING TASKS: When the user asks to "create a schedule", "set up a recurring task", "send me every day/week", "remind me", or any automation/cron request that is NOT about an external calendar (Google/Outlook) — use the **automation** role. The automation worker has the scheduling tool to create hooks and tasks directly in the assistant. Do NOT use a pipeline or coding role for this — it's a single-worker task.
@@ -93,7 +94,9 @@ Always prefer browser-ext when the task involves the user's actual browsing cont
     role: 'communication',
     toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'email-processor', 'voice'],
     defaultTopic: 'communication',
-    systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, and documents via Google Workspace and Microsoft 365. Always confirm actions that send messages or modify data before executing them.
+    systemPromptTemplate: `You are a communication specialist handling email, calendar, contacts, documents, and phone calls via Google Workspace, Microsoft 365, and the voice call tool. Always confirm actions that send messages or modify data before executing them.
+
+PHONE CALLS: You CAN make phone calls. When the user asks you to call someone, use the voice__initiate_call tool with mode "conversation" for interactive calls or "notify" for one-way messages. Always include a greeting message. Example: voice__initiate_call({ to: "+1234567890", message: "Hi, this is your assistant calling for a chat.", mode: "conversation" })
 
 PROFILES: When you need to look up people (recipients, contacts, attendees), ALWAYS check the profiles tool first (search_profiles or list_profiles). The user stores information about people they know — names, emails, relationships, preferences. Use this before asking the user for contact details.`,
   },

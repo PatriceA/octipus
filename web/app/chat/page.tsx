@@ -129,7 +129,7 @@ export default function ChatPage() {
       if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
-          .filter(s => s.status === 'active' && (!s.channelType || s.channelType === 'webchat' || s.channelType === 'api'))
+          .filter(s => s.status === 'active')
           .filter(s => !deletedSessionsRef.current.has(s.id))
           .slice(0, 50)
           .map(s => ({
@@ -141,6 +141,7 @@ export default function ChatPage() {
             status: s.status,
             devMode: s.context?.devMode,
             projectName: s.context?.projectName,
+            channelType: s.channelType,
           }));
         setSessions(items);
 
@@ -586,18 +587,8 @@ export default function ChatPage() {
       case 'worker_spawned': {
         const d = data.data as any;
         const agentId = d.workerId || d.agentId;
-        // Use server timestamp, but ensure agent always sorts AFTER the latest user message
         const serverTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
         updateSessionState(sessionId, (prev) => {
-          // Find the latest user message timestamp to guarantee correct ordering
-          let latestUserMsgTime = 0;
-          for (const msg of prev.messages) {
-            if (msg.role === 'user') {
-              const t = new Date(msg.timestamp).getTime();
-              if (t > latestUserMsgTime) latestUserMsgTime = t;
-            }
-          }
-          const agentStartTime = Math.max(serverTime, latestUserMsgTime + 1);
           const next = new Map(prev.trackedAgents);
           next.set(agentId, {
             id: agentId,
@@ -605,7 +596,7 @@ export default function ChatPage() {
             model: d.model,
             status: 'running',
             toolCalls: [],
-            startTime: agentStartTime,
+            startTime: serverTime,
             parentAgentId: d.parentAgentId,
             stageName: d.stageName,
           });

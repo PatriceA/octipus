@@ -22,7 +22,13 @@ async function getLocalWhisper() {
 /**
  * Handle telephony provider webhook events (call answered, speech gathered, hangup).
  */
-async function handleVoiceWebhook(provider: string, body: Record<string, unknown>, headers: Record<string, string>, url: string): Promise<string> {
+async function handleVoiceWebhook(provider: string, body: Record<string, unknown>, headers: Record<string, string>, rawUrl: string): Promise<string> {
+  // Resolve the public webhook URL — request.url is the internal URL (localhost),
+  // but Twilio needs the public URL for callbacks.
+  const { getSettingsService } = await import('@/config/settings-service');
+  const settingsSvc = getSettingsService();
+  const publicBase = (await settingsSvc.get('voice.publicUrl') as string) || '';
+  const url = publicBase ? `${publicBase}/api/voice/webhook/${provider}` : rawUrl;
   const { getTelephonyProvider, getCallManager } = await import('@/voice/telephony');
   const telephonyProvider = await getTelephonyProvider(provider);
 
@@ -36,37 +42,63 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
     // Continue anyway for now — some dev setups don't have signing configured
   }
 
+  // Debug: log all webhook fields to diagnose speech recognition issues
+  apiLogger.info({ provider, bodyKeys: Object.keys(body), callStatus: body.CallStatus, speechResult: body.SpeechResult ? 'present' : 'absent', callSid: body.CallSid }, 'Voice webhook received');
+
   const callManager = getCallManager();
   const providerCallId = (body.CallSid || body.call_control_id || body.RequestUUID || '') as string;
-  const session = callManager.getByProviderCallId(providerCallId);
+  let session = callManager.getByProviderCallId(providerCallId);
 
-  // Call answered — speak the initial message or start conversation
   const callStatus = (body.CallStatus || body.event_type || body.Event || '') as string;
+  const callerNumber = (body.From || body.from || '') as string;
 
-  if (callStatus === 'ringing' || callStatus === 'initiated') {
-    if (session) callManager.updateStatus(session.id, 'ringing');
-    return telephonyProvider.generateHangupResponse(); // Wait for answer
-  }
+  // ── Inbound call handling ───────────────────────────────────────
+  // When Twilio answers, the first webhook has CallStatus = "ringing" or "in-progress"
+  // with no existing session. Create one if the inbound policy allows it.
+  if (!session && providerCallId) {
+    const inboundPolicy = (await settingsSvc.get('voice.inboundPolicy') as string) || 'disabled';
 
-  if (callStatus === 'in-progress' || callStatus === 'answered' || callStatus === 'call.answered') {
-    if (session) {
-      callManager.updateStatus(session.id, 'active');
-      const mode = session.metadata.mode as string;
-      const pending = session.metadata.pendingMessage as string | undefined;
+    if (inboundPolicy === 'disabled') {
+      apiLogger.info({ provider, caller: callerNumber }, 'Inbound call rejected (policy: disabled)');
+      return telephonyProvider.generateHangupResponse();
+    }
 
-      if (pending) {
-        delete session.metadata.pendingMessage;
-        const webhookUrl = `${url}`;
-        return telephonyProvider.generateAnswerResponse({
-          message: pending,
-          gatherSpeech: mode === 'conversation',
-          callbackUrl: mode === 'conversation' ? webhookUrl : undefined,
-        });
+    if (inboundPolicy === 'allowlist') {
+      const allowList = (await settingsSvc.get('voice.inboundAllowFrom') as string[] | null) || [];
+      if (!allowList.includes(callerNumber)) {
+        apiLogger.info({ provider, caller: callerNumber }, 'Inbound call rejected (not in allowlist)');
+        return telephonyProvider.generateHangupResponse();
       }
     }
+
+    // Policy is "open" or caller is in allowlist — create a session
+    const toNumber = (body.To || body.to || '') as string;
+    const inboundSession: import('@/voice/telephony').CallSession = {
+      id: `inbound-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      provider,
+      providerCallId,
+      direction: 'inbound',
+      from: callerNumber,
+      to: toNumber,
+      status: 'active',
+      startedAt: new Date(),
+      answeredAt: new Date(),
+      metadata: { mode: 'conversation', conversationHistory: [] },
+    };
+    callManager.create(inboundSession);
+    session = inboundSession;
+    apiLogger.info({ callId: session.id, provider, caller: callerNumber, policy: inboundPolicy }, 'Inbound call accepted');
+
+    // Answer with a greeting and start gathering speech
+    return telephonyProvider.generateAnswerResponse({
+      message: 'Hello, how can I help you?',
+      gatherSpeech: true,
+      callbackUrl: url,
+    });
   }
 
-  // Speech gathered (conversation mode) — transcribed speech from caller.
+  // ── Speech gathered — MUST be checked before call-status handlers ──
+  // Twilio sends SpeechResult alongside CallStatus=in-progress on the Gather callback.
   // FAST PATH: direct LLM call with expert system prompt, no orchestrator.
   const speechResult = (body.SpeechResult || body.speech || body.Speech || '') as string;
   if (speechResult && session) {
@@ -78,20 +110,22 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       const client = getLiteLLMClient();
       const registry = getModelRegistry();
 
-      // Model: per-call override → topic "voice" routing → system default
-      let voiceModelId = session.metadata.voiceModel as string | undefined;
+      // Model: voice topic routing → system default (ignore per-call overrides from LLM agents)
+      let voiceModelId: string | undefined;
+      try {
+        const { ModelSelector } = await import('@/core/orchestrator/model-selector');
+        const selector = new ModelSelector();
+        const routing = await selector.selectForWorker('voice', false);
+        voiceModelId = routing.model;
+      } catch { /* fallback below */ }
       if (!voiceModelId) {
-        try {
-          // Use the model assigned to the "voice" topic in the model registry
-          const { ModelSelector } = await import('@/core/orchestrator/model-selector');
-          const selector = new ModelSelector();
-          const routing = await selector.selectForWorker('voice', false);
-          voiceModelId = routing.model;
-        } catch { /* fallback below */ }
+        voiceModelId = (await registry.getDefaultModel())?.modelId;
       }
       if (!voiceModelId) {
-        voiceModelId = (await registry.getDefaultModel())?.modelId || 'qwen3:14b';
+        throw new Error('No model configured for voice topic');
       }
+
+      apiLogger.info({ callId: session.id, voiceModelId }, 'Voice LLM model selected');
 
       // Build conversation history (kept in session metadata for speed — no DB round-trip)
       const history = (session.metadata.conversationHistory || []) as Array<{ role: string; content: string }>;
@@ -153,6 +187,29 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
         gatherSpeech: true,
         callbackUrl: url,
       });
+    }
+  }
+
+  // ── Outbound call: ringing ──────────────────────────────────────
+  if (callStatus === 'ringing' || callStatus === 'initiated') {
+    if (session) callManager.updateStatus(session.id, 'ringing');
+    return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
+  }
+
+  // ── Call answered (outbound with pending message) ───────────────
+  if (callStatus === 'in-progress' || callStatus === 'answered' || callStatus === 'call.answered') {
+    if (session) {
+      callManager.updateStatus(session.id, 'active');
+      const pending = session.metadata.pendingMessage as string | undefined;
+      if (pending) {
+        delete session.metadata.pendingMessage;
+        const mode = session.metadata.mode as string;
+        return telephonyProvider.generateAnswerResponse({
+          message: pending,
+          gatherSpeech: mode === 'conversation',
+          callbackUrl: mode === 'conversation' ? url : undefined,
+        });
+      }
     }
   }
 
@@ -257,20 +314,16 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     { detail: { tags: ['voice'] } }
   )
 
-  // Telephony webhook — receives call events from Twilio/Telnyx/Plivo
+  // Telephony webhook — receives call events from Twilio/Telnyx/Plivo.
+  // Twilio sends application/x-www-form-urlencoded which Elysia doesn't auto-parse.
+  // Use a custom `parse` hook to handle both form-urlencoded and JSON.
   .post(
     '/webhook/:provider',
     async ({ params, body, request }) => {
       const headers: Record<string, string> = {};
       request.headers.forEach((v, k) => { headers[k] = v; });
-      const url = request.url;
 
-      const xml = await handleVoiceWebhook(
-        params.provider,
-        body as Record<string, unknown>,
-        headers,
-        url,
-      );
+      const xml = await handleVoiceWebhook(params.provider, body as Record<string, unknown>, headers, request.url);
 
       return new Response(xml, {
         headers: { 'Content-Type': 'application/xml' },
@@ -278,6 +331,15 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     },
     {
       params: t.Object({ provider: t.String() }),
+      type: 'text',  // Accept raw text so we can parse it ourselves
+      async parse({ request }) {
+        const ct = request.headers.get('content-type') || '';
+        const raw = await request.text();
+        if (ct.includes('x-www-form-urlencoded')) {
+          return Object.fromEntries(new URLSearchParams(raw).entries());
+        }
+        try { return JSON.parse(raw); } catch { return {}; }
+      },
       detail: { tags: ['voice'] },
     }
   )
@@ -294,6 +356,15 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     },
     {
       params: t.Object({ provider: t.String() }),
+      type: 'text',
+      async parse({ request }) {
+        const ct = request.headers.get('content-type') || '';
+        const raw = await request.text();
+        if (ct.includes('x-www-form-urlencoded')) {
+          return Object.fromEntries(new URLSearchParams(raw).entries());
+        }
+        try { return JSON.parse(raw); } catch { return {}; }
+      },
       detail: { tags: ['voice'] },
     }
   )

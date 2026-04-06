@@ -1,0 +1,293 @@
+import OpenAI from 'openai';
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionCreateParams,
+} from 'openai/resources/chat/completions';
+import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
+import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import { modelLogger } from '@/utils/logger';
+import type { AgentMessage } from '@/core/types';
+
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+
+/**
+ * OpenRouter direct provider — calls the OpenRouter API (OpenAI-compatible)
+ * without going through the LiteLLM proxy.
+ *
+ * OpenRouter model IDs use a `provider/model` format (e.g., `openai/gpt-4o`,
+ * `anthropic/claude-sonnet-4-6`). However, primary routing is DB-based: models
+ * are configured with `provider: 'openrouter'` in the model registry.
+ */
+export class OpenRouterProvider implements ModelProvider {
+  readonly name = 'openrouter';
+  readonly type = 'direct' as const;
+
+  supportsModel(modelName: string): boolean {
+    // OpenRouter model IDs contain a slash (e.g., "openai/gpt-4o").
+    // Only match if it looks like an OpenRouter slug and doesn't match other providers.
+    if (!modelName.includes('/')) return false;
+    // Avoid matching file paths or URLs
+    if (modelName.startsWith('/') || modelName.includes('://')) return false;
+    return true;
+  }
+
+  async complete(options: CompletionOptions): Promise<CompletionResult> {
+    const client = await this.createClient();
+    const startTime = Date.now();
+
+    const params: ChatCompletionCreateParams = {
+      model: options.model,
+      messages: this.formatMessages(options.messages),
+      temperature: options.temperature,
+      max_tokens: options.maxTokens,
+      top_p: options.topP,
+      stop: options.stopSequences,
+      response_format: options.responseFormat,
+      stream: false,
+    };
+
+    if (options.tools?.length) {
+      params.tools = options.tools;
+      params.tool_choice = 'auto';
+    }
+
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
+    }
+
+    modelLogger.debug(
+      { model: params.model, messageCount: options.messages.length, provider: this.name },
+      'Sending completion request to OpenRouter',
+    );
+
+    try {
+      const response = await client.chat.completions.create(params);
+      const latencyMs = Date.now() - startTime;
+      const choice = response.choices[0];
+      const usage = response.usage as any; // OpenRouter extends standard usage
+
+      const result: CompletionResult = {
+        content: choice.message.content || '',
+        finishReason: choice.finish_reason || 'stop',
+        usage: {
+          inputTokens: usage?.prompt_tokens || 0,
+          outputTokens: usage?.completion_tokens || 0,
+          totalTokens: usage?.total_tokens || 0,
+        },
+        model: response.model,
+        latencyMs,
+      };
+
+      if (choice.message.tool_calls?.length) {
+        result.toolCalls = choice.message.tool_calls.map((tc) => ({
+          id: tc.id,
+          name: tc.function.name,
+          arguments: JSON.parse(tc.function.arguments),
+        }));
+      }
+
+      modelLogger.debug(
+        {
+          model: response.model,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          latencyMs,
+          hasToolCalls: !!result.toolCalls?.length,
+          cost: usage?.cost,
+          provider: this.name,
+        },
+        'OpenRouter completion successful',
+      );
+
+      return result;
+    } catch (error) {
+      modelLogger.error({ error, model: params.model, provider: this.name }, 'OpenRouter completion failed');
+      throw error;
+    }
+  }
+
+  async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    const client = await this.createClient();
+
+    const params: ChatCompletionCreateParams = {
+      model: options.model,
+      messages: this.formatMessages(options.messages),
+      temperature: options.temperature,
+      max_tokens: options.maxTokens,
+      top_p: options.topP,
+      stop: options.stopSequences,
+      stream: true,
+    };
+
+    if (options.tools?.length) {
+      params.tools = options.tools;
+      params.tool_choice = 'auto';
+    }
+
+    if (options.extraBody) {
+      Object.assign(params, options.extraBody);
+    }
+
+    modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via OpenRouter');
+
+    const stream = await client.chat.completions.create(params);
+
+    const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+
+      if (delta?.content) {
+        yield { content: delta.content };
+      }
+
+      if (delta?.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          if (!toolCallBuffers.has(tc.index)) {
+            toolCallBuffers.set(tc.index, { id: tc.id || '', name: '', arguments: '' });
+          }
+          const buffer = toolCallBuffers.get(tc.index)!;
+          if (tc.id) buffer.id = tc.id;
+          if (tc.function?.name) buffer.name = tc.function.name;
+          if (tc.function?.arguments) buffer.arguments += tc.function.arguments;
+
+          yield {
+            toolCallDelta: {
+              id: buffer.id,
+              name: tc.function?.name,
+              arguments: tc.function?.arguments,
+            },
+          };
+        }
+      }
+
+      if (chunk.choices[0]?.finish_reason) {
+        yield { finishReason: chunk.choices[0].finish_reason };
+      }
+    }
+  }
+
+  async checkHealth(): Promise<ProviderHealthStatus> {
+    const startTime = Date.now();
+
+    try {
+      const apiKey = await this.getApiKey();
+      if (!apiKey) {
+        return { healthy: false, error: 'OpenRouter API key not configured' };
+      }
+
+      // Use /auth/key endpoint to verify the key and check credits
+      const res = await fetch(`${OPENROUTER_BASE_URL}/auth/key`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+
+      if (!res.ok) {
+        return { healthy: false, error: `OpenRouter API returned ${res.status}` };
+      }
+
+      return { healthy: true, latencyMs: Date.now() - startTime };
+    } catch (error) {
+      return { healthy: false, error: (error as Error).message };
+    }
+  }
+
+  async getQuotaStatus(): Promise<QuotaStatus> {
+    try {
+      const apiKey = await this.getApiKey();
+      if (!apiKey) {
+        return { provider: this.name, hasQuota: false, exhausted: false, lastError: 'API key not configured' };
+      }
+
+      const res = await fetch(`${OPENROUTER_BASE_URL}/auth/key`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+
+      if (!res.ok) {
+        return { provider: this.name, hasQuota: false, exhausted: false, lastError: `HTTP ${res.status}` };
+      }
+
+      const data = await res.json() as {
+        data?: { limit_remaining?: number; usage?: number; is_free_tier?: boolean };
+      };
+
+      const remaining = data.data?.limit_remaining;
+      const exhausted = remaining != null && remaining <= 0;
+
+      return {
+        provider: this.name,
+        hasQuota: !exhausted,
+        exhausted,
+        tokensRemaining: remaining != null ? Math.round(remaining * 1_000_000) : undefined, // rough estimate
+      };
+    } catch (error) {
+      return { provider: this.name, hasQuota: true, exhausted: false, lastError: (error as Error).message };
+    }
+  }
+
+  // -- Private helpers --
+
+  private async getApiKey(): Promise<string | null> {
+    if (process.env.OPENROUTER_API_KEY) {
+      return process.env.OPENROUTER_API_KEY;
+    }
+
+    try {
+      const { getVault } = await import('@/security/vault');
+      const vault = getVault();
+      const value = await vault.getByName('system', 'openrouter_api_key');
+      return value || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async createClient(): Promise<OpenAI> {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) {
+      throw new Error('OpenRouter API key not available. Set OPENROUTER_API_KEY or store it in the vault.');
+    }
+
+    return new OpenAI({
+      baseURL: OPENROUTER_BASE_URL,
+      apiKey,
+      timeout: 120_000,
+      maxRetries: 2,
+      defaultHeaders: {
+        'HTTP-Referer': 'https://the-assistant.app',
+        'X-Title': 'The Assistant',
+      },
+    });
+  }
+
+  private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
+    return messages.map((msg) => {
+      if (msg.role === 'tool') {
+        return {
+          role: 'tool' as const,
+          content: msg.content,
+          tool_call_id: msg.toolCallId || '',
+        };
+      }
+
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        return {
+          role: 'assistant' as const,
+          content: msg.content || null,
+          tool_calls: msg.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.arguments),
+            },
+          })),
+        };
+      }
+
+      return {
+        role: msg.role as 'system' | 'user' | 'assistant',
+        content: msg.content,
+      };
+    });
+  }
+}

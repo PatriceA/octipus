@@ -33,6 +33,18 @@ function summarizeForChannel(response: string): string {
   const codeBlockCount = (text.match(/```[\s\S]*?```/g) || []).length;
   text = text.replace(/```[\s\S]*?```/g, '');
 
+  // Strip file change / implementation detail sections that are only useful in web UI.
+  // Matches sections headed by common technical headers followed by bullet/numbered lists of file paths.
+  text = text.replace(/(?:^|\n)#{1,4}\s*(?:files?\s*(?:changed|modified|created|updated|deleted)|changes?\s*(?:made|summary)|implementation\s*details?|what\s*(?:was\s*)?changed)[^\n]*\n(?:[\t ]*[-*\d.].*\n?)+/gi, '');
+
+  // Strip standalone bullet lists where most items look like file paths (contain / or end with common extensions)
+  text = text.replace(/(?:^|\n)((?:[\t ]*[-*]\s*`?[\w/.]+(?:\.(?:ts|js|tsx|jsx|py|go|rs|json|yaml|yml|md|css|html|sql))`?[^\n]*\n){3,})/gi, (_match, block: string) => {
+    // Only strip if most lines contain path-like content
+    const lines = block.trim().split('\n');
+    const pathLines = lines.filter(l => /[/\\]|\.(?:ts|js|tsx|jsx|py|go|rs|json|yaml|yml|md|css|html|sql)\b/.test(l));
+    return pathLines.length >= lines.length * 0.6 ? '' : _match;
+  });
+
   // Remove excessive whitespace from removals
   text = text.replace(/\n{3,}/g, '\n\n').trim();
 

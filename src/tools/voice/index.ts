@@ -92,7 +92,8 @@ export class VoiceCallTool extends BaseTool {
             streamUrl: mode === 'conversation' ? `${publicUrl.replace('http', 'ws')}/api/voice/stream` : undefined,
           });
 
-          // Store expert prompt and model in call metadata for the webhook's direct LLM path
+          // Store the initial message and expert config for the webhook handler
+          session.metadata.pendingMessage = message;
           session.metadata.expertPrompt = expertPrompt;
           if (voiceModel) session.metadata.voiceModel = voiceModel;
           session.metadata.conversationHistory = [];

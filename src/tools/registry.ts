@@ -146,14 +146,21 @@ export class ToolRegistry {
     for (const toolId of toolIds) {
       const tool = this.tools.get(toolId);
       if (tool && this.initialized.has(toolId)) {
-        // Use cached availability — stale check is fine here since agents
-        // are short-lived and availability is refreshed periodically
+        // Use cached availability — only skip if the cache entry is fresh AND unavailable
         const cached = this.availabilityCache.get(toolId);
-        if (cached && !cached.result.available) {
-          toolLogger.debug({ toolId }, 'Skipping unavailable tool for agent');
+        if (cached && !cached.result.available && Date.now() - cached.checkedAt < ToolRegistry.AVAILABILITY_TTL) {
+          toolLogger.info({ toolId, cacheAge: Date.now() - cached.checkedAt, reason: cached.result.reason }, 'Skipping unavailable tool for agent');
           continue;
         }
-        handlers.push(...tool.getToolHandlers());
+        const toolHandlers = tool.getToolHandlers();
+        if (toolHandlers.length === 0) {
+          toolLogger.warn({ toolId, initialized: this.initialized.has(toolId), cached: cached ? { available: cached.result.available, age: Date.now() - cached.checkedAt } : null }, 'Tool returned 0 handlers');
+        }
+        handlers.push(...toolHandlers);
+      } else if (!tool) {
+        toolLogger.warn({ toolId, registeredTools: Array.from(this.tools.keys()) }, 'Tool not found in registry');
+      } else if (!this.initialized.has(toolId)) {
+        toolLogger.warn({ toolId }, 'Tool not initialized');
       }
     }
 

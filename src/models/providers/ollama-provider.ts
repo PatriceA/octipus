@@ -26,7 +26,13 @@ const CLOUD_PREFIXES = [
   'text-embedding-',
   'whisper-',
   'tts-',
+  'voyage-',
 ];
+
+/** Reject model names that look like OpenRouter slugs (contain `/` but aren't `cli/`) */
+function looksLikeOpenRouterSlug(name: string): boolean {
+  return name.includes('/') && !name.startsWith('cli/');
+}
 
 /**
  * Ollama provider -- connects directly to a local Ollama server via its
@@ -55,7 +61,9 @@ export class OllamaProvider implements ModelProvider {
    */
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();
-    return !CLOUD_PREFIXES.some((prefix) => lower.startsWith(prefix));
+    if (CLOUD_PREFIXES.some((prefix) => lower.startsWith(prefix))) return false;
+    if (looksLikeOpenRouterSlug(lower)) return false;
+    return true;
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {

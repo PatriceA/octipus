@@ -83,6 +83,8 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'drive', 'docs', 'sheets', 'slides', 'google docs',
     'outlook', 'office 365', 'microsoft 365',
     'compose', 'reply', 'forward', 'draft',
+    'call me', 'phone call', 'ring me', 'dial', 'voice call',
+    'call at', 'call to', 'make a call', 'give me a call',
   ],
   automation: [
     'schedule', 'scheduled task', 'recurring task', 'cron', 'hook',

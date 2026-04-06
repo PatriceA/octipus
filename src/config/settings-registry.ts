@@ -339,6 +339,18 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'WORKER_TIMEOUT_MS',
   },
 
+  // ── OpenRouter ──
+  {
+    key: 'openrouter.apiKey',
+    category: 'openrouter',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'OpenRouter API key (get one at openrouter.ai/keys)',
+    isSecret: true,
+    vaultName: 'openrouter_api_key',
+    envVar: 'OPENROUTER_API_KEY',
+  },
+
   // ── Workspace ──
   {
     key: 'workspace.rootPath',
@@ -621,7 +633,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'voice',
     valueType: 'string',
     defaultValue: null,
-    description: 'Public URL for receiving call webhooks (e.g., ngrok URL). Required for telephony.',
+    description: 'Public base URL for receiving call webhooks — just the origin, no path (e.g., "https://example.ngrok.io" or "https://app.example.com"). The webhook path /api/voice/webhook/:provider is appended automatically.',
     isSecret: false,
   },
   {
