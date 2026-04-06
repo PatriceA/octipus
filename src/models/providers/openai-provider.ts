@@ -76,11 +76,12 @@ export class OpenAIProvider implements ModelProvider {
       };
 
       if (choice.message.tool_calls?.length) {
-        result.toolCalls = choice.message.tool_calls.map((tc) => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments),
-        }));
+        result.toolCalls = choice.message.tool_calls.map((tc) => {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function.arguments); }
+          catch { modelLogger.warn({ toolName: tc.function.name, raw: tc.function.arguments.slice(0, 200) }, 'Truncated tool call arguments, using empty object'); }
+          return { id: tc.id, name: tc.function.name, arguments: args };
+        });
       }
 
       modelLogger.debug(

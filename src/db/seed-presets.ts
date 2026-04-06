@@ -41,7 +41,7 @@ Be thorough but concise. Cite sources where possible.`,
       {
         name: 'Requirements & Architecture',
         description: 'Define requirements and design the architecture. Requires user approval before proceeding.',
-        topic: 'analysis',
+        topic: 'architecture',
         toolIds: ['filesystem'],
         requiresApproval: true,
         promptTemplate: `Based on the research findings, create a detailed requirements document and architecture plan.

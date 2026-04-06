@@ -204,6 +204,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
       { name: 'Knowledge Base (RAG)', topic: 'embedding', hint: "Assign the 'embedding' topic to an embedding model" },
       { name: 'Document OCR', topic: 'vision', hint: "Pull a vision model (e.g., glm-ocr) and assign 'vision' topic" },
       { name: 'Research & Analysis', topic: 'analysis', hint: "Assign a model to the 'analysis' topic" },
+      { name: 'Architecture', topic: 'architecture', hint: "Assign a model to the 'architecture' topic" },
     ] as const;
 
     const registry = getModelRegistry();

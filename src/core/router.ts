@@ -222,7 +222,7 @@ Respond with ONLY the topic name, nothing else.`,
       });
 
       const topic = result.content.trim().toLowerCase();
-      const validTopics = ['coding', 'analysis', 'chat', 'embedding', 'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing'];
+      const validTopics = ['coding', 'analysis', 'architecture', 'chat', 'embedding', 'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing'];
 
       if (validTopics.includes(topic)) {
         const model = await registry.getModelForTopic(topic);

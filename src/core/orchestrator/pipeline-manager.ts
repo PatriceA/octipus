@@ -168,11 +168,19 @@ export class PipelineManager {
 
       // Spawn worker for this stage with structured handoff context
       try {
+        // Resolve the model for the stage's topic so pipeline steps use the
+        // correct topic-specific model instead of the role's defaultTopic.
+        const stageTopic = stage.role; // role is set from the step's topic field
+        const registry = getModelRegistry();
+        const topicModel = await registry.getModelForTopic(stageTopic);
+        const modelOverride = topicModel?.modelId || undefined;
+
         const result = await orchestrator.spawnWorker(
           stage.role,
           input,
           handoffText || previousOutput,
           { ...context, stageName: stage.name } as any,
+          modelOverride ? { model: modelOverride } : undefined,
         );
 
         previousOutput = String(result || '');
@@ -271,11 +279,16 @@ export class PipelineManager {
               await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
               try {
+                // Resolve topic-specific model for the retry target stage
+                const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
+                const retryModelOverride = retryTopicModel?.modelId || undefined;
+
                 const retryResult = await orchestrator.spawnWorker(
                   retryTargetStage.role,
                   retryInput,
                   '',
                   context,
+                  retryModelOverride ? { model: retryModelOverride } : undefined,
                 );
 
                 const retryOutput = String(retryResult || '');
@@ -300,11 +313,16 @@ export class PipelineManager {
 
                 await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
+                // Resolve topic-specific model for the QA stage
+                const qaTopicModel = await registry.getModelForTopic(stage.role);
+                const qaModelOverride = qaTopicModel?.modelId || undefined;
+
                 const qaRetryResult = await orchestrator.spawnWorker(
                   stage.role,
                   qaRetryInput,
                   retryOutput,
                   context,
+                  qaModelOverride ? { model: qaModelOverride } : undefined,
                 );
 
                 previousOutput = String(qaRetryResult || '');
