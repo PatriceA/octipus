@@ -52,6 +52,7 @@ export const AVAILABLE_TOPICS = [
   { value: 'general', label: 'General', description: 'General-purpose tasks, browser interaction' },
   { value: 'coding', label: 'Coding', description: 'Code generation, shell, git' },
   { value: 'analysis', label: 'Analysis', description: 'Research, review, code analysis' },
+  { value: 'architecture', label: 'Architecture', description: 'Software architecture, requirements, system design' },
   { value: 'review', label: 'Review', description: 'Code review, PR review, quality analysis' },
   { value: 'communication', label: 'Communication', description: 'Email, calendar, contacts (Google/Microsoft)' },
   { value: 'chat', label: 'Chat', description: 'Casual conversations' },
