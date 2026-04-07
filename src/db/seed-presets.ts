@@ -21,7 +21,7 @@ const PRESET_TEMPLATES: Array<{
       {
         name: 'Research & Discovery',
         description: 'Research the topic, find relevant docs, libraries, and best practices.',
-        topic: 'analysis',
+        topic: 'research',
         toolIds: ['browser', 'websearch'],
         requiresApproval: false,
         promptTemplate: `You are a research specialist. Investigate the following development task thoroughly.
@@ -229,7 +229,7 @@ Keep it concise and actionable.`,
       {
         name: 'Deep Investigation',
         description: 'Thoroughly research the topic using web search and browsing.',
-        topic: 'analysis',
+        topic: 'research',
         toolIds: ['browser', 'websearch'],
         requiresApproval: false,
         promptTemplate: `Investigate the following topic thoroughly. Search the web, find documentation, examples, and expert opinions.

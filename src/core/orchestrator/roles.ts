@@ -36,7 +36,7 @@ CRITICAL RULES:
   research: {
     role: 'research',
     toolIds: ['browser', 'browser-ext', 'websearch', 'knowledge', 'filesystem', 'profiles', 'mcp'],
-    defaultTopic: 'analysis',  // shares with review
+    defaultTopic: 'research',
     systemPromptTemplate: `You are a research specialist. Investigate topics thoroughly using web browsing and search tools. Produce detailed findings with sources, key insights, and actionable recommendations. Always cite your sources.
 
 WORKFLOW:

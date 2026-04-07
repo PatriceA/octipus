@@ -49,12 +49,13 @@ export async function handleExpertMessage(
 
   const startTime = Date.now();
   const agentRole = expert.role as AgentRole;
+  const roleConfig = getRoleConfig(agentRole);
   const context: AgentContext = {
     id: `expert-${Date.now()}`,
     sessionId,
     userId,
     model: expert.modelPreference || '',
-    topic: expert.name,
+    topic: roleConfig.defaultTopic,
     role: agentRole,
     status: 'running',
     createdAt: new Date(),
@@ -67,7 +68,6 @@ export async function handleExpertMessage(
 
   try {
     // Build expert identity prompt — role config as base, then expert-specific overrides
-    const roleConfig = getRoleConfig(agentRole);
     let expertPrompt = SECURITY_PREAMBLE;
 
     // Expert identity: name, description, and role-specific system prompt
