@@ -103,6 +103,21 @@ export class OpenRouterProvider implements ModelProvider {
       return result;
     } catch (error) {
       modelLogger.error({ error, model: params.model, provider: this.name }, 'OpenRouter completion failed');
+
+      // Surface provider-specific error details so users see it's an OpenRouter issue
+      const err = error as any;
+      const status = err?.status || err?.response?.status;
+      const raw = err?.error?.metadata?.raw || err?.error?.message || err?.message || '';
+      const providerName = err?.error?.metadata?.provider_name || '';
+
+      if (status === 429) {
+        const detail = providerName ? ` (upstream: ${providerName})` : '';
+        throw new Error(`OpenRouter rate limit${detail}: ${raw}`);
+      }
+      if (status === 402) {
+        throw new Error(`OpenRouter credit exhausted: ${raw}. Add credits at https://openrouter.ai/settings/credits`);
+      }
+
       throw error;
     }
   }

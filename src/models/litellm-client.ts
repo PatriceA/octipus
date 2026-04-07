@@ -146,7 +146,7 @@ export class LiteLLMClient {
           { model: resolvedModel, provider: provider.name },
           'Routing completion through direct provider'
         );
-        return await router.complete({ ...options, model: resolvedModel });
+        return await provider.complete({ ...options, model: resolvedModel });
       }
     } catch {
       // Fall through to LiteLLM proxy path

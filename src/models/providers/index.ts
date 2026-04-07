@@ -127,6 +127,15 @@ export class ProviderRouter {
     return this.getProvider(modelName);
   }
 
+  /**
+   * Providers whose models are also registered in LiteLLM and can fall back to the proxy.
+   * OpenRouter, CLI, and Voyage have their own model namespaces that LiteLLM doesn't know about.
+   */
+  private canFallbackToLiteLLM(providerName: string): boolean {
+    const litellmCompatible = new Set(['ollama', 'openai', 'anthropic', 'gemini', 'deepseek']);
+    return litellmCompatible.has(providerName);
+  }
+
   /** Complete with automatic provider selection, rate limiting, and circuit breaking */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const provider = await this.resolveProvider(options.model);
@@ -144,8 +153,7 @@ export class ProviderRouter {
       circuitBreakers.checkAllowed(rateLimitKey);
     } catch (error) {
       if (error instanceof CircuitOpenError) {
-        // Try fallback to LiteLLM if available and it's not the same provider
-        if (provider.name !== 'litellm' && this.hasLiteLLM()) {
+        if (this.canFallbackToLiteLLM(provider.name) && this.hasLiteLLM()) {
           modelLogger.warn({
             provider: provider.name,
             model: options.model,
@@ -174,8 +182,8 @@ export class ProviderRouter {
       token.reportError(isRL);
       circuitBreakers.recordFailure(rateLimitKey);
 
-      // On rate limit, try fallback if available
-      if (isRL && provider.name !== 'litellm' && this.hasLiteLLM()) {
+      // On rate limit, only fall back to LiteLLM for providers it understands
+      if (isRL && this.canFallbackToLiteLLM(provider.name) && this.hasLiteLLM()) {
         modelLogger.warn({
           provider: provider.name,
           model: options.model,
