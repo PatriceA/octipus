@@ -189,6 +189,9 @@ export class LiteLLMClient {
     try {
       const response = await this.client.chat.completions.create(params);
       const latencyMs = Date.now() - startTime;
+      if (!response.choices?.length) {
+        throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
+      }
       const choice = response.choices[0];
 
       // Strip thinking/reasoning blocks from models that include them as content
@@ -492,6 +495,9 @@ export class LiteLLMClient {
         });
 
         const latencyMs = Date.now() - startTime;
+        if (!response.choices?.length) {
+          throw new Error(`Provider returned empty response (no choices) for model ${options.model}`);
+        }
         const choice = response.choices[0];
         const msg = choice?.message as unknown as Record<string, unknown>;
         let content = (choice?.message?.content || msg?.reasoning || '') as string;

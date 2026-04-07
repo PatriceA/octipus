@@ -63,6 +63,11 @@ export class OpenRouterProvider implements ModelProvider {
     try {
       const response = await client.chat.completions.create(params);
       const latencyMs = Date.now() - startTime;
+
+      if (!response.choices?.length) {
+        throw new Error(`OpenRouter returned empty response (no choices) for model ${params.model}. The model may be unavailable or overloaded.`);
+      }
+
       const choice = response.choices[0];
       const usage = response.usage as any; // OpenRouter extends standard usage
 

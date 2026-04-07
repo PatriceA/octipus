@@ -66,6 +66,9 @@ export class DeepSeekProvider implements ModelProvider {
     try {
       const response = await client.chat.completions.create(params);
       const latencyMs = Date.now() - startTime;
+      if (!response.choices?.length) {
+        throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
+      }
       const choice = response.choices[0];
 
       const result: CompletionResult = {

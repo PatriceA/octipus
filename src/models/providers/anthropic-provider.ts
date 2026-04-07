@@ -67,6 +67,9 @@ export class AnthropicProvider implements ModelProvider {
         headers: anthropicHeaders,
       });
       const latencyMs = Date.now() - startTime;
+      if (!response.choices?.length) {
+        throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
+      }
       const choice = response.choices[0];
 
       // Extract cache stats from Anthropic's response (available via extra fields)
