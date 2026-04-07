@@ -657,9 +657,10 @@ export class AgentWorker extends BaseAgentWorker {
     if (model.provider && model.provider !== 'litellm') {
       const { getProviderRouter } = await import('@/models/providers');
       const router = getProviderRouter();
-      const provider = router.getProviderByName(model.provider);
-      if (provider) {
-        result = await router.complete(completionOpts);
+      const directProvider = router.getProviderByName(model.provider);
+      if (directProvider) {
+        agentLogger.debug({ model: litellmModel, provider: model.provider }, 'Using direct provider');
+        result = await directProvider.complete(completionOpts);
       } else {
         result = await client.complete(completionOpts);
       }
