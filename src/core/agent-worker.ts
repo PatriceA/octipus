@@ -587,6 +587,35 @@ export class AgentWorker extends BaseAgentWorker {
       }
     }
 
+    // XML-style tool calls: <tool_call><function=tool_name><parameter=key>value</parameter>...</function></tool_call>
+    // Some models (e.g. OpenRouter free models) emit this format
+    if (results.length === 0) {
+      const xmlPattern = /<(?:tool_call|function_call)>\s*<function=([^>]+)>([\s\S]*?)<\/function>\s*<\/(?:tool_call|function_call)>/g;
+      let xmlMatch;
+      while ((xmlMatch = xmlPattern.exec(content)) !== null) {
+        const toolName = xmlMatch[1].trim();
+        const paramBlock = xmlMatch[2];
+
+        if (!registeredTools.has(toolName)) continue;
+
+        const args: Record<string, unknown> = {};
+        const paramPattern = /<parameter=([^>]+)>([\s\S]*?)<\/parameter>/g;
+        let paramMatch;
+        while ((paramMatch = paramPattern.exec(paramBlock)) !== null) {
+          const key = paramMatch[1].trim();
+          const value = paramMatch[2].trim();
+          // Try to parse as JSON, fall back to string
+          try { args[key] = JSON.parse(value); } catch { args[key] = value; }
+        }
+
+        results.push({
+          id: `call_xml_${Date.now()}_${results.length}`,
+          name: toolName,
+          arguments: args,
+        });
+      }
+    }
+
     return results;
   }
 
