@@ -640,7 +640,7 @@ export class AgentWorker extends BaseAgentWorker {
       } catch {}
     }
 
-    const result = await client.complete({
+    const completionOpts = {
       model: litellmModel,
       messages: this.messages,
       tools: tools.length > 0 ? tools : undefined,
@@ -649,7 +649,23 @@ export class AgentWorker extends BaseAgentWorker {
       extraBody,
       endpoint: model.endpoint || undefined,
       apiKey,
-    });
+    };
+
+    // Route to the correct provider based on DB config.
+    // Direct providers (openrouter, openai, anthropic, etc.) bypass LiteLLM.
+    let result: CompletionResult;
+    if (model.provider && model.provider !== 'litellm') {
+      const { getProviderRouter } = await import('@/models/providers');
+      const router = getProviderRouter();
+      const provider = router.getProviderByName(model.provider);
+      if (provider) {
+        result = await router.complete(completionOpts);
+      } else {
+        result = await client.complete(completionOpts);
+      }
+    } else {
+      result = await client.complete(completionOpts);
+    }
 
     await costTracker.logUsageWithCost(
       this.context.userId,
