@@ -128,12 +128,12 @@ export class ProviderRouter {
   }
 
   /**
-   * Providers whose models are also registered in LiteLLM and can fall back to the proxy.
-   * OpenRouter, CLI, and Voyage have their own model namespaces that LiteLLM doesn't know about.
+   * Only models configured with provider='litellm' should fall back to the LiteLLM proxy.
+   * All direct providers (openai, anthropic, openrouter, ollama, etc.) handle their own
+   * errors — falling back to LiteLLM would send model IDs it doesn't know about.
    */
   private canFallbackToLiteLLM(providerName: string): boolean {
-    const litellmCompatible = new Set(['ollama', 'openai', 'anthropic', 'gemini', 'deepseek']);
-    return litellmCompatible.has(providerName);
+    return providerName === 'litellm';
   }
 
   /** Complete with automatic provider selection, rate limiting, and circuit breaking */
