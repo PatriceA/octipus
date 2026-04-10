@@ -247,6 +247,32 @@ export function setupWebSocket(app: Elysia): void {
             break;
           }
 
+          case 'steer': {
+            // Inject a steering message into the active agent for a session
+            const content = (parsed.content || '').trim();
+            const sessionId = parsed.sessionId as string | undefined;
+            if (!content || !sessionId) {
+              ws.send(JSON.stringify({
+                type: 'steer_error',
+                error: 'Missing content or sessionId',
+              }));
+              break;
+            }
+
+            const orchestrator = getOrchestratorService();
+            const steered = orchestrator.steer(sessionId, {
+              role: parsed.role || 'user',
+              content,
+              timestamp: new Date(),
+            });
+            ws.send(JSON.stringify({
+              type: 'steer_result',
+              sessionId,
+              steered,
+            }));
+            break;
+          }
+
           case 'ping':
             ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
             break;

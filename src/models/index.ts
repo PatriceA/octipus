@@ -4,3 +4,4 @@ export { CostTracker, getCostTracker, type UsageStats, type ModelUsageStats, typ
 export { HealthChecker, getHealthChecker, type ProviderHealth, type ModelHealth } from './health-checker';
 export { ProviderRouter, getProviderRouter, type ModelProvider, type ProviderType, type QuotaStatus } from './providers';
 export { QuotaTracker, getQuotaTracker } from './quota-tracker';
+export { adjustMaxTokensForThinking, supportsThinking, type ThinkingLevel, type ThinkingBudgetResult } from './thinking-budget';

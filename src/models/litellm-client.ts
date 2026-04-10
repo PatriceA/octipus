@@ -6,6 +6,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
+import { transformMessagesForProvider } from '@/models/message-transform';
 import type { AgentMessage, ToolCall } from '@/core/types';
 
 export interface CompletionOptions {
@@ -94,10 +95,13 @@ export class LiteLLMClient {
   }
 
   /**
-   * Convert internal message format to OpenAI format
+   * Convert internal message format to OpenAI format.
+   * Applies cross-model message transformation (ID normalization, thinking block
+   * stripping) before sanitizing orphaned tool messages.
    */
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    const sanitized = this.sanitizeToolMessages(messages);
+    const transformed = transformMessagesForProvider(messages, 'litellm');
+    const sanitized = this.sanitizeToolMessages(transformed);
     return sanitized.map((msg) => {
       if (msg.role === 'tool') {
         return {

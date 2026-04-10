@@ -4,8 +4,9 @@ import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 import { getConfig } from '@/config';
 import { resolve } from 'path';
+import type { ShellOperations } from './operations';
+import { LocalShellOperations } from './local-operations';
 
-const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
 // Dangerous commands that should never be executed
@@ -65,6 +66,13 @@ export class ShellTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'Execute shell commands in a sandboxed environment';
 
+  private readonly ops: ShellOperations;
+
+  constructor(operations?: ShellOperations) {
+    super();
+    this.ops = operations ?? new LocalShellOperations();
+  }
+
   getManifest(): ToolManifest {
     return {
       id: this.id,
@@ -120,7 +128,7 @@ export class ShellTool extends BaseTool {
           role: context?.role,
         }, 'Shell command executing');
 
-        const result = await this.executeCommand(command, { cwd, timeout, env });
+        const result = await this.ops.exec(command, cwd, { timeout, env });
 
         if (result.exitCode !== 0 || result.killed) {
           toolLogger.warn({
@@ -153,7 +161,8 @@ export class ShellTool extends BaseTool {
 
         this.validateCommand(command);
 
-        // Run detached process
+        // Run detached process — fire-and-forget doesn't fit the ops interface,
+        // so we keep the direct spawn for background/detached processes.
         const child = spawn('sh', ['-c', command], {
           cwd,
           detached: true,
@@ -178,8 +187,8 @@ export class ShellTool extends BaseTool {
         if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
           throw new Error(`Invalid executable name: ${name}`);
         }
-        const result = await this.executeCommand(`which ${name}`, { timeout: 5000 });
-        return { executable: name, path: result.stdout.trim() || null };
+        const path = await this.ops.which(name);
+        return { executable: name, path };
       },
       { permissionAction: 'execute', requiresPermission: false }
     );
@@ -192,17 +201,19 @@ export class ShellTool extends BaseTool {
       }),
       async (args) => {
         if (args.name) {
-          return { [args.name as string]: process.env[args.name as string] || null };
+          const envVars = await this.ops.getEnv(args.name as string);
+          const value = envVars[args.name as string] ?? null;
+          return { [args.name as string]: value };
         }
         // Filter sensitive variables
-        const filtered = { ...process.env };
+        const allEnv = await this.ops.getEnv();
         const sensitiveKeys = ['PASSWORD', 'SECRET', 'KEY', 'TOKEN', 'CREDENTIAL'];
-        for (const key of Object.keys(filtered)) {
+        for (const key of Object.keys(allEnv)) {
           if (sensitiveKeys.some((s) => key.toUpperCase().includes(s))) {
-            filtered[key] = '[REDACTED]';
+            allEnv[key] = '[REDACTED]';
           }
         }
-        return filtered;
+        return allEnv;
       },
       { requiresPermission: true }
     );
@@ -271,57 +282,6 @@ export class ShellTool extends BaseTool {
 
   private getPermissionAction(getCommand: (args: Record<string, unknown>) => string): string {
     return 'execute'; // Could be made dynamic based on command analysis
-  }
-
-  private async executeCommand(
-    command: string,
-    options: { cwd?: string; timeout?: number; env?: Record<string, string> }
-  ): Promise<{ stdout: string; stderr: string; exitCode: number; killed: boolean }> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('sh', ['-c', command], {
-        cwd: options.cwd || this.getWorkspaceRoot(),
-        env: { ...process.env, ...options.env },
-        timeout: options.timeout,
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let killed = false;
-
-      child.stdout.on('data', (data) => {
-        const chunk = data.toString();
-        if (stdout.length + chunk.length <= MAX_OUTPUT_SIZE) {
-          stdout += chunk;
-        }
-      });
-
-      child.stderr.on('data', (data) => {
-        const chunk = data.toString();
-        if (stderr.length + chunk.length <= MAX_OUTPUT_SIZE) {
-          stderr += chunk;
-        }
-      });
-
-      const timeout = setTimeout(() => {
-        killed = true;
-        child.kill('SIGKILL');
-      }, options.timeout || DEFAULT_TIMEOUT);
-
-      child.on('close', (code) => {
-        clearTimeout(timeout);
-        resolve({
-          stdout,
-          stderr,
-          exitCode: code || 0,
-          killed,
-        });
-      });
-
-      child.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-    });
   }
 }
 

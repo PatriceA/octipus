@@ -1,6 +1,16 @@
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import {
+  serializeConversation,
+  extractFileOperations,
+  buildSummarizationPrompt,
+  compactWithSummarization,
+} from '@/core/context-compaction';
 import type { AgentMessage } from '@/core/types';
+
+// Re-export for convenience
+export { compactWithSummarization, extractFileOperations } from '@/core/context-compaction';
+export type { CompactionResult } from '@/core/context-compaction';
 
 interface CompactionOptions {
   maxMessages?: number;
@@ -200,6 +210,7 @@ export function slidingWindowCompact(
 
 /**
  * Create an LLM-generated summary of removed messages.
+ * Uses file-operation-aware summarization for richer context preservation.
  * Falls back to createSummaryMessage() on error.
  */
 export async function createLLMSummary(
@@ -209,10 +220,10 @@ export async function createLLMSummary(
   try {
     const client = getLiteLLMClient();
 
-    // Build a condensed transcript for summarization
-    const transcript = removedMessages
-      .map((m) => `[${m.role}]: ${m.content.slice(0, 500)}`)
-      .join('\n');
+    // Use the richer serialization and file-operation extraction
+    const fileOps = extractFileOperations(removedMessages);
+    const serialized = serializeConversation(removedMessages);
+    const prompt = buildSummarizationPrompt(serialized.slice(0, 8000), fileOps);
 
     const result = await client.complete({
       model: summaryModel,
@@ -220,23 +231,29 @@ export async function createLLMSummary(
         {
           role: 'system',
           content:
-            'Summarize the following conversation excerpt in 2-4 sentences. ' +
-            'Focus on key decisions, tool outputs, and user intent. Be concise.',
+            'You are a conversation summarizer. Produce a concise factual summary. ' +
+            'Do not continue the conversation. Focus on decisions, actions, and outcomes.',
           timestamp: new Date(),
         },
         {
           role: 'user',
-          content: transcript.slice(0, 8000),
+          content: prompt,
           timestamp: new Date(),
         },
       ],
       temperature: 0.3,
-      maxTokens: 300,
+      maxTokens: 500,
     });
+
+    const fileOpsSection = [
+      fileOps.read.length > 0 ? `Files read: ${fileOps.read.join(', ')}` : null,
+      fileOps.written.length > 0 ? `Files written: ${fileOps.written.join(', ')}` : null,
+      fileOps.edited.length > 0 ? `Files edited: ${fileOps.edited.join(', ')}` : null,
+    ].filter(Boolean).join('\n');
 
     return {
       role: 'system',
-      content: `[Context Summary — ${removedMessages.length} earlier messages compacted]: ${result.content}`,
+      content: `[Context Summary - ${removedMessages.length} earlier messages compacted]\n\n${result.content}${fileOpsSection ? '\n\n' + fileOpsSection : ''}`,
       timestamp: new Date(),
     };
   } catch {

@@ -28,6 +28,14 @@ export class AgentWorker extends BaseAgentWorker {
   private consecutiveRepeatCount: number = 0;
   private static MAX_CONSECUTIVE_REPEATS = 3;
 
+  /** Queue for steering messages injected mid-run */
+  private steeringQueue: AgentMessage[] = [];
+
+  /** Inject a message into the agent's context mid-run. */
+  steer(message: AgentMessage): void {
+    this.steeringQueue.push(message);
+  }
+
   /** Milliseconds since agent start */
   private elapsed(): number {
     return Date.now() - this.startTime;
@@ -431,6 +439,9 @@ export class AgentWorker extends BaseAgentWorker {
           iteration: this.iteration, elapsedMs: this.elapsed(),
           phase: 'handleToolCalls', toolDurationMs: Date.now() - toolStart, tools: toolNames,
         }, 'Tool execution completed');
+
+        // Drain steering queue before next LLM call
+        this.drainSteeringQueue();
         continue;
       }
 
@@ -469,6 +480,9 @@ export class AgentWorker extends BaseAgentWorker {
                 'handleToolCalls',
               );
           this.messages.push(...toolMessages);
+
+          // Drain steering queue before next LLM call
+          this.drainSteeringQueue();
           continue;
         }
       }
@@ -714,6 +728,20 @@ export class AgentWorker extends BaseAgentWorker {
     this.messages.push(assistantMessage);
 
     return result;
+  }
+
+  /** Drain the steering queue into the message context. */
+  private drainSteeringQueue(): void {
+    if (this.steeringQueue.length > 0) {
+      for (const msg of this.steeringQueue) {
+        this.messages.push(msg);
+      }
+      agentLogger.debug({
+        agentId: this.context.id,
+        count: this.steeringQueue.length,
+      }, 'Steering messages injected');
+      this.steeringQueue = [];
+    }
   }
 
   stop(): void {

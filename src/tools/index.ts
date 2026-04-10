@@ -4,6 +4,8 @@ export { ToolRegistry, getToolRegistry, type ToolRegistryOptions } from './regis
 // Built-in tools
 export { FilesystemTool, filesystemTool } from './filesystem';
 export { ShellTool, shellTool } from './shell';
+export type { ShellOperations, ShellExecResult } from './shell/operations';
+export { LocalShellOperations } from './shell/local-operations';
 export { GitTool, gitTool } from './git';
 export { BrowserTool, browserTool } from './browser';
 export { WebSearchTool, websearchTool } from './websearch';

@@ -9,10 +9,12 @@ import { DeepSeekProvider } from './deepseek-provider';
 import { OpenRouterProvider } from './openrouter-provider';
 import { VoyageProvider } from './voyage-provider';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import { transformMessagesForProvider } from '../message-transform';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
 import { getRateLimitManager, RateLimitError } from '../rate-limiter';
 import { getCircuitBreakerRegistry, CircuitOpenError } from '../circuit-breaker';
+import { supportsThinking, adjustMaxTokensForThinking, type ThinkingLevel } from '../thinking-budget';
 
 export type { ModelProvider, ProviderType, ProviderHealthStatus, QuotaStatus } from './interface';
 export { LiteLLMProvider } from './litellm-provider';
@@ -140,6 +142,13 @@ export class ProviderRouter {
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const provider = await this.resolveProvider(options.model);
     const rateLimitKey = resolveRateLimitKey(provider, options.model);
+
+    // Apply thinking budget for reasoning models
+    options = await this.applyThinkingBudget(options);
+
+    // Transform messages for cross-model compatibility (normalize tool call IDs,
+    // strip thinking blocks) before sending to the target provider.
+    options = { ...options, messages: transformMessagesForProvider(options.messages, provider.name) };
 
     modelLogger.debug({
       model: options.model,
@@ -272,6 +281,51 @@ export class ProviderRouter {
   }
 
   // ── Private helpers ──
+
+  /**
+   * If the model supports extended thinking/reasoning, adjust maxTokens
+   * to include a thinking budget. Reads the model's DB config for
+   * contextWindow and applies a default 'medium' thinking level.
+   */
+  private async applyThinkingBudget(options: CompletionOptions): Promise<CompletionOptions> {
+    if (!supportsThinking(options.model)) return options;
+
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const registry = getModelRegistry();
+      const dbModel = await registry.getModelByModelId(options.model) || await registry.getModel(options.model);
+
+      if (!dbModel) return options;
+
+      const metadata = dbModel.metadata as import('@/db/schema/models').ModelMetadata | null;
+      // If the model has explicit thinking config in extraBody (e.g. think: false), respect it
+      if (metadata?.extraBody && ('think' in metadata.extraBody || 'thinking' in metadata.extraBody)) {
+        return options;
+      }
+
+      const baseMaxTokens = options.maxTokens || dbModel.defaultMaxTokens || 4096;
+      const modelMaxTokens = dbModel.maxTokens || 128000;
+      const thinkingLevel: ThinkingLevel = 'medium';
+
+      const { maxTokens, thinkingBudget } = adjustMaxTokensForThinking(
+        baseMaxTokens,
+        modelMaxTokens,
+        thinkingLevel,
+      );
+
+      modelLogger.debug({
+        model: options.model,
+        baseMaxTokens,
+        adjustedMaxTokens: maxTokens,
+        thinkingBudget,
+        level: thinkingLevel,
+      }, 'Applied thinking budget');
+
+      return { ...options, maxTokens };
+    } catch {
+      return options;
+    }
+  }
 
   private hasLiteLLM(): boolean {
     return this.providers.some(p => p.name === 'litellm');

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import TextInput from 'ink-text-input';
 import { GatewayClient, type ConnectionStatus } from './gateway-client';
+import { getFileCompletions, cancelFileCompletions, extractPathToken } from './file-completer';
 import { randomBytes } from 'crypto';
 
 interface ChatMessage {
@@ -23,6 +24,18 @@ interface PendingPermission {
   toolName: string;
   detail: string;
 }
+
+// ── Tool state machine ──────────────────────────────────────────
+type ToolState = 'pending' | 'executing' | 'completed' | 'error';
+interface ToolExecution {
+  name: string;
+  state: ToolState;
+  startedAt: number;
+  preview?: string; // first line of output
+}
+
+// ── Paste tracking ──────────────────────────────────────────────
+const PASTE_LINE_THRESHOLD = 10;
 
 /** Strip variation selectors (U+FE0E, U+FE0F) that break terminal emoji rendering */
 function sanitizeEmoji(text: string): string {
@@ -48,8 +61,17 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [agentStats, setAgentStats] = useState<AgentStats>({});
   const [cumulativeStats, setCumulativeStats] = useState({ tokens: 0, cost: 0, turns: 0 });
-  const [currentTool, setCurrentTool] = useState<string | null>(null);
+  const [currentTool, setCurrentTool] = useState<ToolExecution | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
+
+  // Paste marker state
+  const [pastedContent, setPastedContent] = useState<string | null>(null);
+  const [pastedLineCount, setPastedLineCount] = useState(0);
+  const previousInputRef = useRef('');
+
+  // File completion state
+  const [completions, setCompletions] = useState<string[]>([]);
+  const [completionIdx, setCompletionIdx] = useState(0);
 
   const [sessionId] = useState(() => {
     const hex = randomBytes(16).toString('hex');
@@ -142,11 +164,30 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         setMessages(prev => [...prev, { role: 'system', content: 'Agent completed.', timestamp: new Date() }]);
       }
 
-      // Tool use
+      // Tool use — state machine: pending -> executing -> completed/error
       if (event.type === 'agent.action') {
         const data = payload?.data || payload;
-        if (data?.type === 'tool_call' || data?.type === 'cli_tool_use') setCurrentTool(data.toolName || data.tool_name || 'tool');
-        if (data?.type === 'cli_tool_result' || data?.type === 'tool_result') setCurrentTool(null);
+        if (data?.type === 'tool_call' || data?.type === 'cli_tool_use') {
+          const name = data.toolName || data.tool_name || 'tool';
+          setCurrentTool({ name, state: 'pending', startedAt: Date.now() });
+          // Transition to executing after a brief flash of pending
+          setTimeout(() => {
+            setCurrentTool(prev => prev && prev.name === name && prev.state === 'pending'
+              ? { ...prev, state: 'executing' }
+              : prev);
+          }, 150);
+        }
+        if (data?.type === 'cli_tool_result' || data?.type === 'tool_result') {
+          const isError = data.error || data.isError;
+          const preview = typeof data.output === 'string' ? data.output.split('\n')[0]?.slice(0, 80) : undefined;
+          setCurrentTool(prev => prev
+            ? { ...prev, state: isError ? 'error' : 'completed', preview }
+            : null);
+          // Clear completed/error state after 1.5s
+          setTimeout(() => {
+            setCurrentTool(prev => prev && (prev.state === 'completed' || prev.state === 'error') ? null : prev);
+          }, 1500);
+        }
       }
 
       // Chat response
@@ -171,13 +212,51 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
     return () => client.disconnect();
   }, [client]);
 
+  // ── Input change handler: paste detection + file completion ──
+  const handleInputChange = useCallback((value: string) => {
+    const prev = previousInputRef.current;
+    previousInputRef.current = value;
+
+    // Paste detection: if a large chunk with many newlines arrives at once
+    const delta = value.slice(prev.length);
+    const newlineCount = (delta.match(/\n/g) || []).length;
+    if (newlineCount > PASTE_LINE_THRESHOLD && delta.length > 50) {
+      // Collapse the paste in the display
+      const lineCount = newlineCount + 1;
+      setPastedContent(value); // store full content
+      setPastedLineCount(lineCount);
+      setInput(`[pasted ${lineCount} lines]`);
+      return;
+    }
+
+    setInput(value);
+
+    // File completion: trigger when typing a path-like token
+    const pathInfo = extractPathToken(value);
+    if (pathInfo && pathInfo.token.length > 2) {
+      getFileCompletions(pathInfo.token, process.cwd(), (results) => {
+        setCompletions(results);
+        setCompletionIdx(0);
+      });
+    } else {
+      cancelFileCompletions();
+      setCompletions([]);
+    }
+  }, []);
+
   const handleSubmit = useCallback((value: string) => {
-    if (!value.trim()) return;
+    // If we have pasted content, send that instead of the marker
+    const actualValue = pastedContent || value;
+    if (!actualValue.trim()) return;
     setInput('');
+    setPastedContent(null);
+    setPastedLineCount(0);
+    cancelFileCompletions();
+    setCompletions([]);
 
     // Handle permission response
     if (pendingPermission) {
-      const lower = value.trim().toLowerCase();
+      const lower = actualValue.trim().toLowerCase();
       const approved = /^(y|yes|ok|allow|approve|sure|go)$/i.test(lower);
       const denied = /^(n|no|deny|reject|cancel|abort)$/i.test(lower);
       if (approved || denied) {
@@ -192,10 +271,10 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       }
     }
 
-    setMessages(prev => [...prev, { role: 'user', content: value, timestamp: new Date() }]);
+    setMessages(prev => [...prev, { role: 'user', content: actualValue, timestamp: new Date() }]);
 
-    if (value.startsWith('/')) {
-      const parts = value.slice(1).split(/\s+/);
+    if (actualValue.startsWith('/')) {
+      const parts = actualValue.slice(1).split(/\s+/);
       const cmdName = parts[0];
       const args: Record<string, string> = {};
       if (parts.length > 1) args.value = parts.slice(1).join(' ');
@@ -209,12 +288,23 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
       }
       client.sendCommand(cmdName, Object.keys(args).length > 0 ? args : undefined);
     } else {
-      client.sendChat(sessionId, value);
+      client.sendChat(sessionId, actualValue);
     }
-  }, [client, sessionId, exit, cumulativeStats, pendingPermission]);
+  }, [client, sessionId, exit, cumulativeStats, pendingPermission, pastedContent]);
 
-  useInput((input, key) => {
-    if (key.ctrl && input === 'c') { client.disconnect(); exit(); }
+  useInput((inputChar, key) => {
+    if (key.ctrl && inputChar === 'c') { client.disconnect(); exit(); }
+    // Tab: accept top file completion
+    if (key.tab && completions.length > 0) {
+      const pathInfo = extractPathToken(input);
+      if (pathInfo) {
+        const selected = completions[completionIdx] || completions[0];
+        const newValue = input.slice(0, pathInfo.start) + selected;
+        setInput(newValue);
+        previousInputRef.current = newValue;
+        setCompletions([]);
+      }
+    }
   });
 
   const statusDot = status === 'connected' ? '\x1b[32m\u25CF\x1b[0m'
@@ -252,14 +342,37 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         ))}
       </Box>
 
-      {/* Activity bar — spinner when agent running */}
-      {agentRunning && (
+      {/* Activity bar — tool state machine display */}
+      {agentRunning && !currentTool && (
         <Box paddingX={1}>
           <Text color="#7AA2D4">{SPINNER[spinnerFrame]} </Text>
           <Text color="#7AA2D4">
-            {currentTool ? `Running ${currentTool}` : 'Thinking'}
+            Thinking
             {agentStats.model ? ` \u00B7 ${agentStats.model}` : ''}
           </Text>
+        </Box>
+      )}
+      {currentTool && currentTool.state === 'pending' && (
+        <Box paddingX={1}>
+          <Text color="yellow">{'  '}Calling {currentTool.name}...</Text>
+        </Box>
+      )}
+      {currentTool && currentTool.state === 'executing' && (
+        <Box paddingX={1}>
+          <Text color="cyan">{SPINNER[spinnerFrame]} Running {currentTool.name}...</Text>
+          {currentTool.preview && (
+            <Text color="gray"> {currentTool.preview.slice(0, 60)}</Text>
+          )}
+        </Box>
+      )}
+      {currentTool && currentTool.state === 'completed' && (
+        <Box paddingX={1}>
+          <Text color="green">{'\u2713'} {currentTool.name}</Text>
+        </Box>
+      )}
+      {currentTool && currentTool.state === 'error' && (
+        <Box paddingX={1}>
+          <Text color="red">{'\u2717'} {currentTool.name}</Text>
         </Box>
       )}
 
@@ -296,12 +409,31 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         <Text color="gray">{sessionId.slice(0, 8)}</Text>
       </Box>
 
+      {/* File completions dropdown */}
+      {completions.length > 0 && (
+        <Box paddingX={2} flexDirection="column">
+          {completions.slice(0, 5).map((c, i) => (
+            <Text key={c} color={i === completionIdx ? 'cyan' : 'gray'}>
+              {i === completionIdx ? '\u276F ' : '  '}{c}
+            </Text>
+          ))}
+          <Text color="gray" dimColor>  Tab to accept</Text>
+        </Box>
+      )}
+
+      {/* Paste marker indicator */}
+      {pastedContent && (
+        <Box paddingX={2}>
+          <Text color="yellow">[pasted {pastedLineCount} lines] - press Enter to send</Text>
+        </Box>
+      )}
+
       {/* Input */}
       <Box borderStyle="single" borderColor={pendingPermission ? 'yellow' : agentRunning ? '#7AA2D4' : 'gray'} paddingX={1}>
         <Text color="green">{'\u276F '}</Text>
         <TextInput
           value={input}
-          onChange={setInput}
+          onChange={handleInputChange}
           onSubmit={handleSubmit}
           placeholder={pendingPermission ? 'Type yes or no...' : agentRunning ? 'Agent working...' : 'Type a message or /command...'}
         />

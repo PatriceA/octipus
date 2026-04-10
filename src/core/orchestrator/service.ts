@@ -551,6 +551,27 @@ export class OrchestratorService {
     return this.approvalManager.getPendingApprovals();
   }
 
+  // ── Steering ────────────────────────────────────────────────────
+
+  /**
+   * Inject a steering message into the active agent for a session.
+   * Returns true if an active running agent was found and steered.
+   */
+  steer(sessionId: string, message: import('@/core/types').AgentMessage): boolean {
+    const agentManager = getAgentManager();
+    const sessionAgents = agentManager.getBySession(sessionId);
+    const running = sessionAgents.find(a => a.getStatus() === 'running');
+    if (!running) return false;
+
+    // Only AgentWorker supports steering (CLIAgentWorker is autonomous)
+    if ('steer' in running && typeof (running as any).steer === 'function') {
+      (running as any).steer(message);
+      coreLogger.info({ sessionId, agentId: running.getContext().id }, 'Steering message injected');
+      return true;
+    }
+    return false;
+  }
+
   // ── Utility delegation ───────────────────────────────────────────
 
   async sendStatusUpdate(

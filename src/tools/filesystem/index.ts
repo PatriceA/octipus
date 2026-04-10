@@ -6,6 +6,7 @@ import type { ToolManifest, AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
 import { safeRegExp } from '@/utils/sanitize';
 import { coreLogger } from '@/utils/logger';
+import { withFileMutationQueue } from '@/utils/file-mutation-queue';
 
 function getWorkspacePaths(): { root: string; additional: string[] } {
   try {
@@ -193,19 +194,21 @@ export class FilesystemTool extends BaseTool {
         }
         this.validatePath(filePath);
 
-        if (args.createDirs !== false) {
-          const dir = dirname(filePath);
-          if (!existsSync(dir)) {
-            await mkdir(dir, { recursive: true });
+        return withFileMutationQueue(filePath, async () => {
+          if (args.createDirs !== false) {
+            const dir = dirname(filePath);
+            if (!existsSync(dir)) {
+              await mkdir(dir, { recursive: true });
+            }
           }
-        }
 
-        await writeFile(filePath, args.content as string, 'utf-8');
+          await writeFile(filePath, args.content as string, 'utf-8');
 
-        // Auto-index into RAG knowledge base
-        autoIndexFile(filePath);
+          // Auto-index into RAG knowledge base
+          autoIndexFile(filePath);
 
-        return { success: true, path: filePath, bytesWritten: (args.content as string).length };
+          return { success: true, path: filePath, bytesWritten: (args.content as string).length };
+        });
       },
       { permissionAction: 'write' }
     );
@@ -222,13 +225,15 @@ export class FilesystemTool extends BaseTool {
         this.requireString(args, 'content');
         this.validatePath(filePath);
 
-        const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
-        await writeFile(filePath, existing + args.content, 'utf-8');
+        return withFileMutationQueue(filePath, async () => {
+          const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
+          await writeFile(filePath, existing + args.content, 'utf-8');
 
-        // Auto-index into RAG
-        autoIndexFile(filePath);
+          // Auto-index into RAG
+          autoIndexFile(filePath);
 
-        return { success: true, path: filePath };
+          return { success: true, path: filePath };
+        });
       },
       { permissionAction: 'write' }
     );
@@ -304,8 +309,10 @@ export class FilesystemTool extends BaseTool {
         const filePath = this.resolvePath(args.path as string, context);
         this.validatePath(filePath);
 
-        await rm(filePath, { recursive: args.recursive as boolean, force: false });
-        return { success: true, path: filePath };
+        return withFileMutationQueue(filePath, async () => {
+          await rm(filePath, { recursive: args.recursive as boolean, force: false });
+          return { success: true, path: filePath };
+        });
       },
       { permissionAction: 'delete' }
     );
@@ -323,8 +330,10 @@ export class FilesystemTool extends BaseTool {
         this.validatePath(srcPath);
         this.validatePath(destPath);
 
-        await copyFile(srcPath, destPath);
-        return { success: true, source: srcPath, destination: destPath };
+        return withFileMutationQueue(destPath, async () => {
+          await copyFile(srcPath, destPath);
+          return { success: true, source: srcPath, destination: destPath };
+        });
       },
       { permissionAction: 'write' }
     );
@@ -342,8 +351,10 @@ export class FilesystemTool extends BaseTool {
         this.validatePath(srcPath);
         this.validatePath(destPath);
 
-        await rename(srcPath, destPath);
-        return { success: true, source: srcPath, destination: destPath };
+        return withFileMutationQueue(destPath, async () => {
+          await rename(srcPath, destPath);
+          return { success: true, source: srcPath, destination: destPath };
+        });
       },
       { permissionAction: 'write' }
     );

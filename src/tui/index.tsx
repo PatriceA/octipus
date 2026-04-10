@@ -4,6 +4,28 @@ import { TuiApp } from './app';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 
+// ── Synchronized output (CSI 2026) ─────────────────────────────
+// Wraps each render frame in sync markers so the terminal can
+// composite the whole frame atomically, eliminating flicker.
+const SYNC_START = '\x1b[?2026h';
+const SYNC_END = '\x1b[?2026l';
+
+function installSyncOutput(): void {
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  let inRender = false;
+  process.stdout.write = function (chunk: any, ...args: any[]) {
+    if (!inRender) {
+      inRender = true;
+      originalWrite(SYNC_START);
+      queueMicrotask(() => {
+        originalWrite(SYNC_END);
+        inRender = false;
+      });
+    }
+    return originalWrite(chunk, ...args);
+  } as any;
+}
+
 /**
  * Read API port from .env file (same as the backend uses).
  */
@@ -32,6 +54,9 @@ function getApiPort(): string {
 export function launchTui(options?: { gatewayUrl?: string }): void {
   const port = getApiPort();
   const gatewayUrl = options?.gatewayUrl || `ws://localhost:${port}/gateway`;
+
+  // Install synchronized output before first render
+  installSyncOutput();
 
   render(
     <TuiApp gatewayUrl={gatewayUrl} />,
