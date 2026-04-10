@@ -91,12 +91,13 @@ export class GatewayClient {
   /**
    * Send a chat message.
    */
-  sendChat(sessionId: string, content: string, expertId?: string): void {
+  sendChat(sessionId: string, content: string, expertId?: string, projectPath?: string): void {
     this.send({
       type: 'chat.send',
       sessionId,
       content,
       expertId,
+      ...(projectPath ? { projectPath } : {}),
     });
   }
 

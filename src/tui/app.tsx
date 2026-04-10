@@ -47,12 +47,16 @@ const SPINNER = ['\u280B', '\u2819', '\u2839', '\u2838', '\u283C', '\u2834', '\u
 
 interface TuiAppProps {
   gatewayUrl?: string;
+  projectPath?: string;
 }
 
-export function TuiApp({ gatewayUrl }: TuiAppProps) {
+export function TuiApp({ gatewayUrl, projectPath: initialProjectPath }: TuiAppProps) {
   const { exit } = useApp();
+  const [projectPath, setProjectPath] = useState<string | undefined>(initialProjectPath);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'system', content: 'Welcome to the Assistant TUI. Type a message or /help for commands.', timestamp: new Date() },
+    { role: 'system', content: initialProjectPath
+        ? `Welcome to the Assistant TUI. Project: ${initialProjectPath.split(/[/\\]/).pop()}\nType a message or /help for commands.`
+        : 'Welcome to the Assistant TUI. Type a message or /help for commands.', timestamp: new Date() },
   ]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
@@ -286,11 +290,22 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
         setMessages(prev => [...prev, { role: 'system', content: `/cost: ${content}`, timestamp: new Date() }]);
         return;
       }
+      if (cmdName === 'project') {
+        const path = args.value?.trim();
+        if (!path) {
+          const current = projectPath || '(none)';
+          setMessages(prev => [...prev, { role: 'system', content: `Current project: ${current}`, timestamp: new Date() }]);
+        } else {
+          setProjectPath(path);
+          setMessages(prev => [...prev, { role: 'system', content: `Project set to: ${path}`, timestamp: new Date() }]);
+        }
+        return;
+      }
       client.sendCommand(cmdName, Object.keys(args).length > 0 ? args : undefined);
     } else {
-      client.sendChat(sessionId, actualValue);
+      client.sendChat(sessionId, actualValue, undefined, projectPath);
     }
-  }, [client, sessionId, exit, cumulativeStats, pendingPermission, pastedContent]);
+  }, [client, sessionId, exit, cumulativeStats, pendingPermission, pastedContent, projectPath]);
 
   useInput((inputChar, key) => {
     if (key.ctrl && inputChar === 'c') { client.disconnect(); exit(); }
@@ -406,6 +421,9 @@ export function TuiApp({ gatewayUrl }: TuiAppProps) {
             <Text color="gray">auto-route</Text>
           )}
         </Box>
+        {projectPath && (
+          <Text color="cyan">{'\u{1F4C1}'} {projectPath.split(/[/\\]/).pop()}</Text>
+        )}
         <Text color="gray">{sessionId.slice(0, 8)}</Text>
       </Box>
 

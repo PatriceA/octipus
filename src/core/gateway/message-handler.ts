@@ -70,6 +70,26 @@ async function handleChatSend(
     // Track the session on the connection for /status command
     context.sessionId = message.sessionId;
 
+    // Set project context on the session if provided (enables dev mode)
+    if (message.projectPath) {
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const session = await sessionRepository.findById(message.sessionId);
+      if (session) {
+        const existingCtx = (session.context || {}) as Record<string, unknown>;
+        if (!existingCtx.projectPath) {
+          await sessionRepository.update(message.sessionId, {
+            context: {
+              ...existingCtx,
+              devMode: true,
+              projectPath: message.projectPath,
+              projectName: message.projectPath.split(/[/\\]/).pop() || 'project',
+            },
+          });
+          coreLogger.info({ sessionId: message.sessionId, projectPath: message.projectPath }, 'Set project context on session');
+        }
+      }
+    }
+
     // Route through orchestrator
     const userId = await resolveUserId(context.userId);
     // Use expert from message, or from connection's active expert (/expert command)

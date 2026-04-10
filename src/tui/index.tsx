@@ -51,7 +51,7 @@ function getApiPort(): string {
  * Launch the TUI.
  * Connects to the gateway on the API server port (default 3005).
  */
-export function launchTui(options?: { gatewayUrl?: string }): void {
+export function launchTui(options?: { gatewayUrl?: string; projectPath?: string }): void {
   const port = getApiPort();
   const gatewayUrl = options?.gatewayUrl || `ws://localhost:${port}/gateway`;
 
@@ -59,12 +59,22 @@ export function launchTui(options?: { gatewayUrl?: string }): void {
   installSyncOutput();
 
   render(
-    <TuiApp gatewayUrl={gatewayUrl} />,
+    <TuiApp gatewayUrl={gatewayUrl} projectPath={options?.projectPath} />,
     { exitOnCtrlC: true },
   );
 }
 
-// Allow direct invocation: bun run src/tui/index.tsx
+// Allow direct invocation: bun run src/tui/index.tsx [--project /path/to/project]
 if (import.meta.main) {
-  launchTui();
+  const args = process.argv.slice(2);
+  let projectPath: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === '--project' || args[i] === '-p') && args[i + 1]) {
+      projectPath = resolve(args[i + 1]);
+      i++;
+    }
+  }
+
+  launchTui({ projectPath });
 }
