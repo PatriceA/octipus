@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-04-10 — Concurrent Safety, Execution Backends, Steering, Reasoning Budgets
+
+### File Mutation Queue
+- **Per-file write serialization**: Concurrent agents writing to the same file are now queued per-path, preventing race conditions in teams and parallel pipelines. Reads remain unblocked.
+
+### Abstract Shell Operations
+- **Swappable execution backends**: Shell tool now supports pluggable backends (local, SSH, Docker) — agents can execute commands on remote hosts or inside containers without tool changes.
+
+### Steering Messages
+- **Mid-run corrections via WebSocket**: Send `{ type: 'steer', sessionId, content }` to inject guidance into a running agent. Messages queue and drain after the current tool completes, injected before the next LLM call.
+
+### Thinking/Reasoning Budgets
+- **Auto-managed token budgets**: Reasoning models (Qwen3, DeepSeek, o-series) get level-based thinking budgets (off/low/medium/high) assigned by role. Orchestrator gets minimal budgets; agent workers get higher budgets for complex tool reasoning.
+
+### Context Compaction
+- **LLM-based summarization**: Replaces simple truncation with an LLM summarization pass that preserves file operation metadata (reads, writes, creates, deletes), keeping agents aware of filesystem state after compaction.
+
+### Cross-Model Message Transform
+- **Tool call ID normalization**: Normalizes tool call IDs and message formats across providers (OpenAI, Anthropic, Gemini, Ollama), enabling seamless mid-conversation model switching.
+
+### TUI Improvements
+- **Synchronized output**: Concurrent agent output streams are now serialized to prevent interleaving
+- **Tool state machine**: Tool execution lifecycle tracked with proper state transitions
+- **Paste markers**: Multi-line paste detection with visual boundary markers
+- **File path completion**: Tab-completion for file paths in the TUI input
+
 ## 2026-04-01 — Expert System, Channel Feedback, Permission Engine
 
 ### Expert System Overhaul

@@ -145,6 +145,69 @@ Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that co
 
 **Strategy:** Disable thinking for fast orchestrator responses (classification, casual chat). Enable thinking for agent workers that need to reason about multi-step tool execution.
 
+## Steering Messages
+
+Steering messages allow users to inject corrections or guidance into a running agent session without interrupting the current tool execution.
+
+### How It Works
+
+1. Client sends `{ type: 'steer', sessionId, content }` over the WebSocket gateway
+2. The message is queued on the session
+3. After the current tool call completes, the queue is drained
+4. Steering content is injected as a system-level message before the next LLM call
+
+### When to Use
+
+- Redirect an agent that is going down the wrong path ("focus on the API layer, not the UI")
+- Add constraints mid-run ("don't modify any test files")
+- Provide clarification the agent needs without aborting and restarting
+
+Steering messages are non-disruptive — they never interrupt a tool that is already executing. The agent sees them as additional context on its next LLM turn.
+
+## Context Compaction
+
+When a conversation grows large, the system compacts it using LLM-based summarization rather than simple message truncation.
+
+### Approach
+
+- An LLM call summarizes the conversation history into a condensed form
+- **File operation metadata is preserved** — which files were read, written, created, or deleted — so the agent retains awareness of filesystem state even after compaction
+- Tool call/result pairs are condensed but their essential outcomes are kept
+- The compacted summary replaces older messages while recent messages remain intact
+
+This preserves more useful context per token than naive truncation, especially for long coding sessions where file state matters.
+
+## File Mutation Queue
+
+Concurrent agents (teams, parallel pipeline stages) may attempt to write to the same file simultaneously, causing race conditions or corrupted output.
+
+### How It Works
+
+- A per-file write queue serializes all mutation operations (write, append, patch) targeting the same file path
+- Read operations are not queued — only writes acquire the lock
+- Each file path gets its own independent queue, so writes to different files proceed in parallel
+- The queue is transparent to tool implementations — serialization is handled at the tool executor level
+
+## Thinking Budgets
+
+Reasoning models (Qwen3, DeepSeek, o-series) benefit from thinking tokens but consume output capacity. The system auto-manages thinking budgets.
+
+### Levels
+
+| Level | Thinking Budget | Use Case |
+|-------|----------------|----------|
+| **off** | 0 tokens | Orchestrator routing, casual chat |
+| **low** | ~1024 tokens | Simple tool calls, classification |
+| **medium** | ~4096 tokens | Multi-step tool reasoning |
+| **high** | ~8192+ tokens | Complex planning, code generation |
+
+### Behavior
+
+- **Auto-detection**: The system detects reasoning-capable models and assigns a default budget based on the agent's role
+- **Scaling**: Budget scales with task complexity — orchestrator gets `off` or `low`, agent workers get `medium` or `high`
+- **Agent worker override**: Workers always enable thinking even if the model config disables it, since complex tool-use benefits from reasoning
+- Thinking tokens are stripped from output before delivery to users
+
 ## Adding New Components
 
 ### New Tool

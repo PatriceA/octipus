@@ -29,13 +29,15 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **CLI model access** — Claude Code, Gemini CLI, Codex CLI (free tier supported)
 - **LiteLLM proxy** — unified gateway to 100+ model providers
 - **Smart routing** — topic-based model selection, quota tracking, cost monitoring, health checks
+- **Thinking/reasoning budgets** — auto-managed token budgets for reasoning models with level-based scaling
+- **Cross-model message transform** — tool call ID normalization across providers for seamless model switching
 - **Adaptive rate limiting** — per-provider concurrency semaphores, token bucket RPM, circuit breaker with automatic failover. Redis-backed state
 - **Provider conformance testing** — automated test suite validates all providers with capability-gated skipping
 - **Model evaluation** — 8 quality evaluators with standard datasets and cross-model comparison
 
 ### Tools That Actually Do Things
-- **Filesystem** — read, write, search files
-- **Shell** — execute commands and scripts
+- **Filesystem** — read, write, search files with per-file mutation queue for concurrent write safety
+- **Shell** — execute commands via abstract backends (local, SSH, Docker) — swappable at runtime
 - **Git** — commit, branch, push, diff
 - **Browser** — navigate, interact, screenshot via Playwright
 - **Web Search** — SearXNG meta-search
@@ -56,10 +58,12 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Single entry point** — all clients connect to `/gateway` with typed Zod-validated protocol
 - **Multi-client auth** — session tokens, local file tokens, HMAC keys, API keys
 - **Central event bus** — typed pub/sub with pattern matching and per-session replay
+- **Steering messages** — mid-run corrections via WebSocket that inject guidance before the next LLM call
+- **Context compaction** — LLM-based summarization preserving file operation metadata, replacing simple truncation
 - **12 gateway commands** — `/help`, `/status`, `/expert`, `/abort`, `/clear`, `/think`, `/cost`, and more
 - **Channel feedback** — real-time emoji reactions and typing indicators across all channels
 - **Rate limiting & budgets** — sliding window per-connection, connection limits per user/IP
-- **TUI** — Ink-based terminal interface with permission prompts and cost tracking
+- **TUI** — Ink-based terminal interface with permission prompts, cost tracking, synchronized output, tool state machine, paste markers, and file path completion
 
 ### Reach Users Everywhere
 - **Telegram** — full bot with emoji reactions, typing indicator, `/expert` switching, permission prompts with tool details
