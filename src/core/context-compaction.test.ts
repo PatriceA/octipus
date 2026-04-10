@@ -106,7 +106,7 @@ describe('Context Compaction', () => {
       await compactWithSummarization(messages, summarize, 10);
 
       expect(summarize).toHaveBeenCalledTimes(1);
-      const prompt = summarize.mock.calls[0][0] as string;
+      const prompt = (summarize.mock.calls as unknown as string[][])[0][0];
       expect(prompt).toContain('Summarize the following conversation');
       expect(prompt).toContain('Message 0'); // first message in summarized window
       expect(prompt).not.toContain('Message 24'); // last message is in keepRecent

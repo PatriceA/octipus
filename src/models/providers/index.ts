@@ -212,6 +212,10 @@ export class ProviderRouter {
     const provider = await this.resolveProvider(options.model);
     const rateLimitKey = resolveRateLimitKey(provider, options.model);
 
+    // Apply thinking budget and message transformation (same as complete())
+    options = await this.applyThinkingBudget(options);
+    options = { ...options, messages: transformMessagesForProvider(options.messages, provider.name) };
+
     modelLogger.debug({
       model: options.model,
       provider: provider.name,
