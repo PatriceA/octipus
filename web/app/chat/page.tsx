@@ -182,6 +182,27 @@ export default function ChatPage() {
                     name: tc.name,
                     argsSummary: tc.argsSummary,
                   })));
+                  // Detect file changes from filesystem tool calls
+                  const FS_TOOLS: Record<string, string> = {
+                    'filesystem__write_file': 'write', 'filesystem__append_file': 'append',
+                    'filesystem__delete_file': 'delete', 'filesystem__copy_file': 'copy',
+                    'filesystem__move_file': 'move', 'filesystem__create_directory': 'create_dir',
+                  };
+                  for (const tc of ev.data.toolCalls) {
+                    const action = FS_TOOLS[tc.name];
+                    if (action && tc.argsSummary) {
+                      const pathMatch = tc.argsSummary.match(/(?:path|destination|source):\s*([^\s,]+)/);
+                      if (pathMatch) {
+                        restoredFileChanges.push({
+                          path: pathMatch[1],
+                          action,
+                          agentId: a.id,
+                          agentRole: a.role,
+                          timestamp: a.createdAt,
+                        });
+                      }
+                    }
+                  }
                 }
                 // CLI agent tool use (single tool format from cli_tool_use events)
                 else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
@@ -655,6 +676,32 @@ export default function ChatPage() {
           name: tc.name,
           argsSummary: tc.argsSummary,
         }));
+        // Detect file changes from filesystem tool calls (non-CLI agents)
+        const FILESYSTEM_FILE_TOOLS: Record<string, string> = {
+          'filesystem__write_file': 'write',
+          'filesystem__append_file': 'append',
+          'filesystem__delete_file': 'delete',
+          'filesystem__copy_file': 'copy',
+          'filesystem__move_file': 'move',
+          'filesystem__create_directory': 'create_dir',
+        };
+        const newFileChanges: FileChange[] = [];
+        for (const tc of d.toolCalls) {
+          const action = FILESYSTEM_FILE_TOOLS[tc.name];
+          if (action && tc.argsSummary) {
+            // Extract path from argsSummary (format: "path: /some/path, content: ...")
+            const pathMatch = tc.argsSummary.match(/(?:path|destination|source):\s*([^\s,]+)/);
+            if (pathMatch) {
+              newFileChanges.push({
+                path: pathMatch[1],
+                action,
+                agentId: data.agentId,
+                agentRole: 'unknown',
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+        }
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
@@ -664,7 +711,13 @@ export default function ChatPage() {
               toolCalls: [...existing.toolCalls, ...toolCalls],
             });
           }
-          return { ...prev, trackedAgents: next };
+          return {
+            ...prev,
+            trackedAgents: next,
+            fileChanges: newFileChanges.length > 0
+              ? [...prev.fileChanges, ...newFileChanges]
+              : prev.fileChanges,
+          };
         });
       }
       // CLI agent tool use (single tool format from cli_tool_use events)

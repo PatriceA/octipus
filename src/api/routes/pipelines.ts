@@ -168,6 +168,9 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         toolIds: s.toolIds || [],
         requiresApproval: s.requiresApproval ?? false,
         promptTemplate: s.promptTemplate,
+        stageType: s.stageType,
+        maxRetries: s.maxRetries,
+        retryTargetStage: s.retryTargetStage,
       }));
       const [template] = await db.insert(pipelineTemplates).values({
         userId: user.id,
@@ -188,6 +191,9 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
           toolIds: t.Optional(t.Array(t.String())),
           requiresApproval: t.Optional(t.Boolean()),
           promptTemplate: t.Optional(t.String()),
+          stageType: t.Optional(t.Union([t.Literal('standard'), t.Literal('qa_validation')])),
+          maxRetries: t.Optional(t.Number()),
+          retryTargetStage: t.Optional(t.Number()),
         }))),
       }),
       detail: { tags: ['pipelines'] },
@@ -207,6 +213,9 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         toolIds: s.toolIds || [],
         requiresApproval: s.requiresApproval ?? false,
         promptTemplate: s.promptTemplate,
+        stageType: s.stageType,
+        maxRetries: s.maxRetries,
+        retryTargetStage: s.retryTargetStage,
       }));
       const [updated] = await db
         .update(pipelineTemplates)
@@ -228,6 +237,9 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
           toolIds: t.Optional(t.Array(t.String())),
           requiresApproval: t.Optional(t.Boolean()),
           promptTemplate: t.Optional(t.String()),
+          stageType: t.Optional(t.Union([t.Literal('standard'), t.Literal('qa_validation')])),
+          maxRetries: t.Optional(t.Number()),
+          retryTargetStage: t.Optional(t.Number()),
         }))),
       }),
       detail: { tags: ['pipelines'] },

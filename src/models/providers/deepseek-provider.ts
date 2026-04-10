@@ -86,8 +86,15 @@ export class DeepSeekProvider implements ModelProvider {
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
           let args: Record<string, unknown> = {};
-          try { args = JSON.parse(tc.function.arguments); }
-          catch { modelLogger.warn({ toolName: tc.function.name, raw: tc.function.arguments.slice(0, 200) }, 'Truncated tool call arguments, using empty object'); }
+          const rawArgs = tc.function.arguments || '';
+          try {
+            args = JSON.parse(rawArgs);
+          } catch {
+            modelLogger.warn(
+              { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
+              'Failed to parse tool call arguments — JSON may be truncated',
+            );
+          }
           return { id: tc.id, name: tc.function.name, arguments: args };
         });
       }

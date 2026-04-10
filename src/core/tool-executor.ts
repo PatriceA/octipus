@@ -236,6 +236,10 @@ export class ToolExecutor {
         if (FILE_CHANGE_TOOLS.has(toolCall.name)) {
           const filePath = (toolCall.arguments.path || toolCall.arguments.destination || toolCall.arguments.source) as string | undefined;
           if (filePath) {
+            agentLogger.info(
+              { agentId: this.context.id, tool: toolCall.name, path: filePath },
+              'Emitting file_change event',
+            );
             this.emitFn('action', {
               type: 'file_change',
               action: toolCall.name.replace('filesystem__', '').replace('_file', '').replace('_directory', '_dir'),
@@ -243,6 +247,11 @@ export class ToolExecutor {
               agentId: this.context.id,
               agentRole: this.context.role,
             });
+          } else {
+            agentLogger.warn(
+              { agentId: this.context.id, tool: toolCall.name, args: Object.keys(toolCall.arguments) },
+              'File change tool called but no path found in arguments',
+            );
           }
         }
 

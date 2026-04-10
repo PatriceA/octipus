@@ -14,15 +14,28 @@ export async function autoUpdateProjectSummary(
   output: string,
 ): Promise<void> {
   try {
-    // Determine project root — dev mode uses projectPath, otherwise workspace root
+    // Determine project root from (in priority order):
+    // 1. Agent metadata.projectPath (set by worker-spawner after detecting the project)
+    // 2. Dev mode session's projectPath
+    // 3. Workspace root (fallback)
     const session = await (await import('@/db/repositories/session-repository')).sessionRepository.findById(context.sessionId);
     const sessionCtx = session?.context as { devMode?: boolean; projectPath?: string } | undefined;
 
     let projectRoot: string;
-    if (sessionCtx?.devMode && sessionCtx?.projectPath) {
+    if (typeof context.metadata?.projectPath === 'string') {
+      projectRoot = context.metadata.projectPath;
+    } else if (sessionCtx?.devMode && sessionCtx?.projectPath) {
       projectRoot = sessionCtx.projectPath;
     } else {
       projectRoot = resolve(getConfig().workspace?.rootPath || '.');
+    }
+
+    // Guard: never write project summaries inside session folders
+    const resolvedRoot = resolve(projectRoot);
+    const sessionsDir = resolve(getConfig().workspace?.rootPath || '.', 'sessions');
+    if (resolvedRoot.startsWith(sessionsDir)) {
+      coreLogger.warn({ projectRoot, sessionsDir }, 'Skipping project summary — resolved path is inside sessions directory');
+      return;
     }
 
     const summaryDir = resolve(projectRoot, '.assistant');

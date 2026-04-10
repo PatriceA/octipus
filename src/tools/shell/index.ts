@@ -101,8 +101,12 @@ export class ShellTool extends BaseTool {
         env: { type: 'object', description: 'Additional environment variables' },
       }),
       async (args, context) => {
-        const command = args.command as string;
-        const cwd = (args.cwd as string) || this.getWorkspaceRoot();
+        if (typeof args.command !== 'string' || !args.command) {
+          throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
+        }
+        const command = args.command;
+        const projectPath = (context?.metadata as Record<string, unknown>)?.projectPath as string | undefined;
+        const cwd = (args.cwd as string) || projectPath || this.getWorkspaceRoot();
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
         const env = args.env as Record<string, string> | undefined;
 
@@ -141,7 +145,10 @@ export class ShellTool extends BaseTool {
         cwd: { type: 'string', description: 'Working directory' },
       }),
       async (args) => {
-        const command = args.command as string;
+        if (typeof args.command !== 'string' || !args.command) {
+          throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
+        }
+        const command = args.command;
         const cwd = (args.cwd as string) || this.getWorkspaceRoot();
 
         this.validateCommand(command);

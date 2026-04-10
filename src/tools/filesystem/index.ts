@@ -148,8 +148,8 @@ export class FilesystemTool extends BaseTool {
         path: { type: 'string', description: 'Relative or absolute path to the file', required: true },
         encoding: { type: 'string', description: 'File encoding', default: 'utf-8' },
       }),
-      async (args) => {
-        const filePath = this.resolvePath(args.path as string);
+      async (args, context) => {
+        const filePath = this.resolvePath(this.requireString(args, 'path'), context);
         this.validatePath(filePath);
 
         const content = await readFile(filePath, { encoding: (args.encoding as BufferEncoding) || 'utf-8' });
@@ -167,7 +167,8 @@ export class FilesystemTool extends BaseTool {
         createDirs: { type: 'boolean', description: 'Create parent directories if needed', default: true },
       }),
       async (args, context) => {
-        const rawPath = args.path as string;
+        const rawPath = this.requireString(args, 'path');
+        this.requireString(args, 'content');
         let filePath: string;
 
         // Redirect to session directory when possible
@@ -184,11 +185,11 @@ export class FilesystemTool extends BaseTool {
               const relFromRoot = relative(root, resolved);
               filePath = resolve(sessionDir, relFromRoot);
             } else {
-              filePath = this.resolvePath(rawPath);
+              filePath = this.resolvePath(rawPath, context);
             }
           }
         } else {
-          filePath = this.resolvePath(rawPath);
+          filePath = this.resolvePath(rawPath, context);
         }
         this.validatePath(filePath);
 
@@ -216,8 +217,9 @@ export class FilesystemTool extends BaseTool {
         path: { type: 'string', description: 'Path to the file', required: true },
         content: { type: 'string', description: 'Content to append', required: true },
       }),
-      async (args) => {
-        const filePath = this.resolvePath(args.path as string);
+      async (args, context) => {
+        const filePath = this.resolvePath(this.requireString(args, 'path'), context);
+        this.requireString(args, 'content');
         this.validatePath(filePath);
 
         const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
@@ -239,8 +241,8 @@ export class FilesystemTool extends BaseTool {
         recursive: { type: 'boolean', description: 'List recursively', default: false },
         includeHidden: { type: 'boolean', description: 'Include hidden files', default: false },
       }),
-      async (args) => {
-        const dirPath = this.resolvePath((args.path as string) || '.');
+      async (args, context) => {
+        const dirPath = this.resolvePath((args.path as string) || '.', context);
         this.validatePath(dirPath);
 
         const entries = await this.listDir(dirPath, args.recursive as boolean, args.includeHidden as boolean);
@@ -255,8 +257,8 @@ export class FilesystemTool extends BaseTool {
       createParameterSchema({
         path: { type: 'string', description: 'Path to the file or directory', required: true },
       }),
-      async (args) => {
-        const filePath = this.resolvePath(args.path as string);
+      async (args, context) => {
+        const filePath = this.resolvePath(args.path as string, context);
         this.validatePath(filePath);
 
         const stats = await stat(filePath);
@@ -281,8 +283,8 @@ export class FilesystemTool extends BaseTool {
         path: { type: 'string', description: 'Directory path', required: true },
         recursive: { type: 'boolean', description: 'Create parent directories', default: true },
       }),
-      async (args) => {
-        const dirPath = this.resolvePath(args.path as string);
+      async (args, context) => {
+        const dirPath = this.resolvePath(args.path as string, context);
         this.validatePath(dirPath);
 
         await mkdir(dirPath, { recursive: args.recursive !== false });
@@ -298,8 +300,8 @@ export class FilesystemTool extends BaseTool {
         path: { type: 'string', description: 'Path to delete', required: true },
         recursive: { type: 'boolean', description: 'Delete directories recursively', default: false },
       }),
-      async (args) => {
-        const filePath = this.resolvePath(args.path as string);
+      async (args, context) => {
+        const filePath = this.resolvePath(args.path as string, context);
         this.validatePath(filePath);
 
         await rm(filePath, { recursive: args.recursive as boolean, force: false });
@@ -315,9 +317,9 @@ export class FilesystemTool extends BaseTool {
         source: { type: 'string', description: 'Source path', required: true },
         destination: { type: 'string', description: 'Destination path', required: true },
       }),
-      async (args) => {
-        const srcPath = this.resolvePath(args.source as string);
-        const destPath = this.resolvePath(args.destination as string);
+      async (args, context) => {
+        const srcPath = this.resolvePath(args.source as string, context);
+        const destPath = this.resolvePath(args.destination as string, context);
         this.validatePath(srcPath);
         this.validatePath(destPath);
 
@@ -334,9 +336,9 @@ export class FilesystemTool extends BaseTool {
         source: { type: 'string', description: 'Source path', required: true },
         destination: { type: 'string', description: 'Destination path', required: true },
       }),
-      async (args) => {
-        const srcPath = this.resolvePath(args.source as string);
-        const destPath = this.resolvePath(args.destination as string);
+      async (args, context) => {
+        const srcPath = this.resolvePath(args.source as string, context);
+        const destPath = this.resolvePath(args.destination as string, context);
         this.validatePath(srcPath);
         this.validatePath(destPath);
 
@@ -354,8 +356,8 @@ export class FilesystemTool extends BaseTool {
         path: { type: 'string', description: 'Directory to search in', default: '.' },
         maxResults: { type: 'number', description: 'Maximum results', default: 100 },
       }),
-      async (args) => {
-        const dirPath = this.resolvePath((args.path as string) || '.');
+      async (args, context) => {
+        const dirPath = this.resolvePath((args.path as string) || '.', context);
         this.validatePath(dirPath);
 
         const pattern = safeRegExp(args.pattern as string);
@@ -388,9 +390,22 @@ export class FilesystemTool extends BaseTool {
     );
   }
 
-  private resolvePath(path: string): string {
+  private requireString(args: Record<string, unknown>, key: string): string {
+    const value = args[key];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error(`Missing required parameter "${key}". The tool call arguments may have been truncated or malformed.`);
+    }
+    return value;
+  }
+
+  private resolvePath(path: string, context?: import('@/core/types').AgentContext): string {
     if (path.startsWith('/')) {
       return resolve(path);
+    }
+    // Use project-specific path from agent context when available
+    const projectPath = (context?.metadata as Record<string, unknown>)?.projectPath as string | undefined;
+    if (projectPath) {
+      return resolve(projectPath, path);
     }
     const { root } = getWorkspacePaths();
     return resolve(root, path);

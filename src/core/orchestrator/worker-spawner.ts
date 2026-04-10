@@ -280,6 +280,12 @@ If you cannot write files (e.g., read-only environment), include the summary con
     }
   }
 
+  // Store resolved project path in context metadata so downstream consumers
+  // (e.g., autoUpdateProjectSummary) can use it instead of guessing
+  if (resolvedProjectPath) {
+    context.metadata.projectPath = resolvedProjectPath;
+  }
+
   if (resolvedProjectPath) {
     // Working on a specific project: inject instruction for ALL roles
     systemPrompt += PROJECT_SUMMARY_INSTRUCTION;

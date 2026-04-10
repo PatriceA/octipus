@@ -342,33 +342,20 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
 
 /**
  * Seed preset pipeline templates into the database.
- * Idempotent — inserts new templates and updates existing preset templates
- * (description and steps) so code changes propagate on restart.
- * Only updates templates with isPreset=true to preserve user-created templates.
+ * Idempotent — only inserts templates that don't exist yet.
+ * Existing templates are never overwritten so user modifications persist across restarts.
  */
 export async function seedPresetTemplates(): Promise<void> {
   const db = getDb();
 
   for (const preset of PRESET_TEMPLATES) {
-    // Check if this preset already exists
     const existing = await db
-      .select({ id: pipelineTemplates.id, isPreset: pipelineTemplates.isPreset })
+      .select({ id: pipelineTemplates.id })
       .from(pipelineTemplates)
       .where(eq(pipelineTemplates.name, preset.name))
       .limit(1);
 
     if (existing.length > 0) {
-      // Update existing preset templates so code changes propagate
-      if (existing[0].isPreset) {
-        await db
-          .update(pipelineTemplates)
-          .set({
-            description: preset.description,
-            steps: preset.steps,
-          })
-          .where(eq(pipelineTemplates.id, existing[0].id));
-        logger.info({ template: preset.name }, 'Updated preset pipeline template');
-      }
       continue;
     }
 
