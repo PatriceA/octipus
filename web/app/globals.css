@@ -2,64 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+
+:root {
+  color-scheme: dark;
+}
 
 body {
-  font-family: 'Manrope', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   color: #ffffff;
   background: #0e0e0e;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Manrope', system-ui, sans-serif;
+  letter-spacing: -0.02em;
 }
 
-::-webkit-scrollbar-track {
-  background: #0e0e0e;
+/* ── Scrollbar — thin, subtle ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0e0e0e; }
+::-webkit-scrollbar-thumb { background: #262626; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #494847; }
+
+/* ── Material symbols ── */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #262626;
-  border-radius: 10px;
-}
+/* Smooth transitions */
+button, a { transition: all 0.15s ease; }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #484847;
-}
-
-/* Smooth transitions for interactive elements */
-button,
-a {
-  transition: all 0.15s ease;
-}
-
-/* Focus ring */
+/* ── Focus ring — mint glow ── */
 .focus-ring {
   @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-1 focus:ring-offset-transparent;
 }
 
-/* Slide-up animation for banners */
+/* ── "Intelligent Void" signature effects ── */
+.glass-panel {
+  background: rgba(38, 38, 38, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.glow-accent {
+  box-shadow: 0 0 20px rgba(115, 255, 227, 0.15);
+}
+
+.neural-grid {
+  background-image: radial-gradient(rgba(115, 255, 227, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ── Slide-up animation (banners) ── */
 @keyframes slide-up {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
 }
+.animate-slide-up { animation: slide-up 0.25s ease-out; }
 
-.animate-slide-up {
-  animation: slide-up 0.25s ease-out;
-}
-
-/* Selection */
+/* ── Selection — mint ── */
 ::selection {
-  background: #8cacff;
-  color: #002a6d;
+  background: rgba(115, 255, 227, 0.3);
+  color: #73ffe3;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

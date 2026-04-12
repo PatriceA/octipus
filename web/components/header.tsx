@@ -191,7 +191,7 @@ export function Header() {
   };
 
   return (
-    <header className="h-16 bg-[#0e0e0e] px-6 shrink-0 flex items-center justify-between">
+    <header className="h-16 sticky top-0 z-40 bg-[#0e0e0e]/80 backdrop-blur-md border-b border-outline-variant/10 px-6 shrink-0 flex items-center justify-between">
       {/* Search */}
       <div className="flex-1 max-w-md" ref={searchRef}>
         <div className="relative">

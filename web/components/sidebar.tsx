@@ -80,23 +80,25 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex flex-col bg-[#131313] transition-all duration-300 ease-in-out shrink-0',
+        'flex flex-col bg-[#000000] border-r border-outline-variant/15 transition-all duration-300 ease-in-out shrink-0 font-body',
         collapsed ? 'w-16' : 'w-64'
       )}
     >
       {/* Logo */}
       <div className="h-16 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-2.5 overflow-hidden">
-          <img src="/logo.png" alt="Assistant" className="w-8 h-8 rounded-lg shrink-0 shadow-sm object-cover" />
+          <div className="w-8 h-8 bg-gradient-to-br from-primary to-primary-container rounded-sm flex items-center justify-center shrink-0 shadow-[0_0_18px_-4px_rgba(115,255,227,0.5)]">
+            <img src="/logo.png" alt="Assistant" className="w-full h-full object-contain" />
+          </div>
           {!collapsed && (
-            <span className="text-lg font-bold tracking-tighter text-white whitespace-nowrap">
+            <span className="text-lg font-black tracking-tighter text-primary whitespace-nowrap font-headline">
               Assistant
             </span>
           )}
         </div>
         <button
           onClick={toggle}
-          className="p-1.5 text-on-surface-variant hover:text-white hover:bg-[#1a1a1a] rounded-lg cursor-pointer shrink-0 transition-colors"
+          className="p-1.5 text-on-surface-variant hover:text-primary hover:bg-surface-container-low rounded-lg cursor-pointer shrink-0 transition-colors"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? (
@@ -113,7 +115,7 @@ export function Sidebar() {
           <div key={group.label}>
             {!collapsed && (
               <div className="px-4 mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-outline-variant">
                   {group.label}
                 </span>
               </div>
@@ -130,37 +132,37 @@ export function Sidebar() {
                     href={item.href}
                     title={collapsed ? item.name : undefined}
                     className={cn(
-                      'relative flex items-center gap-3 text-sm font-medium transition-all duration-200',
-                      collapsed ? 'justify-center px-2 py-2.5 rounded-lg' : 'px-6 py-2.5',
+                      'relative flex items-center gap-4 text-sm font-medium uppercase tracking-[0.08em] transition-all duration-200',
+                      collapsed ? 'justify-center px-2 py-2.5 rounded-lg' : 'px-4 py-3',
                       isActive
-                        ? 'text-white bg-[#1a1a1a] border-l-2 border-primary'
-                        : 'text-on-surface-variant hover:text-white hover:bg-[#1a1a1a] border-l-2 border-transparent'
+                        ? 'text-primary bg-gradient-to-r from-primary/10 to-transparent border-r-2 border-primary translate-x-0.5'
+                        : 'text-outline-variant hover:text-on-surface-variant hover:bg-surface-container-low border-r-2 border-transparent'
                     )}
                   >
-                    <item.icon className={cn('shrink-0', collapsed ? 'w-5 h-5' : 'w-[18px] h-[18px]')} />
+                    <item.icon className={cn('shrink-0', collapsed ? 'w-5 h-5' : 'w-5 h-5')} />
                     {!collapsed && <span>{item.name}</span>}
                   </Link>
                 );
               })}
             </div>
-            {/* Divider between groups */}
+            {/* Group spacer — no divider lines per design spec */}
             {group.label !== 'Admin' && !collapsed && (
-              <div className="h-px bg-outline-variant/10 mt-4 mx-6" />
+              <div className="h-3" />
             )}
           </div>
         ))}
       </nav>
 
-      {/* User card at bottom */}
+      {/* User card at bottom — glass variant */}
       {!collapsed && (
-        <div className="px-4 py-4 border-t border-outline-variant/10">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center">
-              <Bot className="w-4 h-4 text-primary" />
+        <div className="px-4 py-4 space-y-3">
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-container-lowest border border-outline-variant/20">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-tertiary flex items-center justify-center">
+              <Bot className="w-4 h-4 text-on-primary" />
             </div>
-            <div>
-              <p className="text-xs font-bold text-white">System Admin</p>
-              <p className="text-[10px] text-on-surface-variant">Superuser Access</p>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-white truncate">System Admin</p>
+              <p className="text-[10px] text-on-surface-variant uppercase tracking-widest">Tier-1 Access</p>
             </div>
           </div>
         </div>
