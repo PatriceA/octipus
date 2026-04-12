@@ -346,6 +346,125 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
 }
 
 // --- Edit Skill Dialog ---
+// --- Topic assignments panel ---
+interface TopicAssignment {
+  id: string;
+  skillId: string;
+  topic: string;
+  isActive: boolean;
+}
+
+function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery<{ assignments: TopicAssignment[] }>({
+    queryKey: ['skill-topic-assignments', skillId],
+    queryFn: async () => api.get(`/skills/topics?skillId=${skillId}`),
+  });
+  const [pending, setPending] = useState<string | null>(null);
+
+  const assignments = data?.assignments ?? [];
+  const byTopic = new Map(assignments.map((a) => [a.topic, a]));
+
+  const handleToggle = async (topic: string) => {
+    setPending(topic);
+    try {
+      const existing = byTopic.get(topic);
+      if (!existing) {
+        await api.post('/skills/topics', { skillId, topic, isActive: true });
+      } else if (existing.isActive) {
+        // Active → inactive
+        await api.patch(`/skills/topics/${existing.id}`, { isActive: false });
+      } else {
+        // Inactive → remove entirely
+        await api.delete(`/skills/topics/${existing.id}`);
+      }
+      queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments', skillId] });
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const handleBulk = async (isActive: boolean) => {
+    setPending('__bulk__');
+    try {
+      // Ensure assignments exist for all topics first, then toggle
+      if (isActive) {
+        for (const topic of CATEGORIES) {
+          if (!byTopic.has(topic)) {
+            await api.post('/skills/topics', { skillId, topic, isActive: true });
+          }
+        }
+      }
+      await api.patch(`/skills/topics/bulk/${skillId}`, { isActive });
+      queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments', skillId] });
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="block text-sm font-medium text-white/80">
+          Attached Topics
+          <span className="ml-2 text-xs font-normal text-on-surface-variant">
+            Active topics auto-inject this skill into worker prompts
+          </span>
+        </label>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => handleBulk(true)}
+            disabled={pending !== null}
+            className="text-xs px-2 py-1 bg-[#262626] hover:bg-[#20201f] rounded cursor-pointer disabled:opacity-50"
+          >
+            Enable all
+          </button>
+          <button
+            type="button"
+            onClick={() => handleBulk(false)}
+            disabled={pending !== null}
+            className="text-xs px-2 py-1 bg-[#262626] hover:bg-[#20201f] rounded cursor-pointer disabled:opacity-50"
+          >
+            Disable all
+          </button>
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="text-xs text-on-surface-variant">Loading assignments...</div>
+      ) : (
+        <div className="grid grid-cols-4 gap-1.5">
+          {CATEGORIES.map((topic) => {
+            const existing = byTopic.get(topic);
+            const state = !existing ? 'off' : existing.isActive ? 'active' : 'attached';
+            return (
+              <button
+                key={topic}
+                type="button"
+                onClick={() => handleToggle(topic)}
+                disabled={pending !== null}
+                title={
+                  state === 'active' ? 'Active — click to deactivate'
+                  : state === 'attached' ? 'Attached (inactive) — click to remove'
+                  : 'Not attached — click to attach & activate'
+                }
+                className={cn(
+                  'text-xs px-2 py-1.5 rounded border transition-colors cursor-pointer disabled:opacity-50',
+                  state === 'active' && 'bg-primary-800/40 border-primary-700 text-white',
+                  state === 'attached' && 'bg-[#262626] border-outline-variant/20 text-on-surface-variant',
+                  state === 'off' && 'bg-transparent border-outline-variant/10 text-on-surface-variant/50 hover:border-outline-variant/30',
+                )}
+              >
+                {topic}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState('');
@@ -491,6 +610,10 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
               />
             </>
           )}
+
+          <div className="pt-2 border-t border-outline-variant/10">
+            <TopicAssignmentsPanel skillId={skill.id} />
+          </div>
 
           <div className="flex justify-end gap-2 pt-2">
             <button
