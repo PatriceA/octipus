@@ -530,7 +530,7 @@ export default function KnowledgePage() {
           <Brain className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Knowledge Base</h1>
+          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Knowledge Base</h1>
           <p className="text-on-surface-variant">
             RAG knowledge base powered by pgvector. Search indexed documents, code, and agent outputs using hybrid semantic + keyword search.
           </p>
@@ -549,19 +549,19 @@ export default function KnowledgePage() {
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-white">{stats?.total ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Total Entries</p>
         </div>
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-blue-400">{stats?.bySourceType?.document ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Documents</p>
         </div>
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-green-400">{stats?.bySourceType?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-orange-400">{stats?.bySourceType?.agent_output ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Agent Output</p>
         </div>

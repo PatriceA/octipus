@@ -778,7 +778,7 @@ export default function ProfilesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-4xl font-extrabold tracking-tighter text-white">People & Profiles</h1>
+        <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">People & Profiles</h1>
         <p className="text-on-surface-variant mt-2">
           Store information about people, organizations, and relationships. Your own profile is automatically shared with agents for personalized responses.
         </p>

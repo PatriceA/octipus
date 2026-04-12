@@ -357,7 +357,7 @@ export default function ToolsPage() {
           <Wrench className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Tools & Permissions</h1>
+          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Tools & Permissions</h1>
           <p className="text-on-surface-variant">
             Executable capabilities available to agents — filesystem, shell, git, browser, email, and more. Each tool has configurable permissions.
           </p>

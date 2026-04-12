@@ -424,7 +424,7 @@ export default function MCPPage() {
             <Cable className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-4xl font-extrabold tracking-tighter text-white">MCP Servers</h1>
+            <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">MCP Servers</h1>
             <p className="text-on-surface-variant">
               Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients.
             </p>

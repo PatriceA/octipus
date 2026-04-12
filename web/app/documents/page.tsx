@@ -561,7 +561,7 @@ export default function DocumentsPage() {
           <FileText className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Documents</h1>
+          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Documents</h1>
           <p className="text-on-surface-variant">
             Upload and manage documents. Files are processed with OCR, categorized by AI, and indexed into the knowledge base for retrieval.
           </p>

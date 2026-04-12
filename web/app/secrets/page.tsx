@@ -57,7 +57,7 @@ export default function SecretsPage() {
           <KeyRound className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">
+          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">
             Secrets & Credentials
           </h1>
           <p className="text-on-surface-variant">

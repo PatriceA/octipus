@@ -151,7 +151,7 @@ export default function EvalPage() {
             <FlaskConical className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-4xl font-extrabold tracking-tighter text-white">Evaluations</h1>
+            <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Evaluations</h1>
             <p className="text-on-surface-variant">Test agent routing accuracy, tool usage, and response quality. Run evaluation suites and compare results across models.</p>
           </div>
         </div>

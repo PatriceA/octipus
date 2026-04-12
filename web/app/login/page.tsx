@@ -106,18 +106,20 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0e0e0e] flex items-center justify-center p-4">
+    <div className="min-h-screen bg-[#000000] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <img src="/logo.png" alt="Assistant" className="w-16 h-16 rounded-2xl mb-4 inline-block object-cover" />
-          <h1 className="text-2xl font-bold text-white">Assistant</h1>
-          <p className="text-on-surface-variant">Autonomous Development Assistant</p>
+          <div className="w-16 h-16 rounded-2xl mb-4 inline-flex items-center justify-center bg-gradient-to-br from-primary to-primary-container shadow-[0_0_30px_-5px_rgba(115,255,227,0.5)]">
+            <img src="/logo.png" alt="Assistant" className="w-16 h-16 rounded-2xl object-contain" />
+          </div>
+          <h1 className="font-headline text-2xl font-extrabold tracking-tighter text-primary">Assistant</h1>
+          <p className="text-on-surface-variant text-sm mt-1">Autonomous Development Agent</p>
         </div>
 
         {/* TOTP Verification */}
         {totpRequired ? (
-          <div className="bg-[#1a1a1a] rounded-xl shadow-lg p-6">
+          <div className="bg-surface-variant/60 backdrop-blur-[20px] border border-outline-variant/20 rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] p-6">
             <h2 className="text-lg font-semibold text-white mb-4">Two-Factor Authentication</h2>
             <p className="text-sm text-on-surface-variant mb-4">Enter the 6-digit code from your authenticator app.</p>
             <form onSubmit={handleTotpVerify} className="space-y-4">
@@ -154,7 +156,7 @@ export default function LoginPage() {
         ) : (
 
         /* Form */
-        <div className="bg-[#1a1a1a] rounded-xl shadow-lg p-6">
+        <div className="bg-surface-variant/60 backdrop-blur-[20px] border border-outline-variant/20 rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] p-6">
           <div className="flex mb-6">
             <button
               onClick={() => setIsLogin(true)}

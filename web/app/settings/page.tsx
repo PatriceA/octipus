@@ -41,7 +41,7 @@ export default function SettingsPage() {
           <Settings className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Settings</h1>
+          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Settings</h1>
           <p className="text-on-surface-variant">System configuration — workspace paths, model routing, channel integrations, security, and notifications.</p>
         </div>
       </div>

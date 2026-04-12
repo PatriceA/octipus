@@ -900,7 +900,7 @@ export default function SkillsPage() {
           <BookOpen className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">Skills</h1>
+          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Skills</h1>
           <p className="text-on-surface-variant">
             Domain knowledge injected into agent prompts. Skills provide expertise in areas like software architecture, security practices, and API design.
           </p>
