@@ -34,12 +34,12 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/70 backdrop-blur-md"
         onClick={onClose}
       />
       <div
         className={cn(
-          'relative w-full mx-4 bg-surface-container rounded-[1rem] shadow-2xl ring-1 ring-outline-variant/20',
+          'relative w-full mx-4 bg-surface-variant/80 backdrop-blur-[20px] rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] border border-outline-variant/20',
           'animate-in fade-in zoom-in-95 duration-200',
           maxWidthMap[maxWidth],
           className

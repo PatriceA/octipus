@@ -7,6 +7,8 @@ import { FeatureStatus } from '@/components/dashboard/feature-status';
 import { UsageChart } from '@/components/dashboard/usage-chart';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
+import { Card } from '@/components/ui/card';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 
 interface ServiceHealth {
@@ -100,32 +102,45 @@ export default function DashboardPage() {
     },
   ];
 
+  const runningAgents = health?.agents?.running ?? 0;
+  const statusVariant = runningAgents > 0 ? 'success' : 'neutral';
+  const statusLabel = runningAgents > 0 ? `${runningAgents} live` : 'idle';
+
   return (
     <div className="space-y-8">
       {/* Page Header */}
-      <div>
-        <h1 className="text-4xl font-extrabold tracking-tighter text-white">Dashboard</h1>
-        <p className="mt-2 text-on-surface-variant">Live overview of your AI infrastructure — active agents, sessions, token usage, and system health.</p>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-4xl font-extrabold tracking-tighter text-white font-headline">Dashboard</h1>
+            <StatusBadge variant={statusVariant} dot pulse={runningAgents > 0}>
+              {statusLabel}
+            </StatusBadge>
+          </div>
+          <p className="text-on-surface-variant">
+            Live overview of your AI infrastructure — active agents, sessions, token usage, and system health.
+          </p>
+        </div>
       </div>
 
-      {/* Stats Grid */}
+      {/* Bento Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <div key={stat.name} className="bg-surface-container rounded-[1rem] p-6 ring-1 ring-outline-variant/10">
+          <Card key={stat.name} variant="bento" className="p-6">
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
                   {stat.name}
                 </p>
-                <p className="mt-2 text-4xl font-extrabold tracking-tight text-white">
+                <p className="mt-2 text-4xl font-extrabold tracking-tight text-white font-headline">
                   {stat.value}
                 </p>
               </div>
-              <div className={`p-3 rounded-full ${stat.iconBg}`}>
+              <div className={`p-3 rounded-lg ${stat.iconBg}`}>
                 <stat.icon className={`w-5 h-5 ${stat.iconColor}`} />
               </div>
             </div>
-          </div>
+          </Card>
         ))}
       </div>
 

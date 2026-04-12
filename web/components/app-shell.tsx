@@ -44,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col flex-1 min-w-0">
         <Header />
         <main className={cn(
-          'flex-1 overflow-hidden',
+          'flex-1 overflow-hidden neural-grid',
           pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
         )}>{children}</main>
       </div>
