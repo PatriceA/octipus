@@ -35,17 +35,43 @@ interface Skill {
   isSystem: boolean;
 }
 
-const CATEGORIES = ['engineering', 'design', 'security', 'devops', 'data', 'ai', 'management', 'finance', 'science', 'other'];
+// Categories match agent role / model topic names — see src/core/orchestrator/roles.ts
+const CATEGORIES = [
+  'coding',
+  'architecture',
+  'review',
+  'qa',
+  'research',
+  'design',
+  'devops',
+  'security',
+  'data',
+  'ai',
+  'finance',
+  'automation',
+  'pm',
+  'writing',
+  'communication',
+  'general',
+];
 
 const CATEGORY_COLORS: Record<string, string> = {
-  engineering: 'bg-blue-900/30 text-blue-300',
+  coding: 'bg-blue-900/30 text-blue-300',
+  architecture: 'bg-sky-900/30 text-sky-300',
+  review: 'bg-cyan-900/30 text-cyan-300',
+  qa: 'bg-teal-900/30 text-teal-300',
+  research: 'bg-violet-900/30 text-violet-300',
   design: 'bg-purple-900/30 text-purple-300',
-  security: 'bg-red-900/30 text-red-300',
   devops: 'bg-orange-900/30 text-orange-300',
+  security: 'bg-red-900/30 text-red-300',
   data: 'bg-green-900/30 text-green-300',
   ai: 'bg-indigo-900/30 text-indigo-300',
-  management: 'bg-yellow-900/30 text-yellow-300',
   finance: 'bg-emerald-900/30 text-emerald-300',
+  automation: 'bg-amber-900/30 text-amber-300',
+  pm: 'bg-yellow-900/30 text-yellow-300',
+  writing: 'bg-rose-900/30 text-rose-300',
+  communication: 'bg-pink-900/30 text-pink-300',
+  general: 'bg-slate-900/30 text-slate-300',
 };
 
 function getCategoryColor(category: string): string {
@@ -155,7 +181,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<'markdown' | 'structured'>('markdown');
 
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('engineering');
+  const [category, setCategory] = useState('general');
   const [description, setDescription] = useState('');
   const [content, setContent] = useState('');
   const [principles, setPrinciples] = useState<string[]>([]);
