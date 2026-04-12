@@ -11,14 +11,43 @@
 body {
   font-family: 'Inter', system-ui, sans-serif;
   color: #ffffff;
-  background: #0e0e0e;
+  background: #000000;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01', 'ss03'; /* Inter stylistic sets — taller, sharper */
+  text-rendering: optimizeLegibility;
 }
 
-h1, h2, h3, h4, h5, h6 {
+/* ── Display / headline family: Manrope — reaches every heading + any element
+      that opts in with `font-headline`, plus large extrabold utilities that
+      would otherwise fall back to the body font. ── */
+h1, h2, h3, h4, h5, h6,
+.font-headline {
   font-family: 'Manrope', system-ui, sans-serif;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
+  font-feature-settings: 'ss01', 'ss02';
+  font-variation-settings: 'wght' 800;
+}
+
+h1 { letter-spacing: -0.035em; }
+h2 { letter-spacing: -0.028em; }
+
+/* Display utility — tight tracking + Manrope — used for large hero numbers /
+   page headers. Opt-in via className="font-display". */
+.font-display {
+  font-family: 'Manrope', system-ui, sans-serif;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+}
+
+/* Label utility — crisp Inter with extra spacing (small-caps style) */
+.font-label {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
 }
 
 /* ── Scrollbar — thin, subtle ── */

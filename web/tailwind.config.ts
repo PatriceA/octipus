@@ -92,6 +92,7 @@ const config: Config = {
         sans:     ['Inter', 'system-ui', 'sans-serif'],
         body:     ['Inter', 'system-ui', 'sans-serif'],
         headline: ['Manrope', 'system-ui', 'sans-serif'],
+        display:  ['Manrope', 'system-ui', 'sans-serif'],
         label:    ['Inter', 'system-ui', 'sans-serif'],
         mono:     ['JetBrains Mono', 'Fira Code', 'monospace'],
       },
