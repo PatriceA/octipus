@@ -8,7 +8,7 @@ Your own autonomous AI workforce. An orchestration platform that deploys special
 
 Built for developers who want full control. Runs locally. No vendor lock-in. Every model provider, every channel, every skill — yours to configure.
 
-**Website:** [https://the-assistant.io](https://the-assistant.io)
+**Website:** [https://the-assistant.app](https://the-assistant.app)
 
 ## What It Does
 
