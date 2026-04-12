@@ -39,12 +39,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen bg-[#0e0e0e] text-white overflow-hidden">
+    <div className="flex h-screen bg-[#000000] text-white overflow-hidden">
       <Sidebar />
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col flex-1 min-w-0 bg-[#000000]">
         <Header />
         <main className={cn(
-          'flex-1 overflow-hidden neural-grid',
+          'flex-1 overflow-hidden neural-grid bg-[#000000]',
           pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
         )}>{children}</main>
       </div>
