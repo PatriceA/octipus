@@ -1,6 +1,7 @@
-import { eq, or, isNull, inArray } from 'drizzle-orm';
+import { eq, or, isNull, inArray, and } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { skills } from '@/db/schema/skills';
+import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
 import type { Skill } from '@/db/schema/skills';
 
 function buildPromptFragment(skill: Skill): string {
@@ -62,6 +63,29 @@ export class SkillRegistry {
   /** Build combined prompt fragment for a set of skill ids */
   async buildPromptFragment(skillIds: string[]): Promise<string> {
     const found = await this.getByIds(skillIds);
+    if (found.length === 0) return '';
+    return found.map(buildPromptFragment).join('\n\n');
+  }
+
+  /** Get all active skills assigned to a topic */
+  async getActiveSkillsForTopic(topic: string): Promise<Skill[]> {
+    const db = getDb();
+    const rows = await db
+      .select({ skill: skills })
+      .from(skillTopicAssignments)
+      .innerJoin(skills, eq(skillTopicAssignments.skillId, skills.id))
+      .where(
+        and(
+          eq(skillTopicAssignments.topic, topic),
+          eq(skillTopicAssignments.isActive, true),
+        ),
+      );
+    return rows.map((r) => r.skill);
+  }
+
+  /** Build prompt fragment from all active skills for a topic */
+  async buildTopicPromptFragment(topic: string): Promise<string> {
+    const found = await this.getActiveSkillsForTopic(topic);
     if (found.length === 0) return '';
     return found.map(buildPromptFragment).join('\n\n');
   }

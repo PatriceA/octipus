@@ -225,6 +225,18 @@ export async function spawnWorker(
     }
   }
 
+  // ── Inject topic-assigned active skills ──
+  let topicSkillFragment = '';
+  try {
+    const { getSkillRegistry } = await import('@/skills/registry');
+    topicSkillFragment = await getSkillRegistry().buildTopicPromptFragment(roleConfig.defaultTopic);
+    if (topicSkillFragment) {
+      coreLogger.debug({ topic: roleConfig.defaultTopic }, 'Injected topic-assigned skills');
+    }
+  } catch (err) {
+    coreLogger.debug({ err, topic: roleConfig.defaultTopic }, 'Topic skill injection skipped');
+  }
+
   const routing = await deps.modelSelector.selectForWorker(
     roleConfig.defaultTopic,
     roleTools.length > 0,
@@ -238,6 +250,11 @@ export async function spawnWorker(
   const startTime = Date.now();
 
   let systemPrompt = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
+
+  // Append topic-assigned skills (e.g. caveman mode) after the base prompt
+  if (topicSkillFragment) {
+    systemPrompt += '\n\n# Topic Skills\n' + topicSkillFragment;
+  }
 
   // === DYNAMIC BOUNDARY ===
   // Everything above is static (role, rules, identity) — cacheable across requests.

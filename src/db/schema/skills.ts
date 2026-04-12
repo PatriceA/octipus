@@ -4,7 +4,7 @@ import { users } from './users';
 export const skills = pgTable('skills', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
-  category: text('category').notNull().default('engineering'),
+  category: text('category').notNull().default('general'),
   description: text('description').notNull(),
   /** Markdown content — Claude Code-style skill definition. When set, used directly as the prompt fragment. */
   content: text('content').default(''),

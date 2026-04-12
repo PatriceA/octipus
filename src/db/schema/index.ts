@@ -21,3 +21,4 @@ export * from './profiles';
 export * from './evaluations';
 export * from './cleanup-log';
 export * from './roles';
+export * from './skill-topic-assignments';

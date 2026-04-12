@@ -9,6 +9,7 @@ import { initializeVault } from '@/security/vault';
 import { seedPresetTemplates } from '@/db/seed-presets';
 import { seedRoles, loadRolesFromDb } from '@/db/seed-roles';
 import { seedExperts } from '@/db/seed-experts';
+import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
 import { getSettingsService } from '@/config/settings-service';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { loadRuntimeConfig } from '@/config';
@@ -31,6 +32,7 @@ async function main() {
     await seedPresetTemplates();
     await seedSkills();
     await seedExperts();
+    await seedSkillTopicAssignments();
     await seedRoles();
     await loadRolesFromDb();
     logger.info('System data seeded');

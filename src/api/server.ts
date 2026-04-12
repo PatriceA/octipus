@@ -32,6 +32,7 @@ import { oauthRoutes } from './routes/oauth';
 import { settingsRoutes } from './routes/settings';
 import { expertRoutes } from './routes/experts';
 import { skillRoutes } from './routes/skills';
+import { skillTopicAssignmentRoutes } from './routes/skill-topic-assignments';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
 import { evalRoutes } from './routes/eval';
 import { evaluationRoutes } from './routes/evaluations';
@@ -187,6 +188,7 @@ export function createServer() {
         .use(oauthRoutes)
         .use(settingsRoutes)
         .use(expertRoutes)
+        .use(skillTopicAssignmentRoutes)
         .use(skillRoutes)
         .use(recurringTaskRoutes)
         .use(evalRoutes)

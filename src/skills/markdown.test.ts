@@ -12,7 +12,7 @@ describe('Skill Markdown (Unit)', () => {
 
   const structuredSkill: PortableSkill = {
     name: 'Test Driven Development',
-    category: 'engineering',
+    category: 'qa',
     description: 'Write tests before implementation',
     principles: ['Write the test first', 'Red-Green-Refactor', 'Keep tests small'],
     bestPractices: ['One assertion per test', 'Use descriptive test names'],
@@ -40,7 +40,7 @@ describe('Skill Markdown (Unit)', () => {
 
       expect(md).toContain('---');
       expect(md).toContain('name: Test Driven Development');
-      expect(md).toContain('category: engineering');
+      expect(md).toContain('category: qa');
       expect(md).toContain('description: Write tests before implementation');
     });
 
@@ -96,10 +96,10 @@ describe('Skill Markdown (Unit)', () => {
       expect(md).not.toContain('## Principles');
     });
 
-    test('defaults category to engineering when not set', () => {
+    test('defaults category to general when not set', () => {
       const md = skillToMarkdown(minimalSkill);
 
-      expect(md).toContain('category: engineering');
+      expect(md).toContain('category: general');
     });
 
     test('handles skill with empty arrays', () => {
@@ -145,7 +145,7 @@ description: A security skill
     test('parses structured sections', () => {
       const md = `---
 name: Code Review
-category: engineering
+category: review
 description: Code review practices
 ---
 
@@ -214,7 +214,7 @@ Some content`;
       expect(skill.name).toBe('Untitled Skill');
     });
 
-    test('defaults category to engineering when missing', () => {
+    test('defaults category to general when missing', () => {
       const md = `---
 name: No Category
 description: Test
@@ -224,7 +224,7 @@ Some content`;
 
       const skill = markdownToSkill(md);
 
-      expect(skill.category).toBe('engineering');
+      expect(skill.category).toBe('general');
     });
 
     test('handles markdown without frontmatter', () => {
@@ -239,7 +239,7 @@ Some content`;
     test('handles empty body', () => {
       const md = `---
 name: Empty Body
-category: engineering
+category: coding
 description: No body
 ---`;
 
@@ -293,7 +293,7 @@ description: No body
     test('parses a single skill document', () => {
       const md = `---
 name: Single Skill
-category: engineering
+category: coding
 description: Just one
 ---
 
@@ -309,7 +309,7 @@ description: Just one
     test('handles multi-skill document with separator', () => {
       const md = `---
 name: Skill One
-category: engineering
+category: coding
 description: First skill
 ---
 
@@ -337,7 +337,7 @@ description: Second skill
     test('handles multi-skill document with multiple frontmatter blocks', () => {
       const md = `---
 name: Alpha
-category: engineering
+category: coding
 description: Alpha skill
 ---
 
@@ -363,7 +363,7 @@ description: Beta skill
     test('returns empty principles for skill with no body sections', () => {
       const md = `---
 name: Empty
-category: engineering
+category: coding
 description: No body
 ---`;
 
@@ -382,7 +382,7 @@ description: No body
       const dbSkill = {
         id: 'uuid-123',
         name: 'DB Skill',
-        category: 'engineering',
+        category: 'data',
         description: 'A database skill',
         content: '',
         principles: ['Principle 1'],
@@ -398,7 +398,7 @@ description: No body
       const portable = toPortableSkill(dbSkill);
 
       expect(portable.name).toBe('DB Skill');
-      expect(portable.category).toBe('engineering');
+      expect(portable.category).toBe('data');
       expect(portable.description).toBe('A database skill');
       expect(portable.principles).toEqual(['Principle 1']);
       expect(portable.bestPractices).toEqual(['BP 1']);
@@ -415,7 +415,7 @@ description: No body
     test('omits empty content', () => {
       const dbSkill = {
         name: 'No Content',
-        category: 'engineering',
+        category: 'coding',
         description: 'Test',
         content: '   ',
         principles: null,
@@ -434,7 +434,7 @@ description: No body
     test('includes content when non-empty', () => {
       const dbSkill = {
         name: 'With Content',
-        category: 'engineering',
+        category: 'coding',
         description: 'Test',
         content: 'Some markdown body',
         principles: null,

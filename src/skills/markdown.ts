@@ -50,7 +50,7 @@ export function skillToMarkdown(skill: Skill | PortableSkill): string {
   // YAML frontmatter
   lines.push('---');
   lines.push(`name: ${skill.name}`);
-  lines.push(`category: ${skill.category ?? 'engineering'}`);
+  lines.push(`category: ${skill.category ?? 'general'}`);
   lines.push(`description: ${skill.description}`);
   lines.push('---');
   lines.push('');
@@ -165,7 +165,7 @@ export function markdownToSkill(md: string): PortableSkill {
 
   const skill: PortableSkill = {
     name: meta.name ?? 'Untitled Skill',
-    category: meta.category ?? 'engineering',
+    category: meta.category ?? 'general',
     description: meta.description ?? '',
   };
 

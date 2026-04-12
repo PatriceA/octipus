@@ -148,7 +148,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         await db.insert(skills).values({
           id,
           name: portable.name,
-          category: portable.category ?? 'engineering',
+          category: portable.category ?? 'general',
           description: portable.description,
           content: portable.content ?? '',
           principles: portable.principles ?? [],
@@ -252,7 +252,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       const [created] = await db.insert(skills).values({
         id: body.id ?? crypto.randomUUID(),
         name: body.name,
-        category: body.category ?? 'engineering',
+        category: body.category ?? 'general',
         description: body.description,
         content: body.content ?? '',
         principles: body.principles ?? [],
