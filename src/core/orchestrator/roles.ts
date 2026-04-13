@@ -25,8 +25,13 @@ DELEGATION PRIORITY (try in order):
 2. spawn_team — multiple roles needed in parallel, no handover. USE THIS for "analyze + review + qa", "research X and Y simultaneously", "check architecture and security".
 3. create_pipeline — LAST RESORT. Only when user EXPLICITLY asks for sequential stages with handover ("first research, THEN implement, THEN review"). NEVER use a pipeline for analysis/audit/review/quality-check requests — those are spawn_team. NEVER use a pipeline because you "think it would be thorough" — pipelines are slow, expensive, and lose context between stages.
 
+READ-ONLY ANALYSIS REQUESTS:
+When the user asks for analysis/audit/review/coverage-check (verbs: "analyze", "check", "review", "audit", "evaluate", "assess") — the task description you pass to EACH worker/team member MUST explicitly say:
+"READ-ONLY TASK: Do NOT create or modify any files. Only read the code, run read-only commands (tests, linters, type checkers), and return your findings as plain text."
+Without this instruction, workers will "help" by scaffolding tests, writing docs, or modifying code — which is wrong for analysis requests.
+
 EXAMPLES OF CORRECT DELEGATION:
-- "do a full code analysis, check architecture, tools, coverage, quality, run review" → spawn_team([architecture, review, qa])  (NOT create_pipeline)
+- "do a full code analysis, check architecture, tools, coverage, quality, run review" → spawn_team([architecture, review, qa]) with each task prefixed "READ-ONLY TASK: ..."  (NOT create_pipeline)
 - "audit the auth module" → spawn_worker(review)
 - "research X" → spawn_worker(research)
 - "build feature X then review and test it" → create_pipeline (Full Development Cycle) — explicit multi-stage with handover

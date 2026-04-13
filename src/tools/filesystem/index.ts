@@ -172,8 +172,13 @@ export class FilesystemTool extends BaseTool {
         this.requireString(args, 'content');
         let filePath: string;
 
-        // Redirect to session directory when possible
-        const sessionDir = await getSessionOutputDir(context);
+        // Session-dir redirect only applies to agents with NO resolved project.
+        // When the worker is operating on a real project (projectPath set by
+        // the orchestrator), writes go to the real project — otherwise the
+        // agent's output lands in a throwaway session folder and nothing ends
+        // up in the repo.
+        const projectPath = (context?.metadata as Record<string, unknown> | undefined)?.projectPath as string | undefined;
+        const sessionDir = projectPath ? null : await getSessionOutputDir(context);
         if (sessionDir) {
           if (!rawPath.startsWith('/')) {
             // Relative path → resolve into session dir
@@ -189,6 +194,9 @@ export class FilesystemTool extends BaseTool {
               filePath = this.resolvePath(rawPath, context);
             }
           }
+        } else if (projectPath && !rawPath.startsWith('/')) {
+          // Project-scoped agent: relative paths resolve inside the project
+          filePath = resolve(projectPath, rawPath);
         } else {
           filePath = this.resolvePath(rawPath, context);
         }

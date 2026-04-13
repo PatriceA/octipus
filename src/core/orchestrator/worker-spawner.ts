@@ -392,6 +392,9 @@ If you cannot write files (e.g., read-only environment), include the summary con
       workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
     }
     workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    if (/\s/.test(assistantRoot) || /\s/.test(devProjectPath)) {
+      workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${devProjectPath}/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
+    }
     systemPrompt += workspaceHint;
   } else {
     // Normal mode: global workspace
@@ -408,6 +411,9 @@ If you cannot write files (e.g., read-only environment), include the summary con
       workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
     }
     workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    if (/\s/.test(workspaceRoot) || /\s/.test(assistantRoot)) {
+      workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${workspaceRoot}/project/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
+    }
     systemPrompt += workspaceHint;
   }
 
