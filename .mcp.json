@@ -4,7 +4,8 @@
       "command": "node",
       "args": ["/home/patrice/Github Rep/assistant/mcp-server/dist/index.js"],
       "env": {
-        "ASSISTANT_URL": "http://127.0.0.1:3005","ASSISTANT_API_KEY":"6zOXuwgmlaTm4L8Hvz3YMAq7GbgKhaWXTcELssQmA7Y"
+        "ASSISTANT_URL": "http://127.0.0.1:3005",
+        "ASSISTANT_API_KEY": "s/9RM8on964aiu8hwwQuH3djdUL4w5d+rWso9z2F+JE="
       }
     }
   }
