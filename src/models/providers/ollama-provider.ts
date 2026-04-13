@@ -168,6 +168,7 @@ export class OllamaProvider implements ModelProvider {
       const native: Record<string, unknown> = { role: m.role };
       if (m.role === 'tool') {
         native.content = typeof (m as any).content === 'string' ? (m as any).content : '';
+        if ((m as any).tool_call_id) native.tool_call_id = (m as any).tool_call_id;
       } else if (m.role === 'assistant' && (m as any).tool_calls?.length) {
         native.content = (m as any).content || '';
         native.tool_calls = (m as any).tool_calls;
