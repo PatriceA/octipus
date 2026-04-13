@@ -186,10 +186,13 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
       name: 'create_pipeline',
       final: true,
       description:
-        'Create a multi-stage pipeline for complex tasks (e.g., development projects). ' +
-        'Each stage runs a specialist worker in sequence, with optional approval checkpoints. ' +
-        'Use this ONLY for tasks that explicitly need multiple stages (research → plan → code → review → test). ' +
-        'For simple single-role tasks, prefer spawn_worker instead. ' +
+        'LAST RESORT delegation. Create a multi-stage sequential pipeline with handover between stages. ' +
+        'Use ONLY when the user EXPLICITLY asks for staged execution with handover ' +
+        '(e.g., "first research, then implement, then review"). ' +
+        'DO NOT use for analysis/audit/review/quality-check requests — use spawn_team instead. ' +
+        'DO NOT use because you think it will be "more thorough" — pipelines lose context between stages and are slow. ' +
+        'If multiple roles are needed in parallel without handover, use spawn_team. ' +
+        'If a single role can do it, use spawn_worker. ' +
         'You may only delegate ONCE per request. ' +
         'IMPORTANT: You MUST call list_pipeline_templates first to get valid template names. Do NOT invent template names.',
       parameters: {

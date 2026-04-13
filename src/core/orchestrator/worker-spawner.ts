@@ -256,11 +256,6 @@ export async function spawnWorker(
     systemPrompt += '\n\n# Topic Skills\n' + topicSkillFragment;
   }
 
-  // === DYNAMIC BOUNDARY ===
-  // Everything above is static (role, rules, identity) — cacheable across requests.
-  // Everything below is dynamic (date, project, profiles) — changes per request.
-  systemPrompt += '\n\n__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__';
-
   // Inject current date/time context so agents know "today"
   const now = new Date();
   systemPrompt += `\n\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
