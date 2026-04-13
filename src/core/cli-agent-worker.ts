@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { resolve as resolvePath, join as joinPath } from 'path';
-import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import { writeFileSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
 import { getModelRegistry } from '@/models/model-registry';
 import { getConfig } from '@/config';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -276,6 +277,37 @@ export class CLIAgentWorker extends BaseAgentWorker {
       { tool: toolConfig.name, hasSystemPrompt: !!systemPrompt, cwd: workspaceCwd },
       'CLI agent context',
     );
+
+    try {
+      const dumpDir = joinPath(homedir(), '.assistant', 'prompts');
+      mkdirSync(dumpDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`);
+      const body = [
+        `# Agent ${this.context.id}`,
+        `tool: ${toolConfig.name}`,
+        `model: ${this.context.model}`,
+        `cwd: ${workspaceCwd}`,
+        '',
+        '## System Prompt',
+        systemPrompt || '(none)',
+        '',
+        '## User Prompt',
+        prompt || '(none)',
+        '',
+        '## stdinPrompt',
+        stdinPrompt || '(none)',
+        '',
+        '## CLI args',
+        '```',
+        [binary, ...args].join(' '),
+        '```',
+      ].join('\n');
+      writeFileSync(dumpPath, body, 'utf-8');
+      agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped CLI agent prompt');
+    } catch (err) {
+      agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump CLI agent prompt');
+    }
     if (systemPrompt) {
       const contextFileMap: Record<string, string> = {
         'Gemini CLI': 'GEMINI.md',

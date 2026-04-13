@@ -7,6 +7,9 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
 import { agentLogger } from '@/utils/logger';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join as joinPath } from 'path';
+import { homedir } from 'os';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import type { AgentMessage, ToolCall } from './types';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
@@ -118,6 +121,26 @@ export class AgentWorker extends BaseAgentWorker {
     this.context.status = 'running';
     this.startTime = Date.now();
     this.emit('status_change', { status: 'running' });
+
+    try {
+      const dumpDir = joinPath(homedir(), '.assistant', 'prompts');
+      mkdirSync(dumpDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${this.context.role}.md`);
+      const body = [
+        `# Agent ${this.context.id}`,
+        `role: ${this.context.role}`,
+        `topic: ${this.context.topic || ''}`,
+        `model: ${this.context.model}`,
+        `sessionId: ${this.context.sessionId}`,
+        '',
+        ...this.messages.map((m, i) => `## [${i}] ${m.role}\n${m.content || ''}`),
+      ].join('\n');
+      writeFileSync(dumpPath, body, 'utf-8');
+      agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped agent prompt');
+    } catch (err) {
+      agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump agent prompt');
+    }
 
     try {
       const result = await this.loop();
