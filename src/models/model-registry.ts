@@ -131,13 +131,13 @@ export class ModelRegistry {
       model = legacyResult[0] ?? null;
     }
 
-    // 3. Fall back to default
-    if (!model) {
-      model = await this.getDefaultModel();
-    }
-
+    // No fallback to default — caller must handle null. Falling back here
+    // silently routes unmapped topics to whichever model is default, which
+    // breaks the "topic → model" contract users configure in the UI.
     if (model) {
       await this.cacheSet(`model:topic:${topic}`, model);
+    } else {
+      modelLogger.debug({ topic }, 'No model mapped for topic');
     }
 
     return model;

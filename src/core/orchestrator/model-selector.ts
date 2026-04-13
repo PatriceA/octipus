@@ -49,21 +49,18 @@ export class ModelSelector {
     const registry = getModelRegistry();
     const topicModel = await registry.getModelForTopic(topic);
 
-    const routing: ModelRouting = {
-      model: topicModel?.modelId || '',
-      reason: topicModel ? `Best model for topic: ${topic}` : '',
-    };
-
-    // Fallback to default model if no topic-specific model found
-    if (!routing.model) {
-      const defaultModel = await registry.getDefaultModel();
-      if (defaultModel) {
-        routing.model = defaultModel.modelId;
-        routing.reason = 'Fallback to default model';
-      } else {
-        return { model: '', reason: 'No model configured' };
-      }
+    if (!topicModel) {
+      coreLogger.warn(
+        { topic },
+        'No model mapped for topic — refusing to fall back to default. Map a model to this topic in the Models page.',
+      );
+      return { model: '', reason: `No model mapped for topic "${topic}"` };
     }
+
+    const routing: ModelRouting = {
+      model: topicModel.modelId,
+      reason: `Best model for topic: ${topic}`,
+    };
 
     // If the worker needs tools, verify the routed model supports them
     if (needsTools) {
