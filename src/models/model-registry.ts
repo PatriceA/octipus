@@ -312,7 +312,7 @@ export class ModelRegistry {
         supportsTools: true,
         supportsStreaming: true,
         defaultTemperature: 0.7,
-        topics: ['coding', 'analysis', 'general'],
+        topics: ['coding', 'research', 'general'],
         priority: 100,
         costPerInputToken: 2.5, // per 1M tokens
         costPerOutputToken: 10,
@@ -346,7 +346,7 @@ export class ModelRegistry {
         supportsTools: true,
         supportsStreaming: true,
         defaultTemperature: 0.7,
-        topics: ['coding', 'analysis'],
+        topics: ['coding', 'research'],
         priority: 90,
         costPerInputToken: 3,
         costPerOutputToken: 15,
@@ -397,7 +397,7 @@ export class ModelRegistry {
         supportsVision: false,
         supportsTools: false,
         supportsStreaming: false,
-        topics: ['coding', 'analysis'],
+        topics: ['coding', 'research'],
         priority: 80,
         costPerInputToken: 0,
         costPerOutputToken: 0,
@@ -414,7 +414,7 @@ export class ModelRegistry {
         supportsVision: false,
         supportsTools: false,
         supportsStreaming: false,
-        topics: ['coding', 'analysis', 'general'],
+        topics: ['coding', 'research', 'general'],
         priority: 75,
         costPerInputToken: 0,
         costPerOutputToken: 0,
@@ -464,7 +464,7 @@ export class ModelRegistry {
     await this.cacheDelete('model:default');
     // Clear all topic caches (simplified - in production you'd track these)
     const topics = [
-      'general', 'coding', 'research', 'analysis', 'architecture', 'communication',
+      'general', 'coding', 'research', 'architecture', 'communication',
       'chat', 'embedding', 'ocr', 'vision', 'data', 'design', 'devops', 'security',
       'ai', 'finance', 'automation', 'qa', 'pm', 'writing', 'review', 'voice', 'local', 'simple',
     ];

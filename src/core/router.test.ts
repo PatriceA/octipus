@@ -22,10 +22,10 @@ describe('Router', () => {
       expect(result.topic).toBe('coding');
     });
 
-    test('classifies analysis messages', () => {
+    test('classifies research messages', () => {
       const result = router.classifyTopic('Please review this architecture and explain the design pattern');
 
-      expect(result.topic).toBe('analysis');
+      expect(result.topic).toBe('research');
     });
 
     test('classifies chat messages', () => {
@@ -108,16 +108,16 @@ describe('Router', () => {
       expect(router.classifyTopic('check for xss vulnerability').topic).toBe('security');
     });
 
-    const analysisKeywords = [
+    const researchKeywords = [
       'analyze', 'review', 'explain', 'compare', 'evaluate',
       'pros', 'cons', 'architecture', 'pattern', 'best practice',
     ];
 
-    test('recognizes all analysis keywords', () => {
-      for (const keyword of analysisKeywords) {
+    test('recognizes all research keywords', () => {
+      for (const keyword of researchKeywords) {
         const result = router.classifyTopic(`Please ${keyword} this`);
         // May be analysis or overlap with other topics
-        expect(['analysis', 'coding', 'chat', 'design']).toContain(result.topic);
+        expect(['research', 'coding', 'chat', 'design']).toContain(result.topic);
       }
     });
 

@@ -15,7 +15,7 @@ const TOPIC_KEYWORDS: Record<string, string[]> = {
     'typescript', 'javascript', 'python', 'rust', 'go', 'java',
     'api', 'backend', 'frontend', 'compile', 'build', 'package',
   ],
-  analysis: [
+  research: [
     'analyze', 'review', 'explain', 'understand', 'compare', 'evaluate',
     'pros', 'cons', 'architecture', 'pattern', 'best practice',
   ],
@@ -194,7 +194,7 @@ export class Router {
             role: 'system',
             content: `You are a message classifier. Classify the user's message into one of these topics:
 - coding: Programming, debugging, implementation
-- analysis: Code review, architecture, comparisons
+- research: Code review, architecture, comparisons, analysis
 - chat: General conversation, simple questions
 - embedding: Vector/semantic search
 - design: UI/UX, layout, styling
@@ -222,7 +222,7 @@ Respond with ONLY the topic name, nothing else.`,
       });
 
       const topic = result.content.trim().toLowerCase();
-      const validTopics = ['coding', 'research', 'analysis', 'architecture', 'chat', 'embedding', 'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing'];
+      const validTopics = ['coding', 'research', 'architecture', 'chat', 'embedding', 'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing'];
 
       if (validTopics.includes(topic)) {
         const model = await registry.getModelForTopic(topic);
