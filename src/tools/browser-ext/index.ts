@@ -1,6 +1,37 @@
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { getBrowserBridge } from '@/api/browser-bridge';
+import { toolLogger } from '@/utils/logger';
+
+// Tabs opened by an agent via new_tab — closed when the agent finishes.
+const agentTabs = new Map<string, Set<number>>();
+
+function trackTab(agentId: string, tabId: number): void {
+  let set = agentTabs.get(agentId);
+  if (!set) { set = new Set(); agentTabs.set(agentId, set); }
+  set.add(tabId);
+}
+
+function untrackTab(agentId: string, tabId: number): void {
+  const set = agentTabs.get(agentId);
+  if (!set) return;
+  set.delete(tabId);
+  if (set.size === 0) agentTabs.delete(agentId);
+}
+
+export async function closeAgentTabs(agentId: string): Promise<void> {
+  const set = agentTabs.get(agentId);
+  if (!set || set.size === 0) return;
+  agentTabs.delete(agentId);
+  const bridge = getBrowserBridge();
+  for (const tabId of set) {
+    try {
+      await bridge.sendCommand('close_tab', { tabId });
+    } catch (err) {
+      toolLogger.debug({ err, agentId, tabId }, 'Failed to auto-close browser tab');
+    }
+  }
+}
 
 export class BrowserExtTool extends BaseTool {
   readonly id = 'browser-ext';
@@ -85,10 +116,16 @@ export class BrowserExtTool extends BaseTool {
         url: { type: 'string', description: 'URL to open (optional, defaults to blank tab)' },
         active: { type: 'boolean', description: 'Whether to focus the new tab (default: true)' },
       }),
-      async (args) => bridge.sendCommand('new_tab', {
-        url: args.url as string | undefined,
-        active: args.active as boolean | undefined,
-      }),
+      async (args, context) => {
+        const result = await bridge.sendCommand('new_tab', {
+          url: args.url as string | undefined,
+          active: args.active as boolean | undefined,
+        }) as { tabId?: number; url?: string; title?: string };
+        if (context?.id && typeof result?.tabId === 'number') {
+          trackTab(context.id, result.tabId);
+        }
+        return result;
+      },
       { permissionAction: 'tabs' },
     );
 
@@ -98,9 +135,14 @@ export class BrowserExtTool extends BaseTool {
       createParameterSchema({
         tabId: { type: 'number', description: 'Tab ID to close (optional, closes active tab)' },
       }),
-      async (args) => bridge.sendCommand('close_tab', {
-        tabId: args.tabId as number | undefined,
-      }),
+      async (args, context) => {
+        const tabId = args.tabId as number | undefined;
+        const result = await bridge.sendCommand('close_tab', { tabId });
+        if (context?.id && typeof tabId === 'number') {
+          untrackTab(context.id, tabId);
+        }
+        return result;
+      },
       { permissionAction: 'tabs' },
     );
 

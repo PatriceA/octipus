@@ -187,6 +187,11 @@ export class AgentWorker extends BaseAgentWorker {
         }).catch(() => {});
       }
 
+      // Close any browser tabs the agent opened via browser-ext.new_tab
+      import('@/tools/browser-ext').then(({ closeAgentTabs }) => {
+        closeAgentTabs(this.context.id).catch(() => {});
+      }).catch(() => {});
+
       return result;
     } catch (error) {
       this.context.status = 'failed';
@@ -215,6 +220,11 @@ export class AgentWorker extends BaseAgentWorker {
         durationMs: failDurationMs,
         error: (error as Error).message,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure'));
+
+      // Close any browser tabs the agent opened via browser-ext.new_tab
+      import('@/tools/browser-ext').then(({ closeAgentTabs }) => {
+        closeAgentTabs(this.context.id).catch(() => {});
+      }).catch(() => {});
 
       throw error;
     }
