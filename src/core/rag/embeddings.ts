@@ -16,23 +16,35 @@ export interface SearchResult {
   createdAt?: Date;
 }
 
-const DEFAULT_MODEL = 'nomic-embed-text';
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
 
 export class EmbeddingService {
+  /** Explicit override. Empty = resolve from registry topic='embedding' per-call. */
   private model: string;
 
   constructor(model?: string) {
-    this.model = model || DEFAULT_MODEL;
+    this.model = model || '';
+  }
+
+  private async resolveModel(): Promise<string> {
+    if (this.model) return this.model;
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const registry = getModelRegistry();
+    const m = await registry.getModelForTopic('embedding');
+    if (!m) {
+      throw new Error('No model mapped to topic "embedding". Assign one in the Models page.');
+    }
+    return m.modelId;
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
     const client = getLiteLLMClient();
+    const modelId = await this.resolveModel();
     try {
-      const [embedding] = await client.embed(text, this.model);
+      const [embedding] = await client.embed(text, modelId);
       return embedding;
     } catch (err) {
-      coreLogger.warn({ err, model: this.model }, 'Embedding generation failed — model may not be available');
+      coreLogger.warn({ err, model: modelId }, 'Embedding generation failed — model may not be available');
       throw err;
     }
   }
@@ -50,7 +62,7 @@ export class EmbeddingService {
       sourceId,
       content,
       embedding,
-      model: this.model,
+      model: this.model || await this.resolveModel().catch(() => 'unknown'),
       metadata: metadata || {},
     }).returning({ id: embeddings.id });
     return result[0].id;
@@ -279,7 +291,8 @@ export class EmbeddingService {
 
         const { getModelRegistry } = await import('@/models/model-registry');
         const defaultModel = await getModelRegistry().getDefaultModel();
-        const modelName = defaultModel?.modelId || 'qwen3:14b';
+        if (!defaultModel) continue; // no model configured — skip abstract
+        const modelName = defaultModel.modelId;
         const now = new Date();
         const response = await client.complete({
           model: modelName,

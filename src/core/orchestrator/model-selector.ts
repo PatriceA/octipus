@@ -16,9 +16,12 @@ export class ModelSelector {
   async selectForOrchestration(): Promise<string> {
     const registry = getModelRegistry();
     const defaultModel = await registry.getDefaultModel();
-    let modelName = defaultModel?.modelId || 'gpt-oss';
+    if (!defaultModel) {
+      throw new Error('No default model configured. Set one in the Models page.');
+    }
+    let modelName = defaultModel.modelId;
 
-    if (defaultModel) {
+    {
       const isReasoner = defaultModel.modelId.includes('reasoner') || defaultModel.modelId.includes('thinking');
       const noTools = !defaultModel.supportsTools && defaultModel.provider !== 'cli';
       if (isReasoner || noTools) {
@@ -135,7 +138,10 @@ export class ModelSelector {
   async selectByComplexity(complexity: 'simple' | 'moderate' | 'complex' = 'moderate'): Promise<string> {
     const registry = getModelRegistry();
     const defaultModel = await registry.getDefaultModel();
-    const defaultModelId = defaultModel?.modelId || 'qwen3:14b';
+    if (!defaultModel) {
+      throw new Error('No default model configured. Set one in the Models page.');
+    }
+    const defaultModelId = defaultModel.modelId;
 
     if (complexity === 'simple') {
       // Try to find a smaller/cheaper model

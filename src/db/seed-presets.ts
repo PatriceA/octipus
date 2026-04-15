@@ -356,6 +356,8 @@ export async function seedPresetTemplates(): Promise<void> {
       .limit(1);
 
     if (existing.length > 0) {
+      // Do not overwrite — users can edit preset templates and we must not
+      // clobber their changes on restart.
       continue;
     }
 

@@ -287,7 +287,10 @@ export async function compactMessagesWithSummary(
   if (!model) {
     const registry = getModelRegistry();
     const defaultModel = await registry.getDefaultModel();
-    model = defaultModel?.modelId || 'gpt-oss';
+    if (!defaultModel) {
+      throw new Error('No default model configured for context compaction. Set one in the Models page.');
+    }
+    model = defaultModel.modelId;
   }
   const summary = await createLLMSummary(nonSystemRemoved, model);
 

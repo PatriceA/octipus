@@ -1,4 +1,4 @@
-import { eq, and, gte, sql, desc } from 'drizzle-orm';
+import { eq, and, gte, or, sql, desc } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { costLog, type CostLogEntry, type NewCostLogEntry, modelConfig } from '@/db/schema/models';
 import { RedisCache } from '@/db/redis';
@@ -57,11 +57,11 @@ export class CostTracker {
     inputTokens: number,
     outputTokens: number
   ): Promise<number> {
-    // Get model pricing from config
+    // Get model pricing from config — callers pass either name or modelId
     const model = await this.db
       .select()
       .from(modelConfig)
-      .where(eq(modelConfig.name, modelName))
+      .where(or(eq(modelConfig.name, modelName), eq(modelConfig.modelId, modelName)))
       .limit(1);
 
     if (!model[0]) {

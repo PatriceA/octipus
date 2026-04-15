@@ -22,6 +22,7 @@ export { DocumentsTool, documentsTool } from './documents';
 export { ProfilesTool, profilesTool } from './profiles';
 export { EmailProcessorTool, emailProcessorTool } from './email-processor';
 export { VoiceCallTool } from './voice';
+export { VisualTool, visualTool } from './visual';
 
 import { getToolRegistry } from './registry';
 import { filesystemTool } from './filesystem';
@@ -42,6 +43,7 @@ import { documentsTool } from './documents';
 import { profilesTool } from './profiles';
 import { emailProcessorTool } from './email-processor';
 import { VoiceCallTool } from './voice';
+import { visualTool } from './visual';
 import { loadPlugins, PluginTool } from '@/plugins';
 import { toolLogger } from '@/utils/logger';
 
@@ -69,6 +71,7 @@ export async function registerBuiltinTools(): Promise<void> {
   await registry.register(profilesTool);
   await registry.register(emailProcessorTool);
   await registry.register(new VoiceCallTool());
+  await registry.register(visualTool);
 
   // Load plugins from extensions/ directory
   const plugins = await loadPlugins();

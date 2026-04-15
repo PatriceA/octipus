@@ -29,16 +29,21 @@ import type { BrowserType } from './screenshot';
 /**
  * Factory function to create a visual debugger instance
  */
-export function createVisualDebugger(
+export async function createVisualDebugger(
   llmClient: LiteLLMClient,
   options: {
     browserType?: BrowserType;
     visionModel?: string;
   } = {}
-): VisualDebugger {
-  return new VisualDebugger(
-    llmClient,
-    options.browserType || 'chromium',
-    options.visionModel || 'gpt-4-vision-preview'
-  );
+): Promise<VisualDebugger> {
+  let visionModel = options.visionModel;
+  if (!visionModel) {
+    const { getModelRegistry } = await import('../models/model-registry');
+    const m = await getModelRegistry().getModelForTopic('vision');
+    if (!m) {
+      throw new Error('No model mapped to topic "vision". Assign one in the Models page.');
+    }
+    visionModel = m.modelId;
+  }
+  return new VisualDebugger(llmClient, options.browserType || 'chromium', visionModel);
 }

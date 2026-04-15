@@ -30,7 +30,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd }: CLIStatusPane
         supportsVision: false,
         supportsTools: false,
         supportsStreaming: false,
-        topics: ['coding', 'analysis'],
+        topics: ['coding', 'review'],
         priority: 80,
         costPerInputToken: 0,
         costPerOutputToken: 0,

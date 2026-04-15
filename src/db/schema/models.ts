@@ -18,7 +18,7 @@ export const modelConfig = pgTable('model_config', {
   defaultTopP: real('default_top_p').default(1.0),
   defaultMaxTokens: integer('default_max_tokens').default(4096),
   // Routing
-  topics: text('topics').array().default([]), // coding, analysis, chat, etc.
+  topics: text('topics').array().default([]), // coding, research, chat, etc.
   priority: integer('priority').default(0).notNull(), // Higher = preferred (deprecated, use topicRoles)
   topicRoles: jsonb('topic_roles').$type<Record<string, 'primary' | 'backup'>>().default({}),
   // Cost tracking (per 1M tokens)

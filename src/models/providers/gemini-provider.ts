@@ -29,6 +29,64 @@ export class GeminiProvider implements ModelProvider {
    */
   private rawAssistantMessages = new Map<string, Record<string, unknown>>();
 
+  /**
+   * Gemini rejects sequences where a function_call is not immediately followed
+   * by its function_response, or where a function_response has no preceding
+   * function_call. Compaction can break these pairs, so sanitize before send.
+   *
+   * Rules applied:
+   * 1. If an assistant(tool_calls) message lacks ALL matching tool responses
+   *    directly after it, strip the tool_calls (keep any text content, else drop).
+   * 2. If any tool_call has no matching tool response, drop that specific call.
+   * 3. Drop tool messages whose tool_call_id is not declared by the immediately
+   *    preceding assistant message.
+   */
+  private sanitizeMessages(messages: AgentMessage[]): AgentMessage[] {
+    const out: AgentMessage[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        // Collect immediately following tool responses
+        const responses = new Map<string, AgentMessage>();
+        let j = i + 1;
+        while (j < messages.length && messages[j].role === 'tool') {
+          const tid = messages[j].toolCallId;
+          if (tid) responses.set(tid, messages[j]);
+          j++;
+        }
+        const keptCalls = msg.toolCalls.filter(tc => responses.has(tc.id));
+        if (keptCalls.length === 0) {
+          // No valid calls — emit text-only assistant if there's content, else drop
+          if (msg.content && String(msg.content).trim()) {
+            out.push({ ...msg, toolCalls: undefined });
+          }
+        } else {
+          // Gemini: function_call must follow a user or function_response turn.
+          // If prev emitted message isn't one of those (e.g. system summary, or
+          // another assistant), inject a synthetic user turn.
+          const prev = out[out.length - 1];
+          const prevOk = prev && (prev.role === 'user' || prev.role === 'tool');
+          if (!prevOk) {
+            out.push({ role: 'user', content: '(continuing)', timestamp: new Date() } as AgentMessage);
+          }
+          out.push({ ...msg, toolCalls: keptCalls });
+          for (const tc of keptCalls) out.push(responses.get(tc.id)!);
+        }
+        i = j - 1;
+        continue;
+      }
+
+      if (msg.role === 'tool') {
+        // Orphan tool response (preceding assistant wasn't a tool_calls msg) — drop
+        continue;
+      }
+
+      out.push(msg);
+    }
+    return out;
+  }
+
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const apiKey = await this.getApiKey();
     if (!apiKey) throw new Error('Gemini API key not available');
@@ -37,7 +95,7 @@ export class GeminiProvider implements ModelProvider {
     // Build request body — only include params that are set.
     const body: Record<string, unknown> = {
       model: options.model,
-      messages: this.formatMessagesRaw(options.messages),
+      messages: this.formatMessagesRaw(this.sanitizeMessages(options.messages)),
       stream: false,
     };
 
@@ -180,7 +238,7 @@ export class GeminiProvider implements ModelProvider {
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
-      messages: this.formatMessages(options.messages),
+      messages: this.formatMessages(this.sanitizeMessages(options.messages)),
       stream: true,
     };
 

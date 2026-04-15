@@ -40,6 +40,12 @@ export async function seedRoles(): Promise<void> {
         updates.systemPromptTemplate = config.systemPromptTemplate;
       }
 
+      // defaultTopic is not user-editable via UI — always resync from code for
+      // system roles so renames (e.g. analysis → research) propagate.
+      if (existing.isSystem && config.defaultTopic !== existing.defaultTopic) {
+        updates.defaultTopic = config.defaultTopic;
+      }
+
       if (Object.keys(updates).length > 0) {
         await db.update(roles).set(updates).where(eq(roles.role, roleName));
         logger.info({ role: roleName, updatedFields: Object.keys(updates) }, 'Updated role from code');

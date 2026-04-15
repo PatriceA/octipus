@@ -714,7 +714,10 @@ export class DocumentProcessor {
   private async getModel(): Promise<string> {
     const registry = getModelRegistry();
     const defaultModel = await registry.getDefaultModel();
-    return defaultModel?.modelId || 'qwen3:14b';
+    if (!defaultModel) {
+      throw new Error('No default model configured for document processing. Set one in the Models page.');
+    }
+    return defaultModel.modelId;
   }
 }
 

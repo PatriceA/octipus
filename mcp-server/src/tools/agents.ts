@@ -39,7 +39,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
     {
       message: z.string().describe('The task or question for the agent'),
       model: z.string().optional().describe('Model to use (e.g., "qwen3:14b", "gemma3:12b"). Uses default if not specified.'),
-      topic: z.string().optional().describe('Topic hint for routing (e.g., "research", "coding", "analysis")'),
+      topic: z.string().optional().describe('Topic hint for routing (e.g., "research", "coding", "review")'),
     },
     async ({ message, model, topic }) => {
       try {

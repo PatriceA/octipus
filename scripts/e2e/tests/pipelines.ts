@@ -33,7 +33,7 @@ export async function testPipelines(runner: TestRunner, client: APIClient) {
     const { status, data } = await client.request<{ id: string; name: string }>(
       'PUT', `/pipelines/templates/${templateId}`, {
         name: 'E2E Test Pipeline (Updated)',
-        steps: [{ name: 'Updated Step', topic: 'analysis' }],
+        steps: [{ name: 'Updated Step', topic: 'research' }],
       },
     );
     assertStatus(status, 200);

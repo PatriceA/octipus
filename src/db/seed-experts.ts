@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { experts } from '@/db/schema/experts';
 import type { ExpertParameters } from '@/db/schema/experts';
@@ -364,14 +364,22 @@ export async function seedExperts(): Promise<void> {
       .limit(1);
 
     if (existing.length > 0) {
-      // Update existing experts with new structured prompt fields and skills
+      // Resync all code-owned fields for system experts so DB tracks source.
+      // User-owned experts (isSystem=false) are never touched here.
       await db.update(experts).set({
+        description: expert.description,
+        icon: expert.icon,
+        role: expert.role,
+        systemPrompt: expert.systemPrompt ?? null,
+        modelPreference: expert.modelPreference ?? null,
+        toolIds: expert.toolIds ?? [],
         skillIds: expert.skillIds ?? [],
+        parameters: expert.parameters ?? {},
         criticalRules: expert.criticalRules ?? [],
         deliverableTemplate: expert.deliverableTemplate ?? null,
         successMetrics: expert.successMetrics ?? [],
         updatedAt: new Date(),
-      }).where(eq(experts.name, expert.name));
+      }).where(and(eq(experts.name, expert.name), eq(experts.isSystem, true)));
       continue;
     }
 
