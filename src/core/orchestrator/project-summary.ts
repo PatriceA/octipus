@@ -14,21 +14,16 @@ export async function autoUpdateProjectSummary(
   output: string,
 ): Promise<void> {
   try {
-    // Determine project root from (in priority order):
-    // 1. Agent metadata.projectPath (set by worker-spawner after detecting the project)
-    // 2. Dev mode session's projectPath
-    // 3. Workspace root (fallback)
+    // Gate: only dev sessions get project-summary auto-writes.
+    // Non-dev sessions rely on RAG/knowledge base for cross-session recall.
     const session = await (await import('@/db/repositories/session-repository')).sessionRepository.findById(context.sessionId);
     const sessionCtx = session?.context as { devMode?: boolean; projectPath?: string } | undefined;
 
-    let projectRoot: string;
-    if (typeof context.metadata?.projectPath === 'string') {
-      projectRoot = context.metadata.projectPath;
-    } else if (sessionCtx?.devMode && sessionCtx?.projectPath) {
-      projectRoot = sessionCtx.projectPath;
-    } else {
-      projectRoot = resolve(getConfig().workspace?.rootPath || '.');
+    if (!sessionCtx?.devMode || !sessionCtx?.projectPath) {
+      return;
     }
+
+    const projectRoot = sessionCtx.projectPath;
 
     // Guard: never write project summaries inside session folders
     const resolvedRoot = resolve(projectRoot);

@@ -278,40 +278,15 @@ If .assistant/ doesn't exist, create the directory first: mkdir -p .assistant
 Keep the summary under 4000 chars. This file is critical — it's injected into all future agents working on this project.
 If you cannot write files (e.g., read-only environment), include the summary content in your final response and the system will save it automatically.`;
 
-  // Detect project path from: dev mode session OR task description mentioning a known project
-  let resolvedProjectPath = devProjectPath;
-  if (!resolvedProjectPath && task) {
-    // Try to extract project path from the task description (orchestrator includes it)
-    const pathMatch = task.match(/(?:project|repo(?:sitory)?|folder|directory)\s+(?:at|in|:)\s+([/\w.-]+)/i)
-      || task.match(/(\/home\/[^\s"']+)/);
-    if (pathMatch) {
-      try {
-        const { statSync } = await import('fs');
-        if (statSync(pathMatch[1]).isDirectory()) resolvedProjectPath = pathMatch[1];
-      } catch { /* not a valid path */ }
-    }
-  }
-
-  // Store resolved project path in context metadata so downstream consumers
-  // (e.g., autoUpdateProjectSummary) can use it instead of guessing
-  if (resolvedProjectPath) {
-    context.metadata.projectPath = resolvedProjectPath;
-  }
-
-  if (resolvedProjectPath) {
-    // Working on a specific project: inject instruction for ALL roles
+  // Project summary only applies to dev-mode sessions (explicit project link).
+  // Non-dev sessions: no path guessing, no workspace fallback. RAG handles recall.
+  if (devProjectPath) {
+    context.metadata.projectPath = devProjectPath;
     systemPrompt += PROJECT_SUMMARY_INSTRUCTION;
-    const projectSummary = await loadProjectSummary(resolvedProjectPath);
+    const projectSummary = await loadProjectSummary(devProjectPath);
     if (projectSummary) {
-      const projectName = sessionCtx?.projectName || resolvedProjectPath.split(/[/\\]/).pop() || 'project';
+      const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
       systemPrompt += `\n\n--- Project Summary (${projectName}) ---\n${projectSummary}`;
-    }
-  } else if (agentRole === 'coding' || agentRole === 'review' || agentRole === 'qa') {
-    // No specific project, but these roles work on code — try workspace root
-    systemPrompt += PROJECT_SUMMARY_INSTRUCTION;
-    const projectSummary = await loadProjectSummary();
-    if (projectSummary) {
-      systemPrompt += `\n\n--- Existing Project Summary ---\n${projectSummary}`;
     }
   }
 

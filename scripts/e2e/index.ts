@@ -115,5 +115,7 @@ export async function run() {
   }
 }
 
-// Run directly if this is the entry point
-run();
+// Run directly only when this file is the entry point
+if (import.meta.main) {
+  run();
+}
