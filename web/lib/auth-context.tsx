@@ -47,9 +47,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const login = useCallback((newToken: string, newUser: User) => {
-    setToken(newToken);
+    if (newToken) {
+      setToken(newToken);
+      api.setToken(newToken);
+    }
     setUser(newUser);
-    api.setToken(newToken);
     localStorage.setItem('assistant-user', JSON.stringify(newUser));
   }, []);
 
@@ -63,14 +65,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Validate token on mount
   useEffect(() => {
     const existingToken = localStorage.getItem('auth_token');
-    if (!existingToken) {
-      setIsLoading(false);
-      return;
+    if (existingToken) {
+      api.setToken(existingToken);
+      setToken(existingToken);
     }
 
-    api.setToken(existingToken);
-    setToken(existingToken);
-
+    // Try to get current user — works with both Bearer token and HttpOnly cookie
     api.get<User>('/auth/me')
       .then((data) => {
         setUser({ id: data.id, username: data.username, isAdmin: data.isAdmin });

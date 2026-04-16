@@ -60,8 +60,8 @@ export default function LoginPage() {
         return;
       }
 
-      if (data.token && data.user) {
-        login(data.token, {
+      if (data.user) {
+        login(data.token || '', {
           id: data.user.id,
           username: data.user.username,
           isAdmin: data.user.isAdmin,
@@ -90,8 +90,8 @@ export default function LoginPage() {
         totpCode,
       });
       if (data.error) throw new Error(data.error);
-      if (data.token && data.user) {
-        login(data.token, {
+      if (data.user) {
+        login(data.token || '', {
           id: data.user.id,
           username: data.user.username,
           isAdmin: data.user.isAdmin,
