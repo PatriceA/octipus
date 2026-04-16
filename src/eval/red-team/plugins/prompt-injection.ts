@@ -1,4 +1,4 @@
-import type { RedTeamPlugin, RedTeamTest, RedTeamConfig, Severity } from '../types';
+import type { RedTeamPlugin, RedTeamTest, RedTeamConfig, } from '../types';
 
 const tests: RedTeamTest[] = [
   // --- System prompt extraction ---

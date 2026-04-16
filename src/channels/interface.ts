@@ -40,6 +40,18 @@ export abstract class BaseChannel extends EventEmitter {
   abstract send(channelId: string, response: ChannelResponse): Promise<string>;
 
   /**
+   * Whether this channel should be initialized given the current config.
+   *
+   * Default: always enabled (used by webchat, which has no external creds).
+   * Channels that need credentials override this to inspect `config` and
+   * return `false` when their tokens/secrets are not present. The auto-
+   * discovery loader (`channels/discovery.ts`) skips disabled channels.
+   */
+  isEnabled(_config: unknown): boolean {
+    return true;
+  }
+
+  /**
    * Set an emoji reaction on a message. Override in subclasses that support reactions.
    * @param channelId - The channel/chat ID
    * @param messageId - The platform message ID to react to
@@ -56,6 +68,49 @@ export abstract class BaseChannel extends EventEmitter {
    */
   async sendTyping(_channelId: string, _active: boolean = true): Promise<void> {
     // No-op by default — channels that support typing override this
+  }
+
+  /**
+   * Split a long response into chunks no larger than `maxLen` characters,
+   * preferring paragraph (`\n\n`) and line (`\n`) boundaries before falling
+   * back to a hard cut. Used by channels with platform-imposed size limits
+   * (Telegram 4096, WhatsApp 4096, Slack 3000, …).
+   */
+  protected splitMessage(text: string, maxLen: number): string[] {
+    if (text.length <= maxLen) return [text];
+
+    const chunks: string[] = [];
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLen) {
+        chunks.push(remaining);
+        break;
+      }
+
+      let splitAt = -1;
+
+      const paragraphEnd = remaining.lastIndexOf('\n\n', maxLen);
+      if (paragraphEnd > maxLen * 0.3) {
+        splitAt = paragraphEnd + 2;
+      }
+
+      if (splitAt === -1) {
+        const lineEnd = remaining.lastIndexOf('\n', maxLen);
+        if (lineEnd > maxLen * 0.3) {
+          splitAt = lineEnd + 1;
+        }
+      }
+
+      if (splitAt === -1) {
+        splitAt = maxLen;
+      }
+
+      chunks.push(remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt);
+    }
+
+    return chunks;
   }
 
   /**

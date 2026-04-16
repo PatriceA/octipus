@@ -37,8 +37,12 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const agentManager = getAgentManager();
 
     const unsubAgent = agentManager.onEvent((event: any) => {
+      const subtype = event.type === 'spawned' ? 'agent.spawned'
+        : event.type === 'completed' ? 'agent.completed'
+        : event.type === 'stopped' ? 'agent.stopped'
+        : 'agent.event';
       hub.publishEvent({
-        type: `agent.${event.type || 'event'}`,
+        type: subtype,
         source: `agent:${event.agentId || 'unknown'}`,
         userId: event.userId,
         sessionId: event.sessionId,
@@ -79,7 +83,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
 
   return () => {
     for (const cleanup of cleanups) {
-      try { cleanup(); } catch {}
+      try { cleanup(); } catch (err) { coreLogger.warn({ err }, 'event-bridge cleanup failed'); }
     }
   };
 }
@@ -87,7 +91,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
 /**
  * Map orchestrator event types to gateway event type namespaces.
  */
-function mapOrchestratorEventType(type: string): string {
+function mapOrchestratorEventType(type: string): import('./protocol').GatewayEventType {
   switch (type) {
     case 'chat_response': return 'chat.response';
     case 'status_update': return 'orchestrator.status';
@@ -97,6 +101,6 @@ function mapOrchestratorEventType(type: string): string {
     case 'pipeline_event': return 'pipeline.event';
     case 'team_started': return 'team.started';
     case 'team_completed': return 'team.completed';
-    default: return `orchestrator.${type}`;
+    default: return 'agent.event';
   }
 }

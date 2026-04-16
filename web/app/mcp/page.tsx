@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ChevronRight,
   Wrench,
-  RefreshCw,
   Eye,
   EyeOff,
   Zap,

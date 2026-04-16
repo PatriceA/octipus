@@ -8,7 +8,7 @@ export class GitLabTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'GitLab project, issue, merge request, and CI/CD management via glab CLI';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { execSync } = await import('child_process');
       execSync('glab auth status', { stdio: 'ignore', timeout: 5000 });

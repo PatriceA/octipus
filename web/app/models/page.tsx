@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Cpu, Plus, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
-import { type Model, type CLITool } from '@/lib/types/models';
+import type { Model, CLITool } from '@/lib/types/models';
 import { AddModelModal } from '@/components/models/add-model-modal';
 import { EditModelModal } from '@/components/models/edit-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';

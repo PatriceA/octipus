@@ -13,9 +13,9 @@ export {
 } from './wake-word';
 export type { WakeWordOptions, WakeWordEngine, WakeWordDetection } from './wake-word';
 
-import { SpeechToText, createSTTEngine } from './stt';
-import { TextToSpeech, createTTSEngine } from './tts';
-import { WakeWordDetector, createWakeWordEngine } from './wake-word';
+import { SpeechToText, } from './stt';
+import { TextToSpeech, } from './tts';
+import { WakeWordDetector, } from './wake-word';
 import { logger } from '../utils/logger';
 
 export interface VoiceServiceConfig {

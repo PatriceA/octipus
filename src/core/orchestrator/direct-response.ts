@@ -30,7 +30,11 @@ export async function directResponse(
 
   // Check response cache
   const cache = getResponseCache();
-  const recentMessages = await messageRepository.findRecentBySession(sessionId, 6, ['user', 'assistant']);
+  const sessionForBoundary = await sessionRepository.findById(sessionId);
+  const clearedAt = (sessionForBoundary?.context as SessionContext)?.clearedAt
+    ? new Date((sessionForBoundary!.context as SessionContext).clearedAt!)
+    : undefined;
+  const recentMessages = await messageRepository.findRecentBySession(sessionId, 6, ['user', 'assistant'], clearedAt);
   const recentContext = recentMessages.slice(0, 2).map(m => m.content).join('|');
 
   const cached = await cache.get(sessionId, message, recentContext);
@@ -55,14 +59,20 @@ export async function directResponse(
       timestamp: m.createdAt,
     }));
 
-    const session = await sessionRepository.findById(sessionId);
-    const summary = (session?.context as SessionContext)?.compactedSummary;
+    const session = sessionForBoundary ?? await sessionRepository.findById(sessionId);
+    const summary = clearedAt ? undefined : (session?.context as SessionContext)?.compactedSummary;
     const now = new Date();
     const dateContext = `\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
     let basePrompt = SECURITY_PREAMBLE + 'You are a friendly development assistant. Keep casual responses brief and helpful.' + dateContext;
     if (guardFlags.length > 0) {
       basePrompt += buildSecurityReminder(guardFlags);
     }
+
+    const sources: string[] = [];
+    if (recentMessages.length > 0) {
+      sources.push(`recent ${recentMessages.length} msg${recentMessages.length === 1 ? '' : 's'}`);
+    }
+    if (summary) sources.push('session summary');
 
     // Inject user profile context for personalized responses
     if (userId) {
@@ -73,10 +83,12 @@ export async function directResponse(
         if (userProfile && (userProfile.facts as import('@/db/schema/profiles').ProfileFact[])?.length > 0) {
           const facts = (userProfile.facts as import('@/db/schema/profiles').ProfileFact[]).map(f => `- ${f.key}: ${f.value}`).join('\n');
           basePrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
+          sources.push(`profile(${userProfile.name}, ${(userProfile.facts as import('@/db/schema/profiles').ProfileFact[]).length} facts)`);
         } else if (userProfile) {
           basePrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}`;
+          sources.push(`profile(${userProfile.name})`);
         }
-      } catch {}
+      } catch (err) { coreLogger.error({ err }, 'silent failure in direct-response'); }
     }
 
     const systemContent = summary
@@ -100,18 +112,23 @@ export async function directResponse(
 
     const tokens = result.usage?.totalTokens || 0;
 
-    await messageRepository.create({ sessionId, role: 'assistant', content: result.content });
+    const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
+    const finalContent = showSources && sources.length > 0
+      ? `${result.content}\n\n_Sources: ${sources.join(', ')}_`
+      : result.content;
+
+    await messageRepository.create({ sessionId, role: 'assistant', content: finalContent });
     await sessionRepository.incrementMessageCount(sessionId);
 
     await cache.set(sessionId, message, recentContext, {
-      response: result.content,
+      response: finalContent,
       model: modelName,
       tokens,
       cachedAt: Date.now(),
     });
 
     return {
-      response: result.content,
+      response: finalContent,
       metadata: {
         model: modelName,
         tokens,

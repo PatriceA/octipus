@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil, ChevronDown, AlertCircle, Loader2, Search } from 'lucide-react';
+import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil, AlertCircle, Loader2, Search } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   type LiteLLMModel,

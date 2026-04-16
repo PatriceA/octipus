@@ -239,7 +239,7 @@ export class GitTool extends BaseTool {
         gitArgs.push(args.url as string);
         if (args.path) gitArgs.push(args.path as string);
 
-        const result = await this.git(gitArgs, '.');
+        const _result = await this.git(gitArgs, '.');
         return { cloned: args.url, path: args.path || (args.url as string).split('/').pop()?.replace('.git', '') };
       },
       { permissionAction: 'write' }

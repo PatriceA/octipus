@@ -2,7 +2,7 @@
  * Model information tools — list available models and check health.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AssistantClient } from '../client.js';
 
 export function registerModelTools(server: McpServer, client: AssistantClient): void {

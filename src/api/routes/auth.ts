@@ -78,8 +78,9 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
 
+      // Token lives only in the HttpOnly cookie — do not echo it in the
+      // response body where same-origin scripts could read it.
       return {
-        token,
         user: {
           id: user.id,
           username: user.username,
@@ -234,12 +235,12 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
 
+      // Token sits in the HttpOnly cookie only.
       return {
         id: user.id,
         username: user.username,
         email: user.email,
         isAdmin: user.isAdmin,
-        token,
         user: {
           id: user.id,
           username: user.username,
@@ -345,8 +346,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
 
+      // Token sits in the HttpOnly cookie only.
       return {
-        token,
         user: {
           id: user!.id,
           username: user!.username,
@@ -405,7 +406,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       }
 
       const totpAuth = getTOTPAuth();
-      const { secret, qrCodeUrl, backupCodes } = await totpAuth.generateSecret(user.id);
+      const { qrCodeUrl, backupCodes } = await totpAuth.generateSecret(user.id);
 
       return { qrCodeUrl, backupCodes };
     },

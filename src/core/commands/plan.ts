@@ -2,7 +2,6 @@ import { registerCommand } from './registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { getOrchestratorService } from '@/core/orchestrator';
 import { coreLogger } from '@/utils/logger';
 import type { SessionContext, PlanningState } from '@/db/schema/sessions';
 

@@ -1,11 +1,10 @@
 import { Elysia, t } from 'elysia';
-import { eq, or, isNull, desc } from 'drizzle-orm';
+import { eq, or, desc } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
 import { listAvailableTemplates } from '@/core/orchestrator/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
-import { apiLogger } from '@/utils/logger';
 
 export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   .use(apiContext)

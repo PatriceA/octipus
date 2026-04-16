@@ -4,12 +4,10 @@ import { coreLogger } from '@/utils/logger';
 import {
   type ConnectionContext,
   type ConnectionState,
-  type ClientType,
   type TrustLevel,
   type AuthMessage,
   type GatewayMessage,
   parseClientMessage,
-  PROTOCOL_VERSION,
 } from './protocol';
 import { GatewayRateLimiter } from './rate-limiter';
 import { validateLocalAuth } from './local-auth';
@@ -387,7 +385,7 @@ export class ConnectionManager {
 
     try {
       conn.ws.close(4001, 'Auth timeout');
-    } catch {}
+    } catch (err) { coreLogger.error({ err }, 'silent failure in connection-manager'); }
 
     this.handleClose(connectionId, 4001, 'Auth timeout');
   }
@@ -399,7 +397,7 @@ export class ConnectionManager {
 
     try {
       conn.ws.close(4001, reason);
-    } catch {}
+    } catch (err) { coreLogger.error({ err }, 'silent failure in connection-manager'); }
   }
 
   // ── Queries ─────────────────────────────────────────────────────
@@ -487,12 +485,12 @@ export class ConnectionManager {
    */
   async drain(): Promise<void> {
     coreLogger.info({ connections: this.connections.size }, 'Draining gateway connections');
-    for (const [id, conn] of this.connections) {
+    for (const [_id, conn] of this.connections) {
       conn.state = 'draining';
       this.send(conn, { type: 'error', code: 'SERVER_SHUTDOWN', message: 'Server shutting down' });
       try {
         conn.ws.close(1001, 'Server shutdown');
-      } catch {}
+      } catch (err) { coreLogger.error({ err }, 'silent failure in connection-manager'); }
     }
     this.connections.clear();
     this.byUser.clear();

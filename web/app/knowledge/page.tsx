@@ -7,7 +7,6 @@ import {
   Search,
   Loader2,
   X,
-  Trash2,
   FileText,
   Code,
   MessageSquare,

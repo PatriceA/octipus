@@ -72,13 +72,13 @@ describe('CommandRegistry', () => {
     expect(result!.text).toContain('Unknown command');
   });
 
-  test('/clear returns clear marker', async () => {
+  test('/clear without session returns no-session message', async () => {
     const result = await registry.execute('/clear', {
       userId: 'user1',
       clientType: 'webchat',
       trustLevel: 'user',
     });
-    expect(result!.text).toBe('[clear]');
+    expect(result!.text).toBe('No active session.');
   });
 
   test('/compact with no session returns message', async () => {

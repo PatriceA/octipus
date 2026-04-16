@@ -9,7 +9,7 @@ export class KnowledgeTool extends BaseTool {
   readonly version = '1.2.0';
   readonly description = 'Search and manage the RAG knowledge base — hybrid search (semantic + keyword), index files, and read stored knowledge.';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
       const registry = getModelRegistry();

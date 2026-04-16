@@ -7,7 +7,6 @@ import {
   toPortableSkill,
   skillToMarkdown,
   skillsToMarkdown,
-  markdownToSkill,
   markdownToSkills,
   type PortableSkill,
 } from '@/skills/markdown';

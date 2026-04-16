@@ -1,4 +1,4 @@
-import { eq, desc, sql } from 'drizzle-orm';
+import { eq, desc, } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { conformanceRuns, evalRuns } from '../schema/evaluations';
 import type {

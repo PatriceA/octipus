@@ -7,7 +7,6 @@
 
 import { getEmbeddingService } from './embeddings';
 import { coreLogger } from '@/utils/logger';
-import { getConfig } from '@/config';
 
 const MIN_OUTPUT_LENGTH = 100; // Skip trivially short outputs
 

@@ -1,7 +1,5 @@
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
-import type { AgentContext } from '@/core/types';
-import { toolLogger } from '@/utils/logger';
 import { spawn } from 'child_process';
 
 const EXEC_TIMEOUT = 30000; // 30s
@@ -24,7 +22,7 @@ export class DockerTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'Manage Docker containers, images, and services';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { execSync } = await import('child_process');
       execSync('docker info', { stdio: 'ignore', timeout: 5000 });

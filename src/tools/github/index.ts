@@ -8,7 +8,7 @@ export class GitHubTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'GitHub repository, issue, PR, and workflow management via gh CLI';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { execSync } = await import('child_process');
       execSync('gh auth status', { stdio: 'ignore', timeout: 5000 });

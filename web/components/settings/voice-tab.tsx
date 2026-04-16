@@ -7,7 +7,6 @@ import {
   CheckCircle,
   XCircle,
   Loader2,
-  ExternalLink,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import {

@@ -3,6 +3,7 @@
  * Credentials are loaded from the vault at runtime.
  */
 
+import { coreLogger } from '@/utils/logger';
 import type { TelephonyProvider } from './interface';
 export { CallManager, getCallManager } from './interface';
 export type { TelephonyProvider, CallSession, CallStatus, CallDirection, InitiateCallOptions, CallEvent } from './interface';
@@ -104,5 +105,5 @@ export function resetTelephonyProvider(): void {
   cachedProvider = null;
   cachedProviderName = null;
   // Also invalidate the tool availability cache so the voice tool is re-checked
-  import('@/tools/registry').then(m => m.getToolRegistry().invalidateAvailabilityCache()).catch(() => {});
+  import('@/tools/registry').then(m => m.getToolRegistry().invalidateAvailabilityCache()).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
 }

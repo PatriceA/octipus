@@ -2,7 +2,7 @@
  * Knowledge/RAG tools — search, read, and index the knowledge base.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 

@@ -6,15 +6,14 @@ import {
   Shield,
   RefreshCw,
   ArrowLeft,
-  CheckCircle,
   XCircle,
   AlertTriangle,
   ShieldAlert,
   ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { cn, formatDate, truncate } from '@/lib/utils';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn, truncate } from '@/lib/utils';
+import { Card, CardContent, } from '@/components/ui/card';
 import { ScoreBar } from '@/components/eval/ScoreBar';
 import { AssertionBadge } from '@/components/eval/AssertionBadge';
 

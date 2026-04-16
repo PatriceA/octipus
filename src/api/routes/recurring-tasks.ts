@@ -1,7 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getHookManager } from '@/hooks/manager';
-import { getNextCronDate } from '@/core/cron-runner';
 
 /**
  * Recurring tasks API — compatibility layer.

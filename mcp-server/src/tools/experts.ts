@@ -2,7 +2,7 @@
  * Expert agent tools — list available experts and chat using a specific expert.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 

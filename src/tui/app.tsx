@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import TextInput from 'ink-text-input';
 import { GatewayClient, type ConnectionStatus } from './gateway-client';
@@ -322,7 +322,7 @@ export function TuiApp({ gatewayUrl, projectPath: initialProjectPath }: TuiAppPr
     }
   });
 
-  const statusDot = status === 'connected' ? '\x1b[32m\u25CF\x1b[0m'
+  const _statusDot = status === 'connected' ? '\x1b[32m\u25CF\x1b[0m'
     : status === 'connecting' || status === 'authenticating' ? '\x1b[33m\u25CF\x1b[0m'
     : '\x1b[31m\u25CF\x1b[0m';
 

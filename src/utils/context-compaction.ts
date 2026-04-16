@@ -4,7 +4,6 @@ import {
   serializeConversation,
   extractFileOperations,
   buildSummarizationPrompt,
-  compactWithSummarization,
 } from '@/core/context-compaction';
 import type { AgentMessage } from '@/core/types';
 

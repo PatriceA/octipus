@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, XCircle, AlertCircle, RefreshCw, Database, Server, Layers, Cpu, Brain, Sparkles, Zap } from 'lucide-react';
+import { RefreshCw, Database, Server, Layers, Cpu, Brain, Sparkles, Zap } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 
 interface ServiceHealth {

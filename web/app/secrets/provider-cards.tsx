@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
-import { PROVIDER_KEY_GROUPS, ALL_VAULT_KEYS } from '@/lib/vault-config';
+import { PROVIDER_KEY_GROUPS, } from '@/lib/vault-config';
 
 interface ProviderCardsProps {
   statuses: Record<string, boolean>;

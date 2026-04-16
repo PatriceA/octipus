@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getModelRegistry } from '@/models/model-registry';
@@ -386,7 +387,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
             const testData = await testRes.json();
             const reply = testData.choices?.[0]?.message?.content || '';
             return { success: true, message: `Model responded via LiteLLM: "${reply.slice(0, 100)}"` };
-          } catch (fetchErr) {
+          } catch (_fetchErr) {
             return { success: false, error: `Cannot reach LiteLLM proxy at ${litellmBase}` };
           }
         }
@@ -739,7 +740,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           const { getVault } = await import('@/security/vault');
           const vault = getVault();
           apiKey = (await vault.getByName('system', 'openrouter_api_key')) || '';
-        } catch {}
+        } catch (err) { coreLogger.error({ err }, 'silent failure in models'); }
       }
 
       if (!apiKey) {
@@ -851,7 +852,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         const svc = getSettingsService();
         const raw = svc.getSync('models.catalog.' + provider) as KnownModel[] | undefined;
         if (Array.isArray(raw)) custom = raw;
-      } catch {}
+      } catch (err) { coreLogger.error({ err }, 'silent failure in models'); }
 
       // Custom entries override built-in by id, then append new ones
       const builtInIds = new Set(builtIn.map(m => m.id));

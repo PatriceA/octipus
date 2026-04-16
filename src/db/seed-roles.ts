@@ -4,11 +4,22 @@ import { roles } from '@/db/schema/roles';
 import { logger } from '@/utils/logger';
 
 /**
- * Seed role system prompt templates into the database from the hardcoded ROLE_CONFIGS.
- * Idempotent — skips roles that already exist. Existing DB entries take precedence
- * over hardcoded values (so user edits are preserved).
+ * Seed role records into the database from the file-based registry
+ * (`src/core/orchestrator/roles/<name>/{config.ts, prompt.md}`).
  *
- * Call this after the hardcoded ROLE_CONFIGS are initialized.
+ * SOURCE-OF-TRUTH RULES — read before editing:
+ *
+ *   - The file registry is canonical. Add/remove roles by editing files,
+ *     never by writing to the DB directly.
+ *   - The DB row exists so users can tweak prompts and tool allowlists
+ *     at runtime from the web UI. We fill MISSING rows here; we never
+ *     overwrite fields that diverge, so user edits survive restarts.
+ *   - New tool IDs added at the registry level are MERGED into the DB
+ *     row's toolIds so capabilities stay current without wiping user
+ *     customisations.
+ *
+ * If the DB and registry diverge confusingly, trust the registry — delete
+ * the DB row and re-seed.
  */
 export async function seedRoles(): Promise<void> {
   // Dynamic import to avoid circular dependency

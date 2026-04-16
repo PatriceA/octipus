@@ -10,8 +10,6 @@ import {
   FileText,
   Image,
   Music,
-  ArrowUp,
-  ArrowDown,
 } from 'lucide-react';
 import { AudioWaveform } from './audio-waveform';
 import { cn } from '@/lib/utils';
@@ -342,7 +340,7 @@ export default function PromptInput({
 
         // Safety limit: 2 minutes max
         setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 120_000);
-      } catch (err) {
+      } catch (_err) {
         alert('Microphone access denied. Check browser permissions.');
         setIsListening(false);
         setMediaStream(null);

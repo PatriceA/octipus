@@ -171,14 +171,14 @@ export async function initializeExtensions() {
   try {
     await rawExec('CREATE EXTENSION IF NOT EXISTS vector');
     dbLogger.info('pgvector extension enabled');
-  } catch (error) {
+  } catch (_error) {
     dbLogger.warn('pgvector extension not available - embeddings will be disabled');
   }
 
   try {
     await rawExec('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     dbLogger.info('uuid-ossp extension enabled');
-  } catch (error) {
+  } catch (_error) {
     dbLogger.warn('uuid-ossp extension not available - using fallback UUID generation');
   }
 }

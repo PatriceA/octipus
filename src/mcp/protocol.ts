@@ -1,5 +1,4 @@
 import { EventEmitter } from 'events';
-import { coreLogger } from '@/utils/logger';
 
 // MCP Protocol Types
 export interface MCPMessage {
@@ -205,7 +204,7 @@ export class MCPProtocol extends EventEmitter {
    * Clean up pending requests
    */
   cleanup(): void {
-    for (const [id, pending] of this.pendingRequests) {
+    for (const [_id, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);
       pending.reject(new Error('MCP connection closed'));
     }

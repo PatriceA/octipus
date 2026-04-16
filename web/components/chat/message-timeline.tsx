@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Bot,
-  User,
   Zap,
   Copy,
   Check,

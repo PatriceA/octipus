@@ -1,0 +1,55 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.12/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "web/app/**/*.ts",
+      "web/app/**/*.tsx",
+      "web/components/**/*.ts",
+      "web/components/**/*.tsx",
+      "web/lib/**/*.ts",
+      "mcp-server/src/**/*.ts",
+      "!**/*.test.ts",
+      "!**/node_modules/**",
+      "!**/dist/**",
+      "!**/.next/**"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "suspicious": {
+        "noExplicitAny": "off",
+        "noEmptyBlockStatements": "off",
+        "useAwait": "off",
+        "noConsole": "off"
+      },
+      "correctness": {
+        "noUnusedVariables": "warn",
+        "noUnusedImports": "warn",
+        "useExhaustiveDependencies": "off"
+      },
+      "complexity": {
+        "noUselessCatch": "error"
+      },
+      "style": {
+        "useConst": "error",
+        "noNonNullAssertion": "off",
+        "useImportType": "warn"
+      }
+    }
+  },
+  "javascript": {
+    "globals": ["Bun"]
+  }
+}

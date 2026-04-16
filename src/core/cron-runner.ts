@@ -1,6 +1,6 @@
 import { getDb } from '@/db/postgres';
 import { hooks } from '@/db/schema/hooks';
-import { eq, and, lte, sql, isNotNull } from 'drizzle-orm';
+import { eq, and, lte, isNotNull } from 'drizzle-orm';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
 import { getHookManager } from '@/hooks/manager';
@@ -187,13 +187,13 @@ async function processCronTick(): Promise<void> {
           db.update(hooks)
             .set({ lastError: null, updatedAt: new Date() })
             .where(eq(hooks.id, hook.id))
-            .catch(() => {});
+            .catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cron-runner'));
           coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook completed');
         }).catch(err => {
           db.update(hooks)
             .set({ lastError: (err as Error).message, updatedAt: new Date() })
             .where(eq(hooks.id, hook.id))
-            .catch(() => {});
+            .catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cron-runner'));
           coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
         });
 

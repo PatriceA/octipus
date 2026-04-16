@@ -19,6 +19,10 @@ export class TeamsChannel extends BaseChannel {
   private adapter: CloudAdapter | null = null;
   private conversationReferences: Map<string, Partial<Activity>> = new Map();
 
+  override isEnabled(config: unknown): boolean {
+    return Boolean((config as { teams?: { appId?: string } })?.teams?.appId);
+  }
+
   async connect(): Promise<void> {
     const config = getConfig();
 
@@ -106,7 +110,7 @@ export class TeamsChannel extends BaseChannel {
     const userName = activity.from.name;
 
     // Find user binding
-    let user = await userRepository.findByChannelBinding('teams', teamsUserId);
+    const user = await userRepository.findByChannelBinding('teams', teamsUserId);
 
     if (!user) {
       channelLogger.info({ teamsUserId, userName }, 'New Teams user - needs linking');

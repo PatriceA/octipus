@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckCircle, XCircle, AlertCircle, Trash2, Star, Terminal, Pencil, Cpu } from 'lucide-react';
-import { type Model } from '@/lib/types/models';
+import type { Model } from '@/lib/types/models';
 
 function isLocalProvider(provider: string): boolean {
   return provider === 'ollama' || provider === 'local' || provider === 'lmstudio';

@@ -88,7 +88,7 @@ function autoIndexFile(filePath: string): void {
       }).catch((err) => {
         coreLogger.debug({ err, filePath }, 'Auto-index skipped (embedding service may be unavailable)');
       });
-    }).catch(() => {});
+    }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
   } catch {
     // Silently skip if anything fails
   }

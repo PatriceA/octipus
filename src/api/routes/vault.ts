@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getVault } from '@/security/vault';
@@ -13,7 +14,7 @@ const TELEPHONY_SECRET_NAMES = new Set([
 /** Reset telephony provider cache when a telephony credential changes. */
 function resetTelephonyIfNeeded(secretName: string): void {
   if (TELEPHONY_SECRET_NAMES.has(secretName)) {
-    import('@/voice/telephony').then(m => m.resetTelephonyProvider()).catch(() => {});
+    import('@/voice/telephony').then(m => m.resetTelephonyProvider()).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in vault'));
     apiLogger.info({ secretName }, 'Telephony provider cache reset after credential change');
   }
 }

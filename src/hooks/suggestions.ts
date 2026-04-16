@@ -26,17 +26,17 @@ export async function getHookSuggestions(userId: string): Promise<HookSuggestion
   try {
     const googleToken = await oauthManager.getValidToken(userId, 'google');
     hasGoogle = !!googleToken;
-  } catch {}
+  } catch (err) { coreLogger.error({ err }, 'silent failure in suggestions'); }
 
   try {
     const msToken = await oauthManager.getValidToken(userId, 'microsoft');
     hasMicrosoft = !!msToken;
-  } catch {}
+  } catch (err) { coreLogger.error({ err }, 'silent failure in suggestions'); }
 
   try {
     const umi = getUMI();
     hasTelegram = umi.isChannelAvailable('telegram' as any);
-  } catch {}
+  } catch (err) { coreLogger.error({ err }, 'silent failure in suggestions'); }
 
   const hasEmail = hasGoogle || hasMicrosoft;
   const hasCalendar = hasGoogle || hasMicrosoft;

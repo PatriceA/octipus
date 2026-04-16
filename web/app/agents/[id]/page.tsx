@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -47,7 +46,7 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const agentId = params.id as string;
 
-  const { events, isConnected } = useAgentEvents(agentId);
+  const { events } = useAgentEvents(agentId);
 
   // Fetch agent details
   const { data: agent, isLoading } = useQuery({

@@ -1,6 +1,23 @@
 /**
  * Input guard — pre-LLM pattern matching to detect prompt injection and adversarial inputs.
  * Pure function, no dependencies. Runs synchronously on every user message.
+ *
+ * THREAT MODEL — IMPORTANT FOR REVIEWERS
+ *
+ * This guard is a defense-in-depth *signal*, not a hard sandbox. Regex on
+ * natural-language input is inherently bypassable (paraphrase, encoding,
+ * Unicode lookalikes, multi-turn priming, …). The hard guarantees live at
+ * execution time:
+ *
+ *   - Shell tool tokenizes commands and refuses metacharacters by default
+ *     (see src/tools/shell/local-operations.ts).
+ *   - Permission system (ALLOW / ASK / DENY) gates every tool action.
+ *   - Vault enforces per-tool credential ACLs.
+ *
+ * This guard's job is to (a) raise the cost of obvious adversarial inputs
+ * and (b) emit audit signals so operators can see attack patterns in logs.
+ * `block` actions are coarse-grained safety nets; `warn` actions flow into
+ * the LLM via buildSecurityReminder() so the model knows to be on guard.
  */
 
 export interface InputGuardResult {
@@ -36,13 +53,14 @@ const rules: PatternRule[] = [
   { category: 'mode_escalation', action: 'warn', pattern: /\bDAN\b.*\bmode\b/i },
 
   // ── Category C: Command injection ──────────────────────────
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /;\s*rm\s+-[rRf]{1,3}\s+[\/~]/i },
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /;\s*dd\s+if=/i },
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /;\s*mkfs\b/i },
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /;\s*:(){ :\|:& };:/i },
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /;\s*chmod\s+777\s+\//i },
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /&&\s*rm\s+-[rRf]{1,3}\s+[\/~]/i },
-  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /\|\s*rm\s+-[rRf]{1,3}\s+[\/~]/i },
+  // Match the dangerous command after ANY separator (start-of-string, whitespace,
+  // newline, ;, &, |, brace, paren). Hard execution gate is in the shell tool;
+  // these block patterns are coarse safety nets only.
+  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /(^|[\s;&|{(])rm\s+-[rRf]{1,3}\s+[\/~]/i },
+  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /(^|[\s;&|{(])dd\s+if=/i },
+  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /(^|[\s;&|{(])mkfs\b/i },
+  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/ },
+  { category: 'command_injection', action: 'block', blockReason: 'Message contains a potentially dangerous shell command injection pattern.', pattern: /(^|[\s;&|{(])chmod\s+777\s+\//i },
 
   // ── Category D: Secret fishing ─────────────────────────────
   { category: 'secret_fishing', action: 'warn', pattern: /list\s+(all\s+)?(the\s+)?(api\s+)?keys/i },

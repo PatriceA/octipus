@@ -1,9 +1,8 @@
 import { Elysia, t } from 'elysia';
-import { eq, or, isNull, and } from 'drizzle-orm';
+import { eq, or, } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { experts } from '@/db/schema/experts';
-import { apiLogger } from '@/utils/logger';
 
 export const expertRoutes = new Elysia({ prefix: '/experts' })
   .use(apiContext)

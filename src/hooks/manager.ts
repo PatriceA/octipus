@@ -132,7 +132,7 @@ export class HookManager extends EventEmitter {
           error: (error as Error).message,
           durationMs: executionTime,
           triggerContext: this.sanitizeContext(context),
-        }).catch(() => {}); // Don't fail the hook if logging fails
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in manager')); // Don't fail the hook if logging fails
 
         results.push({
           hookId: hook.id,

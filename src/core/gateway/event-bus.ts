@@ -1,5 +1,5 @@
 import { coreLogger } from '@/utils/logger';
-import type { GatewayEvent, ConnectionContext } from './protocol';
+import type { GatewayEvent, } from './protocol';
 import { matchesPattern } from './protocol';
 
 type EventHandler = (event: GatewayEvent) => void;

@@ -22,3 +22,5 @@ export * from './evaluations';
 export * from './cleanup-log';
 export * from './roles';
 export * from './skill-topic-assignments';
+export * from './notifications';
+export * from './pipeline-templates';

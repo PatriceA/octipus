@@ -1,8 +1,8 @@
+import { coreLogger } from '@/utils/logger';
 import { AgentWorker, type AgentWorkerConfig, type ToolHandler, type AgentEvent } from './agent-worker';
 import { CLIAgentWorker } from './cli-agent-worker';
 import { isCLIProvider } from './cli-agent-factory';
 import { getRouter } from './router';
-import { getScheduler } from './scheduler';
 import { getModelRegistry } from '@/models/model-registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -163,7 +163,7 @@ export class AgentManager {
         sessionId: context.sessionId,
         type: event.type,
         data: event.data,
-      }).catch(() => {});
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-manager'));
 
       // Forward to WebSocket / other handlers
       for (const handler of this.eventHandlers) {

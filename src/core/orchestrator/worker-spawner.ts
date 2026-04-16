@@ -354,7 +354,7 @@ If you cannot write files (e.g., read-only environment), include the summary con
           systemPrompt += `\n\nRELEVANT PROFILES:\n${profileTexts.join('\n\n')}`;
         }
       }
-    } catch {}
+    } catch (err) { coreLogger.error({ err }, 'silent failure in worker-spawner'); }
   }
 
   // Inject workspace context
@@ -476,7 +476,7 @@ Use these when the task benefits from them — especially for people-related que
       `Agent "${agentRole}" completed`,
       result.slice(0, 200),
       { workerId, role: agentRole, durationMs },
-    ).catch(() => {});
+    ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
 
     deps.setLastWorkerResult(result);
 
@@ -567,7 +567,7 @@ async function handleWorkerFailure(
 
   const failedTokens = worker.getTotalTokens();
   if (failedTokens > 0) {
-    sessionRepository.incrementMessageCount(context.sessionId, failedTokens).catch(() => {});
+    sessionRepository.incrementMessageCount(context.sessionId, failedTokens).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
   }
 
   const errorMsg = error.message || '';
@@ -715,7 +715,7 @@ async function handleWorkerFailure(
     `Agent "${agentRole}" failed`,
     error.message,
     { workerId, role: agentRole },
-  ).catch(() => {});
+  ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
 
   throw new Error(`Worker "${agentRole}" failed: ${error.message}`);
 }

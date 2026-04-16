@@ -1,4 +1,4 @@
-import { BaseTool, type ToolAvailability } from './base-tool';
+import type { BaseTool, ToolAvailability } from './base-tool';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';

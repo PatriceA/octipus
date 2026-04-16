@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { modelLogger } from '@/utils/logger';
@@ -34,7 +35,7 @@ export class VoyageProvider implements ModelProvider {
       const vault = getVault();
       const value = await vault.getByName('system', 'voyage_api_key');
       return value || null;
-    } catch {}
+    } catch (err) { coreLogger.error({ err }, 'silent failure in voyage-provider'); }
     return null;
   }
 

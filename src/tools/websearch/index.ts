@@ -1,4 +1,5 @@
-import type { Browser, Page } from 'playwright';
+import { coreLogger } from '@/utils/logger';
+import type { Browser, } from 'playwright';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
@@ -173,7 +174,7 @@ export class WebSearchTool extends BaseTool {
       await page.goto(searchUrl, { timeout: 20000, waitUntil: 'domcontentloaded' });
 
       // Wait for results to be present
-      await page.waitForSelector('#search', { timeout: 5000 }).catch(() => {});
+      await page.waitForSelector('#search', { timeout: 5000 }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
 
       const results = await page.evaluate((max) => {
         const items: Array<{ title: string; url: string; snippet: string }> = [];
@@ -210,8 +211,8 @@ export class WebSearchTool extends BaseTool {
       toolLogger.debug({ query, resultCount: results.length, method: 'google' }, 'Search completed');
       return { query, resultCount: results.length, results, method: 'google' };
     } finally {
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await page.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+      await context.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
     }
   }
 
@@ -260,8 +261,8 @@ export class WebSearchTool extends BaseTool {
       toolLogger.debug({ query, resultCount: results.length, method: 'duckduckgo' }, 'Search completed');
       return { query, resultCount: results.length, results, method: 'duckduckgo' };
     } finally {
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await page.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+      await context.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
     }
   }
 
@@ -319,8 +320,8 @@ export class WebSearchTool extends BaseTool {
       toolLogger.error({ error, url }, 'Browser page fetch failed');
       throw new Error(`Failed to fetch page: ${(error as Error).message}`);
     } finally {
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await page.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+      await context.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
     }
   }
 
@@ -333,9 +334,9 @@ export class WebSearchTool extends BaseTool {
     return this.browser;
   }
 
-  async shutdown(): Promise<void> {
+  override async shutdown(): Promise<void> {
     if (this.browser) {
-      await this.browser.close().catch(() => {});
+      await this.browser.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
       this.browser = null;
       toolLogger.info('Web search browser closed');
     }

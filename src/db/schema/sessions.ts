@@ -37,6 +37,12 @@ export interface SessionContext {
   compactedSummary?: string;
   activeCommand?: string;
   planningState?: PlanningState;
+  /**
+   * ISO timestamp of a user-initiated context reset (/clear).
+   * Orchestrator + directResponse must ignore messages created before this
+   * boundary when building system-prompt history.
+   */
+  clearedAt?: string;
   // Development Mode
   devMode?: boolean;
   projectPath?: string;

@@ -4,8 +4,6 @@ import { initializeStorage, closeStorage } from '@/db/storage';
 import { runMigrations } from '@/db/migrate';
 import { loadConfig, getConfig } from '@/config';
 import { getAgentManager, type AgentInfo } from './agent-manager';
-import { getScheduler } from './scheduler';
-import { getRouter } from './router';
 import { getModelRegistry } from '@/models/model-registry';
 import { getHealthChecker } from '@/models/health-checker';
 import { coreLogger } from '@/utils/logger';

@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, } from 'elysia';
 import { cors } from '@elysiajs/cors';
 import { swagger } from '@elysiajs/swagger';
 import { getConfig } from '@/config';

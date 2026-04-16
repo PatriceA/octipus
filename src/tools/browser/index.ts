@@ -1,10 +1,11 @@
+import { coreLogger } from '@/utils/logger';
 import type { Browser, Page, BrowserContext } from 'playwright';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 
 const DEFAULT_TIMEOUT = 30000;
-const MAX_SCREENSHOT_SIZE = 5 * 1024 * 1024; // 5MB
+const _MAX_SCREENSHOT_SIZE = 5 * 1024 * 1024; // 5MB
 
 export class BrowserTool extends BaseTool {
   readonly id = 'browser';
@@ -12,7 +13,7 @@ export class BrowserTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'Web browser automation using Playwright';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       // Quick file-based check without importing playwright (which is slow)
       const { existsSync } = await import('fs');
@@ -423,14 +424,14 @@ export class BrowserTool extends BaseTool {
     return `page_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   }
 
-  async shutdown(): Promise<void> {
+  override async shutdown(): Promise<void> {
     for (const page of this.pages.values()) {
-      await page.close().catch(() => {});
+      await page.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
     }
     this.pages.clear();
 
     for (const context of this.contexts.values()) {
-      await context.close().catch(() => {});
+      await context.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
     }
     this.contexts.clear();
 

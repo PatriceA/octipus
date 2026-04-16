@@ -172,14 +172,16 @@ export class GatewayHub {
   }
 
   private emitAuditEvent(event: string, data: Record<string, unknown>): void {
-    // Map gateway event names to event bus types
+    // Audit events from the connection manager carry their original name in
+    // the payload so subscribers can filter; the bus type is the catch-all
+    // 'audit' so the GatewayEventType union stays closed.
     this.eventBus.publish({
       id: randomBytes(12).toString('hex'),
-      type: event,
+      type: 'audit',
       source: 'gateway',
       userId: data.userId as string | undefined,
       timestamp: Date.now(),
-      payload: data,
+      payload: { originalType: event, ...data },
     });
   }
 }

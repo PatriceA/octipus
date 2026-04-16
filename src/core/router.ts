@@ -99,7 +99,7 @@ export class Router {
     }
 
     // Calculate confidence (normalized)
-    const totalKeywords = Math.max(...Object.values(TOPIC_KEYWORDS).map((k) => k.length));
+    const _totalKeywords = Math.max(...Object.values(TOPIC_KEYWORDS).map((k) => k.length));
     const confidence = bestScore > 0 ? Math.min(bestScore / 5, 1) : 0.3;
 
     return { topic: bestTopic, confidence };

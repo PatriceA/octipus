@@ -65,7 +65,7 @@ export class PluginTool extends BaseTool {
   /**
    * Shutdown the plugin tool and call the plugin's shutdown hook
    */
-  async shutdown(): Promise<void> {
+  override async shutdown(): Promise<void> {
     if (this.plugin.module.shutdown) {
       await this.plugin.module.shutdown();
     }

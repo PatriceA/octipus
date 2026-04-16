@@ -1,6 +1,6 @@
 import { eq, and, desc } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { notifications, type NewNotification } from '@/db/schema/notifications';
+import { notifications, } from '@/db/schema/notifications';
 import { coreLogger } from '@/utils/logger';
 
 interface NotificationHandler {
@@ -55,7 +55,7 @@ export class NotificationService {
               }).catch(err => coreLogger.error({ err, target }, 'Channel delivery failed'));
             }
           }
-        } catch {}
+        } catch (err) { coreLogger.error({ err }, 'silent failure in notification-service'); }
       }
     } catch (error) {
       coreLogger.error({ error, userId, type }, 'Failed to create notification');

@@ -4,7 +4,6 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import {
   runConformanceTests,
-  getTestCaseNames,
 } from '@/models/testing';
 import {
   runEvaluation,

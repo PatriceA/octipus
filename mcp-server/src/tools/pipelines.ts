@@ -2,7 +2,7 @@
  * Pipeline management tools — list templates, create, monitor, and stop pipelines.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 

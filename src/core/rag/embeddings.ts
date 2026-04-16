@@ -18,6 +18,20 @@ export interface SearchResult {
 
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
 
+/**
+ * Drizzle's `db.execute(sql\`…\`)` returns an opaque `unknown`-shaped result
+ * across drivers (PG returns `QueryResult`, PGlite returns a different shape).
+ * Treat it as a row array of records — callers pass the projected row shape
+ * as the type parameter and the helper enforces the access path.
+ */
+function rows<T = Record<string, unknown>>(r: unknown): T[] {
+  if (Array.isArray(r)) return r as T[];
+  if (r && typeof r === 'object' && Array.isArray((r as { rows?: unknown }).rows)) {
+    return (r as { rows: T[] }).rows;
+  }
+  return [];
+}
+
 export class EmbeddingService {
   /** Explicit override. Empty = resolve from registry topic='embedding' per-call. */
   private model: string;
@@ -96,7 +110,7 @@ export class EmbeddingService {
 
     // Generate abstracts for stored chunks (fire-and-forget)
     if (storedIds.length > 0) {
-      this.generateAbstracts(storedIds, chunks.slice(0, storedIds.length)).catch(() => {});
+      this.generateAbstracts(storedIds, chunks.slice(0, storedIds.length)).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in embeddings'));
     }
 
     return stored;
@@ -161,7 +175,7 @@ export class EmbeddingService {
       LIMIT ${limit}
     `);
 
-    return (results as any[]).map(r => ({
+    return rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown }>(results).map(r => ({
       id: r.id,
       content: r.content,
       abstract: r.abstract,
@@ -228,7 +242,7 @@ export class EmbeddingService {
       LIMIT ${limit}
     `);
 
-    return (results as any[]).map(r => ({
+    return rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown }>(results).map(r => ({
       id: r.id,
       content: r.content,
       abstract: r.abstract,
@@ -354,7 +368,7 @@ export class EmbeddingService {
         ...e,
         metadata: (e.metadata || {}) as EmbeddingMetadata,
       })),
-      total: (countResult as any[])[0]?.count || 0,
+      total: rows<{ count: number }>(countResult)[0]?.count || 0,
     };
   }
 
@@ -397,18 +411,18 @@ export class EmbeddingService {
     ]);
 
     const bySourceType: Record<string, number> = {};
-    for (const row of typeResults as any[]) {
+    for (const row of rows<{ source_type: string; count: number }>(typeResults)) {
       bySourceType[row.source_type] = row.count;
     }
 
-    const meta = (metaResults as any[])[0] || {};
-    const age = (ageResults as any[])[0] || {};
-    const abs = (abstractResults as any[])[0] || {};
+    const meta = rows<{ total: number; avg_len: number; oldest: string | null; newest: string | null }>(metaResults)[0] || {};
+    const age = rows<{ last_24h: number; last_7d: number; last_30d: number; older: number }>(ageResults)[0] || {};
+    const abs = rows<{ with_abstract: number; without_abstract: number }>(abstractResults)[0] || {};
 
     return {
       total: meta.total || 0,
       bySourceType,
-      models: (modelResults as any[]).map(r => r.model),
+      models: rows<{ model: string }>(modelResults).map(r => r.model),
       avgContentLength: meta.avg_len || 0,
       oldestEntry: meta.oldest || null,
       newestEntry: meta.newest || null,
@@ -474,7 +488,7 @@ export class EmbeddingService {
 
     // Capture pre-cleanup count
     const beforeRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
-    const totalBefore = ((beforeRes as any[])[0]?.count) || 0;
+    const totalBefore = (rows<{ count: number }>(beforeRes)[0]?.count) || 0;
 
     const results = {
       orphanedDocuments: 0,
@@ -490,11 +504,11 @@ export class EmbeddingService {
       WHERE e.source_type = 'document'
         AND NOT EXISTS (SELECT 1 FROM documents d WHERE CAST(d.id AS text) = e.source_id)
     `);
-    const orphaned = Array.isArray(orphanedRes) ? orphanedRes : (orphanedRes as any).rows || [];
+    const orphaned = rows<{ id: string }>(orphanedRes);
 
     results.orphanedDocuments = orphaned.length;
     if (!dryRun && orphaned.length > 0) {
-      const ids = orphaned.map((r: any) => r.id);
+      const ids = orphaned.map(r => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
         await db.delete(embeddings).where(inArray(embeddings.id, batch));
@@ -510,11 +524,11 @@ export class EmbeddingService {
       WHERE source_type = 'agent_output'
         AND created_at < ${cutoffDate.toISOString()}
     `);
-    const stale = Array.isArray(staleRes) ? staleRes : (staleRes as any).rows || [];
+    const stale = rows<{ id: string }>(staleRes);
 
     results.staleAgentOutputs = stale.length;
     if (!dryRun && stale.length > 0) {
-      const ids = stale.map((r: any) => r.id);
+      const ids = stale.map(r => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
         await db.delete(embeddings).where(inArray(embeddings.id, batch));
@@ -527,11 +541,11 @@ export class EmbeddingService {
       WHERE length(content) < ${minContentLength}
         AND content NOT LIKE '[%'
     `);
-    const short = Array.isArray(shortRes) ? shortRes : (shortRes as any).rows || [];
+    const short = rows<{ id: string }>(shortRes);
 
     results.shortEntries = short.length;
     if (!dryRun && short.length > 0) {
-      const ids = short.map((r: any) => r.id);
+      const ids = short.map(r => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
         await db.delete(embeddings).where(inArray(embeddings.id, batch));
@@ -550,11 +564,11 @@ export class EmbeddingService {
           AND e2.created_at > e.created_at
       )
     `);
-    const dupes = Array.isArray(dupesRes) ? dupesRes : (dupesRes as any).rows || [];
+    const dupes = rows<{ id: string }>(dupesRes);
 
     results.duplicates = dupes.length;
     if (!dryRun && dupes.length > 0) {
-      const ids = dupes.map((r: any) => r.id);
+      const ids = dupes.map(r => r.id);
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
         await db.delete(embeddings).where(inArray(embeddings.id, batch));
@@ -565,7 +579,7 @@ export class EmbeddingService {
 
     // Capture post-cleanup count and duration
     const afterRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
-    const totalAfter = ((afterRes as any[])[0]?.count) || 0;
+    const totalAfter = (rows<{ count: number }>(afterRes)[0]?.count) || 0;
     const durationMs = Date.now() - startTime;
 
     // Write audit log entry

@@ -7,7 +7,7 @@ export class EmailProcessorTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'Process emails one-by-one with AI-driven classification and actions. Supports batch processing with per-email decisions.';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     // Requires at least one email provider (Google or Microsoft) to be configured
     const { getToolRegistry } = await import('../registry');
     const registry = getToolRegistry();

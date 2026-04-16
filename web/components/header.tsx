@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, User, LogOut, Settings, KeyRound, ChevronDown, MessageSquare, Webhook, Cpu, BookOpen, Brain, Wrench, Loader2 } from 'lucide-react';
+import { Bell, Search, User, LogOut, Settings, KeyRound, MessageSquare, Webhook, Cpu, BookOpen, Brain, Wrench, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';

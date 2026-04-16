@@ -1,5 +1,5 @@
 import { coreLogger } from '@/utils/logger';
-import type { ConnectionContext, TrustLevel } from './protocol';
+import type { TrustLevel } from './protocol';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -258,11 +258,39 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
 
   registry.register({
     name: 'clear',
-    aliases: ['cls'],
-    description: 'Clear conversation display',
+    aliases: ['cls', 'reset'],
+    description: 'Reset orchestrator context (and clear UI display on channels that support it)',
     minTrustLevel: 'user',
-    handler: async () => {
-      return { text: '[clear]' };
+    handler: async (ctx) => {
+      if (!ctx.sessionId) return { text: 'No active session.' };
+      try {
+        const { sessionRepository } = await import('@/db/repositories/session-repository');
+        const session = await sessionRepository.findById(ctx.sessionId);
+        if (!session) return { text: 'Session not found.' };
+
+        const existingCtx = (session.context as Record<string, unknown>) || {};
+        await sessionRepository.update(ctx.sessionId, {
+          context: {
+            ...existingCtx,
+            clearedAt: new Date().toISOString(),
+            compactedSummary: undefined,
+          },
+        });
+
+        // Channels with ephemeral transcripts (webchat, tui) wipe the UI too.
+        // Persistent-transcript channels (telegram, slack, …) keep history visible
+        // but the orchestrator will ignore anything before the clear boundary.
+        const DISPLAY_CLEAR_CLIENTS = new Set(['webchat', 'tui', 'web', 'ide']);
+        if (DISPLAY_CLEAR_CLIENTS.has(ctx.clientType)) {
+          return { text: '[clear]' };
+        }
+        return {
+          text: 'Context reset. Past messages stay in this chat but I will start fresh from your next message.',
+        };
+      } catch (err) {
+        coreLogger.error({ err, sessionId: ctx.sessionId }, 'clear command failed');
+        return { text: `Clear failed: ${(err as Error).message}` };
+      }
     },
   });
 

@@ -1,7 +1,7 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, } from 'elysia';
 import { apiContext } from '@/api/context';
 import { resolve } from 'path';
-import { readdir, readFile, stat } from 'fs/promises';
+import { readdir, readFile, } from 'fs/promises';
 
 const EVAL_RESULTS_DIR = resolve(process.cwd(), 'eval', 'results');
 

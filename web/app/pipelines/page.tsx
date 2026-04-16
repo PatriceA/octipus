@@ -12,9 +12,12 @@ import {
   ChevronUp,
   Shield,
   RotateCcw,
+  List,
+  Network,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS } from '@/lib/types/models';
+import { PipelineGraph } from '@/components/pipeline-graph';
 
 interface PipelineStep {
   name: string;
@@ -176,6 +179,7 @@ function TemplateCard({
   onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [view, setView] = useState<'list' | 'graph'>('list');
 
   return (
     <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10 p-4">
@@ -193,6 +197,24 @@ function TemplateCard({
           )}
         </div>
         <div className="flex items-center gap-1">
+          {expanded && (
+            <div className="flex items-center bg-surface-container-high rounded-full p-0.5 mr-1">
+              <button
+                onClick={() => setView('list')}
+                title="List view"
+                className={`p-1 rounded-full cursor-pointer ${view === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+              >
+                <List className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setView('graph')}
+                title="Graph view"
+                className={`p-1 rounded-full cursor-pointer ${view === 'graph' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+              >
+                <Network className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           <button
             onClick={() => setExpanded(!expanded)}
             className="p-1.5 text-on-surface-variant hover:text-white rounded cursor-pointer"
@@ -214,33 +236,39 @@ function TemplateCard({
         </div>
       </div>
 
-      {/* Steps preview */}
+      {/* Steps preview — list or graph */}
       {expanded && template.steps.length > 0 && (
-        <div className="mt-4 border-t border-outline-variant/10 pt-3 space-y-2">
-          {template.steps.map((step, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-3 text-sm pl-2"
-            >
-              <span className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium">
-                {i + 1}
-              </span>
-              <span className="font-medium text-white">{step.name}</span>
-              <span className="text-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded font-mono">
-                {step.topic}
-              </span>
-              {step.requiresApproval && (
-                <span title="Requires approval">
-                  <Shield className="w-3.5 h-3.5 text-orange-500" />
-                </span>
-              )}
-              {(step as any).stageType === 'qa_validation' && (
-                <span title={`QA validation (retries step ${((step as any).retryTargetStage ?? 0) + 1}, max ${(step as any).maxRetries ?? 3})`}>
-                  <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
-                </span>
-              )}
+        <div className="mt-4 border-t border-outline-variant/10 pt-3">
+          {view === 'graph' ? (
+            <PipelineGraph steps={template.steps} />
+          ) : (
+            <div className="space-y-2">
+              {template.steps.map((step, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-3 text-sm pl-2"
+                >
+                  <span className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium">
+                    {i + 1}
+                  </span>
+                  <span className="font-medium text-white">{step.name}</span>
+                  <span className="text-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded font-mono">
+                    {step.topic}
+                  </span>
+                  {step.requiresApproval && (
+                    <span title="Requires approval">
+                      <Shield className="w-3.5 h-3.5 text-orange-500" />
+                    </span>
+                  )}
+                  {(step as any).stageType === 'qa_validation' && (
+                    <span title={`QA validation (retries step ${((step as any).retryTargetStage ?? 0) + 1}, max ${(step as any).maxRetries ?? 3})`}>
+                      <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>

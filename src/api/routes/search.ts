@@ -1,5 +1,5 @@
 import { Elysia, t } from 'elysia';
-import { ilike, or, sql } from 'drizzle-orm';
+import { ilike, or, } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { sessions } from '@/db/schema/sessions';

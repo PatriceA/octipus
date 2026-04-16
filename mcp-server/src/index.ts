@@ -86,7 +86,7 @@ async function main(): Promise<void> {
         for await (const chunk of req) {
           chunks.push(chunk as Buffer);
         }
-        const body = Buffer.concat(chunks).toString();
+        const _body = Buffer.concat(chunks).toString();
 
         // The SSE transport handles message routing internally
         // This endpoint receives JSON-RPC messages from the client

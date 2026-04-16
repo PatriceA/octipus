@@ -16,7 +16,7 @@ export default function LoginPage() {
 
   const [totpRequired, setTotpRequired] = useState(false);
   const [totpCode, setTotpCode] = useState('');
-  const [totpUserId, setTotpUserId] = useState('');
+  const [_totpUserId, setTotpUserId] = useState('');
 
   const [formData, setFormData] = useState({
     username: '',

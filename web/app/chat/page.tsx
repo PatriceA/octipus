@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Bot, PanelRightClose, PanelRight } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { PanelRightClose, PanelRight } from 'lucide-react';
 import { api, createWebSocket } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import MessageTimeline, {
@@ -163,13 +162,13 @@ export default function ChatPage() {
         : [welcomeMessage()];
 
       // Restore agent activity and file changes for this session
-      let restoredAgents = new Map<string, TrackedAgent>();
+      const restoredAgents = new Map<string, TrackedAgent>();
       const restoredFileChanges: FileChange[] = [];
       try {
-        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>('/agents');
-        const sessionAgents = (agentData?.agents || []).filter(a => a.sessionId === sessionId);
+        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
+        const sessionAgents = agentData?.agents || [];
         for (const a of sessionAgents) {
-          let toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
+          const toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
           let cliIterations = 0;
           try {
             const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);

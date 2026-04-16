@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Clock, ChevronDown, Calendar, Repeat } from 'lucide-react';
+import { Clock, Calendar, Repeat } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ── Types ──────────────────────────────────────────────────────────

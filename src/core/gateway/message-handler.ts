@@ -19,7 +19,7 @@ async function resolveUserId(userId: string): Promise<string> {
     const db = getDb();
     const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.isAdmin, true)).limit(1);
     if (admin) return admin.id;
-  } catch {}
+  } catch (err) { coreLogger.error({ err }, 'silent failure in message-handler'); }
   return userId; // Fallback
 }
 

@@ -6,7 +6,7 @@
  */
 
 import { BaseTool } from '@/tools/base-tool';
-import type { ToolManifest, AgentContext } from '@/core/types';
+import type { ToolManifest, } from '@/core/types';
 import { logger } from '@/utils/logger';
 
 const log = logger.child({ component: 'voice-tool' });
@@ -31,7 +31,7 @@ export class VoiceCallTool extends BaseTool {
     };
   }
 
-  async checkAvailability() {
+  override async checkAvailability() {
     try {
       const { getTelephonyProvider } = await import('@/voice/telephony');
       const provider = await getTelephonyProvider();

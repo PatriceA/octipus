@@ -9,7 +9,7 @@ export class DocumentsTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'List, view, and search uploaded documents — access OCR text, summaries, and categories.';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
       const registry = getModelRegistry();

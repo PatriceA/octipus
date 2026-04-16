@@ -1,7 +1,9 @@
 export { BaseTool, createParameterSchema, type ToolContext, type ToolExecutionOptions, type ToolAvailability } from './base-tool';
 export { ToolRegistry, getToolRegistry, type ToolRegistryOptions } from './registry';
 
-// Built-in tools
+// Built-in tools — re-exported for direct import elsewhere. Registration
+// is auto-discovered by `discoverTools()` (see `discovery.ts`); adding a
+// new built-in tool no longer requires editing this file.
 export { FilesystemTool, filesystemTool } from './filesystem';
 export { ShellTool, shellTool } from './shell';
 export type { ShellOperations, ShellExecResult } from './shell/operations';
@@ -25,53 +27,33 @@ export { VoiceCallTool } from './voice';
 export { VisualTool, visualTool } from './visual';
 
 import { getToolRegistry } from './registry';
-import { filesystemTool } from './filesystem';
-import { shellTool } from './shell';
-import { gitTool } from './git';
-import { browserTool } from './browser';
-import { websearchTool } from './websearch';
-import { dockerTool } from './docker';
-import { githubTool } from './github';
-import { gitlabTool } from './gitlab';
-import { googleWorkspaceTool } from './google-workspace';
-import { microsoft365Tool } from './microsoft365';
-import { knowledgeTool } from './knowledge';
-import { messagingTool } from './messaging';
-import { browserExtTool } from './browser-ext';
-import { schedulingTool } from './scheduling';
-import { documentsTool } from './documents';
-import { profilesTool } from './profiles';
-import { emailProcessorTool } from './email-processor';
-import { VoiceCallTool } from './voice';
-import { visualTool } from './visual';
+import { discoverTools } from './discovery';
 import { loadPlugins, PluginTool } from '@/plugins';
 import { toolLogger } from '@/utils/logger';
 
 /**
- * Register all built-in tools
+ * Register all built-in tools (auto-discovered) and plugins.
+ *
+ * Tool discovery walks `src/tools/<name>/index.ts`; see `discovery.ts`
+ * for the convention. Plugins live in `extensions/` and are loaded by
+ * `loadPlugins()`.
  */
 export async function registerBuiltinTools(): Promise<void> {
   const registry = getToolRegistry();
 
-  await registry.register(filesystemTool);
-  await registry.register(shellTool);
-  await registry.register(gitTool);
-  await registry.register(browserTool);
-  await registry.register(websearchTool);
-  await registry.register(dockerTool);
-  await registry.register(githubTool);
-  await registry.register(gitlabTool);
-  await registry.register(googleWorkspaceTool);
-  await registry.register(microsoft365Tool);
-  await registry.register(knowledgeTool);
-  await registry.register(messagingTool);
-  await registry.register(browserExtTool);
-  await registry.register(schedulingTool);
-  await registry.register(documentsTool);
-  await registry.register(profilesTool);
-  await registry.register(emailProcessorTool);
-  await registry.register(new VoiceCallTool());
-  await registry.register(visualTool);
+  const discovered = await discoverTools();
+  for (const { folder, tool } of discovered) {
+    try {
+      await registry.register(tool);
+      toolLogger.debug({ folder, toolId: tool.id }, 'Tool auto-registered');
+    } catch (err) {
+      toolLogger.error(
+        { folder, toolId: tool.id, error: (err as Error).message },
+        'Auto-registration failed',
+      );
+    }
+  }
+  toolLogger.info({ count: discovered.length }, 'Built-in tools registered (auto-discovered)');
 
   // Load plugins from extensions/ directory
   const plugins = await loadPlugins();

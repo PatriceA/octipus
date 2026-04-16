@@ -1,5 +1,5 @@
 export { BaseChannel, UnifiedMessageInterface, getUMI, type ChannelConfig, type ChannelEvents } from './interface';
-import { BaseChannel } from './interface';
+import { coreLogger } from '@/utils/logger';
 export { TelegramChannel, telegramChannel } from './telegram';
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
@@ -7,11 +7,6 @@ export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 export { WebChatChannel, webChatChannel, type WebChatConnection, type WebChatMessage } from './webchat';
 
 import { getUMI } from './interface';
-import { telegramChannel } from './telegram';
-import { slackChannel } from './slack';
-import { teamsChannel } from './teams';
-import { whatsappChannel } from './whatsapp';
-import { webChatChannel } from './webchat';
 import { getConfig } from '@/config';
 import { channelLogger } from '@/utils/logger';
 import { getPermissionManager } from '@/security/permissions';
@@ -191,7 +186,7 @@ function subscribeToDocumentResults(
         umi.send(message.channelType, message.channelId, {
           content: `**${name}**${category}\n${summary}`,
           replyTo,
-        }).catch(() => {});
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
         sent++;
       }
     } catch (err) {
@@ -207,7 +202,7 @@ function subscribeToDocumentResults(
     umi.send(message.channelType, message.channelId, {
       content: `Document processing failed: ${error}`,
       replyTo,
-    }).catch(() => {});
+    }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
     if (sent >= expectedCount) cleanup();
   };
 
@@ -273,7 +268,9 @@ async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise
 
 /**
  * Reinitialize a single channel at runtime (hot-reload).
- * Disconnects, unregisters, then re-registers and reconnects if configured.
+ * Disconnects, unregisters, then re-registers and reconnects if the
+ * channel's `isEnabled(config)` still returns true. Drives off discovery —
+ * no per-channel switch.
  */
 export async function reinitializeChannel(channelType: ChannelType): Promise<void> {
   const umi = getUMI();
@@ -290,81 +287,51 @@ export async function reinitializeChannel(channelType: ChannelType): Promise<voi
     umi.unregister(channelType);
   }
 
-  // Create fresh instance and register if configured
-  let newChannel: BaseChannel | null = null;
-  switch (channelType) {
-    case 'telegram':
-      if (config.telegram?.botToken) {
-        // Create new instance to avoid stale state
-        const { TelegramChannel } = await import('./telegram');
-        newChannel = new TelegramChannel();
-      }
-      break;
-    case 'slack':
-      if (config.slack?.botToken) {
-        const { SlackChannel } = await import('./slack');
-        newChannel = new SlackChannel();
-      }
-      break;
-    case 'teams':
-      if (config.teams?.appId) {
-        const { TeamsChannel } = await import('./teams');
-        newChannel = new TeamsChannel();
-      }
-      break;
-    case 'whatsapp':
-      if (config.whatsapp?.accessToken) {
-        const { WhatsAppChannel } = await import('./whatsapp');
-        newChannel = new WhatsAppChannel();
-      }
-      break;
-    default:
-      channelLogger.warn({ channelType }, 'Cannot reinitialize channel type');
-      return;
+  const { discoverChannels } = await import('./discovery');
+  const discovered = await discoverChannels();
+  const match = discovered.find(d => d.channel.type === channelType);
+  if (!match) {
+    channelLogger.warn({ channelType }, 'Cannot reinitialize: no matching channel discovered');
+    return;
+  }
+  if (!match.channel.isEnabled(config)) {
+    channelLogger.info({ channelType }, 'Channel removed (no longer configured)');
+    return;
   }
 
-  if (newChannel) {
-    umi.register(newChannel);
-    try {
-      await newChannel.connect();
-      channelLogger.info({ channelType }, 'Channel reinitialized successfully');
-    } catch (error) {
-      channelLogger.error({ error, channelType }, 'Failed to reconnect channel during reinit');
-    }
-  } else {
-    channelLogger.info({ channelType }, 'Channel removed (no longer configured)');
+  umi.register(match.channel);
+  try {
+    await match.channel.connect();
+    channelLogger.info({ channelType }, 'Channel reinitialized successfully');
+  } catch (error) {
+    channelLogger.error({ error, channelType }, 'Failed to reconnect channel during reinit');
   }
 }
 
 /**
- * Initialize and register all configured channels
+ * Initialize and register all configured channels via auto-discovery.
+ * Each channel decides whether it should be enabled via its own
+ * `isEnabled(config)` method — no per-channel switch here.
  */
 export async function initializeChannels(): Promise<void> {
   const umi = getUMI();
   const config = getConfig();
 
-  // Always register webchat
-  umi.register(webChatChannel);
-
-  // Register Telegram if configured
-  if (config.telegram?.botToken) {
-    umi.register(telegramChannel);
+  const { discoverChannels } = await import('./discovery');
+  const discovered = await discoverChannels();
+  for (const { folder, channel } of discovered) {
+    if (channel.isEnabled(config)) {
+      umi.register(channel);
+      channelLogger.debug({ folder, type: channel.type }, 'Channel registered (auto-discovered)');
+    } else {
+      channelLogger.debug({ folder, type: channel.type }, 'Channel skipped (isEnabled=false)');
+    }
   }
-
-  // Register Slack if configured
-  if (config.slack?.botToken) {
-    umi.register(slackChannel);
-  }
-
-  // Register Teams if configured
-  if (config.teams?.appId) {
-    umi.register(teamsChannel);
-  }
-
-  // Register WhatsApp if configured
-  if (config.whatsapp?.accessToken) {
-    umi.register(whatsappChannel);
-  }
+  const registered = discovered.filter(d => d.channel.isEnabled(config)).length;
+  channelLogger.info(
+    { discovered: discovered.length, registered },
+    'Channels initialized (auto-discovered)',
+  );
 
   // Connect all registered channels
   await umi.connectAll();
@@ -462,12 +429,12 @@ export async function initializeChannels(): Promise<void> {
       let unsubAgentEvents: (() => void) | null = null;
       let typingInterval: ReturnType<typeof setInterval> | null = null;
       let stallTimer: ReturnType<typeof setTimeout> | null = null;
-      let lastEventTime = Date.now();
+      let _lastEventTime = Date.now();
       let isTerminal = false;
 
       const react = (emoji: string) => {
         if (isTerminal) return; // Don't overwrite terminal states
-        umi.setReaction(message.channelType, message.channelId, platformMessageId!, emoji).catch(() => {});
+        umi.setReaction(message.channelType, message.channelId, platformMessageId!, emoji).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
       };
 
       const stopTypingAndStall = () => {
@@ -476,7 +443,7 @@ export async function initializeChannels(): Promise<void> {
       };
 
       const resetStallTimer = () => {
-        lastEventTime = Date.now();
+        _lastEventTime = Date.now();
         if (stallTimer) clearTimeout(stallTimer);
         if (isTerminal) return;
         // Soft stall at 15s, hard stall at 45s
@@ -493,10 +460,10 @@ export async function initializeChannels(): Promise<void> {
         react('👀');
 
         // Repeating typing indicator — Telegram expires after 5s, so resend every 4s
-        umi.sendTyping(message.channelType, message.channelId).catch(() => {});
+        umi.sendTyping(message.channelType, message.channelId).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
         typingInterval = setInterval(() => {
           if (!isTerminal) {
-            umi.sendTyping(message.channelType, message.channelId).catch(() => {});
+            umi.sendTyping(message.channelType, message.channelId).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
           }
         }, 4_000);
 
@@ -558,15 +525,17 @@ export async function initializeChannels(): Promise<void> {
 
               if (role) {
                 react(roleEmojis[role] || '🧠');
-                // Send text feedback for non-orchestrator workers (once per role)
+                // Direct-response fast path (small talk) never spawns a real worker —
+                // suppress the "started ... agent" text to avoid phantom announcements.
+                const isDirect = d.model === 'direct';
                 const key = `spawned-${role}`;
-                if (!sentStatuses.has(key)) {
+                if (!isDirect && !sentStatuses.has(key)) {
                   sentStatuses.add(key);
-                  const model = d.model && d.model !== 'direct' ? ` (${d.model})` : '';
+                  const model = d.model ? ` (${d.model})` : '';
                   umi.send(message.channelType, message.channelId, {
                     content: `Working on it \u2014 started *${role}* agent${model}.`,
                     replyTo: platformMessageId,
-                  }).catch(() => {});
+                  }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
                 }
               } else if (!sentStatuses.has('ack')) {
                 sentStatuses.add('ack');
@@ -592,7 +561,7 @@ export async function initializeChannels(): Promise<void> {
               umi.send(message.channelType, message.channelId, {
                 content: `Started a team of agents (${roles}).`,
                 replyTo: platformMessageId,
-              }).catch(() => {});
+              }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
               break;
             }
             case 'team_completed': {
@@ -615,7 +584,7 @@ export async function initializeChannels(): Promise<void> {
               umi.send(message.channelType, message.channelId, {
                 content: approvalText,
                 replyTo: platformMessageId,
-              }).catch(() => {});
+              }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
               break;
             }
             case 'status_update': {
@@ -627,7 +596,7 @@ export async function initializeChannels(): Promise<void> {
                 umi.send(message.channelType, message.channelId, {
                   content: d.message,
                   replyTo: platformMessageId,
-                }).catch(() => {});
+                }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
               }
               break;
             }

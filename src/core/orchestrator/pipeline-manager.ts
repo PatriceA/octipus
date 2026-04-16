@@ -1,20 +1,19 @@
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { pipelines, pipelineStages } from '@/db/schema/pipelines';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
+import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import type { Pipeline, NewPipeline, PipelineStageRow, NewPipelineStage } from '@/db/schema/pipelines';
 import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
 import type { AgentContext } from '@/core/types';
 import type { QAValidationResult } from './types';
 import { getModelRegistry } from '@/models/model-registry';
-import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import { getNotificationService } from '@/core/notification-service';
 import { getOrchestratorService } from './service';
 import { getPipelineTemplate, expandPromptTemplate, buildStagesFromTemplate } from './templates';
 import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
 import { messageRepository } from '@/db/repositories/message-repository';
-import type { PipelineStatus, StageStatus } from './types';
 
 export class PipelineManager {
   private get db() { return getDb(); }
@@ -44,7 +43,7 @@ export class PipelineManager {
     const stageConfigs = buildStagesFromTemplate(template, description);
 
     // Create pipeline record
-    const [pipeline] = await this.db.insert(pipelines).values({
+    const pipeline = await pipelineRepository.create({
       orchestratorAgentId,
       sessionId,
       userId,
@@ -53,21 +52,19 @@ export class PipelineManager {
       description,
       status: 'running',
       currentStageIndex: 0,
-    }).returning();
+    });
 
     // Create stage records
-    for (const stageConfig of stageConfigs) {
-      await this.db.insert(pipelineStages).values({
-        pipelineId: pipeline.id,
-        name: stageConfig.name,
-        role: stageConfig.role,
-        toolIds: stageConfig.toolIds,
-        systemPrompt: stageConfig.systemPrompt,
-        input: '',
-        requiresApproval: stageConfig.requiresApproval,
-        stageIndex: stageConfig.stageIndex,
-      });
-    }
+    await pipelineRepository.createStages(stageConfigs.map(stageConfig => ({
+      pipelineId: pipeline.id,
+      name: stageConfig.name,
+      role: stageConfig.role,
+      toolIds: stageConfig.toolIds,
+      systemPrompt: stageConfig.systemPrompt,
+      input: '',
+      requiresApproval: stageConfig.requiresApproval,
+      stageIndex: stageConfig.stageIndex,
+    })));
 
     const orchestrator = getOrchestratorService();
     orchestrator['emit']({
@@ -115,7 +112,7 @@ export class PipelineManager {
         role: 'system',
         content: `**Stage ${i + 1}: ${stage.name}** (${stage.role || 'agent'}) started`,
         metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_started' },
-      }).catch(() => {});
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
       // Check if this stage requires approval
       if (stage.requiresApproval && previousOutput) {
@@ -228,7 +225,7 @@ export class PipelineManager {
           role: 'system',
           content: `**${stage.name}** (${stage.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
           metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_completed' },
-        }).catch(() => {});
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
         // --- QA Validation retry loop ---
         if (builtStage.stageType === 'qa_validation') {
@@ -396,7 +393,7 @@ export class PipelineManager {
           `Pipeline "${title}" failed`,
           `Failed at stage "${stage.name}": ${errorMsg}`,
           { pipelineId: pipeline.id, stage: stage.name },
-        ).catch(() => {});
+        ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
         return { pipelineId: pipeline.id, result: `Pipeline failed at "${stage.name}": ${errorMsg}` };
       }
     }
@@ -419,8 +416,8 @@ export class PipelineManager {
     // Auto-update project summary after pipeline completion
     try {
       const { autoUpdateProjectSummary } = await import('./project-summary');
-      autoUpdateProjectSummary(context, title, previousOutput).catch(() => {});
-    } catch {}
+      autoUpdateProjectSummary(context, title, previousOutput).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+    } catch (err) { coreLogger.error({ err }, 'silent failure in pipeline-manager'); }
 
     getNotificationService().notify(
       pipeline.userId,
@@ -428,7 +425,7 @@ export class PipelineManager {
       `Pipeline "${title}" completed`,
       (previousOutput || '').slice(0, 200),
       { pipelineId: pipeline.id },
-    ).catch(() => {});
+    ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
     return { pipelineId: pipeline.id, result: summary };
   }
@@ -458,7 +455,7 @@ export class PipelineManager {
     const registry = getModelRegistry();
 
     // Create pipeline record
-    const [pipeline] = await this.db.insert(pipelines).values({
+    const pipeline = await pipelineRepository.create({
       orchestratorAgentId,
       sessionId,
       userId,
@@ -467,13 +464,14 @@ export class PipelineManager {
       description,
       status: 'running',
       currentStageIndex: 0,
-    }).returning();
+    });
 
     // Create stages from template steps
+    const stageRows: NewPipelineStage[] = [];
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       const model = await registry.getModelForTopic(step.topic);
-      await this.db.insert(pipelineStages).values({
+      stageRows.push({
         pipelineId: pipeline.id,
         name: step.name,
         role: step.topic,
@@ -485,6 +483,7 @@ export class PipelineManager {
         stageIndex: i,
       });
     }
+    await pipelineRepository.createStages(stageRows);
 
     coreLogger.info({ pipelineId: pipeline.id, template: template.name, stages: steps.length }, 'Pipeline created from template');
 
@@ -551,7 +550,7 @@ export class PipelineManager {
         role: 'system',
         content: `**Stage ${i + 1}: ${stage.name}** (${stage.role || 'agent'}) started`,
         metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_started' },
-      }).catch(() => {});
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
       if (stage.requiresApproval && previousOutput) {
         await this.updateStage(stage.id, { status: 'awaiting_approval' });
@@ -636,7 +635,7 @@ export class PipelineManager {
           role: 'system',
           content: `**${stage.name}** (${stage.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
           metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_completed' },
-        }).catch(() => {});
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
         // --- QA Validation retry loop for DB template pipelines ---
         if (stepConfig?.stageType === 'qa_validation') {
@@ -754,8 +753,8 @@ export class PipelineManager {
     // Auto-update project summary after pipeline completion
     try {
       const { autoUpdateProjectSummary } = await import('./project-summary');
-      autoUpdateProjectSummary(context, pipeline.title, previousOutput).catch(() => {});
-    } catch {}
+      autoUpdateProjectSummary(context, pipeline.title, previousOutput).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+    } catch (err) { coreLogger.error({ err }, 'silent failure in pipeline-manager'); }
 
     getNotificationService().notify(
       pipeline.userId,
@@ -763,7 +762,7 @@ export class PipelineManager {
       `Pipeline "${pipeline.title}" completed`,
       (previousOutput || '').slice(0, 200),
       { pipelineId: pipeline.id },
-    ).catch(() => {});
+    ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
     return { pipelineId: pipeline.id, result: summary };
   }
@@ -772,8 +771,7 @@ export class PipelineManager {
    * Get pipeline by ID with stages.
    */
   async getPipeline(id: string): Promise<Pipeline | null> {
-    const result = await this.db.select().from(pipelines).where(eq(pipelines.id, id)).limit(1);
-    return result[0] ?? null;
+    return pipelineRepository.findById(id);
   }
 
   /**

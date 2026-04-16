@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { Elysia, t } from 'elysia';
 import { eq, and } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -168,7 +169,7 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
             error: errorMessage,
             triggerContext: { webhook: { hookId, body: payload } },
           });
-        } catch {}
+        } catch (err) { coreLogger.error({ err }, 'silent failure in webhook-incoming'); }
 
         set.status = 500;
         return { error: 'Processing failed', message: errorMessage };

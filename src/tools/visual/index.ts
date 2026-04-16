@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -22,7 +23,7 @@ async function playwrightUsable(browserType: BrowserType): Promise<boolean> {
     if (isPlaywrightMissingError(err)) return false;
     return false;
   } finally {
-    await cap.close().catch(() => {});
+    await cap.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
   }
 }
 
@@ -33,7 +34,7 @@ export class VisualTool extends BaseTool {
   readonly description =
     'Capture and analyze web pages with a vision model. Returns UI elements, visual/functional/accessibility issues, and suggestions. Useful for QA and UI testing.';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     const m = await getModelRegistry().getModelForTopic('vision');
     if (!m) {
       return {
@@ -113,10 +114,10 @@ export class VisualTool extends BaseTool {
         await cap.navigate(url);
         shots.push(await cap.capture({ fullPage: !!fullPage }));
       }
-      await cap.close().catch(() => {});
+      await cap.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
       return { backend: 'playwright', shots };
     } catch (err) {
-      await cap.close().catch(() => {});
+      await cap.close().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
       if (!isPlaywrightMissingError(err)) throw err;
     }
 

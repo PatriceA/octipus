@@ -6,6 +6,7 @@
  * The WebSocket endpoint is registered in websocket.ts alongside other WS routes.
  */
 
+import { coreLogger } from '@/utils/logger';
 import { apiLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
 
@@ -36,7 +37,7 @@ class BrowserBridgeService {
   registerConnection(ws: any, info: Record<string, unknown>): void {
     // Close previous connection if any
     if (this.ws) {
-      try { this.ws.close(4001, 'Replaced by new connection'); } catch {}
+      try { this.ws.close(4001, 'Replaced by new connection'); } catch (err) { coreLogger.error({ err }, 'silent failure in browser-bridge'); }
       this.rejectAllPending('Browser extension reconnected');
     }
 
@@ -112,7 +113,7 @@ class BrowserBridgeService {
   }
 
   private rejectAllPending(reason: string): void {
-    for (const [id, pending] of this.pendingCommands) {
+    for (const [_id, pending] of this.pendingCommands) {
       clearTimeout(pending.timer);
       pending.reject(new Error(reason));
     }

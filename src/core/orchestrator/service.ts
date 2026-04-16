@@ -41,12 +41,22 @@ export class OrchestratorService {
   private modelSelector = new ModelSelector();
   private _lastWorkerResult: string | null = null;
 
+  /**
+   * Subscribe to orchestrator events. The gateway hub does this at startup
+   * via `event-bridge.ts` and forwards every event to the GatewayEventBus —
+   * so orchestrator events DO land in the gateway replay buffer. Direct
+   * subscribers should still prefer `getGatewayHub().eventBus.subscribe(...)`
+   * unless they need raw shape (no event-type mapping).
+   */
   onEvent(handler: OrchestratorEventHandler): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
   }
 
   private emit(event: OrchestratorEvent): void {
+    // Synchronous fan-out to local subscribers. The gateway-event-bridge is
+    // one of these subscribers; it republishes through GatewayEventBus so
+    // the replay buffer captures every orchestrator event.
     for (const handler of this.eventHandlers) {
       try {
         handler(event);
@@ -97,7 +107,7 @@ export class OrchestratorService {
         if (!currentTitle || genericTitles.includes(currentTitle) || currentTitle.endsWith(' conversation')) {
           const autoTitle = message.slice(0, 80).replace(/\n/g, ' ').trim();
           if (autoTitle) {
-            sessionRepository.update(resolvedSessionId, { title: autoTitle }).catch(() => {});
+            sessionRepository.update(resolvedSessionId, { title: autoTitle }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in service'));
           }
         }
       }
@@ -208,9 +218,10 @@ export class OrchestratorService {
 
         const planMessage = `Execute this project plan. Follow the brief and use the appropriate tools and agents:\n\n${planState.brief}`;
         const classification = classifyMessage(planMessage);
-        const { response, agentId } = await this.runOrchestrator(
+        const { response, agentId, sources: _planSources } = await this.runOrchestrator(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
         );
+        void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
         const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
@@ -279,14 +290,20 @@ export class OrchestratorService {
       }
 
       const startTime = Date.now();
-      const { response, agentId } = await this.runOrchestrator(
+      const { response, agentId, sources } = await this.runOrchestrator(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
-      const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
+      let finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
       if (outputCheck.action === 'replace') {
         coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced orchestrator response');
+      }
+
+      const activeSession = await sessionRepository.findById(resolvedSessionId);
+      const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
+      if (showSources && sources.length > 0) {
+        finalResponse += `\n\n_Sources: ${sources.join(', ')}_`;
       }
 
       await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
@@ -321,7 +338,7 @@ export class OrchestratorService {
     classification: MessageClassification,
     guardFlags: string[] = [],
     channel?: string,
-  ): Promise<{ response: string; agentId: string }> {
+  ): Promise<{ response: string; agentId: string; sources: string[] }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration();
 
@@ -334,13 +351,23 @@ export class OrchestratorService {
     }
 
     const session = await sessionRepository.findById(sessionId);
-    const sessionSummary = (session?.context as SessionContext)?.compactedSummary;
-    if (sessionSummary) {
+    const sessionCtxData = session?.context as SessionContext | undefined;
+    const clearedAt = sessionCtxData?.clearedAt ? new Date(sessionCtxData.clearedAt) : undefined;
+    const sessionSummary = sessionCtxData?.compactedSummary;
+    const sources: string[] = [];
+    if (sessionSummary && !clearedAt) {
       systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
+      sources.push('session summary');
     }
 
     // Load recent conversation history so the orchestrator can reference prior messages
-    const recentHistory = await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant']);
+    const recentHistory = await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant'], clearedAt);
+    if (recentHistory.length > 0) {
+      sources.push(`recent ${recentHistory.length} msg${recentHistory.length === 1 ? '' : 's'}`);
+    }
+    if (classification.topic) {
+      sources.push(`classifier(${classification.topic})`);
+    }
     if (recentHistory.length > 0) {
       const historyLines = recentHistory.map(m =>
         `[${m.role}]: ${m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content}`
@@ -374,7 +401,7 @@ export class OrchestratorService {
           const brief = (await file.text()).slice(0, 500);
           wsContext += `\nProject overview: ${brief}`;
         }
-      } catch {}
+      } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
 
       wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
       wsContext += `\n\nFor complex implementation tasks in this project, PREFER using the "Full Development Cycle" pipeline (via create_pipeline) to ensure thorough research, architecture planning, and testing.`;
@@ -403,8 +430,11 @@ export class OrchestratorService {
       }
     }
 
-    // Hook-triggered tasks get a longer timeout (45 min) since they run unattended
-    const orchestratorTimeout = channel === 'hook' ? 2700000 : 1800000;
+    // Hook-triggered tasks get a longer timeout since they run unattended.
+    const orchConfig = getConfig().orchestrator;
+    const orchestratorTimeout = channel === 'hook'
+      ? orchConfig.orchestratorHookTimeoutMs
+      : orchConfig.orchestratorTimeoutMs;
 
     const worker = await agentManager.spawn({
       sessionId,
@@ -451,7 +481,7 @@ export class OrchestratorService {
         timestamp: new Date(),
       });
 
-      return { response: finalResponse, agentId };
+      return { response: finalResponse, agentId, sources };
     } catch (error) {
       this._lastWorkerResult = null;
       coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
@@ -479,7 +509,7 @@ export class OrchestratorService {
       const response = wasStopped
         ? 'Task was stopped. Would you like to adjust the request or start something new?'
         : `I encountered an error while processing your request: ${errMsg}`;
-      return { response, agentId };
+      return { response, agentId, sources };
     }
   }
 

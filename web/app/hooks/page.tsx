@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Info, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Play, Eye, Calendar, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
+import { Webhook, Plus, ToggleLeft, ToggleRight, Trash2, Pencil, X, Loader2, Lightbulb, Save, History, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, Eye, Calendar, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { SchedulePicker, describeCron } from '@/components/schedule-picker';
@@ -774,8 +774,8 @@ interface EditHookModalProps {
 function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [name, setName] = useState(hook.name);
   const [description, setDescription] = useState(hook.description || '');
-  const [trigger, setTrigger] = useState(hook.trigger);
-  const [action, setAction] = useState(hook.action);
+  const [trigger, _setTrigger] = useState(hook.trigger);
+  const [action, _setAction] = useState(hook.action);
 
   // Trigger config
   const [webhookPath, setWebhookPath] = useState((hook.triggerConfig?.webhookPath as string) || '');

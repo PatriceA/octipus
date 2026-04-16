@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
@@ -122,7 +123,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     const exists = existsSync(resolved);
     let isDirectory = false;
     if (exists) {
-      try { isDirectory = statSync(resolved).isDirectory(); } catch {}
+      try { isDirectory = statSync(resolved).isDirectory(); } catch (err) { coreLogger.error({ err }, 'silent failure in workspace'); }
     }
     return { path: resolved, exists, isDirectory, valid: exists && isDirectory };
   }, {

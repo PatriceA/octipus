@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils';
-import { type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 type CardVariant = 'default' | 'glass' | 'bento';
 

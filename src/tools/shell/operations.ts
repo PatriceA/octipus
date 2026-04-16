@@ -11,6 +11,12 @@ export interface ShellOperations {
       env?: Record<string, string>;
       onData?: (stream: 'stdout' | 'stderr', data: Buffer) => void;
       signal?: AbortSignal;
+      /**
+       * Opt-in to `sh -c` execution for commands that need shell features
+       * (pipes, redirects, command substitution). Defaults to false; safe
+       * commands are tokenized and spawned without a shell. Audited.
+       */
+      unsafe?: boolean;
     },
   ): Promise<ShellExecResult>;
 

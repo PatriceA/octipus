@@ -1,7 +1,6 @@
 import { eq, desc, and, gte, lte, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
-import { auditLog, auditActionEnum, type AuditLogEntry, type NewAuditLogEntry, type AuditDetails } from '../schema/audit';
-import { dbLogger } from '@/utils/logger';
+import { auditLog, type auditActionEnum, type AuditLogEntry, type NewAuditLogEntry, type AuditDetails } from '../schema/audit';
 
 export class AuditRepository {
   private get db() { return getDb(); }

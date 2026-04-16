@@ -1,6 +1,6 @@
-import { LiteLLMClient } from '../models/litellm-client';
+import type { LiteLLMClient } from '../models/litellm-client';
 import { logger } from '../utils/logger';
-import type { ScreenshotResult, ElementInfo } from './screenshot';
+import type { ScreenshotResult, } from './screenshot';
 
 export interface AnalysisResult {
   description: string;

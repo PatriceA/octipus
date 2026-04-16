@@ -16,7 +16,6 @@ export {
   SUPPORTED_VERSIONS,
 } from './protocol';
 export { PresenceTracker, type PresenceEntry, type PresenceStats } from './presence';
-// AdapterRegistry removed — channel adapters still use legacy UMI pattern
 export { GatewayHub, getGatewayHub } from './hub';
 export { connectEventBridge } from './event-bridge';
 export { wireMessageHandler } from './message-handler';

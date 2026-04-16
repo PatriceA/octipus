@@ -1,6 +1,6 @@
 import { readFile, mkdir, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { resolve, dirname, basename, join, extname } from 'path';
+import { dirname, basename, join, extname } from 'path';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -171,7 +171,7 @@ export class DocumentProcessor {
         spawnSync('convert', [filePath, tmpOut], { timeout: 15000 });
         fileBuffer = await readFile(tmpOut);
         mimeType = 'image/png';
-        try { unlinkSync(tmpOut); } catch {}
+        try { unlinkSync(tmpOut); } catch (err) { coreLogger.error({ err }, 'silent failure in processor'); }
         this.logger.info({ from: ext, filePath }, 'Converted image to PNG');
       } catch (convErr) {
         this.logger.warn({ err: convErr, ext }, 'Image conversion failed, sending original format');
@@ -332,7 +332,7 @@ export class DocumentProcessor {
     try {
       const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
       const pdf = await pdfjsLib.getDocument(filePath).promise;
-      const client = getLiteLLMClient();
+      const _client = getLiteLLMClient();
       const pageTexts: string[] = [];
       const maxPages = Math.min(pdf.numPages, 20); // Cap OCR at 20 pages
 
@@ -349,7 +349,7 @@ export class DocumentProcessor {
           const data = new Uint8ClampedArray(width * height * 4);
 
           // Use pdfjs NodeCanvasFactory pattern
-          const canvasAndContext = {
+          const _canvasAndContext = {
             canvas: { width, height },
             context: {
               _data: data,

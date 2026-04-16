@@ -2,7 +2,6 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
-import { apiLogger } from '@/utils/logger';
 
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
@@ -183,9 +182,29 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       const offset = query.offset ? parseInt(query.offset, 10) : 0;
       const roles = query.roles ? query.roles.split(',') : undefined;
 
-      const messages = await messageRepository.findBySession(params.id, limit, offset, roles);
+      // Aggregate messages across sibling sessions for long-lived channel chats.
+      // Channel restarts or /clear can create new session rows for the same
+      // (user, channelType, channelId); users expect one continuous transcript.
+      const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
+      const aggregate = query.aggregate !== 'false' && AGGREGATED_CHANNELS.has(session.channelType);
 
-      return { messages, total: session.messageCount };
+      let messages;
+      let total;
+      if (aggregate) {
+        const siblings = await sessionRepository.findAllByUserAndChannel(
+          session.userId,
+          session.channelType,
+          session.channelId,
+        );
+        const siblingIds = siblings.map(s => s.id);
+        messages = await messageRepository.findBySessions(siblingIds, limit, offset, roles);
+        total = await messageRepository.countBySessions(siblingIds);
+      } else {
+        messages = await messageRepository.findBySession(params.id, limit, offset, roles);
+        total = session.messageCount;
+      }
+
+      return { messages, total, aggregated: aggregate };
     },
     {
       params: t.Object({
@@ -195,6 +214,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         limit: t.Optional(t.String()),
         offset: t.Optional(t.String()),
         roles: t.Optional(t.String()),
+        aggregate: t.Optional(t.String()),
       }),
       detail: { tags: ['sessions'] },
     }

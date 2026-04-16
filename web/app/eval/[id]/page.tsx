@@ -9,7 +9,6 @@ import {
   ArrowLeft,
   CheckCircle,
   XCircle,
-  Clock,
   GitCompare,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -72,7 +71,7 @@ type FilterType = 'all' | 'passed' | 'failed';
 
 export default function EvalDetailPage() {
   const params = useParams();
-  const router = useRouter();
+  const _router = useRouter();
   const id = params.id as string;
 
   const [data, setData] = useState<EvalDetail | null>(null);

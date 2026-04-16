@@ -2,7 +2,7 @@
  * Agent management tools — spawn, monitor, message, and stop agents.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 

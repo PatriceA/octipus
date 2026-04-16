@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { spawn, type ChildProcess } from 'child_process';
 import { resolve as resolvePath, join as joinPath } from 'path';
 import { writeFileSync, unlinkSync, existsSync, mkdirSync } from 'fs';
@@ -90,7 +91,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           status: 'stopped',
           iterations: this.iteration,
           durationMs,
-        }).catch(() => {});
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cli-agent-worker'));
         throw new Error('Agent was aborted by user');
       }
 

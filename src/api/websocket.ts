@@ -7,15 +7,31 @@ import { getOrchestratorService } from '@/core/orchestrator';
 import { getBrowserBridge } from './browser-bridge';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { getConfig } from '@/config';
+import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 
 interface WebSocketData {
-  userId: string;
-  connectionId: string;
+  userId?: string;
+  connectionId?: string;
+  unsubscribeAgentEvents?: () => void;
+  unsubscribeOrchestrator?: () => void;
+  unsubscribePermissions?: () => void;
+  /** Browser-bridge auth flag — true once the bridge handshake succeeded. */
+  _bridgeAuthed?: boolean;
 }
 
-// Track active WebSocket connections per user to prevent duplicates
-const activeConnections = new Map<string, { ws: any; cleanup: () => void }>();
+/**
+ * Cast Elysia's untyped `ws.data` to our typed `WebSocketData`. The framework
+ * surfaces `data` as a wide structural type; we own the keys we put on it.
+ */
+function wsData(ws: { data: unknown }): WebSocketData {
+  return ws.data as WebSocketData;
+}
+
+// Track active WebSocket connections per user to prevent duplicates.
+// `ws` is unknown because Bun's WebSocket type leaks into Elysia's surface
+// — we only need to call `.close()` on it.
+const activeConnections = new Map<string, { ws: { close: (code?: number, reason?: string) => void }; cleanup: () => void }>();
 
 export function setupWebSocket(app: Elysia): void {
   app.ws('/ws', {
@@ -45,8 +61,8 @@ export function setupWebSocket(app: Elysia): void {
       );
 
       // Store user info in ws data
-      (ws.data as any).userId = session.userId;
-      (ws.data as any).connectionId = connectionId;
+      wsData(ws).userId = session.userId;
+      wsData(ws).connectionId = connectionId;
 
       // Close previous connection for this user (prevents duplicate events from React Strict Mode / HMR)
       const existing = activeConnections.get(session.userId);
@@ -123,9 +139,9 @@ export function setupWebSocket(app: Elysia): void {
       });
 
       // Store unsubscribe functions
-      (ws.data as any).unsubscribeAgentEvents = unsubscribe;
-      (ws.data as any).unsubscribeOrchestrator = unsubscribeOrchestrator;
-      (ws.data as any).unsubscribePermissions = unsubscribePermissions;
+      wsData(ws).unsubscribeAgentEvents = unsubscribe;
+      wsData(ws).unsubscribeOrchestrator = unsubscribeOrchestrator;
+      wsData(ws).unsubscribePermissions = unsubscribePermissions;
 
       // Track this connection for dedup
       const cleanup = () => {
@@ -150,7 +166,15 @@ export function setupWebSocket(app: Elysia): void {
     },
 
     async message(ws, message) {
-      const data = ws.data as any as WebSocketData;
+      const data = wsData(ws);
+      // open() always sets these — guard so the type-narrowed branches below
+      // don't have to keep re-checking. If they're missing the WS skipped auth.
+      if (!data.userId || !data.connectionId) {
+        ws.close(4001, 'Connection not authenticated');
+        return;
+      }
+      const userId = data.userId;
+      const connectionId = data.connectionId;
 
       try {
         const parsed = typeof message === 'string' ? JSON.parse(message) : message;
@@ -163,7 +187,7 @@ export function setupWebSocket(app: Elysia): void {
         switch (parsed.type) {
           case 'message':
             // Handle chat message
-            await webChatChannel.handleIncoming(data.connectionId, {
+            await webChatChannel.handleIncoming(connectionId, {
               type: 'message',
               content: parsed.content,
               attachments: parsed.attachments,
@@ -179,9 +203,9 @@ export function setupWebSocket(app: Elysia): void {
             // Handle permission approval/denial
             const permissionManager = getPermissionManager();
             if (parsed.approved) {
-              await permissionManager.approve(parsed.requestId, data.userId, parsed.resolution);
+              await permissionManager.approve(parsed.requestId, userId, parsed.resolution);
             } else {
-              await permissionManager.deny(parsed.requestId, data.userId, parsed.resolution);
+              await permissionManager.deny(parsed.requestId, userId, parsed.resolution);
             }
             break;
 
@@ -194,7 +218,7 @@ export function setupWebSocket(app: Elysia): void {
               const { sessionRepository } = await import('@/db/repositories/session-repository');
               const { generateId } = await import('@/utils/crypto');
               const session = await sessionRepository.create({
-                userId: data.userId,
+                userId: userId,
                 channelType: 'webchat',
                 channelId: `chat-${generateId().slice(0, 8)}`,
                 title: content.slice(0, 100) || 'New Chat',
@@ -207,7 +231,7 @@ export function setupWebSocket(app: Elysia): void {
             try {
               const result = await orchestrator.handleMessage(
                 sessionId,
-                data.userId,
+                userId,
                 content,
                 'webchat',
                 parsed.expertId,
@@ -290,11 +314,11 @@ export function setupWebSocket(app: Elysia): void {
     },
 
     close(ws) {
-      const data = ws.data as any;
+      const data = wsData(ws);
 
       // Only clean up if this is still the active connection for this user
       const active = data.userId ? activeConnections.get(data.userId) : null;
-      if (active?.ws === ws) {
+      if (active?.ws === ws && data.userId) {
         active.cleanup();
         activeConnections.delete(data.userId);
       } else {
@@ -331,7 +355,7 @@ export function setupWebSocket(app: Elysia): void {
         return;
       }
 
-      (ws.data as any).userId = session.userId;
+      wsData(ws).userId = session.userId;
 
       // Send pending permission requests
       const permissionManager = getPermissionManager();
@@ -346,7 +370,12 @@ export function setupWebSocket(app: Elysia): void {
     },
 
     async message(ws, message) {
-      const data = ws.data as any;
+      const data = wsData(ws);
+      if (!data.userId) {
+        ws.close(4001, 'Connection not authenticated');
+        return;
+      }
+      const userId = data.userId;
 
       try {
         const parsed = typeof message === 'string' ? JSON.parse(message) : message;
@@ -355,9 +384,9 @@ export function setupWebSocket(app: Elysia): void {
           const permissionManager = getPermissionManager();
 
           if (parsed.approved) {
-            await permissionManager.approve(parsed.requestId, data.userId, parsed.resolution);
+            await permissionManager.approve(parsed.requestId, userId, parsed.resolution);
           } else {
-            await permissionManager.deny(parsed.requestId, data.userId, parsed.resolution);
+            await permissionManager.deny(parsed.requestId, userId, parsed.resolution);
           }
 
           ws.send(JSON.stringify({
@@ -372,7 +401,7 @@ export function setupWebSocket(app: Elysia): void {
     },
 
     close(ws) {
-      const data = ws.data as any;
+      const data = wsData(ws);
       apiLogger.info({ userId: data.userId }, 'Permission WS disconnected');
     },
   });
@@ -393,18 +422,18 @@ export function setupWebSocket(app: Elysia): void {
       const config = getConfig();
       const masterKey = config.security.masterKey;
 
-      if (token !== masterKey) {
+      if (!secureCompare(token, masterKey)) {
         ws.close(4001, 'Invalid authentication token');
         return;
       }
 
-      (ws.data as any)._bridgeAuthed = true;
+      wsData(ws)._bridgeAuthed = true;
       apiLogger.info('Browser bridge: WebSocket connected, awaiting handshake');
       ws.send(JSON.stringify({ type: 'ready' }));
     },
 
     message(ws, message) {
-      if (!(ws.data as any)?._bridgeAuthed) return;
+      if (!wsData(ws)._bridgeAuthed) return;
 
       let parsed: any;
       try {
@@ -444,7 +473,7 @@ export function setupWebSocket(app: Elysia): void {
     },
 
     close(ws) {
-      if ((ws.data as any)?._bridgeAuthed) {
+      if (wsData(ws)._bridgeAuthed) {
         bridge.handleDisconnect();
       }
     },

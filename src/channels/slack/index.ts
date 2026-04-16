@@ -1,4 +1,4 @@
-import { App, type SlackEventMiddlewareArgs, type AllMiddlewareArgs } from '@slack/bolt';
+import { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
 import { BaseChannel } from '../interface';
 import { getConfig } from '@/config';
@@ -35,13 +35,16 @@ interface SlackBlock {
 
 type SayFn = (msg: string | { text: string; thread_ts?: string }) => Promise<unknown>;
 
-type MessageEvent = SlackEventMiddlewareArgs<'message'> & AllMiddlewareArgs;
 
 export class SlackChannel extends BaseChannel {
   readonly type: ChannelType = 'slack';
   readonly name = 'Slack';
 
   private app: App | null = null;
+
+  override isEnabled(config: unknown): boolean {
+    return Boolean((config as { slack?: { botToken?: string } })?.slack?.botToken);
+  }
 
   async connect(): Promise<void> {
     const config = getConfig();
@@ -129,7 +132,7 @@ export class SlackChannel extends BaseChannel {
       throw new Error('Slack app not connected');
     }
 
-    const config = getConfig();
+    const _config = getConfig();
 
     // Build message blocks for rich formatting
     const blocks: SlackBlock[] = [];
@@ -219,7 +222,7 @@ export class SlackChannel extends BaseChannel {
     }
 
     // Find user binding
-    let user = await userRepository.findByChannelBinding('slack', slackUserId);
+    const user = await userRepository.findByChannelBinding('slack', slackUserId);
 
     if (!user) {
       channelLogger.info({ slackUserId, userName }, 'New Slack user - needs linking');

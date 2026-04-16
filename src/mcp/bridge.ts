@@ -7,7 +7,6 @@ import { StreamableHTTPTransport } from './transports/streamable-http';
 import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
 import { coreLogger } from '@/utils/logger';
-import { generateId } from '@/utils/crypto';
 import type { MCPServer, MCPTool } from '@/core/types';
 import type { ToolHandler } from '@/core/agent-worker';
 
@@ -214,7 +213,7 @@ export class MCPBridge extends EventEmitter {
         connection.transport.send(message);
       };
 
-      await connection.protocol.sendRequest(send, MCPMethods.Shutdown).catch(() => {});
+      await connection.protocol.sendRequest(send, MCPMethods.Shutdown).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in bridge'));
     } catch {
       // Ignore errors during shutdown
     }
@@ -411,7 +410,7 @@ export class MCPBridge extends EventEmitter {
     await this.saveConfig();
 
     if (enabled) {
-      await this.connect(server).catch(() => {});
+      await this.connect(server).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in bridge'));
     } else {
       await this.disconnect(serverId);
     }

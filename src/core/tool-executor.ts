@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { getPermissionManager } from '@/security/permissions';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -278,7 +279,7 @@ export class ToolExecutor {
           const hookManager = getHookManager();
           hookManager.triggerToolHooks('tool_post', toolCall.name, toolId, toolCall.arguments, {
             output: resultStr.slice(0, 2000),
-          }).catch(() => {});
+          }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in tool-executor'));
         } catch { /* hooks not ready */ }
       } catch (error) {
         agentLogger.error(

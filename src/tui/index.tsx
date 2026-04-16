@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { render } from 'ink';
 import { TuiApp } from './app';
 import { existsSync, readFileSync } from 'fs';

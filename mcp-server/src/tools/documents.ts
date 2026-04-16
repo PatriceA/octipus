@@ -2,7 +2,7 @@
  * Document management tools — list, upload, get, and delete documents.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 

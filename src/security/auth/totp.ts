@@ -1,6 +1,5 @@
 import { authenticator } from 'otplib';
 import { userRepository } from '@/db/repositories/user-repository';
-import { auditRepository } from '@/db/repositories/audit-repository';
 import { getConfig } from '@/config';
 import { securityLogger } from '@/utils/logger';
 import { encrypt, decrypt, deriveKey } from '@/utils/crypto';

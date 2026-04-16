@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import { getLiteLLMClient, type CompletionResult } from '@/models/litellm-client';
 import { getCostTracker } from '@/models/cost-tracker';
 import { getModelRegistry } from '@/models/model-registry';
@@ -11,7 +12,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { join as joinPath } from 'path';
 import { homedir } from 'os';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
-import type { AgentMessage, ToolCall } from './types';
+import type { AgentMessage, } from './types';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { BaseAgentWorker } from './agent-base';
 import { ToolExecutor } from './tool-executor';
@@ -45,7 +46,7 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /** Public elapsed time for status reporting */
-  getElapsedMs(): number {
+  override getElapsedMs(): number {
     return this.startTime > 0 ? Date.now() - this.startTime : 0;
   }
 
@@ -176,21 +177,21 @@ export class AgentWorker extends BaseAgentWorker {
         role: this.context.role,
         topic: this.context.topic,
         output: typeof result === 'string' ? result : JSON.stringify(result),
-      }).catch(() => {}); // Never block on indexing failures
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker')); // Never block on indexing failures
 
       // Auto-update project summary for roles that work on projects
       const summaryRoles = ['coding', 'research', 'review', 'general', 'qa', 'devops', 'design', 'security', 'data', 'ai'];
       if (summaryRoles.includes(this.context.role) && typeof result === 'string' && result.length > 50) {
         import('@/core/orchestrator/project-summary').then(({ autoUpdateProjectSummary }) => {
           const title = `${this.context.role} — ${this.context.topic || 'task'}`;
-          autoUpdateProjectSummary(this.context, title, result).catch(() => {});
-        }).catch(() => {});
+          autoUpdateProjectSummary(this.context, title, result).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
       }
 
       // Close any browser tabs the agent opened via browser-ext.new_tab
       import('@/tools/browser-ext').then(({ closeAgentTabs }) => {
-        closeAgentTabs(this.context.id).catch(() => {});
-      }).catch(() => {});
+        closeAgentTabs(this.context.id).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
 
       return result;
     } catch (error) {
@@ -223,8 +224,8 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Close any browser tabs the agent opened via browser-ext.new_tab
       import('@/tools/browser-ext').then(({ closeAgentTabs }) => {
-        closeAgentTabs(this.context.id).catch(() => {});
-      }).catch(() => {});
+        closeAgentTabs(this.context.id).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
 
       throw error;
     }
@@ -713,7 +714,7 @@ export class AgentWorker extends BaseAgentWorker {
       try {
         const { getVault } = await import('@/security/vault');
         apiKey = await getVault().getByName('system', model.apiKeyRef) || undefined;
-      } catch {}
+      } catch (err) { coreLogger.error({ err }, 'silent failure in agent-worker'); }
     }
 
     const completionOpts = {

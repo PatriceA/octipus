@@ -1,6 +1,5 @@
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
-import { coreLogger } from '@/utils/logger';
 import type { SessionContext } from '@/db/schema/sessions';
 
 export interface CommandContext {

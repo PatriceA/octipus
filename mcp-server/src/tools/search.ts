@@ -2,7 +2,7 @@
  * Web search tools — search the web and fetch pages via the assistant's SearXNG integration.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AssistantClient } from '../client.js';
 

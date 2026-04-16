@@ -23,7 +23,9 @@
     "eval": "bun run src/eval/cli.ts",
     "eval:routing": "bun run src/eval/cli.ts --suite routing",
     "eval:quality": "bun run src/eval/cli.ts --suite quality",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint",
+    "lint:fix": "biome lint --write --unsafe"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.3.15",
@@ -52,6 +54,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.12",
     "@inquirer/prompts": "8.3.0",
     "@types/bun": "^1.1.3",
     "@types/react": "^18.3.3",

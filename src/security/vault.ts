@@ -1,6 +1,6 @@
 import { eq, and } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { vault, type VaultEntry, type NewVaultEntry, SECRET_PLACEHOLDER_PATTERN } from '@/db/schema/vault';
+import { vault, type VaultEntry, type NewVaultEntry, } from '@/db/schema/vault';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { encrypt, decrypt } from '@/utils/crypto';
 import { pbkdf2Sync, createHash } from 'crypto';

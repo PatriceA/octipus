@@ -7,7 +7,6 @@ import {
   Loader2,
   ChevronDown,
   ChevronRight,
-  Shield,
   Cable,
   Search,
   Check,

@@ -154,6 +154,8 @@ export const orchestratorConfigSchema = z.object({
   maxPipelineStages: z.number().min(1).max(20).default(10),
   approvalTimeoutMs: z.number().min(0).default(3600000), // 1 hour
   workerTimeoutMs: z.number().min(0).default(600000), // 10 minutes
+  orchestratorTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
+  orchestratorHookTimeoutMs: z.number().min(0).default(2700000), // 45 minutes for hook-triggered runs
 });
 
 // OAuth configuration schema

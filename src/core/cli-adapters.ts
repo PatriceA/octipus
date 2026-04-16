@@ -1,9 +1,9 @@
-import { agentLogger } from '@/utils/logger';
+import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
-import { tmpdir, homedir } from 'os';
+import { tmpdir, } from 'os';
 import { randomBytes } from 'crypto';
 
 const IS_WIN = process.platform === 'win32';
@@ -22,7 +22,7 @@ function getOrCreateMcpConfig(): string | null {
       const stat = Bun.file(configPath);
       if (Date.now() - stat.lastModified < 3600_000) return configPath;
     }
-  } catch {}
+  } catch (err) { coreLogger.error({ err }, 'silent failure in cli-adapters'); }
 
   // Build MCP server path — resolve from project root
   const projectRoot = resolve(join(import.meta.dir, '../..'));

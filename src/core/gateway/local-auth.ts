@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomBytes, timingSafeEqual } from 'crypto';

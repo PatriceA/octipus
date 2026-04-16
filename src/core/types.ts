@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+
 
 // Agent Types
 export type AgentStatus = 'idle' | 'running' | 'paused' | 'stopped' | 'completed' | 'failed';

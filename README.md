@@ -4,6 +4,10 @@
 
 # Assistant
 
+> **Building in public.** This is a working, opinionated platform — not a finished product. Breaking changes happen; they get announced and migration notes ship with them. If you are evaluating it for production, treat it as a foundation to build on.
+>
+> **A note on the docs.** Parts of this README and the surrounding markdown were drafted fast to get the open-source release out the door. PRs that improve the writing are as welcome as ones that fix bugs.
+
 Your own autonomous AI workforce. An orchestration platform that deploys specialized expert agents — each with their own tools, domain knowledge, and execution capabilities — to tackle complex tasks across coding, research, design, security, DevOps, and beyond.
 
 Built for developers who want full control. Runs locally. No vendor lock-in. Every model provider, every channel, every skill — yours to configure.
@@ -241,6 +245,24 @@ Make globally available: `bun link`
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
 | **[Changelog](docs/CHANGELOG.md)** | Release history |
 
+## Contributing
+
+We welcome contributions of every size — bug reports, doc fixes, new roles, new channels, new tools.
+
+- Read [DESIGN.md](./DESIGN.md) — the principles every PR runs through
+- Read [CONTRIBUTING.md](./CONTRIBUTING.md) — setup, repo layout, PR checklist
+- Read [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) — how we run arguments (constructive confrontation, not polite avoidance)
+- Check [ROADMAP.md](./ROADMAP.md) — what's in flight, what's next, what's open
+
+For security issues, see [SECURITY.md](./SECURITY.md). **Do not** file security reports as public GitHub issues.
+
+## Community
+
+- **GitHub Issues** — bugs and concrete feature requests
+- **GitHub Discussions** — proposals, design conversations, show-and-tell
+
 ## License
 
-MIT
+[MIT](./LICENSE) — free to use, copy, modify, distribute, sublicense, and sell. No warranty. Use at your own risk.
+
+Copyright © 2026 Patrice and contributors.

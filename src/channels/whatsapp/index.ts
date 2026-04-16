@@ -21,6 +21,10 @@ export class WhatsAppChannel extends BaseChannel {
   private verifyToken: string | null = null;
   private appSecret: string | null = null;
 
+  override isEnabled(config: unknown): boolean {
+    return Boolean((config as { whatsapp?: { accessToken?: string } })?.whatsapp?.accessToken);
+  }
+
   async connect(): Promise<void> {
     const config = getConfig();
 
@@ -396,42 +400,6 @@ export class WhatsAppChannel extends BaseChannel {
     return response.json();
   }
 
-  private splitMessage(text: string, maxLen: number): string[] {
-    if (text.length <= maxLen) return [text];
-
-    const chunks: string[] = [];
-    let remaining = text;
-
-    while (remaining.length > 0) {
-      if (remaining.length <= maxLen) {
-        chunks.push(remaining);
-        break;
-      }
-
-      let splitAt = -1;
-
-      const paragraphEnd = remaining.lastIndexOf('\n\n', maxLen);
-      if (paragraphEnd > maxLen * 0.3) {
-        splitAt = paragraphEnd + 2;
-      }
-
-      if (splitAt === -1) {
-        const lineEnd = remaining.lastIndexOf('\n', maxLen);
-        if (lineEnd > maxLen * 0.3) {
-          splitAt = lineEnd + 1;
-        }
-      }
-
-      if (splitAt === -1) {
-        splitAt = maxLen;
-      }
-
-      chunks.push(remaining.slice(0, splitAt));
-      remaining = remaining.slice(splitAt);
-    }
-
-    return chunks;
-  }
 }
 
 export const whatsappChannel = new WhatsAppChannel();

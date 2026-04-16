@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Search, RotateCcw, Trash2, Plus, Loader2 } from 'lucide-react';
+import { useState, } from 'react';
+import { Search, RotateCcw, Trash2, Plus, } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Modal } from '@/components/ui/modal';
 import {

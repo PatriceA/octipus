@@ -1,5 +1,5 @@
 import { Elysia, t } from 'elysia';
-import { desc, eq, and, or, sql } from 'drizzle-orm';
+import { desc, eq, or, sql } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { getHookManager } from '@/hooks/manager';
 import { getHookSuggestions } from '@/hooks/suggestions';

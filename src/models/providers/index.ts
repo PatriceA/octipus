@@ -1,3 +1,4 @@
+import { coreLogger } from '@/utils/logger';
 import type { ModelProvider } from './interface';
 import { LiteLLMProvider } from './litellm-provider';
 import { CLIProvider } from './cli-provider';
@@ -12,7 +13,7 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../litell
 import { transformMessagesForProvider } from '../message-transform';
 import { getConfig } from '@/config';
 import { modelLogger } from '@/utils/logger';
-import { getRateLimitManager, RateLimitError } from '../rate-limiter';
+import { getRateLimitManager, } from '../rate-limiter';
 import { getCircuitBreakerRegistry, CircuitOpenError } from '../circuit-breaker';
 import { supportsThinking, adjustMaxTokensForThinking, type ThinkingLevel } from '../thinking-budget';
 
@@ -125,7 +126,7 @@ export class ProviderRouter {
         const dbProvider = this.getProviderByName(dbModel.provider);
         if (dbProvider) return dbProvider;
       }
-    } catch {}
+    } catch (err) { coreLogger.error({ err }, 'silent failure in index'); }
     return this.getProvider(modelName);
   }
 

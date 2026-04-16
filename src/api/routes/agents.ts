@@ -30,11 +30,27 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // Fetch historical agents from DB (exclude ones still in memory)
       try {
         const sessionId = query?.sessionId as string | undefined;
-        const dbAgents = sessionId
-          ? await agentRepository.findBySession(sessionId)
-          : user.isAdmin
+        let dbAgents;
+        if (sessionId) {
+          // Aggregate across sibling channel sessions (telegram/slack/etc)
+          // so the agent list mirrors the unified transcript.
+          const session = await sessionRepository.findById(sessionId);
+          const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
+          if (session && AGGREGATED_CHANNELS.has(session.channelType)) {
+            const siblings = await sessionRepository.findAllByUserAndChannel(
+              session.userId,
+              session.channelType,
+              session.channelId,
+            );
+            dbAgents = await agentRepository.findBySessions(siblings.map(s => s.id));
+          } else {
+            dbAgents = await agentRepository.findBySession(sessionId);
+          }
+        } else {
+          dbAgents = user.isAdmin
             ? await agentRepository.listRecent()
             : await agentRepository.findByUser(user.id);
+        }
 
         const historical = dbAgents
           .filter(a => !liveIds.has(a.id))

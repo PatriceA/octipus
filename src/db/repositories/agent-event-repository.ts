@@ -1,4 +1,4 @@
-import { eq, lt, desc, gt, and } from 'drizzle-orm';
+import { eq, lt, gt, and } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { agentEvents, type AgentEventRecord, type NewAgentEventRecord } from '../schema/agent-events';
 

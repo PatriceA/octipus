@@ -13,6 +13,10 @@ export class TelegramChannel extends BaseChannel {
   private bot: Bot | null = null;
   private allowedUsers: Set<string> = new Set();
 
+  override isEnabled(config: unknown): boolean {
+    return Boolean((config as { telegram?: { botToken?: string } })?.telegram?.botToken);
+  }
+
   async connect(): Promise<void> {
     const config = getConfig();
 
@@ -186,41 +190,55 @@ export class TelegramChannel extends BaseChannel {
     // Extract attachments
     const attachments: Attachment[] = [];
 
+    // Telegram returns `file_path` as a server-controlled string we then embed
+    // into our download URL. A malicious or compromised upstream could include
+    // path-traversal segments; restrict to the format Telegram actually serves.
+    const safeFilePath = (fp: string | undefined): string | null => {
+      if (!fp || !/^[A-Za-z0-9/_.\-]+$/.test(fp) || fp.includes('..')) return null;
+      return fp;
+    };
+
     if (attachmentType === 'photo' && ctx.message?.photo) {
       const photo = ctx.message.photo[ctx.message.photo.length - 1]; // Get highest resolution
       const file = await ctx.api.getFile(photo.file_id);
-
-      attachments.push({
-        type: 'image',
-        url: `https://api.telegram.org/file/bot${this.bot!.token}/${file.file_path}`,
-        mimeType: 'image/jpeg',
-        size: photo.file_size,
-      });
+      const fp = safeFilePath(file.file_path);
+      if (fp) {
+        attachments.push({
+          type: 'image',
+          url: `https://api.telegram.org/file/bot${this.bot!.token}/${fp}`,
+          mimeType: 'image/jpeg',
+          size: photo.file_size,
+        });
+      }
     }
 
     if (attachmentType === 'document' && ctx.message?.document) {
       const doc = ctx.message.document;
       const file = await ctx.api.getFile(doc.file_id);
-
-      attachments.push({
-        type: 'file',
-        url: `https://api.telegram.org/file/bot${this.bot!.token}/${file.file_path}`,
-        mimeType: doc.mime_type || 'application/octet-stream',
-        filename: doc.file_name,
-        size: doc.file_size,
-      });
+      const fp = safeFilePath(file.file_path);
+      if (fp) {
+        attachments.push({
+          type: 'file',
+          url: `https://api.telegram.org/file/bot${this.bot!.token}/${fp}`,
+          mimeType: doc.mime_type || 'application/octet-stream',
+          filename: doc.file_name,
+          size: doc.file_size,
+        });
+      }
     }
 
     if (attachmentType === 'voice' && ctx.message?.voice) {
       const voice = ctx.message.voice;
       const file = await ctx.api.getFile(voice.file_id);
-
-      attachments.push({
-        type: 'audio',
-        url: `https://api.telegram.org/file/bot${this.bot!.token}/${file.file_path}`,
-        mimeType: voice.mime_type || 'audio/ogg',
-        size: voice.file_size,
-      });
+      const fp = safeFilePath(file.file_path);
+      if (fp) {
+        attachments.push({
+          type: 'audio',
+          url: `https://api.telegram.org/file/bot${this.bot!.token}/${fp}`,
+          mimeType: voice.mime_type || 'audio/ogg',
+          size: voice.file_size,
+        });
+      }
     }
 
     // Handle channel-specific commands locally; pass everything else through
@@ -251,46 +269,6 @@ export class TelegramChannel extends BaseChannel {
     });
 
     this.emitMessage(message);
-  }
-
-  private splitMessage(text: string, maxLen: number): string[] {
-    if (text.length <= maxLen) return [text];
-
-    const chunks: string[] = [];
-    let remaining = text;
-
-    while (remaining.length > 0) {
-      if (remaining.length <= maxLen) {
-        chunks.push(remaining);
-        break;
-      }
-
-      let splitAt = -1;
-
-      // Try splitting at paragraph boundary (double newline)
-      const paragraphEnd = remaining.lastIndexOf('\n\n', maxLen);
-      if (paragraphEnd > maxLen * 0.3) {
-        splitAt = paragraphEnd + 2; // include the double newline
-      }
-
-      // Try splitting at single newline
-      if (splitAt === -1) {
-        const lineEnd = remaining.lastIndexOf('\n', maxLen);
-        if (lineEnd > maxLen * 0.3) {
-          splitAt = lineEnd + 1;
-        }
-      }
-
-      // Last resort: split at maxLen
-      if (splitAt === -1) {
-        splitAt = maxLen;
-      }
-
-      chunks.push(remaining.slice(0, splitAt));
-      remaining = remaining.slice(splitAt);
-    }
-
-    return chunks;
   }
 
   private async sendAttachment(chatId: number, attachment: Attachment, replyTo?: string): Promise<void> {

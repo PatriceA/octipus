@@ -101,12 +101,13 @@ export class ShellTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'run',
-      'Execute a shell command and return the output',
+      'Execute a shell command and return the output. Simple commands are spawned directly with no shell. Set useShell:true if you need pipes, redirects, or command substitution (audited).',
       createParameterSchema({
         command: { type: 'string', description: 'Shell command to execute', required: true },
         cwd: { type: 'string', description: 'Working directory for command execution' },
         timeout: { type: 'number', description: 'Command timeout in milliseconds', default: DEFAULT_TIMEOUT },
         env: { type: 'object', description: 'Additional environment variables' },
+        useShell: { type: 'boolean', description: 'Set true ONLY when the command genuinely needs shell features (pipes, redirects, $(), backticks). Audited. Default false.', default: false },
       }),
       async (args, context) => {
         if (typeof args.command !== 'string' || !args.command) {
@@ -117,6 +118,7 @@ export class ShellTool extends BaseTool {
         const cwd = (args.cwd as string) || projectPath || this.getWorkspaceRoot();
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
         const env = args.env as Record<string, string> | undefined;
+        const unsafe = args.useShell === true;
 
         // Security checks
         this.validateCommand(command);
@@ -124,11 +126,12 @@ export class ShellTool extends BaseTool {
         toolLogger.info({
           command: command.slice(0, 500),
           cwd,
+          unsafe,
           agentId: context?.id,
           role: context?.role,
         }, 'Shell command executing');
 
-        const result = await this.ops.exec(command, cwd, { timeout, env });
+        const result = await this.ops.exec(command, cwd, { timeout, env, unsafe });
 
         if (result.exitCode !== 0 || result.killed) {
           toolLogger.warn({
@@ -195,25 +198,16 @@ export class ShellTool extends BaseTool {
 
     this.registerTool(
       'env',
-      'Get environment variables',
+      'Get a specific environment variable by name. Bulk-listing is intentionally not supported — pass a name.',
       createParameterSchema({
-        name: { type: 'string', description: 'Specific variable name (optional)' },
+        name: { type: 'string', description: 'Variable name to read', required: true },
       }),
       async (args) => {
-        if (args.name) {
-          const envVars = await this.ops.getEnv(args.name as string);
-          const value = envVars[args.name as string] ?? null;
-          return { [args.name as string]: value };
+        if (typeof args.name !== 'string' || !args.name) {
+          throw new Error('env requires a "name" parameter — bulk env dump is not exposed.');
         }
-        // Filter sensitive variables
-        const allEnv = await this.ops.getEnv();
-        const sensitiveKeys = ['PASSWORD', 'SECRET', 'KEY', 'TOKEN', 'CREDENTIAL'];
-        for (const key of Object.keys(allEnv)) {
-          if (sensitiveKeys.some((s) => key.toUpperCase().includes(s))) {
-            allEnv[key] = '[REDACTED]';
-          }
-        }
-        return allEnv;
+        const envVars = await this.ops.getEnv(args.name);
+        return { [args.name]: envVars[args.name] ?? null };
       },
       { requiresPermission: true }
     );

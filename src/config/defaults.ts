@@ -66,6 +66,10 @@ export const defaultConfig: Partial<Config> = {
     maxPipelineStages: 10,
     approvalTimeoutMs: 3600000,
     workerTimeoutMs: 600000,
+    /** Orchestrator agent timeout for interactive channels (30 min). */
+    orchestratorTimeoutMs: 1800000,
+    /** Orchestrator agent timeout for unattended hook-triggered runs (45 min). */
+    orchestratorHookTimeoutMs: 2700000,
   },
   workspace: {
     rootPath: './workspace',

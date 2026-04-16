@@ -1,4 +1,4 @@
-import type { ActionType, Hook } from '@/core/types';
+import type { Hook } from '@/core/types';
 import { getAgentManager } from '@/core/agent-manager';
 import { getUMI } from '@/channels/interface';
 import { coreLogger } from '@/utils/logger';

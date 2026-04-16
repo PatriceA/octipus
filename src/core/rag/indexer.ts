@@ -19,7 +19,7 @@ export class FileIndexer {
     if (!content.trim()) return 0;
 
     const service = getEmbeddingService();
-    const sourceId = generateId();
+    const _sourceId = generateId();
 
     // Delete existing embeddings for this file path
     await service.deleteBySource(sourceType, filePath);
@@ -31,7 +31,7 @@ export class FileIndexer {
   }
 
   async indexDirectory(dirPath: string, patterns = ['**/*.md', '**/*.txt']): Promise<IndexResult> {
-    const glob = new Bun.Glob(patterns.join(','));
+    const _glob = new Bun.Glob(patterns.join(','));
     const result: IndexResult = { filesIndexed: 0, chunksStored: 0, errors: [] };
 
     // Use glob to find matching files

@@ -32,9 +32,49 @@ export interface ConnectionContext {
 
 // ── Gateway Events ────────────────────────────────────────────────
 
+/**
+ * Discriminator for events flowing through the gateway event bus.
+ * New event types must be added here so subscribers can be type-checked
+ * against typos and stale references.
+ */
+export type GatewayEventType =
+  // Agent lifecycle
+  | 'agent.spawned'
+  | 'agent.completed'
+  | 'agent.stopped'
+  | 'agent.event'
+  // Worker (orchestrator-spawned) lifecycle
+  | 'worker_spawned'
+  | 'worker_completed'
+  // Pipeline + team
+  | 'pipeline_event'
+  | 'pipeline.event'
+  | 'team.started'
+  | 'team.completed'
+  // Channel-side status
+  | 'status_update'
+  | 'typing'
+  | 'message'
+  // Chat
+  | 'chat.response'
+  | 'chat.message'
+  // Approval / permission flows
+  | 'approval_required'
+  | 'orchestrator.approval_required'
+  | 'orchestrator.status'
+  | 'permission.request'
+  // Session
+  | 'session.cleared'
+  // Audit (catch-all for connection-manager audit signals — payload carries
+  // the specific audit event name in `originalType`).
+  | 'audit'
+  // Reserved
+  | 'test.event'
+  | 'error';
+
 export interface GatewayEvent {
   id: string;
-  type: string;
+  type: GatewayEventType;
   source: string;
   userId?: string;
   sessionId?: string;

@@ -1,10 +1,10 @@
+import { coreLogger } from '@/utils/logger';
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import {
   toolPermissions,
   permissionRequests,
   type ToolPermission,
-  type NewToolPermission,
   type PermissionRequest,
   type NewPermissionRequest,
   type PermissionCondition,
@@ -286,7 +286,7 @@ export class PermissionManager {
         const callback = this.pendingRequests.get(requestId);
         if (callback) {
           this.pendingRequests.delete(requestId);
-          this.expireRequest(requestId).catch(() => {});
+          this.expireRequest(requestId).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in permissions'));
           resolve(false);
         }
       }, timeoutMs);

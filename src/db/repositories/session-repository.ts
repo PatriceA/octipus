@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, lt, ne } from 'drizzle-orm';
+import { eq, and, desc, sql, lt, } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { sessions, type Session, type NewSession } from '../schema/sessions';
 import { dbLogger } from '@/utils/logger';
@@ -31,6 +31,29 @@ export class SessionRepository {
       .limit(1);
 
     return result[0] ?? null;
+  }
+
+  /**
+   * Return all sessions (active or not) matching the (user, channelType, channelId) tuple.
+   * Used to aggregate cross-restart channel sessions (telegram, slack, etc.)
+   * so the UI can show a single continuous transcript per channel conversation.
+   */
+  async findAllByUserAndChannel(
+    userId: string,
+    channelType: string,
+    channelId: string
+  ): Promise<Session[]> {
+    return this.db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.userId, userId),
+          eq(sessions.channelType, channelType),
+          eq(sessions.channelId, channelId)
+        )
+      )
+      .orderBy(desc(sessions.createdAt));
   }
 
   async findActiveByUser(userId: string): Promise<Session[]> {

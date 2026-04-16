@@ -1,4 +1,4 @@
-import type { AgentContext, ToolManifest, ToolFunction, PermissionLevel } from '@/core/types';
+import type { AgentContext, ToolManifest, } from '@/core/types';
 import type { ToolHandler } from '@/core/agent-worker';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets } from '@/security/secret-injector';

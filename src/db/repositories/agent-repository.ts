@@ -1,4 +1,4 @@
-import { eq, desc, and, sql } from 'drizzle-orm';
+import { eq, desc, inArray } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { agents, type AgentRecord, type NewAgentRecord } from '../schema/agents';
 
@@ -46,7 +46,17 @@ export class AgentRepository {
       .limit(limit);
   }
 
-  async findByUser(userId: string, limit = 50): Promise<AgentRecord[]> {
+  async findBySessions(sessionIds: string[], limit = 200): Promise<AgentRecord[]> {
+    if (sessionIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(agents)
+      .where(inArray(agents.sessionId, sessionIds))
+      .orderBy(desc(agents.createdAt))
+      .limit(limit);
+  }
+
+  async findByUser(userId: string, limit = 200): Promise<AgentRecord[]> {
     return this.db
       .select()
       .from(agents)
@@ -55,7 +65,7 @@ export class AgentRepository {
       .limit(limit);
   }
 
-  async listRecent(limit = 50): Promise<AgentRecord[]> {
+  async listRecent(limit = 200): Promise<AgentRecord[]> {
     return this.db
       .select()
       .from(agents)

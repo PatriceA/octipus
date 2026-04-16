@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, } from 'react';
 import { Plus, Search, MessageSquare, Trash2, MoreHorizontal, Pencil, Code2, Smartphone, Globe, Hash } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { api } from '@/lib/api';
 
 export interface SessionInfo {
   id: string;

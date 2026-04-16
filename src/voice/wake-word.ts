@@ -160,7 +160,7 @@ with sd.InputStream(samplerate=sample_rate_val, channels=1, dtype='float32',
               this.log.info({ detection }, 'Wake word detected');
               this.emit('detection', detection);
             }
-          } catch (e) {
+          } catch (_e) {
             // Not JSON, log as is
             this.log.debug({ line }, 'Non-JSON output');
           }

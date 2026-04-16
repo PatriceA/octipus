@@ -25,7 +25,7 @@ export function setupGatewayWebSocket(app: Elysia): void {
 
   app.ws('/gateway', {
     open(ws) {
-      const url = new URL(ws.data.request.url);
+      const _url = new URL(ws.data.request.url);
       const ip = ws.data.request.headers.get('x-forwarded-for')
         || ws.data.request.headers.get('x-real-ip')
         || ws.remoteAddress

@@ -1,5 +1,5 @@
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
-import type { ToolManifest, AgentContext } from '@/core/types';
+import { BaseTool, type ToolAvailability } from '../base-tool';
+import type { ToolManifest, } from '@/core/types';
 import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
 import { registerGmailTools } from './gmail';
 import { registerCalendarTools } from './calendar';
@@ -13,7 +13,7 @@ export class GoogleWorkspaceTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'Gmail, Calendar, Sheets, Docs, Drive, Contacts, and Tasks via Google APIs';
 
-  async checkAvailability(): Promise<ToolAvailability> {
+  override async checkAvailability(): Promise<ToolAvailability> {
     try {
       const { getVault } = await import('@/security/vault');
       const v = getVault();
