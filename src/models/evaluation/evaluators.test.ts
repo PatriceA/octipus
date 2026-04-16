@@ -34,6 +34,26 @@ mock.module('@/models/model-registry', () => ({
   }),
 }));
 
+// Mock config to avoid validation failures
+mock.module('@/config', () => ({
+  getConfig: () => ({
+    litellm: {
+      proxyUrl: 'http://localhost:4000',
+      apiKey: 'test-key',
+      timeout: 10000,
+      maxRetries: 1,
+    },
+    security: {
+      masterKey: 'a'.repeat(32),
+      jwtSecret: 'b'.repeat(32),
+      sessionSecret: 'c'.repeat(32),
+    },
+    database: {
+      storageMode: 'embedded',
+    },
+  }),
+}));
+
 import { describe, test, expect } from 'bun:test';
 import {
   defineEvaluator,
