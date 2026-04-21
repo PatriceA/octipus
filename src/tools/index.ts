@@ -1,35 +1,34 @@
-export { BaseTool, createParameterSchema, type ToolContext, type ToolExecutionOptions, type ToolAvailability } from './base-tool';
-export { ToolRegistry, getToolRegistry, type ToolRegistryOptions } from './registry';
-
+export { BaseTool, createParameterSchema, type ToolAvailability, type ToolContext, type ToolExecutionOptions } from './base-tool';
+export { BrowserTool, browserTool } from './browser';
+export { BrowserExtTool, browserExtTool } from './browser-ext';
+export { DockerTool, dockerTool } from './docker';
+export { DocumentsTool, documentsTool } from './documents';
+export { EmailProcessorTool, emailProcessorTool } from './email-processor';
 // Built-in tools — re-exported for direct import elsewhere. Registration
 // is auto-discovered by `discoverTools()` (see `discovery.ts`); adding a
 // new built-in tool no longer requires editing this file.
 export { FilesystemTool, filesystemTool } from './filesystem';
-export { ShellTool, shellTool } from './shell';
-export type { ShellOperations, ShellExecResult } from './shell/operations';
-export { LocalShellOperations } from './shell/local-operations';
 export { GitTool, gitTool } from './git';
-export { BrowserTool, browserTool } from './browser';
-export { WebSearchTool, websearchTool } from './websearch';
-export { DockerTool, dockerTool } from './docker';
 export { GitHubTool, githubTool } from './github';
 export { GitLabTool, gitlabTool } from './gitlab';
 export { GoogleWorkspaceTool, googleWorkspaceTool } from './google-workspace';
-export { Microsoft365Tool, microsoft365Tool } from './microsoft365';
 export { KnowledgeTool, knowledgeTool } from './knowledge';
 export { MessagingTool, messagingTool } from './messaging';
-export { BrowserExtTool, browserExtTool } from './browser-ext';
-export { SchedulingTool, schedulingTool } from './scheduling';
-export { DocumentsTool, documentsTool } from './documents';
+export { Microsoft365Tool, microsoft365Tool } from './microsoft365';
 export { ProfilesTool, profilesTool } from './profiles';
-export { EmailProcessorTool, emailProcessorTool } from './email-processor';
-export { VoiceCallTool } from './voice';
+export { getToolRegistry, ToolRegistry, type ToolRegistryOptions } from './registry';
+export { SchedulingTool, schedulingTool } from './scheduling';
+export { ShellTool, shellTool } from './shell';
+export { LocalShellOperations } from './shell/local-operations';
+export type { ShellExecResult, ShellOperations } from './shell/operations';
 export { VisualTool, visualTool } from './visual';
+export { VoiceCallTool } from './voice';
+export { WebSearchTool, websearchTool } from './websearch';
 
-import { getToolRegistry } from './registry';
-import { discoverTools } from './discovery';
 import { loadPlugins, PluginTool } from '@/plugins';
 import { toolLogger } from '@/utils/logger';
+import { discoverTools } from './discovery';
+import { getToolRegistry } from './registry';
 
 /**
  * Register all built-in tools (auto-discovered) and plugins.

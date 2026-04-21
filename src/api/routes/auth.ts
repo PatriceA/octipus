@@ -1,13 +1,13 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { userRepository } from '@/db/repositories/user-repository';
-import { getSessionManager } from '@/security/auth/session';
-import { getPasskeyAuth } from '@/security/auth/passkey';
-import { getTOTPAuth } from '@/security/auth/totp';
 import { redeemLinkCode } from '@/channels/linking';
-import { verifyPassword, hashPassword } from '@/utils/crypto';
-import { apiLogger } from '@/utils/logger';
+import { userRepository } from '@/db/repositories/user-repository';
+import { getPasskeyAuth } from '@/security/auth/passkey';
+import { getSessionManager } from '@/security/auth/session';
+import { getTOTPAuth } from '@/security/auth/totp';
 import { getRateLimiter } from '@/security/rate-limiter';
+import { hashPassword, verifyPassword } from '@/utils/crypto';
+import { apiLogger } from '@/utils/logger';
 
 export const authRoutes = new Elysia({ prefix: '/auth' })
   .use(apiContext)

@@ -1,8 +1,8 @@
-import { BaseChannel } from '../interface';
+import type { Attachment, ChannelResponse, ChannelType, } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
-import { channelLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
-import type { ChannelType, ChannelResponse, Attachment, } from '@/core/types';
+import { channelLogger } from '@/utils/logger';
+import { BaseChannel } from '../interface';
 
 export interface WebChatConnection {
   id: string;

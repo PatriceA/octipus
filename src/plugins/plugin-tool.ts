@@ -1,5 +1,5 @@
-import { BaseTool, createParameterSchema } from '@/tools/base-tool';
 import type { ToolManifest } from '@/core/types';
+import { BaseTool, createParameterSchema } from '@/tools/base-tool';
 import type { LoadedPlugin } from './types';
 
 export class PluginTool extends BaseTool {

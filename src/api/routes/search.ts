@@ -1,12 +1,12 @@
-import { Elysia, t } from 'elysia';
 import { ilike, or, } from 'drizzle-orm';
+import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';
-import { sessions } from '@/db/schema/sessions';
 import { hooks } from '@/db/schema/hooks';
 import { modelConfig } from '@/db/schema/models';
+import { sessions } from '@/db/schema/sessions';
 import { skills } from '@/db/schema/skills';
-import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getToolRegistry } from '@/tools/registry';
 
 interface SearchResult {

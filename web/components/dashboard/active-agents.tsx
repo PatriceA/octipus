@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Bot } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 

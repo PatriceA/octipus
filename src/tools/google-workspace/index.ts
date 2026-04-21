@@ -1,10 +1,10 @@
-import { BaseTool, type ToolAvailability } from '../base-tool';
 import type { ToolManifest, } from '@/core/types';
 import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
-import { registerGmailTools } from './gmail';
+import { BaseTool, type ToolAvailability } from '../base-tool';
 import { registerCalendarTools } from './calendar';
-import { registerDriveTools } from './drive';
 import { registerContactsTools } from './contacts';
+import { registerDriveTools } from './drive';
+import { registerGmailTools } from './gmail';
 import { registerTasksTools } from './tasks';
 
 export class GoogleWorkspaceTool extends BaseTool {

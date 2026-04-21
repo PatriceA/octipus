@@ -5,8 +5,8 @@
  * provider integration for actual phone calls via Twilio, Telnyx, or Plivo.
  */
 
-import { BaseTool } from '@/tools/base-tool';
 import type { ToolManifest, } from '@/core/types';
+import { BaseTool } from '@/tools/base-tool';
 import { logger } from '@/utils/logger';
 
 const log = logger.child({ component: 'voice-tool' });

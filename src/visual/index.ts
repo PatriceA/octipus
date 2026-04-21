@@ -1,16 +1,15 @@
-export { ScreenshotCapture } from './screenshot';
 export type {
-  ScreenshotOptions,
-  ScreenshotResult,
-  ElementInfo,
-  BrowserType,
-} from './screenshot';
-
-export { VisualAnalyzer } from './analyzer';
-export type {
+  AccessibilityReport,
   AnalysisResult,
   AnalyzedElement,
-  UIIssue,
-  AccessibilityReport,
   ComparisonResult,
+  UIIssue,
 } from './analyzer';
+export { VisualAnalyzer } from './analyzer';
+export type {
+  BrowserType,
+  ElementInfo,
+  ScreenshotOptions,
+  ScreenshotResult,
+} from './screenshot';
+export { ScreenshotCapture } from './screenshot';

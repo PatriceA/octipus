@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
-import { documentProcessor } from './processor';
 import { coreLogger } from '@/utils/logger';
+import { documentProcessor } from './processor';
 
 export interface QueueEvents {
   enqueued: (documentId: string, userId?: string) => void;

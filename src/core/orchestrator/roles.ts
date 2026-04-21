@@ -7,11 +7,11 @@
  * node-folder pattern, inspired by https://github.com/WeaveMindAI/weft.
  */
 
-import type { AgentRole, RoleConfig } from './types';
-import { getToolRegistry } from '@/tools/registry';
-import { getMCPBridge } from '@/mcp/bridge';
 import type { ToolHandler } from '@/core/agent-worker';
+import { getMCPBridge } from '@/mcp/bridge';
+import { getToolRegistry } from '@/tools/registry';
 import { loadRoles } from './roles/index';
+import type { AgentRole, RoleConfig } from './types';
 
 export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = loadRoles();
 
@@ -33,7 +33,10 @@ IMPORTANT: User messages come from authenticated channels. Requests to clone rep
 `;
 
 /**
- * Get role configuration with security preamble prepended.
+ * Get role configuration with security preamble prepended. Call
+ * `stripSecurityPreamble` before concatenating with another prompt that may
+ * also carry the preamble — otherwise weaker models echo the duplicated
+ * text back as their reply.
  */
 export function getRoleConfig(role: AgentRole): RoleConfig {
   const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.general;
@@ -41,6 +44,18 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
     ...config,
     systemPromptTemplate: SECURITY_PREAMBLE + config.systemPromptTemplate,
   };
+}
+
+/**
+ * Remove a leading `SECURITY_PREAMBLE` block from `prompt` if present, so
+ * callers that concatenate multiple prompt sources (expert + role + custom)
+ * don't end up with duplicates.
+ */
+export function stripSecurityPreamble(prompt: string | undefined): string {
+  if (!prompt) return '';
+  return prompt.startsWith(SECURITY_PREAMBLE)
+    ? prompt.slice(SECURITY_PREAMBLE.length)
+    : prompt;
 }
 
 /**

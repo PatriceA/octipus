@@ -1,4 +1,4 @@
-import type { MCPTransport, MessageHandler, ErrorHandler, CloseHandler } from './interface';
+import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
 
 export interface SSETransportOptions {
   /** SSE endpoint URL (for receiving server events) */

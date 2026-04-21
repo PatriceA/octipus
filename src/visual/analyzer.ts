@@ -49,12 +49,26 @@ export interface ComparisonResult {
  */
 export class VisualAnalyzer {
   private llmClient: LiteLLMClient;
+  /** Empty string → resolve from the 'vision' topic binding at call time. */
   private visionModel: string;
   private log = logger.child({ component: 'visual-analyzer' });
 
-  constructor(llmClient: LiteLLMClient, visionModel: string = 'gpt-4-vision-preview') {
+  constructor(llmClient: LiteLLMClient, visionModel: string = '') {
     this.llmClient = llmClient;
     this.visionModel = visionModel;
+  }
+
+  /** Resolve vision model from config at call time. No hardcoded default. */
+  private async resolveVisionModel(): Promise<string> {
+    if (this.visionModel) return this.visionModel;
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const bound = await getModelRegistry().getModelForTopic('vision');
+    if (!bound?.modelId) {
+      throw new Error(
+        "No vision model configured. Bind a model to the 'vision' topic in the Models page.",
+      );
+    }
+    return bound.modelId;
   }
 
   /**
@@ -89,7 +103,7 @@ Respond in JSON format with this structure:
 
     const now = new Date();
     const response = await this.llmClient.complete({
-      model: this.visionModel,
+      model: await this.resolveVisionModel(),
       messages: [
         { role: 'system', content: systemPrompt, timestamp: now },
         {
@@ -156,7 +170,7 @@ Respond in JSON format:
 
     const now = new Date();
     const response = await this.llmClient.complete({
-      model: this.visionModel,
+      model: await this.resolveVisionModel(),
       messages: [
         { role: 'system', content: systemPrompt, timestamp: now },
         {
@@ -206,7 +220,7 @@ If the element cannot be found, respond with {"selector": null, "confidence": 0}
 
     const now = new Date();
     const response = await this.llmClient.complete({
-      model: this.visionModel,
+      model: await this.resolveVisionModel(),
       messages: [
         { role: 'system', content: systemPrompt, timestamp: now },
         {
@@ -252,7 +266,7 @@ Respond in JSON format:
 
     const now = new Date();
     const response = await this.llmClient.complete({
-      model: this.visionModel,
+      model: await this.resolveVisionModel(),
       messages: [
         { role: 'system', content: systemPrompt, timestamp: now },
         {
@@ -296,7 +310,7 @@ Respond in JSON format:
 
     const now = new Date();
     const response = await this.llmClient.complete({
-      model: this.visionModel,
+      model: await this.resolveVisionModel(),
       messages: [
         { role: 'system', content: systemPrompt, timestamp: now },
         {

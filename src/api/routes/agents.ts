@@ -1,8 +1,8 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
-import { agentRepository } from '@/db/repositories/agent-repository';
 import { getRouter } from '@/core/router';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { apiLogger } from '@/utils/logger';
 
@@ -24,23 +24,41 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         liveAgents = liveAgents.filter((a) => a.userId === user.id);
       }
 
+      // Session scope: when a sessionId is provided, ALL results (live and
+      // historical) must be scoped to that session. Without this, every
+      // chat surface (web, mobile, TUI) sees every other session's running
+      // agents — breaks the "agent belongs to its session" contract.
+      const sessionId = query?.sessionId as string | undefined;
+      if (sessionId) {
+        // Resolve sibling-channel aggregation once so live + DB paths agree.
+        const session = await sessionRepository.findById(sessionId);
+        const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
+        let allowedSessionIds: Set<string> = new Set([sessionId]);
+        if (session && AGGREGATED_CHANNELS.has(session.channelType)) {
+          const siblings = await sessionRepository.findAllByUserAndChannel(
+            session.userId,
+            session.channelType,
+            session.channelId,
+          );
+          allowedSessionIds = new Set(siblings.map(s => s.id));
+        }
+        liveAgents = liveAgents.filter((a) => allowedSessionIds.has(a.sessionId));
+      }
+
       // Collect IDs of agents still in memory
       const liveIds = new Set(liveAgents.map(a => a.id));
 
       // Fetch historical agents from DB (exclude ones still in memory)
       try {
-        const sessionId = query?.sessionId as string | undefined;
         let dbAgents;
         if (sessionId) {
           // Aggregate across sibling channel sessions (telegram/slack/etc)
           // so the agent list mirrors the unified transcript.
-          const session = await sessionRepository.findById(sessionId);
-          const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
-          if (session && AGGREGATED_CHANNELS.has(session.channelType)) {
+          const sess = await sessionRepository.findById(sessionId);
+          const AGGREGATED = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
+          if (sess && AGGREGATED.has(sess.channelType)) {
             const siblings = await sessionRepository.findAllByUserAndChannel(
-              session.userId,
-              session.channelType,
-              session.channelId,
+              sess.userId, sess.channelType, sess.channelId,
             );
             dbAgents = await agentRepository.findBySessions(siblings.map(s => s.id));
           } else {

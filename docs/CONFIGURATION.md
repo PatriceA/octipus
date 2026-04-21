@@ -66,7 +66,44 @@ SKIP_MIGRATIONS=false                  # Set to true for production deploys
 # ─── Voice (optional) ────────────────────────────────────────
 WHISPER_MODEL_PATH=
 PIPER_MODEL_PATH=
+
+# ─── Observability / Opt-outs ────────────────────────────────
+TRAJECTORY_LOGGING=true                # Record one JSONL line per handleMessage run (default on)
+SKILL_AUTO_EXTENSION=true              # Pattern-detect recurring topic/tool sequences into skill_proposals (default on)
+SPINNER_STYLE=classic                  # TUI spinner style: classic | kawaii
 ```
+
+## Topic → Model Routing (Authoritative)
+
+Model resolution for every agent runs through `ModelRegistry.getModelForTopic(role)`. **There are no hardcoded model defaults.** Each role has a matching topic, and the model bound to that topic in the DB (or via the **Models** page in the web UI) is used.
+
+Resolution order inside the swarm spawner (`SwarmSpawner.resolveChildModelAndExpert`):
+
+1. Expert `modelPreference` — if the matched expert has an explicit preference.
+2. `ModelRegistry.getModelForTopic(childRole)` — otherwise the model bound to the child's topic.
+3. Throw — if neither resolves, with a message pointing at the Models page. No silent fallback.
+
+- Orchestrator, Agent and Subagent children all resolve their model the same way — **children inherit topic bindings, not the parent's model.**
+- The embedding path (`litellm-client.ts:embed()`) and vision path (`visual/analyzer.ts`) resolve the `embedding` / `vision` topic bindings the same way, or throw.
+
+Bind models to topics via the web UI (**Settings → Models → Edit → Topics**) or the API (`PATCH /api/models/:name`).
+
+## Swarm Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `swarm.perUserSpawnsPerMinute` | 30 | Per-user rate limit on `spawn_child` invocations. Enforced by `rate-limiter.ts`. |
+| `swarm.orphanReaperIntervalMs` | 600000 | Interval for the orphan reaper sweep that flips long-running `swarm_nodes` to `cancelled` after process restart. |
+
+Swarm node hard budgets (tokens, wall-clock, fan-out) are baked into `src/core/swarm/types.ts` as `LEVEL_DEFAULT`. Overriding them is not a documented config knob — change the file and rebuild.
+
+## Compaction Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `compaction.minSavingsRatio` | 0.10 | Minimum compression ratio that clears the session stall flag. A compaction pass that saves less than this keeps the stall flag set. |
+| `compaction.growthMultiplier` | 2.0 | Trigger compaction when current context grows by this multiple relative to the last compaction baseline. |
+| `compaction.hardCeiling` | 1_000_000 | Hard ceiling in tokens — compaction always runs above this threshold regardless of other gates. |
 
 ## Docker Services
 

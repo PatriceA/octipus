@@ -1,7 +1,7 @@
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
-import type { ToolManifest } from '@/core/types';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
+import type { ToolManifest } from '@/core/types';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 export class KnowledgeTool extends BaseTool {
   readonly id = 'knowledge';

@@ -1,8 +1,8 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getToolRegistry } from '@/tools/registry';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getPermissionManager } from '@/security/permissions';
+import { getToolRegistry } from '@/tools/registry';
 
 export const toolRoutes = new Elysia({ prefix: '/tools' })
   .use(apiContext)

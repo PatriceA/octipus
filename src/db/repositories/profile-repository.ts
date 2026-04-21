@@ -1,6 +1,6 @@
-import { eq, and, ilike, sql, desc } from 'drizzle-orm';
+import { and, desc, eq, ilike, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
-import { profiles, type Profile, type NewProfile, type ProfileFact } from '../schema/profiles';
+import { type NewProfile, type Profile, type ProfileFact, profiles } from '../schema/profiles';
 
 export class ProfileRepository {
   private get db() { return getDb(); }

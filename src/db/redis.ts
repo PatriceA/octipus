@@ -7,7 +7,7 @@
 import type Redis from 'ioredis';
 import { getStorageProvider } from './storage';
 import { RedisStorageProvider } from './storage/redis-provider';
-import type { CacheProvider, QueueProvider, PubSubProvider } from './storage/types';
+import type { CacheProvider, PubSubProvider, QueueProvider } from './storage/types';
 
 /**
  * Get raw ioredis instance (external mode only).

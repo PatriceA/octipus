@@ -1,18 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Send,
-  Mic,
-  Square,
-  Paperclip,
-  X,
   FileText,
   Image,
+  Mic,
   Music,
+  Paperclip,
+  Send,
+  Square,
+  X,
 } from 'lucide-react';
-import { AudioWaveform } from './audio-waveform';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { AudioWaveform } from './audio-waveform';
 
 export interface Attachment {
   id: string;

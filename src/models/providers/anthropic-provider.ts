@@ -1,12 +1,13 @@
 import OpenAI from 'openai';
 import type {
-  ChatCompletionMessageParam,
   ChatCompletionCreateParams,
+  ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import type { ModelProvider, ProviderHealthStatus } from './interface';
-import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import { modelLogger } from '@/utils/logger';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { modelLogger } from '@/utils/logger';
+import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1/';
 
@@ -68,7 +69,7 @@ export class AnthropicProvider implements ModelProvider {
       });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
-        throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
+        throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'anthropic');
       }
       const choice = response.choices[0];
 
@@ -115,7 +116,7 @@ export class AnthropicProvider implements ModelProvider {
       return result;
     } catch (error) {
       modelLogger.error({ error, model: params.model, provider: this.name }, 'Anthropic completion failed');
-      throw error;
+      throw classifyError(error, 'anthropic');
     }
   }
 
@@ -144,7 +145,12 @@ export class AnthropicProvider implements ModelProvider {
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Anthropic');
 
-    const stream = await client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await client.chat.completions.create(params);
+    } catch (err) {
+      throw classifyError(err, 'anthropic');
+    }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
@@ -220,13 +226,14 @@ export class AnthropicProvider implements ModelProvider {
       return process.env.ANTHROPIC_API_KEY;
     }
 
-    // Fall back to vault
+    // Fall back to vault — recoverable: null return triggers a classified AUTH_FAILED on createClient()
     try {
       const { getVault } = await import('@/security/vault');
       const vault = getVault();
       const value = await vault.getByName('system', 'anthropic_api_key');
       return value || null;
-    } catch {
+    } catch (err) {
+      modelLogger.warn({ err: (err as Error).message, provider: this.name }, 'Anthropic vault lookup failed; falling back to env var');
       return null;
     }
   }
@@ -234,7 +241,7 @@ export class AnthropicProvider implements ModelProvider {
   private async createClient(): Promise<OpenAI> {
     const apiKey = await this.getApiKey();
     if (!apiKey) {
-      throw new Error('Anthropic API key not available. Set ANTHROPIC_API_KEY or store it in the vault.');
+      throw classifyError(new Error('Anthropic API key not available. Set ANTHROPIC_API_KEY or store it in the vault.'), 'anthropic');
     }
 
     return new OpenAI({

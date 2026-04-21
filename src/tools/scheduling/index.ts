@@ -1,6 +1,6 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { getHookManager } from '@/hooks/manager';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class SchedulingTool extends BaseTool {
   readonly id = 'scheduling';

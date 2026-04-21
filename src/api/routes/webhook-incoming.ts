@@ -1,10 +1,9 @@
-import { coreLogger } from '@/utils/logger';
+import { and, eq } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
-import { eq, and } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { hooks } from '@/db/schema/hooks';
 import { hookExecutions } from '@/db/schema/hook-executions';
-import { apiLogger } from '@/utils/logger';
+import { hooks } from '@/db/schema/hooks';
+import { apiLogger, coreLogger } from '@/utils/logger';
 
 /**
  * Simple Mustache-style template rendering.

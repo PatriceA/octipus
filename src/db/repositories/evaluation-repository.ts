@@ -1,15 +1,15 @@
-import { eq, desc, } from 'drizzle-orm';
+import { desc, eq, } from 'drizzle-orm';
+import type { EvalRun } from '@/models/evaluation/types';
+import type { ConformanceReport } from '@/models/testing/conformance';
+import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
-import { conformanceRuns, evalRuns } from '../schema/evaluations';
 import type {
   ConformanceRunEntry,
-  NewConformanceRunEntry,
   EvalRunEntry,
+  NewConformanceRunEntry,
   NewEvalRunEntry,
 } from '../schema/evaluations';
-import type { ConformanceReport } from '@/models/testing/conformance';
-import type { EvalRun } from '@/models/evaluation/types';
-import { dbLogger } from '@/utils/logger';
+import { conformanceRuns, evalRuns } from '../schema/evaluations';
 
 export class EvaluationRepository {
   private get db() {

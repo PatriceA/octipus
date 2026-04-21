@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, Play, Pause, Square, Clock, CheckCircle, XCircle, X, Loader2, Trash2, Ban } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Ban, Bot, CheckCircle, Clock, Loader2, Pause, Play, Square, Trash2, X, XCircle } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 interface Agent {
   id: string;

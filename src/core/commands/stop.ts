@@ -1,5 +1,5 @@
-import { registerCommand } from './registry';
 import { getAgentManager } from '@/core/agent-manager';
+import { registerCommand } from './registry';
 
 registerCommand({
   name: 'stop',

@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from 'child_process';
-import type { MCPTransport, MessageHandler, ErrorHandler, CloseHandler } from './interface';
+import { type ChildProcess, spawn } from 'child_process';
+import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
 
 export interface StdioTransportOptions {
   command: string;

@@ -13,10 +13,14 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 | Capability | competitor | Assistant | Notes |
 |---|---|---|---|
 | Multi-agent orchestration | Yes | Yes | Orchestrator + specialist roles |
-| Sub-agent spawning | Yes (depth/concurrency limits) | Yes (workers, teams, pipelines) | Assistant has 3 delegation modes |
-| Agent team (parallel) | Yes | Yes | `spawn_team` |
-| Pipeline (sequential) | Yes | Yes | `create_pipeline` with handoff context |
+| Sub-agent spawning | Yes (depth/concurrency limits) | Yes (3-level swarm) | Orchestrator → Agent → Subagent via `spawn_child`; hard depth cap 2 |
+| Parallel fan-out | Yes | Yes | `spawn_child` with `parallelGroup`, `Promise.all` execution |
+| Pipeline (sequential) | Yes | Yes | `create_pipeline` with handoff context (Orchestrator-only) |
+| Budget cascade (tokens/wall/fan-out) | Partial | Yes | Per-node hard caps, pool-shared tokens, pausedMs wall clock |
+| Cycle / duplicate protection | — | Yes | Per-session fingerprint `SwarmCallGraph` |
+| Cascade cancel | Partial | Yes | AbortSignal tree + DB walk in `AgentManager.stop({cascade})` |
 | Role-based routing | Yes | Yes | 16 specialist roles |
+| Topic → model routing | Partial | Yes | `ModelRegistry.getModelForTopic()` authoritative; fail-loud on unbound topics |
 | Expert system / personas | Yes | Yes | DB-backed presets with tools + skills |
 
 ## Channels

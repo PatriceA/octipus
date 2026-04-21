@@ -1,7 +1,7 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
-import type { ToolManifest } from '@/core/types';
 import { getBrowserBridge } from '@/api/browser-bridge';
+import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 // Tabs opened by an agent via new_tab — closed when the agent finishes.
 const agentTabs = new Map<string, Set<number>>();

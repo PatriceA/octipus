@@ -183,15 +183,26 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
           };
           const lines = experts.map(e => {
             const emoji = iconToEmoji[e.icon || ''] || '\u25CF';
-            return `  ${emoji} ${e.name} — ${e.description || e.role}`;
+            return `- ${emoji} **${e.name}** — ${e.description || e.role}`;
           });
-          return { text: `Available experts:\n${lines.join('\n')}\n\nUse /expert <name> to switch, /expert reset to auto-route.` };
+          return { text: `**Available experts:**\n\n${lines.join('\n')}\n\nUse \`/expert <name>\` to switch, \`/expert reset\` to auto-route.` };
         }
 
         if (expertName.toLowerCase() === 'reset') {
           if (ctx.metadata) {
             delete ctx.metadata.activeExpertId;
             delete ctx.metadata.activeExpertName;
+          }
+          // Also clear from session DB
+          if (ctx.sessionId) {
+            try {
+              const { sessionRepository } = await import('@/db/repositories/session-repository');
+              const session = await sessionRepository.findById(ctx.sessionId);
+              const sessionCtx = (session?.context as Record<string, unknown>) || {};
+              delete sessionCtx.activeExpertId;
+              delete sessionCtx.activeExpertName;
+              await sessionRepository.update(ctx.sessionId, { context: sessionCtx });
+            } catch { /* best-effort */ }
           }
           return { text: 'Expert reset to auto-routing. Next messages will be classified automatically.' };
         }
@@ -205,10 +216,21 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
           return { text: `Expert "${expertName}" not found. Use /expert to list available experts.` };
         }
 
-        // Store active expert in connection metadata
+        // Store active expert in connection metadata AND session DB
         if (ctx.metadata) {
           ctx.metadata.activeExpertId = match[0].id;
           ctx.metadata.activeExpertName = match[0].name;
+        }
+        // Persist to session context so it survives reconnects
+        if (ctx.sessionId) {
+          try {
+            const { sessionRepository } = await import('@/db/repositories/session-repository');
+            const session = await sessionRepository.findById(ctx.sessionId);
+            const sessionCtx = (session?.context as Record<string, unknown>) || {};
+            sessionCtx.activeExpertId = match[0].id;
+            sessionCtx.activeExpertName = match[0].name;
+            await sessionRepository.update(ctx.sessionId, { context: sessionCtx });
+          } catch { /* session persistence is best-effort */ }
         }
 
         return { text: `Switched to expert: ${match[0].name}. Next messages will be handled by this expert.` };

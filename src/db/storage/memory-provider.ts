@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from 'events';
 import { dbLogger } from '@/utils/logger';
-import type { StorageProvider, CacheProvider, QueueProvider, PubSubProvider } from './types';
+import type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './types';
 
 interface CacheEntry {
   value: string;

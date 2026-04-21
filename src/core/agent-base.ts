@@ -24,6 +24,10 @@ export interface ToolHandler {
   parameters: Record<string, unknown>;
   toolId?: string;
   final?: boolean;
+  /** Name of the most-informative parameter for compact UI display. */
+  previewParam?: string;
+  /** Custom preview renderer (overrides `previewParam`). Truncated to 80 chars. */
+  previewFn?: (params: Record<string, unknown>) => string;
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }
 

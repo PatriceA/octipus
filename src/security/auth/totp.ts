@@ -1,9 +1,9 @@
-import { authenticator } from 'otplib';
-import { userRepository } from '@/db/repositories/user-repository';
-import { getConfig } from '@/config';
-import { securityLogger } from '@/utils/logger';
-import { encrypt, decrypt, deriveKey } from '@/utils/crypto';
 import crypto from 'crypto';
+import { authenticator } from 'otplib';
+import { getConfig } from '@/config';
+import { userRepository } from '@/db/repositories/user-repository';
+import { decrypt, deriveKey, encrypt } from '@/utils/crypto';
+import { securityLogger } from '@/utils/logger';
 
 // Configure TOTP
 authenticator.options = {

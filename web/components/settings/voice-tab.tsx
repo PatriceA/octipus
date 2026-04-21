@@ -1,19 +1,19 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Phone,
   CheckCircle,
-  XCircle,
   Loader2,
+  Phone,
+  XCircle,
 } from 'lucide-react';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import {
-  type SettingItem,
-  useSettingActions,
-  SettingsGroup,
   SecretsRedirectBanner,
+  type SettingItem,
+  SettingsGroup,
+  useSettingActions,
 } from './setting-field';
 
 const PROVIDER_VAULT_KEYS: Record<string, { keys: string[]; labels: string[] }> = {

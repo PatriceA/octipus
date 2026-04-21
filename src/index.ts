@@ -1,23 +1,23 @@
-import { getGateway } from '@/core/gateway';
 import { startServer } from '@/api/server';
 import { initializeChannels } from '@/channels';
-import { registerBuiltinTools } from '@/tools';
-import { seedSkills } from '@/db/seed-skills';
-import { getMCPBridge } from '@/mcp/bridge';
-import { getHookManager } from '@/hooks/manager';
-import { initializeVault } from '@/security/vault';
-import { seedPresetTemplates } from '@/db/seed-presets';
-import { seedRoles, loadRolesFromDb } from '@/db/seed-roles';
-import { seedExperts } from '@/db/seed-experts';
-import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
-import { getSettingsService } from '@/config/settings-service';
-import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { loadRuntimeConfig } from '@/config';
 import { initializeHotReload } from '@/config/hot-reload';
+import { migrateEnvToDb } from '@/config/migrate-env-to-db';
+import { getSettingsService } from '@/config/settings-service';
 import { startCronLoop, stopCronLoop } from '@/core/cron-runner';
-import { getGatewayHub } from '@/core/gateway/hub';
+import { getGateway } from '@/core/gateway';
 import { connectEventBridge } from '@/core/gateway/event-bridge';
+import { getGatewayHub } from '@/core/gateway/hub';
 import { wireMessageHandler } from '@/core/gateway/message-handler';
+import { seedExperts } from '@/db/seed-experts';
+import { seedPresetTemplates } from '@/db/seed-presets';
+import { loadRolesFromDb, seedRoles } from '@/db/seed-roles';
+import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
+import { seedSkills } from '@/db/seed-skills';
+import { getHookManager } from '@/hooks/manager';
+import { getMCPBridge } from '@/mcp/bridge';
+import { initializeVault } from '@/security/vault';
+import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
 
 async function main() {
@@ -98,6 +98,19 @@ async function main() {
     const gatewayHub = getGatewayHub();
     await gatewayHub.start();
     logger.info('Gateway hub started');
+
+    // Reap orphaned swarm_nodes left `running` by a previous process. Must
+    // run after DB init (done in gateway.start above) and alongside the
+    // agent-manager stale cleanup so the live swarm tree hydrates cleanly.
+    try {
+      const { reapOrphanedSwarmNodes } = await import('@/core/swarm/orphan-reaper');
+      const { reaped } = await reapOrphanedSwarmNodes();
+      if (reaped > 0) {
+        logger.warn({ reaped }, 'Swarm orphan reaper cleaned stale running nodes');
+      }
+    } catch (err) {
+      logger.error({ err }, 'Swarm orphan reaper failed (non-fatal)');
+    }
 
     // Wire gateway message handler and bridge orchestrator/agent events
     wireMessageHandler(gatewayHub);

@@ -52,6 +52,10 @@ No silent fallbacks. Nodes either work or fail with a clear error. Every failure
 - If a tool returns an error, the worker sees the error — not a fabricated successful-looking reply.
 - If a model provider is down, the failover engages or the request fails with a named reason. Never a silent "generic assistant" stub.
 - If an input is malformed, it is rejected at the boundary with a specific message. Never coerced into something pretend-valid.
+- If a topic has no model bound, the spawner throws. No default-model fallback, no "try LiteLLM and hope". The user configured the topic map; we follow it or surface the gap.
+- If the knowledge base can't embed (missing model, dead vector store), every write path returns 503 with reasons. The KB is never silently unavailable — `/api/knowledge/readiness` is the ground truth.
+
+Error classification lives in `src/core/errors/classification.ts` (`FailoverReason`, `RecoveryAction`, `classifyError`). All model providers route errors through it. Swarm-level classification (`src/core/swarm/errors.ts`) maps thrown errors onto `ChildResult.status` so parents see a typed failure, not an opaque string.
 
 ## Security preamble is load-bearing
 
@@ -76,9 +80,21 @@ This mirrors the [Weft](https://github.com/WeaveMindAI/weft) graph↔code dualit
 
 ## Recursive composability
 
-Pipelines are nodes. A pipeline stage can itself be a pipeline. A team of workers can be wrapped as a role. Skills can be composed.
+Pipelines are nodes. A pipeline stage can itself be a pipeline. A swarm node can be wrapped as a role. Skills can be composed.
 
-A 100-stage system still looks like 5 blocks at the top level because each block hides a pipeline that hides a pipeline. No hidden coupling, no global scope — only inputs, outputs, and handoff context cross a boundary.
+A 100-stage system still looks like 5 blocks at the top level because each block hides a pipeline or swarm that hides more pipelines or swarms. No hidden coupling, no global scope — only inputs, outputs, and handoff context cross a boundary.
+
+## Swarm is a first-class primitive
+
+Delegation has one shape: `spawn_child`. The tree is fixed depth 3 (Orchestrator → Agent → Subagent). Budgets cascade on tokens (pool-shared) and stay per-node on wall-clock (parent excludes time spent waiting on children via `pausedMs`). Every node has hard caps enforced pre-LLM-call — breach throws structured errors (`BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`). Cycle protection is per-session fingerprints; cascade cancel is an `AbortSignal` tree.
+
+What this buys: no runaway spend, no silent deep recursion, no one-off "team" or "worker" primitives to memorize. One mechanism for fan-out, one shape for hand-off, one set of budgets to reason about. Pipelines still exist for **explicit staged handover with human gates** — that's a different problem, kept separate on purpose. See [.assistant/swarm-design.md](./.assistant/swarm-design.md).
+
+## Config-driven, no hardcoded models
+
+Model resolution goes through `ModelRegistry.getModelForTopic(role)`. Every role has a matching topic; the user binds models to topics in the DB or web UI. There is no hardcoded "default model" fallback — an unbound topic fails loud at spawn time. Children in a swarm inherit **topic bindings, not the parent's model**. A research Agent spawning a security Subagent resolves the model bound to `security`, independent of the parent.
+
+This means swapping a model for a whole role is one config change. It also means when you see an unexpected model in logs, it's because a topic binding caused it — not because some code path hardcoded it. The rule: if you're about to write `model: 'gpt-4o'` in source code, you're wrong. Bind it to a topic.
 
 ## Observability over cleverness
 

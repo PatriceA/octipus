@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, integer, pgEnum, index } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const agentStatusEnum = pgEnum('agent_status', [
   'running',
@@ -21,6 +21,10 @@ export const agents = pgTable('agents', {
   error: text('error'),
   toolCalls: jsonb('tool_calls').$type<Array<{ name: string; count: number }>>().default([]),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
+  /** Parent agent in the swarm hierarchy (nullable — root agents have none). */
+  parentAgentId: text('parent_agent_id'),
+  /** 1:1 link to `swarm_nodes.id` (nullable — only set when the agent is part of a swarm). */
+  swarmNodeId: text('swarm_node_id'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   completedAt: timestamp('completed_at'),
 }, (table) => ({

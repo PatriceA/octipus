@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, integer, index, pgEnum } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const documentStatusEnum = pgEnum('document_status', [
   'queued',

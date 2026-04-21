@@ -1,9 +1,9 @@
-import { configSchema, type Config } from './schema';
-import { defaultConfig } from './defaults';
 import { logger } from '@/utils/logger';
-import { settingKeyToConfigPath } from './settings-registry';
+import { defaultConfig } from './defaults';
 import { loadFromEnvLegacy } from './legacy-loader';
 import { loadRuntimeConfig as loadRuntimeConfigImpl } from './runtime-loader';
+import { type Config, configSchema } from './schema';
+import { settingKeyToConfigPath } from './settings-registry';
 import { deepMerge } from './utils';
 
 let cachedConfig: Config | null = null;
@@ -89,7 +89,7 @@ export function resetConfig(): void {
 
 // ─── Re-exports ────────────────────────────────────────────────
 
-export * from './schema';
+export { type BootstrapConfig, loadBootstrapConfig } from './bootstrap-loader';
 export { defaultConfig } from './defaults';
-export { loadBootstrapConfig, type BootstrapConfig } from './bootstrap-loader';
 export { loadFromEnvLegacy } from './legacy-loader';
+export * from './schema';

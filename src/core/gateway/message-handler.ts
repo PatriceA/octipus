@@ -1,7 +1,7 @@
 import { coreLogger } from '@/utils/logger';
-import type { GatewayHub } from './hub';
-import type { ConnectionContext, ClientMessage } from './protocol';
 import { getCommandRegistry } from './commands';
+import type { GatewayHub } from './hub';
+import type { ClientMessage, ConnectionContext } from './protocol';
 
 /**
  * Resolve a gateway userId to a real DB user ID.
@@ -92,8 +92,18 @@ async function handleChatSend(
 
     // Route through orchestrator
     const userId = await resolveUserId(context.userId);
-    // Use expert from message, or from connection's active expert (/expert command)
-    const expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);
+    // Use expert from message, connection metadata, or session DB (set via /expert command)
+    let expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);
+    if (!expertId && message.sessionId) {
+      try {
+        const { sessionRepository } = await import('@/db/repositories/session-repository');
+        const session = await sessionRepository.findById(message.sessionId);
+        const sessionCtx = session?.context as Record<string, unknown> | undefined;
+        if (sessionCtx?.activeExpertId) {
+          expertId = sessionCtx.activeExpertId as string;
+        }
+      } catch { /* ignore — no expert override */ }
+    }
     const result = await orchestrator.handleMessage(
       message.sessionId,
       userId,

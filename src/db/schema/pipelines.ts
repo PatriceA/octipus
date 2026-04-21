@@ -1,6 +1,6 @@
-import { pgTable, text, timestamp, uuid, jsonb, integer, pgEnum, boolean } from 'drizzle-orm/pg-core';
-import { users } from './users';
+import { boolean, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { sessions } from './sessions';
+import { users } from './users';
 
 export const pipelineStatusEnum = pgEnum('pipeline_status', [
   'planning', 'running', 'paused', 'awaiting_approval', 'completed', 'failed',

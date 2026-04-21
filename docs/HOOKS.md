@@ -309,3 +309,19 @@ The `/api/recurring-tasks` endpoints still work as a compatibility layer — the
 | PATCH | `/api/recurring-tasks/:id` | Update schedule hook |
 | GET | `/api/recurring-tasks/:id/executions` | Execution history |
 | DELETE | `/api/recurring-tasks/:id` | Delete schedule hook |
+
+## Swarm Lifecycle Events
+
+The swarm orchestrator (Orchestrator → Agent → Subagent) publishes its own gateway event family (`swarm.*`) alongside the older `agent.*` events. These are pure observability signals — they are **not** hook triggers today (the hook system matches on `agent_*` triggers, which still fire for every swarm node because every node is also an agent). If you need to react to swarm-specific state — fan-out breach, cycle blocks, budget warnings — subscribe on the gateway instead of the hook system.
+
+| Event | When it fires |
+|-------|---------------|
+| `swarm.node_spawned` | A new Orchestrator / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
+| `swarm.node_completed` | Node finished; `ChildResult` is attached (status + output + usedTokens + durationMs). |
+| `swarm.node_status` | Intermediate status update (budget used, partial progress). |
+| `swarm.budget_warning` | Node crossed its budget warning threshold. |
+| `swarm.call_graph_cycle_blocked` | Duplicate / ancestor-chain fingerprint rejected a spawn. |
+
+All `swarm.*` events participate in the gateway replay buffer (`swarm.*` pattern); subscribers can catch up after reconnect.
+
+Wake-gate: scheduled hooks can carry a `wakeGate` (`command` / `http` / `tool`) evaluated just-before-run. A failing gate emits `skipped_by_wakegate` and skips execution.

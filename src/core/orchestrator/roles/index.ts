@@ -11,7 +11,7 @@
  * Inspired by the catalog pattern in https://github.com/WeaveMindAI/weft.
  */
 
-import { readdirSync, statSync, readFileSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import type { AgentRole, RoleConfig } from '../types';

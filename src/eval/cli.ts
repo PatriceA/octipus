@@ -17,8 +17,8 @@
 
 import { resolve } from 'path';
 import { loadSuites } from './loader';
+import { reportDetailedToConsole, reportToConsole, saveResults, toJSON } from './reporter';
 import { runAllSuites } from './runner';
-import { reportToConsole, reportDetailedToConsole, saveResults, toJSON } from './reporter';
 import type { EvalRunnerOptions } from './types';
 
 // ── Argument parsing ─────────────────────────────────────────────────

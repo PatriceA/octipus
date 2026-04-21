@@ -1,11 +1,11 @@
-import { coreLogger } from '@/utils/logger';
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import { getBrowserBridge } from '@/api/browser-bridge';
 import type { ToolManifest } from '@/core/types';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { getBrowserBridge } from '@/api/browser-bridge';
-import { ScreenshotCapture, type BrowserType, type ScreenshotResult } from '@/visual/screenshot';
+import { coreLogger } from '@/utils/logger';
 import { VisualAnalyzer } from '@/visual/analyzer';
+import { type BrowserType, ScreenshotCapture, type ScreenshotResult } from '@/visual/screenshot';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 type CaptureBackend = 'playwright' | 'browser-ext';
 

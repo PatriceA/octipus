@@ -1,14 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Cpu, CheckCircle, X, Plus, RefreshCw, Pencil, AlertCircle, Loader2, Search } from 'lucide-react';
+import { AlertCircle, CheckCircle, Cpu, Loader2, Pencil, Plus, RefreshCw, Search, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import {
-  type LiteLLMModel,
   AVAILABLE_TOPICS,
+  type LiteLLMModel,
   mapLiteLLMProvider,
-  PROVIDER_LABELS,
   PROVIDER_DEFAULTS,
+  PROVIDER_LABELS,
 } from '@/lib/types/models';
 
 interface AvailableModel {

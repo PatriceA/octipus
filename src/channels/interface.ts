@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
-import type { UnifiedMessage, ChannelResponse, ChannelType, Attachment } from '@/core/types';
-import { channelLogger } from '@/utils/logger';
+import type { Attachment, ChannelResponse, ChannelType, UnifiedMessage } from '@/core/types';
 import { generateId } from '@/utils/crypto';
+import { channelLogger } from '@/utils/logger';
 
 export interface ChannelConfig {
   enabled: boolean;

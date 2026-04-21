@@ -1,6 +1,5 @@
-import type { Config } from './schema';
-import type { StorageMode } from './schema';
 import { defaultConfig } from './defaults';
+import type { Config, StorageMode } from './schema';
 
 export interface BootstrapConfig {
   storageMode: StorageMode;

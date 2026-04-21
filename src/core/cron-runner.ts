@@ -1,10 +1,10 @@
-import { getDb } from '@/db/postgres';
-import { hooks } from '@/db/schema/hooks';
-import { eq, and, lte, isNotNull } from 'drizzle-orm';
-import { sessionRepository } from '@/db/repositories/session-repository';
-import { coreLogger } from '@/utils/logger';
-import { getHookManager } from '@/hooks/manager';
+import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { getDb } from '@/db/postgres';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import { hooks } from '@/db/schema/hooks';
+import { getHookManager } from '@/hooks/manager';
+import { coreLogger } from '@/utils/logger';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour

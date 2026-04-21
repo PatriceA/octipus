@@ -1,24 +1,28 @@
-import { coreLogger } from '@/utils/logger';
-import { getLiteLLMClient, type CompletionResult } from '@/models/litellm-client';
-import { getCostTracker } from '@/models/cost-tracker';
-import { getModelRegistry } from '@/models/model-registry';
+import { mkdirSync, writeFileSync } from 'fs';
+import type { ChatCompletionTool } from 'openai/resources/chat/completions';
+import { homedir } from 'os';
+import { join as joinPath } from 'path';
+import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
+import { agentRepository } from '@/db/repositories/agent-repository';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { auditRepository } from '@/db/repositories/audit-repository';
-import { agentRepository } from '@/db/repositories/agent-repository';
-import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
-import { agentLogger } from '@/utils/logger';
-import { writeFileSync, mkdirSync } from 'fs';
-import { join as joinPath } from 'path';
-import { homedir } from 'os';
+import { getCostTracker } from '@/models/cost-tracker';
+import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
-import type { AgentMessage, } from './types';
-import type { ChatCompletionTool } from 'openai/resources/chat/completions';
+import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
+import {
+  BudgetExceededError,
+  CascadedCancellationError,
+  ChildTimeoutError,
+} from './swarm/errors';
 import { ToolExecutor } from './tool-executor';
+import type { AgentMessage, } from './types';
 
 // Re-export types for backward compatibility
-export type { AgentWorkerConfig, ToolHandler, AgentEventHandler, AgentEvent } from './agent-base';
+export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
 
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
@@ -27,10 +31,15 @@ export class AgentWorker extends BaseAgentWorker {
   private startTime: number = 0;
   private emptyRetries: number = 0;
   private llmRetries: number = 0;
-  /** Track consecutive identical tool calls to detect loops */
+  /** Track consecutive identical tool calls (same name + args) to detect loops */
   private lastToolCallSignature: string = '';
   private consecutiveRepeatCount: number = 0;
   private static MAX_CONSECUTIVE_REPEATS = 3;
+
+  /** Track consecutive same-tool-name calls regardless of args — catches chatty LLMs looping on send_status_update with slightly different messages */
+  private lastToolNames: string = '';
+  private consecutiveSameNameCount: number = 0;
+  private static MAX_SAME_NAME_REPEATS = 2;
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
@@ -40,23 +49,65 @@ export class AgentWorker extends BaseAgentWorker {
     this.steeringQueue.push(message);
   }
 
-  /** Milliseconds since agent start */
+  /**
+   * Wall-clock time spent blocked on synchronous child spawns. Subtracted
+   * from `elapsed()` so parent's timeout does NOT tick down while it's
+   * awaiting a subagent. User spec: "waiting time should not go into the
+   * timeout calculation."
+   */
+  private pausedMs: number = 0;
+
+  /** Increment the paused counter by `durationMs`. Called by ToolExecutor around `spawn_child`. */
+  addPausedMs(durationMs: number): void {
+    if (durationMs > 0) this.pausedMs += durationMs;
+  }
+
+  /** Milliseconds of *active* work since agent start (excludes child-wait time). */
   private elapsed(): number {
-    return Date.now() - this.startTime;
+    return Math.max(0, Date.now() - this.startTime - this.pausedMs);
   }
 
-  /** Public elapsed time for status reporting */
+  /** Public elapsed time for status reporting (active only). */
   override getElapsedMs(): number {
-    return this.startTime > 0 ? Date.now() - this.startTime : 0;
+    return this.startTime > 0 ? this.elapsed() : 0;
   }
 
-  constructor(context: import('./types').AgentContext, config: import('./agent-base').AgentWorkerConfig) {
+  /** Optional parent AbortSignal — chained so that parent abort cascades down. */
+  private parentSignalCleanup: (() => void) | null = null;
+
+  constructor(
+    context: import('./types').AgentContext,
+    config: import('./agent-base').AgentWorkerConfig,
+    opts?: { parentSignal?: AbortSignal },
+  ) {
     super(context, config);
     this.abortController = new AbortController();
     this.toolExecutor = new ToolExecutor(
       context,
       (type, data) => this.emit(type, data),
+      (ms) => this.addPausedMs(ms),
     );
+
+    // Swarm Phase 2: chain parent AbortSignal → this worker's controller.
+    // Any ancestor cancellation flows down. The `once` listener is cleaned up
+    // on this.stop() to avoid leaks when the parent signal outlives the child.
+    if (opts?.parentSignal) {
+      const parent = opts.parentSignal;
+      if (parent.aborted) {
+        // Already aborted at construction — fire immediately on next tick so
+        // the caller has a chance to wire onEvent handlers first.
+        queueMicrotask(() => this.abortController.abort(parent.reason));
+      } else {
+        const onAbort = () => this.abortController.abort(parent.reason);
+        parent.addEventListener('abort', onAbort, { once: true });
+        this.parentSignalCleanup = () => parent.removeEventListener('abort', onAbort);
+      }
+    }
+  }
+
+  /** Public access so the spawner can plumb token deltas into the swarm node bookkeeping. */
+  getAbortSignal(): AbortSignal {
+    return this.abortController.signal;
   }
 
   override getTotalTokens(): number {
@@ -264,8 +315,14 @@ export class AgentWorker extends BaseAgentWorker {
 
   private async loop(): Promise<string> {
     while (this.iteration < this.config.maxIterations) {
+      // Abort from parent (cascade) or explicit stop(). Swarm Phase 2: surface
+      // as a structured `CascadedCancellationError` instead of a string.
       if (this.abortController.signal.aborted) {
-        throw new Error('Agent execution aborted');
+        const reason = this.abortController.signal.reason;
+        throw new CascadedCancellationError({
+          agentId: this.context.id,
+          reason: typeof reason === 'string' ? reason : reason?.message,
+        });
       }
 
       this.iteration++;
@@ -275,15 +332,26 @@ export class AgentWorker extends BaseAgentWorker {
         role: this.context.role, model: this.context.model,
       }, 'Agent loop iteration');
 
-      // Check token budget
+      // ── Pre-LLM-call budget enforcement (Swarm Phase 2) ─────────────
+      // Per design §Budget Envelope: hard cap, fires abort, status='budget'.
       if (this.config.maxTokenBudget > 0 && this.totalTokensUsed >= this.config.maxTokenBudget) {
-        throw new Error(`Token budget exceeded (${this.totalTokensUsed}/${this.config.maxTokenBudget})`);
+        this.abortController.abort(`budget_exceeded:${this.totalTokensUsed}/${this.config.maxTokenBudget}`);
+        throw new BudgetExceededError({
+          agentId: this.context.id,
+          used: this.totalTokensUsed,
+          cap: this.config.maxTokenBudget,
+        });
       }
 
-      // Check timeout — skip if a final/delegation tool already completed
-      // (tools are disabled after delegation; we just need one more LLM call for the summary)
+      // Wall-clock cap — skip if a final/delegation tool already completed
+      // (tools are disabled after delegation; we just need one more LLM call for the summary).
       if (this.config.timeout > 0 && this.elapsed() > this.config.timeout && !this.toolExecutor.toolsDisabled) {
-        throw new Error(`Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s)`);
+        this.abortController.abort(`timeout:${this.elapsed()}ms`);
+        throw new ChildTimeoutError({
+          agentId: this.context.id,
+          elapsedMs: this.elapsed(),
+          capMs: this.config.timeout,
+        });
       }
 
       // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
@@ -439,6 +507,33 @@ export class AgentWorker extends BaseAgentWorker {
           this.consecutiveRepeatCount = 1;
         }
 
+        // Detect same-tool-name spam (different args each time, same name).
+        // Catches chatty LLMs that spin on send_status_update with varying
+        // messages — the per-signature loop above misses them because args
+        // differ every call.
+        const toolNameSignature = [...completion.toolCalls].map(tc => tc.name).sort().join(',');
+        if (toolNameSignature === this.lastToolNames) {
+          this.consecutiveSameNameCount++;
+          if (this.consecutiveSameNameCount >= AgentWorker.MAX_SAME_NAME_REPEATS) {
+            agentLogger.warn({
+              agentId: this.context.id, toolNames: toolNameSignature,
+              repeats: this.consecutiveSameNameCount,
+            }, 'Same tool name called repeatedly — disabling tools, forcing plain-text reply');
+            this.toolExecutor.disableTools();
+            this.messages.push({
+              role: 'user' as const,
+              content:
+                `[SYSTEM] You have called \`${toolNameSignature}\` multiple times. ` +
+                `Tools are now disabled. Respond to the user with plain text using the information you already have.`,
+              timestamp: new Date(),
+            });
+            continue;
+          }
+        } else {
+          this.lastToolNames = toolNameSignature;
+          this.consecutiveSameNameCount = 1;
+        }
+
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -456,7 +551,7 @@ export class AgentWorker extends BaseAgentWorker {
         }
 
         const toolStart = Date.now();
-        // Final/delegation tools (spawn_worker, create_pipeline) manage their own timeouts.
+        // Final/delegation tools (spawn_child, create_pipeline) manage their own timeouts.
         // Don't race the orchestrator timeout against them — a pipeline can legitimately
         // run for much longer than the orchestrator's own timeout.
         const isFinalTool = this.toolExecutor.hasFinalToolCall(completion.toolCalls);
@@ -780,6 +875,10 @@ export class AgentWorker extends BaseAgentWorker {
 
   stop(): void {
     this.abortController.abort();
+    if (this.parentSignalCleanup) {
+      this.parentSignalCleanup();
+      this.parentSignalCleanup = null;
+    }
     this.context.status = 'stopped';
     this.emit('status_change', { status: 'stopped' });
     agentLogger.info({ agentId: this.context.id }, 'Agent stopped');

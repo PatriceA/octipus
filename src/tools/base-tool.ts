@@ -1,5 +1,5 @@
-import type { AgentContext, ToolManifest, } from '@/core/types';
 import type { ToolHandler } from '@/core/agent-worker';
+import type { AgentContext, ToolManifest, } from '@/core/types';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
@@ -67,6 +67,13 @@ export abstract class BaseTool {
   ): void {
     const handler: ToolHandler = {
       name: `${this.id}__${name}`,
+      // The swarm's permission intersection (SwarmSpawner.resolveChildTools)
+      // looks up `handler.toolId` in the parent's allowedToolIds set — which
+      // stores container IDs like 'profiles', 'filesystem'. Without this
+      // field set, the intersection falls back to `handler.name`
+      // ('profiles__search_profiles') which never matches → the child
+      // gets ZERO tools. Must be set.
+      toolId: this.id,
       description,
       parameters,
       execute: async (args, context) => {

@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Text, useInput, useApp } from 'ink';
-import TextInput from 'ink-text-input';
-import { GatewayClient, type ConnectionStatus } from './gateway-client';
-import { getFileCompletions, cancelFileCompletions, extractPathToken } from './file-completer';
 import { randomBytes } from 'crypto';
+import { Box, Text, useApp, useInput } from 'ink';
+import TextInput from 'ink-text-input';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { cancelFileCompletions, extractPathToken, getFileCompletions } from './file-completer';
+import { type ConnectionStatus, GatewayClient } from './gateway-client';
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system';

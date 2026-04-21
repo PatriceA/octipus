@@ -1,5 +1,5 @@
-import type { Config } from './schema';
 import { defaultConfig } from './defaults';
+import type { Config } from './schema';
 
 /**
  * Load ALL config from environment variables (legacy behavior).

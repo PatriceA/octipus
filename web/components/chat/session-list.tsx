@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, } from 'react';
-import { Plus, Search, MessageSquare, Trash2, MoreHorizontal, Pencil, Code2, Smartphone, Globe, Hash } from 'lucide-react';
+import { Code2, Globe, Hash, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Smartphone, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState, } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface SessionInfo {
@@ -275,6 +275,7 @@ export function SessionList({
                             setMenuOpenId(menuOpenId === session.id ? null : session.id);
                             setConfirmDeleteId(null);
                           }}
+                          aria-label="Session actions"
                           className={cn(
                             'mt-0.5 rounded p-0.5 text-on-surface-variant transition-opacity',
                             'hover:bg-surface-container-highest hover:text-white',

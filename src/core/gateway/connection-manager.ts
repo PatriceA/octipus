@@ -1,16 +1,16 @@
 import type { ServerWebSocket } from 'bun';
 import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
+import { validateLocalAuth } from './local-auth';
 import {
+  type AuthMessage,
   type ConnectionContext,
   type ConnectionState,
-  type TrustLevel,
-  type AuthMessage,
   type GatewayMessage,
   parseClientMessage,
+  type TrustLevel,
 } from './protocol';
 import { GatewayRateLimiter } from './rate-limiter';
-import { validateLocalAuth } from './local-auth';
 
 // ── Types ─────────────────────────────────────────────────────────
 

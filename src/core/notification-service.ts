@@ -1,4 +1,4 @@
-import { eq, and, desc } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { notifications, } from '@/db/schema/notifications';
 import { coreLogger } from '@/utils/logger';

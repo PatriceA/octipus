@@ -1,6 +1,6 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
-import type { ToolManifest } from '@/core/types';
 import { getUMI } from '@/channels/interface';
+import type { ToolManifest } from '@/core/types';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class MessagingTool extends BaseTool {
   readonly id = 'messaging';

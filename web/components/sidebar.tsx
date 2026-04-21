@@ -1,28 +1,28 @@
 'use client';
 
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
 import {
+  BookOpen,
+  Bot,
+  Brain,
+  Cable,
+  Cpu,
+  FileText,
+  FlaskConical,
+  GitBranch,
+  KeyRound,
   LayoutDashboard,
   MessageSquare,
-  Bot,
-  Settings,
-  Webhook,
-  Cpu,
-  KeyRound,
-  Wrench,
-  BookOpen,
-  Cable,
-  GitBranch,
-  PanelLeftClose,
   PanelLeft,
-  FlaskConical,
-  FileText,
-  Brain,
+  PanelLeftClose,
+  Settings,
   Users,
+  Webhook,
+  Wrench,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useSidebarStore } from '@/lib/sidebar-store';
+import { cn } from '@/lib/utils';
 
 interface NavItem {
   name: string;

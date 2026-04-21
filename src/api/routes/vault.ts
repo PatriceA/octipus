@@ -1,8 +1,7 @@
-import { coreLogger } from '@/utils/logger';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getVault } from '@/security/vault';
-import { apiLogger } from '@/utils/logger';
+import { apiLogger, coreLogger } from '@/utils/logger';
 
 /** Secret names that, when changed, require a telephony provider cache reset. */
 const TELEPHONY_SECRET_NAMES = new Set([

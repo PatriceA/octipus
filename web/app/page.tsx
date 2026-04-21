@@ -2,11 +2,11 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
-import { HealthStatus } from '@/components/dashboard/health-status';
-import { FeatureStatus } from '@/components/dashboard/feature-status';
-import { UsageChart } from '@/components/dashboard/usage-chart';
-import { RecentSessions } from '@/components/dashboard/recent-sessions';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
+import { FeatureStatus } from '@/components/dashboard/feature-status';
+import { HealthStatus } from '@/components/dashboard/health-status';
+import { RecentSessions } from '@/components/dashboard/recent-sessions';
+import { UsageChart } from '@/components/dashboard/usage-chart';
 import { Card } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';

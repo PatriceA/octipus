@@ -9,4 +9,4 @@ import './plan';
 import './eval';
 import './cost';
 
-export { handleCommand, getAllCommands, getCommand } from './registry';
+export { getAllCommands, getCommand, handleCommand } from './registry';

@@ -1,7 +1,7 @@
-import { getSettingsService } from './settings-service';
-import { SETTINGS_REGISTRY } from './settings-registry';
 import { getVault } from '@/security/vault';
 import { logger } from '@/utils/logger';
+import { SETTINGS_REGISTRY } from './settings-registry';
+import { getSettingsService } from './settings-service';
 
 const MIGRATION_SENTINEL = '_system.envMigrated';
 

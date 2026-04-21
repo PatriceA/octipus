@@ -1,24 +1,101 @@
-import { RedisQueue, RedisPubSub } from '@/db/redis';
+import { RedisPubSub, RedisQueue } from '@/db/redis';
+import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import type { Task } from './types';
-import { generateId } from '@/utils/crypto';
 
 const TASK_QUEUE = 'tasks:queue';
 const TASK_CHANNEL = 'tasks:events';
+
+/**
+ * Wake-gate config — evaluated JUST BEFORE a scheduled task runs.
+ * If the gate says "skip", the task is deferred to the next tick rather than
+ * executing. Used for upstream-dependency checks, feature flags, off-hours
+ * windows, low-resource signals, etc.
+ */
+export type WakeGate =
+  | { kind: 'command'; cmd: string; timeoutMs?: number }
+  | { kind: 'http'; url: string; expectStatus?: number }
+  | { kind: 'tool'; toolName: string; params: Record<string, unknown> };
+
+export interface WakeGateResult {
+  run: boolean;
+  reason: string;
+}
+
+/**
+ * Tool evaluator hook. Optional — only required if any scheduled task uses
+ * a `tool` wake-gate. Consumers wire this up at boot via `registerWakeGateToolEvaluator`.
+ */
+export type WakeGateToolEvaluator = (
+  toolName: string,
+  params: Record<string, unknown>,
+) => Promise<unknown>;
 
 export interface ScheduledTask extends Task {
   scheduledAt: Date;
   attempts: number;
   maxAttempts: number;
   backoffMs: number;
+  wakeGate?: WakeGate;
 }
 
 export interface TaskEvent {
-  type: 'created' | 'started' | 'completed' | 'failed' | 'retried';
+  type:
+    | 'created'
+    | 'started'
+    | 'completed'
+    | 'failed'
+    | 'retried'
+    | 'skipped_by_wakegate';
   taskId: string;
   agentId?: string;
   payload?: unknown;
   timestamp: Date;
+}
+
+let wakeGateToolEvaluator: WakeGateToolEvaluator | null = null;
+
+/**
+ * Wire up a tool evaluator so `wakeGate.kind='tool'` gates can actually run.
+ * Called at boot once the tool registry exists. Safe to call multiple times.
+ */
+export function registerWakeGateToolEvaluator(fn: WakeGateToolEvaluator): void {
+  wakeGateToolEvaluator = fn;
+}
+
+/**
+ * Evaluate a wake-gate. Throws only on programmer errors; runtime failures
+ * resolve to `{run: false, reason}` so the caller can log + skip safely.
+ */
+export async function evaluateWakeGate(gate: WakeGate): Promise<WakeGateResult> {
+  try {
+    if (gate.kind === 'command') {
+      const timeoutMs = gate.timeoutMs ?? 5000;
+      const proc = Bun.spawn(['sh', '-c', gate.cmd], { stdout: 'pipe', stderr: 'pipe' });
+      const timer = setTimeout(() => proc.kill(), timeoutMs);
+      const exit = await proc.exited;
+      clearTimeout(timer);
+      if (exit === 0) return { run: true, reason: `command exit 0` };
+      return { run: false, reason: `command exit ${exit}` };
+    }
+    if (gate.kind === 'http') {
+      const expect = gate.expectStatus ?? 200;
+      const res = await fetch(gate.url, { signal: AbortSignal.timeout(5000) });
+      if (res.status === expect) return { run: true, reason: `http ${res.status}` };
+      return { run: false, reason: `http ${res.status} !== ${expect}` };
+    }
+    if (gate.kind === 'tool') {
+      if (!wakeGateToolEvaluator) {
+        return { run: false, reason: 'no tool evaluator registered' };
+      }
+      const result = await wakeGateToolEvaluator(gate.toolName, gate.params);
+      if (result) return { run: true, reason: `tool ${gate.toolName} returned truthy` };
+      return { run: false, reason: `tool ${gate.toolName} returned falsy` };
+    }
+    return { run: false, reason: `unknown gate kind` };
+  } catch (err) {
+    return { run: false, reason: `gate error: ${(err as Error).message}` };
+  }
 }
 
 export class Scheduler {
@@ -43,6 +120,7 @@ export class Scheduler {
       priority?: number;
       maxAttempts?: number;
       delayMs?: number;
+      wakeGate?: WakeGate;
     }
   ): Promise<string> {
     const taskId = generateId();
@@ -61,6 +139,7 @@ export class Scheduler {
       attempts: 0,
       maxAttempts: options?.maxAttempts || 3,
       backoffMs: 1000,
+      ...(options?.wakeGate ? { wakeGate: options.wakeGate } : {}),
     };
 
     await this.queue.push(task, task.priority);
@@ -86,13 +165,14 @@ export class Scheduler {
 
     if (!task) return null;
 
-    // Check if it's time to execute
-    if (task.scheduledAt > new Date()) {
-      // Re-queue with adjusted priority
+    // scheduledAt comes back as a string after Redis JSON round-trip; coerce before comparing
+    const scheduledAt = task.scheduledAt instanceof Date ? task.scheduledAt : new Date(task.scheduledAt);
+    if (scheduledAt > new Date()) {
       await this.queue.push(task, task.priority - 1);
       return null;
     }
 
+    task.scheduledAt = scheduledAt;
     return task;
   }
 
@@ -234,6 +314,28 @@ export class Scheduler {
         coreLogger.warn({ taskId: task.id, type: task.type }, 'No handler for task type');
         await this.failTask(task.id, `No handler for task type: ${task.type}`);
         continue;
+      }
+
+      // Wake-gate: evaluate just before execution; on skip, re-queue for next tick.
+      if (task.wakeGate) {
+        const gateResult = await evaluateWakeGate(task.wakeGate);
+        if (!gateResult.run) {
+          coreLogger.info(
+            { taskId: task.id, type: task.type, reason: gateResult.reason },
+            'Task skipped by wake-gate',
+          );
+          await this.publishEvent({
+            type: 'skipped_by_wakegate',
+            taskId: task.id,
+            agentId: task.agentId,
+            payload: { reason: gateResult.reason },
+            timestamp: new Date(),
+          });
+          // Defer to next tick without counting as an attempt.
+          task.scheduledAt = new Date(Date.now() + 30_000);
+          await this.queue.push(task, task.priority);
+          continue;
+        }
       }
 
       await this.startTask(task);

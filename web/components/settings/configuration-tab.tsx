@@ -1,13 +1,13 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Cpu, Bot, Server } from 'lucide-react';
+import { Bot, Cpu, Loader2, Server } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
-  type SettingItem,
-  useSettingActions,
-  SettingsGroup,
   SecretsRedirectBanner,
+  type SettingItem,
+  SettingsGroup,
+  useSettingActions,
 } from './setting-field';
 
 /** Categories that belong on the Configuration tab (server/runtime settings only) */

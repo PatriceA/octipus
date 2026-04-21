@@ -1,10 +1,10 @@
-import type { EvalSuite, EvalResult, EvalSuiteResult, AssertionResult } from '../types';
-import type { RedTeamPlugin, RedTeamConfig, RedTeamTest } from './types';
+import type { AssertionResult, EvalResult, EvalSuite, EvalSuiteResult } from '../types';
+import { dataLeakagePlugin } from './plugins/data-leakage';
+import { offTopicDriftPlugin } from './plugins/off-topic-drift';
 import { promptInjectionPlugin } from './plugins/prompt-injection';
 import { roleConfusionPlugin } from './plugins/role-confusion';
 import { toolMisusePlugin } from './plugins/tool-misuse';
-import { dataLeakagePlugin } from './plugins/data-leakage';
-import { offTopicDriftPlugin } from './plugins/off-topic-drift';
+import type { RedTeamConfig, RedTeamPlugin, RedTeamTest } from './types';
 
 export const redTeamPlugins: RedTeamPlugin[] = [
   promptInjectionPlugin,
@@ -256,4 +256,4 @@ export async function runRedTeam(options?: RunRedTeamOptions): Promise<EvalSuite
   };
 }
 
-export type { RedTeamPlugin, RedTeamConfig, RedTeamTest } from './types';
+export type { RedTeamConfig, RedTeamPlugin, RedTeamTest } from './types';

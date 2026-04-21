@@ -1,7 +1,7 @@
-import { generateId } from '@/utils/crypto';
-import { coreLogger } from '@/utils/logger';
 import { getNotificationService } from '@/core/notification-service';
 import type { AgentContext } from '@/core/types';
+import { generateId } from '@/utils/crypto';
+import { coreLogger } from '@/utils/logger';
 import type { OrchestratorEvent } from './service';
 
 export interface ApprovalRequest {

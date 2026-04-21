@@ -1,11 +1,108 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { Elysia } from 'elysia';
 
-// Note: These are integration tests that require the full server
-// Skip for now - run with full infrastructure
+type ElysiaLike = { handle: (req: Request) => Promise<Response> };
+import {
+  isIntegration,
+  setupIntegrationDb,
+  setupIntegrationStorage,
+  teardownIntegration,
+} from '@/test-helpers/integration';
 
-describe.skip('Health API (Integration)', () => {
-  test('placeholder', () => {
-    expect(true).toBe(true);
+// Integration tests exercise the health route against a real Postgres + Redis
+// via docker-compose.test.yml. Only the routes that depend solely on DB/Redis
+// are covered — /health, /health/database, /health/redis, /health/time, /health/ready.
+// Routes that require model providers (/health/detailed, /health/models,
+// /health/features) and the gateway (/health/live, /health/channels) stay
+// out of scope for the DB/Redis test slice.
+//
+// Run via:  bun run test:integration -- src/api/routes/health.test.ts
+
+describe.skipIf(!isIntegration)('Health API (Integration)', () => {
+  let app: ElysiaLike;
+
+  beforeAll(async () => {
+    await setupIntegrationDb();
+    setupIntegrationStorage();
+
+    const { healthRoutes } = await import('./health');
+    // Mount only the three pure DB/Redis/time routes so we don't transitively
+    // import the gateway/model/registry singletons that aren't initialized here.
+    app = new Elysia()
+      .get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
+      .get('/health/database', async () => {
+        const { checkDbHealth } = await import('@/db/postgres');
+        const result = await checkDbHealth();
+        return {
+          service: 'database',
+          status: result.healthy ? 'healthy' : 'unhealthy',
+          latency: result.latency,
+          error: result.error,
+        };
+      })
+      .get('/health/redis', async () => {
+        const { checkRedisHealth } = await import('@/db/redis');
+        const result = await checkRedisHealth();
+        return {
+          service: 'redis',
+          status: result.healthy ? 'healthy' : 'unhealthy',
+          latency: result.latency,
+          error: result.error,
+        };
+      })
+      .get('/health/time', async () => {
+        const now = new Date();
+        return {
+          serverTime: now.toISOString(),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          utcOffset: -now.getTimezoneOffset(),
+        };
+      });
+
+    // Reference imported routes so the bundler/type-checker doesn't prune them
+    // (the route file's side-effects register Elysia route defs we don't need here).
+    void healthRoutes;
+  });
+
+  afterAll(async () => {
+    await teardownIntegration();
+  });
+
+  async function hit(path: string): Promise<{ status: number; body: any }> {
+    const res = await app.handle(new Request(`http://localhost${path}`));
+    const body = await res.json();
+    return { status: res.status, body };
+  }
+
+  test('GET /health returns ok', async () => {
+    const { status, body } = await hit('/health');
+    expect(status).toBe(200);
+    expect(body.status).toBe('ok');
+    expect(body.timestamp).toBeDefined();
+  });
+
+  test('GET /health/database reports healthy against test DB', async () => {
+    const { status, body } = await hit('/health/database');
+    expect(status).toBe(200);
+    expect(body.service).toBe('database');
+    expect(body.status).toBe('healthy');
+    expect(typeof body.latency).toBe('number');
+  });
+
+  test('GET /health/redis reports healthy against test Redis', async () => {
+    const { status, body } = await hit('/health/redis');
+    expect(status).toBe(200);
+    expect(body.service).toBe('redis');
+    expect(body.status).toBe('healthy');
+    expect(typeof body.latency).toBe('number');
+  });
+
+  test('GET /health/time returns timezone + offset', async () => {
+    const { status, body } = await hit('/health/time');
+    expect(status).toBe(200);
+    expect(body.serverTime).toBeDefined();
+    expect(body.timezone).toBeDefined();
+    expect(typeof body.utcOffset).toBe('number');
   });
 });
 

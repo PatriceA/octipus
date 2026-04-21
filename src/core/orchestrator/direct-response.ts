@@ -1,14 +1,14 @@
+import { getResponseCache } from '@/core/response-cache';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import type { SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { sessionRepository } from '@/db/repositories/session-repository';
-import { messageRepository } from '@/db/repositories/message-repository';
-import { getResponseCache } from '@/core/response-cache';
 import { coreLogger } from '@/utils/logger';
-import { SECURITY_PREAMBLE } from './roles';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
+import { SECURITY_PREAMBLE } from './roles';
 import type { ResponseMetadata } from './types';
-import type { SessionContext } from '@/db/schema/sessions';
 
 /**
  * Generate a direct LLM response for casual messages (no orchestrator/worker needed).

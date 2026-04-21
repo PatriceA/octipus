@@ -1,10 +1,10 @@
+import { randomBytes } from 'crypto';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir, } from 'os';
+import { join, resolve } from 'path';
+import type { CLIAgentConfig } from '@/db/schema/models';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
-import type { CLIAgentConfig } from '@/db/schema/models';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join, resolve } from 'path';
-import { tmpdir, } from 'os';
-import { randomBytes } from 'crypto';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -128,6 +128,13 @@ export class CLIArgumentBuilder {
       args.push('-p', prompt, '--verbose', '--output-format', 'stream-json');
     }
 
+    // --bare: skip hooks, plugins, auto-memory, CLAUDE.md auto-discovery.
+    // Prevents host-user plugins (e.g. caveman) from leaking into spawned
+    // agent output. Opt out by setting ASSISTANT_CLI_PRESERVE_HOST_CONFIG=1.
+    if (process.env.ASSISTANT_CLI_PRESERVE_HOST_CONFIG !== '1') {
+      args.push('--bare');
+    }
+
     const permMode = settings.permissionMode || 'bypassPermissions';
     args.push('--permission-mode', permMode);
 
@@ -214,16 +221,19 @@ export class CLIArgumentBuilder {
 
   private buildCodexArgs(prompt: string, systemPrompt?: string | null): { binary: string; args: string[]; stdinPrompt?: string } {
     // Codex: positional prompt or '-' to read from stdin.
-    // When we have a system prompt (expert identity), combine it with the user prompt
-    // and pipe via stdin so it's treated as the full instruction context.
+    // Multi-line prompts or oversized args break the positional path —
+    // codex prints "Reading additional input from stdin..." then exits 1 when
+    // the argv text contains newlines. Always pipe via stdin in that case.
+    // Short single-line prompts may still go as a positional.
     const baseArgs = ['exec', '--skip-git-repo-check', '--json', '--ephemeral'];
 
     if (systemPrompt) {
-      const combined = systemPrompt + '\n\n---\n\n' + prompt;
+      const combined = `${systemPrompt}\n\n---\n\n${prompt}`;
       return { binary: 'codex', args: [...baseArgs, '-'], stdinPrompt: combined };
     }
 
-    if (IS_WIN) {
+    const needsStdin = IS_WIN || prompt.includes('\n') || prompt.length > 1024;
+    if (needsStdin) {
       return { binary: 'codex', args: [...baseArgs, '-'], stdinPrompt: prompt };
     }
     return { binary: 'codex', args: [...baseArgs, prompt] };

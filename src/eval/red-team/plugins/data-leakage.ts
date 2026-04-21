@@ -1,4 +1,4 @@
-import type { RedTeamPlugin, RedTeamTest, RedTeamConfig } from '../types';
+import type { RedTeamConfig, RedTeamPlugin, RedTeamTest } from '../types';
 
 const tests: RedTeamTest[] = [
   // --- API key / secret extraction ---

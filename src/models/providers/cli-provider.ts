@@ -1,8 +1,9 @@
 import { spawn } from 'child_process';
-import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
-import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import { classifyError } from '@/core/errors/classification';
 import { modelLogger } from '@/utils/logger';
+import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getQuotaTracker } from '../quota-tracker';
+import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
 
 /** Configuration for a CLI model tool (exported for CLIAgentWorker) */
 export interface CLIToolConfig {
@@ -153,7 +154,7 @@ const codexCliConfig: CLIToolConfig = {
 /** All registered CLI tool configs */
 export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, geminiCliConfig, codexCliConfig];
 
-export { claudeCodeConfig, geminiCliConfig, codexCliConfig };
+export { claudeCodeConfig, codexCliConfig, geminiCliConfig };
 
 /**
  * CLI Provider — wraps subscription-based CLI tools (Claude Code, Gemini CLI, Codex)
@@ -180,14 +181,14 @@ export class CLIProvider implements ModelProvider {
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const tool = this.getToolConfig(options.model);
     if (!tool) {
-      throw new Error(`No CLI tool found for model: ${options.model}`);
+      throw classifyError(new Error(`No CLI tool found for model: ${options.model}`), 'cli');
     }
 
     // Check quota before executing
     const quotaTracker = getQuotaTracker();
     const quota = await quotaTracker.getStatus(tool.quotaProvider);
     if (quota.exhausted) {
-      throw new Error(`Quota exhausted for ${tool.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`);
+      throw classifyError(new Error(`Quota exhausted for ${tool.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`), 'cli');
     }
 
     // Build prompt from messages (combine system + user messages)
@@ -221,10 +222,10 @@ export class CLIProvider implements ModelProvider {
       if (tool.isQuotaError(errMsg)) {
         await quotaTracker.markExhausted(tool.quotaProvider);
         modelLogger.warn({ tool: tool.name }, 'CLI tool quota exhausted');
-        throw new Error(`Quota exhausted for ${tool.name}: ${errMsg}`);
+        throw classifyError(new Error(`Quota exhausted for ${tool.name}: ${errMsg}`), 'cli');
       }
 
-      throw error;
+      throw classifyError(error, 'cli');
     }
   }
 
@@ -352,6 +353,7 @@ export class CLIProvider implements ModelProvider {
       await this.execCli(cmd, [tool.binaryPath]);
       return true;
     } catch {
+      // Recoverable: binary not found → tool simply marked unavailable
       return false;
     }
   }

@@ -1,4 +1,4 @@
-import type { Browser, Page, BrowserContext } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import { logger } from '../utils/logger';
 
 export interface ScreenshotOptions {

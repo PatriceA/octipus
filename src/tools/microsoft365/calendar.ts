@@ -1,5 +1,5 @@
-import { createParameterSchema } from '../base-tool';
 import type { AgentContext } from '@/core/types';
+import { createParameterSchema } from '../base-tool';
 
 type RegisterFn = (name: string, desc: string, params: any, exec: (args: any, ctx: AgentContext) => Promise<any>, opts?: any) => void;
 type ApiFn = (userId: string, method: string, path: string, body?: unknown) => Promise<unknown>;

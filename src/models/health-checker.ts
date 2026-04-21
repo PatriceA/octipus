@@ -1,11 +1,11 @@
 import { getConfig } from '@/config';
-import { getLiteLLMClient } from './litellm-client';
-import { getModelRegistry } from './model-registry';
+import type { HealthStatus } from '@/core/types';
 import { RedisCache } from '@/db/redis';
 import { modelLogger } from '@/utils/logger';
-import type { HealthStatus } from '@/core/types';
+import { type CircuitBreakerStatus, getCircuitBreakerRegistry } from './circuit-breaker';
+import { getLiteLLMClient } from './litellm-client';
+import { getModelRegistry } from './model-registry';
 import { getRateLimitManager, type RateLimitStats } from './rate-limiter';
-import { getCircuitBreakerRegistry, type CircuitBreakerStatus } from './circuit-breaker';
 
 const HEALTH_CHECK_INTERVAL = 60000; // 1 minute
 const HEALTH_CACHE_TTL = 30; // 30 seconds
@@ -121,9 +121,21 @@ export class HealthChecker {
 
   /**
    * Providers that cannot be health-checked via a LiteLLM completion call.
-   * CLI tools are local subprocess wrappers; direct providers have their own health endpoints.
+   * CLI tools are local subprocess wrappers; direct providers have their own
+   * health endpoints (and probing free-tier OpenRouter models every 60s
+   * burns through rate limits — the user sees 429s for no reason).
    */
-  private static SKIP_LITELLM_PROVIDERS = new Set(['cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'voyage']);
+  private static SKIP_LITELLM_PROVIDERS = new Set([
+    'cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'voyage', 'openrouter',
+  ]);
+
+  /**
+   * Model-name patterns that indicate a non-chat model — OCR, vision-only,
+   * TTS, transcription, and embedding models. These don't answer "Hi" with
+   * a sensible chat response; probing them wastes tokens and pollutes logs.
+   * Embeddings are already handled via the `isEmbedding` branch.
+   */
+  private static NON_CHAT_PATTERNS = /ocr|tts|whisper|transcrib|dall-?e|vision-preview/i;
 
   /**
    * Check health of a specific model
@@ -140,6 +152,14 @@ export class HealthChecker {
         name: modelName,
         status: 'healthy', // Assume available; provider router handles actual errors
       };
+      await this.cache.set(cacheKey, result);
+      return result;
+    }
+
+    // Skip non-chat models (OCR, TTS, transcription, vision-only) — they
+    // don't answer "Hi" sensibly and shouldn't be chat-probed.
+    if (!isEmbedding && HealthChecker.NON_CHAT_PATTERNS.test(modelName)) {
+      const result: ModelHealth = { name: modelName, status: 'healthy' };
       await this.cache.set(cacheKey, result);
       return result;
     }

@@ -1,6 +1,6 @@
-import { pgTable, text, uuid, jsonb, timestamp, index } from 'drizzle-orm/pg-core';
-import type { ConformanceResult } from '@/models/testing/conformance';
+import { index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import type { EvalResult } from '@/models/evaluation/types';
+import type { ConformanceResult } from '@/models/testing/conformance';
 
 // ── Conformance test runs ─────────────────────────────────────
 

@@ -1,11 +1,9 @@
 // Database exports
-export { getDb, closeDb, checkDbHealth, initializeDb, initializeExtensions, type Database } from './postgres';
-export { getRedis, closeRedis, checkRedisHealth, RedisCache, RedisQueue, RedisPubSub } from './redis';
-export { getStorageProvider, initializeStorage, closeStorage, checkStorageHealth } from './storage';
-export type { StorageProvider, CacheProvider, QueueProvider, PubSubProvider } from './storage';
-
-// Schema exports
-export * from './schema';
-
+export { checkDbHealth, closeDb, type Database, getDb, initializeDb, initializeExtensions } from './postgres';
+export { checkRedisHealth, closeRedis, getRedis, RedisCache, RedisPubSub, RedisQueue } from './redis';
 // Repository exports
 export * from './repositories';
+// Schema exports
+export * from './schema';
+export type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './storage';
+export { checkStorageHealth, closeStorage, getStorageProvider, initializeStorage } from './storage';

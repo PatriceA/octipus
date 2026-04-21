@@ -154,4 +154,10 @@ To assign a model to a topic, use the **Models** page in the web UI:
 2. Select the topic(s) this model should handle
 3. The model will be used when agents with that role/topic are spawned
 
-If no model is explicitly assigned to a topic, the **default model** is used as fallback.
+**Fail-loud, no default fallback.** `ModelRegistry.getModelForTopic(role)` is the single authoritative entry point. If a topic has no model bound, the swarm spawner throws — there is no silent "default model" fallback. Same rule applies to the `embedding` / `vision` / `ocr` topics: the knowledge base self-check (`/api/knowledge/readiness`) surfaces a 503 if no embedding model is bound.
+
+## Swarm Children Inherit Topic Bindings
+
+When an Agent spawns a Subagent via `spawn_child`, the child resolves its model through the **child's topic** — not the parent's. A research Agent (`research` topic) spawning a security Subagent (`security` topic) gets the model bound to `security`, independent of what the parent is using. This means configuring each topic once produces consistent behaviour regardless of how deep the swarm tree goes.
+
+Expert `modelPreference` is a fallback and only applies when no topic binding exists.

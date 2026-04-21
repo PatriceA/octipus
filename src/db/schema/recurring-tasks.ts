@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, boolean, integer, index } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 export const recurringTasks = pgTable('recurring_tasks', {

@@ -1,5 +1,5 @@
-import { logger } from '@/utils/logger';
 import { executeRaw, queryRaw } from '@/db/postgres';
+import { logger } from '@/utils/logger';
 
 /**
  * Run database migrations.

@@ -1,7 +1,7 @@
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import { getEmbeddingService } from '@/core/rag/embeddings';
 import type { ToolManifest } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
-import { getEmbeddingService } from '@/core/rag/embeddings';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 export class DocumentsTool extends BaseTool {
   readonly id = 'documents';

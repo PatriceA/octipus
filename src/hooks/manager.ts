@@ -1,12 +1,12 @@
+import { and, desc, eq } from 'drizzle-orm';
 import { EventEmitter } from 'events';
-import { eq, and, desc } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
-import { hooks, hooks as hooksSchema, type Hook, type NewHook } from '@/db/schema/hooks';
-import { hookExecutions } from '@/db/schema/hook-executions';
-import { matchesTrigger, checkConditions, type TriggerEvent, type TriggerContext } from './triggers';
-import { executeAction, type ActionResult } from './actions';
-import { coreLogger } from '@/utils/logger';
 import type { TriggerType } from '@/core/types';
+import { getDb } from '@/db/postgres';
+import { hookExecutions } from '@/db/schema/hook-executions';
+import { type Hook, hooks, hooks as hooksSchema, type NewHook } from '@/db/schema/hooks';
+import { coreLogger } from '@/utils/logger';
+import { type ActionResult, executeAction } from './actions';
+import { checkConditions, matchesTrigger, type TriggerContext, type TriggerEvent } from './triggers';
 
 export interface HookExecutionResult {
   hookId: string;

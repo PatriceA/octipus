@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { CheckCircle, Loader2, AlertCircle, ChevronDown, ExternalLink } from 'lucide-react';
+import { AlertCircle, CheckCircle, ChevronDown, ExternalLink, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { OAUTH_KEY_GROUPS } from '@/lib/vault-config';
 

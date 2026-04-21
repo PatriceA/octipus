@@ -1,7 +1,7 @@
-import { resolve, join } from 'path';
 import { readdir } from 'fs/promises';
+import { join, resolve } from 'path';
 import { createChildLogger } from '@/utils/logger';
-import type { PluginManifest, PluginModule, LoadedPlugin, PluginContext } from './types';
+import type { LoadedPlugin, PluginContext, PluginManifest, PluginModule } from './types';
 
 const pluginLogger = createChildLogger({ component: 'plugin' });
 

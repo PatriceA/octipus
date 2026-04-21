@@ -1,5 +1,5 @@
-import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 
 export interface RoutingDecision {

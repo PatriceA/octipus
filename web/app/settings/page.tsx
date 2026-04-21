@@ -1,23 +1,23 @@
 'use client';
 
-import { useState } from 'react';
 import {
-  Settings,
   Bell,
   MessageSquare,
+  Phone,
   Plug,
+  Settings,
   Shield,
   Sliders,
   Smartphone,
-  Phone,
 } from 'lucide-react';
-import { GeneralTab } from '@/components/settings/general-tab';
-import { ConfigurationTab } from '@/components/settings/configuration-tab';
-import { IntegrationsTab } from '@/components/settings/integrations-tab';
+import { useState } from 'react';
 import { ChannelsTab } from '@/components/settings/channels-tab';
-import { SecurityTab } from '@/components/settings/security-tab';
-import { NotificationsTab } from '@/components/settings/notifications-tab';
+import { ConfigurationTab } from '@/components/settings/configuration-tab';
+import { GeneralTab } from '@/components/settings/general-tab';
+import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { MobileTab } from '@/components/settings/mobile-tab';
+import { NotificationsTab } from '@/components/settings/notifications-tab';
+import { SecurityTab } from '@/components/settings/security-tab';
 import { VoiceTab } from '@/components/settings/voice-tab';
 
 export default function SettingsPage() {

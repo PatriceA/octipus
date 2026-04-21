@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
+import type { NewSkill } from '@/db/schema/skills';
 import { skills } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
-import type { NewSkill } from '@/db/schema/skills';
 
 const SYSTEM_SKILLS: Omit<NewSkill, 'isSystem' | 'userId' | 'createdAt' | 'updatedAt'>[] = [
   { id: 'software-architecture', name: 'Software Architecture', category: 'architecture', description: 'Clean architecture, domain-driven design, and structural patterns for maintainable systems.', principles: ['Separate concerns into distinct layers (presentation, domain, infrastructure)', 'Depend on abstractions, not concretions (Dependency Inversion)', 'Single Responsibility — each module has one reason to change', 'Open/Closed — extend behavior without modifying existing code', 'Bounded contexts encapsulate domain logic and language'], bestPractices: ['Use hexagonal/ports-and-adapters to isolate business logic from I/O', 'Define explicit module boundaries with public APIs and internal implementations', 'Apply CQRS when read/write patterns diverge significantly', 'Document architecture decisions with lightweight ADRs', 'Prefer composition over inheritance for flexible behavior'], antiPatterns: ['Big Ball of Mud — no discernible structure or boundaries', 'God class/module that handles too many responsibilities', 'Circular dependencies between layers or modules', 'Premature abstraction — adding layers before complexity warrants them'], frameworks: ['Clean Architecture', 'DDD', 'Hexagonal Architecture', 'SOLID', 'C4 Model'] },

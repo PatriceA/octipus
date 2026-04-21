@@ -51,6 +51,12 @@ export type GatewayEventType =
   | 'pipeline.event'
   | 'team.started'
   | 'team.completed'
+  // Swarm (Phase 1 + Phase 2)
+  | 'swarm.node_spawned'
+  | 'swarm.node_completed'
+  | 'swarm.node_status'
+  | 'swarm.budget_warning'
+  | 'swarm.call_graph_cycle_blocked'
   // Channel-side status
   | 'status_update'
   | 'typing'
@@ -65,6 +71,7 @@ export type GatewayEventType =
   | 'permission.request'
   // Session
   | 'session.cleared'
+  | 'session.compaction_stalled'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'

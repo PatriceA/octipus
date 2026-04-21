@@ -1,11 +1,10 @@
-import { coreLogger } from '@/utils/logger';
-import { getPermissionManager } from '@/security/permissions';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
-import { agentLogger } from '@/utils/logger';
+import { getPermissionManager } from '@/security/permissions';
+import { agentLogger, coreLogger } from '@/utils/logger';
 import { sanitizeToolOutput } from '@/utils/sanitize';
+import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
-import type { ToolHandler, AgentEvent } from './agent-base';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
@@ -18,6 +17,10 @@ const FILE_CHANGE_TOOLS = new Set([
   'filesystem__create_directory',
 ]);
 
+/** Tools whose wall-clock duration is *paused* out of the calling agent's
+ * timer — the agent is blocked waiting on the child, not doing work. */
+const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
+
 export class ToolExecutor {
   private tools: Map<string, ToolHandler> = new Map();
   private consecutiveToolErrors: number = 0;
@@ -26,10 +29,21 @@ export class ToolExecutor {
   constructor(
     private context: AgentContext,
     private emitFn: (type: AgentEvent['type'], data: unknown) => void,
+    /**
+     * Called after a delegation tool finishes. The agent uses this to subtract
+     * child-wait time from its own timeout counter. User spec: "waiting time
+     * should not go into the timeout calculation."
+     */
+    private onDelegationPause?: (durationMs: number) => void,
   ) {}
 
   get toolsDisabled(): boolean {
     return this._toolsDisabled;
+  }
+
+  /** External caller (e.g. AgentWorker loop guard) can force-disable tools. */
+  disableTools(): void {
+    this._toolsDisabled = true;
   }
 
   registerTool(tool: ToolHandler): void {
@@ -57,8 +71,97 @@ export class ToolExecutor {
   }
 
   /**
+   * Swarm Phase 2: find `spawn_child` calls with a matching `parallelGroup`
+   * in the current turn and run them via `Promise.all`. Returns a map of
+   * tool-call-id → `ToolResult` for the parallel ones; the caller merges
+   * these back into the sequential results at each original position.
+   *
+   * Default fan-out cap per turn is enforced at the spawner — this method
+   * only handles the concurrency mechanics. If a group has a single member
+   * it is handled as normal (sequential) to keep semantics simple.
+   */
+  private async executeParallelSwarmGroups(
+    toolCalls: ToolCall[],
+  ): Promise<Map<string, ToolResult>> {
+    const out = new Map<string, ToolResult>();
+
+    // Bucket by parallelGroup.
+    const groups = new Map<string, ToolCall[]>();
+    for (const tc of toolCalls) {
+      if (tc.name !== 'spawn_child') continue;
+      const pg = (tc.arguments as Record<string, unknown>).parallelGroup;
+      if (typeof pg !== 'string' || !pg.trim()) continue;
+      const key = pg.trim();
+      let bucket = groups.get(key);
+      if (!bucket) {
+        bucket = [];
+        groups.set(key, bucket);
+      }
+      bucket.push(tc);
+    }
+
+    for (const [key, bucket] of groups) {
+      // Singleton group — let the normal sequential path handle it.
+      if (bucket.length < 2) continue;
+
+      // Default fan-out cap per turn (design §Spawn Mechanics: 4/node/turn).
+      // The spawner also enforces its own per-node fan-out budget.
+      const DEFAULT_PARALLEL_CAP = 4;
+      const group = bucket.slice(0, DEFAULT_PARALLEL_CAP);
+      const excess = bucket.slice(DEFAULT_PARALLEL_CAP);
+
+      agentLogger.info(
+        {
+          agentId: this.context.id,
+          parallelGroup: key,
+          count: group.length,
+          excess: excess.length,
+        },
+        'Fanning out parallel spawn_child group',
+      );
+
+      const tool = this.tools.get('spawn_child');
+      if (!tool) continue;
+
+      const groupStart = Date.now();
+      const promises = group.map(async (tc) => {
+        try {
+          const res = await tool.execute(tc.arguments, this.context);
+          return { toolCallId: tc.id, result: res } as ToolResult;
+        } catch (err) {
+          return {
+            toolCallId: tc.id,
+            result: null,
+            error: (err as Error).message,
+          } as ToolResult;
+        }
+      });
+      const settled = await Promise.all(promises);
+      // Pause parent clock for wall-clock of the slowest branch.
+      if (this.onDelegationPause) this.onDelegationPause(Date.now() - groupStart);
+      for (const r of settled) out.set(r.toolCallId, r);
+      // Over-cap calls short-circuit as concurrency_limit.
+      for (const tc of excess) {
+        out.set(tc.id, {
+          toolCallId: tc.id,
+          result:
+            `<ChildResult nodeId="" status="concurrency_limit" tokens="0" durationMs="0">\n` +
+            `<output>null</output>\n<notes>parallel fan-out cap (${DEFAULT_PARALLEL_CAP}) exceeded for group "${key}"</notes>\n</ChildResult>`,
+        });
+      }
+    }
+
+    return out;
+  }
+
+  /**
    * Handle tool calls from the LLM with permission gating.
    * Returns tool result messages to append to the conversation.
+   *
+   * Swarm Phase 2: `spawn_child` calls in the same turn that share a
+   * `parallelGroup` are fanned out via `Promise.all` and their results
+   * merged back into the `results` list in call order. Default fan-out
+   * cap is enforced at the spawner (see `parent.budget.fanOut.cap`).
    */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     this.emitFn('action', {
@@ -77,8 +180,16 @@ export class ToolExecutor {
 
     const permissionManager = getPermissionManager();
     const results: ToolResult[] = [];
+    // Swarm: detect parallelGroup spawn_child calls and execute them
+    // concurrently. Results keyed by toolCallId for merge-in-order below.
+    const parallelResults = await this.executeParallelSwarmGroups(toolCalls);
 
     for (const toolCall of toolCalls) {
+      // Swarm: if this call was handled by the parallel fan-out, skip.
+      if (parallelResults.has(toolCall.id)) {
+        results.push(parallelResults.get(toolCall.id)!);
+        continue;
+      }
       const tool = this.tools.get(toolCall.name);
 
       if (!tool) {
@@ -99,6 +210,11 @@ export class ToolExecutor {
           const result = await tool.execute(toolCall.arguments, this.context);
           const toolExecMs = Date.now() - toolExecStart;
 
+          // Delegation tools: pause parent's timeout clock for this duration.
+          if (DELEGATION_TOOLS.has(toolCall.name) && this.onDelegationPause) {
+            this.onDelegationPause(toolExecMs);
+          }
+
           agentLogger.info({
             agentId: this.context.id, sessionId: this.context.sessionId,
             tool: toolCall.name, toolId, durationMs: toolExecMs,
@@ -112,6 +228,24 @@ export class ToolExecutor {
               { agentId: this.context.id, tool: toolCall.name },
               'Final tool executed — disabling tools for remaining iterations',
             );
+          }
+
+          // Safety: LLMs sometimes use `send_status_update(progress=100)` as
+          // their terminal action instead of returning plain text. Treat
+          // progress=100 as a signal: disable further tools so the next
+          // iteration MUST reply with text. Prevents the orchestrator from
+          // looping on status updates indefinitely. The meta-tool also
+          // stashes `lastStatusMessage` so the service layer can fall back
+          // to that text if the LLM still returns empty.
+          if (toolCall.name === 'send_status_update') {
+            const progress = (toolCall.arguments as Record<string, unknown>).progress;
+            if (typeof progress === 'number' && progress >= 100) {
+              this._toolsDisabled = true;
+              agentLogger.info(
+                { agentId: this.context.id, progress },
+                'send_status_update(progress=100) — disabling tools, forcing plain-text reply',
+              );
+            }
           }
         } catch (error) {
           // If a final tool fails, propagate immediately — avoids a slow LLM round-trip

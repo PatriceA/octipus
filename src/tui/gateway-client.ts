@@ -1,5 +1,5 @@
-import { readLocalToken, ensureLocalToken } from '@/core/gateway/local-auth';
-import type { GatewayMessage, ClientMessage } from '@/core/gateway/protocol';
+import { ensureLocalToken, readLocalToken } from '@/core/gateway/local-auth';
+import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error';
 

@@ -36,6 +36,10 @@ import { testMessaging } from './tests/messaging';
 import { testKnowledge } from './tests/knowledge';
 import { testChannels } from './tests/channels';
 import { testGateway } from './tests/gateway';
+import { testGatewayWS } from './tests/gateway-ws';
+import { testExpertRoutingFlow } from './tests/expert-routing-flow';
+import { testExpertRegistryParity } from './tests/expert-registry-parity';
+import { testSwarmFlow } from './tests/swarm-flow';
 
 export async function run() {
   const runner = new TestRunner();
@@ -70,6 +74,10 @@ export async function run() {
     await testKnowledge(runner, client);
     await testChannels(runner, client);
     await testGateway(runner, client);
+    await testGatewayWS(runner, client);
+    await testExpertRoutingFlow(runner, client);
+    await testExpertRegistryParity(runner, client);
+    await testSwarmFlow(runner, client);
   } catch (err) {
     console.error('\n\x1b[31mTest suite crashed:\x1b[0m', (err as Error).message);
   }

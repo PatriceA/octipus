@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect } from 'react';
+import { Loader2 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Sidebar } from './sidebar';
-import { Header } from './header';
-import { GlobalPermissionBanner } from './global-permission-banner';
+import { useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
-import { Loader2 } from 'lucide-react';
+import { GlobalPermissionBanner } from './global-permission-banner';
+import { Header } from './header';
+import { Sidebar } from './sidebar';
 
 const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/setup'];
 
@@ -43,10 +43,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0 bg-[#000000]">
         <Header />
-        <main className={cn(
-          'flex-1 overflow-hidden neural-grid bg-[#000000]',
-          pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
-        )}>{children}</main>
+        <main
+          tabIndex={pathname === '/chat' ? undefined : 0}
+          aria-label="Page content"
+          className={cn(
+            'flex-1 overflow-hidden neural-grid bg-[#000000]',
+            pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
+          )}
+        >
+          {children}
+        </main>
       </div>
       <GlobalPermissionBanner />
     </div>

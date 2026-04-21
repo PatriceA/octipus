@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { coreLogger } from '@/utils/logger';
 
 const ASSISTANT_DIR = join(homedir(), '.assistant');

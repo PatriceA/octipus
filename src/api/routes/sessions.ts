@@ -1,7 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { sessionRepository } from '@/db/repositories/session-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
 
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)

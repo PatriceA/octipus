@@ -1,18 +1,18 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getModelRegistry } from '@/models/model-registry';
+import type { AgentMessage } from '@/core/types';
+import { evaluationRepository } from '@/db/repositories/evaluation-repository';
+import {
+  ALL_EVALUATORS,
+  runEvaluation,
+  STANDARD_DATASETS,
+} from '@/models/evaluation';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
 import {
   runConformanceTests,
 } from '@/models/testing';
-import {
-  runEvaluation,
-  ALL_EVALUATORS,
-  STANDARD_DATASETS,
-} from '@/models/evaluation';
-import { evaluationRepository } from '@/db/repositories/evaluation-repository';
 import { apiLogger } from '@/utils/logger';
-import type { AgentMessage } from '@/core/types';
 
 // ── Background job tracker ─────────────────────────────────────
 interface RunningJob {

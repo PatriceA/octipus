@@ -1,12 +1,12 @@
-import { Elysia, t } from 'elysia';
 import { desc, eq, or, sql } from 'drizzle-orm';
+import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getHookManager } from '@/hooks/manager';
-import { getHookSuggestions } from '@/hooks/suggestions';
 import { getDb } from '@/db/postgres';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { hooks as hooksTable } from '@/db/schema/hooks';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
+import { getHookManager } from '@/hooks/manager';
+import { getHookSuggestions } from '@/hooks/suggestions';
 
 const VALID_TRIGGERS = ['message_received', 'agent_started', 'agent_completed', 'agent_failed', 'tool_executed', 'permission_requested', 'schedule', 'webhook'] as const;
 const VALID_ACTIONS = ['notify', 'spawn_agent', 'webhook', 'n8n_workflow', 'execute_tool'] as const;

@@ -6,9 +6,8 @@
  * The WebSocket endpoint is registered in websocket.ts alongside other WS routes.
  */
 
-import { coreLogger } from '@/utils/logger';
-import { apiLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
+import { apiLogger, coreLogger } from '@/utils/logger';
 
 export interface BrowserCommand {
   command: string;

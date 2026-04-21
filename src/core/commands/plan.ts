@@ -1,9 +1,9 @@
-import { registerCommand } from './registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { PlanningState, SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import type { SessionContext, PlanningState } from '@/db/schema/sessions';
+import { registerCommand } from './registry';
 
 const AREAS = [
   'Development', 'Finance', 'Communication', 'Research',

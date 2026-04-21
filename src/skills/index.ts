@@ -1,1 +1,1 @@
-export { SkillRegistry, getSkillRegistry } from './registry';
+export { getSkillRegistry, SkillRegistry } from './registry';

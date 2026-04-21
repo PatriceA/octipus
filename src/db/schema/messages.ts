@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, pgEnum, index } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { sessions } from './sessions';
 
 export const messageRoleEnum = pgEnum('message_role', ['system', 'user', 'assistant', 'tool']);

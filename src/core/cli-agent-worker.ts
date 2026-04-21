@@ -1,23 +1,22 @@
-import { coreLogger } from '@/utils/logger';
-import { spawn, type ChildProcess } from 'child_process';
-import { resolve as resolvePath, join as joinPath } from 'path';
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { type ChildProcess, spawn } from 'child_process';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { getModelRegistry } from '@/models/model-registry';
+import { join as joinPath, resolve as resolvePath } from 'path';
 import { getConfig } from '@/config';
+import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
+import { agentRepository } from '@/db/repositories/agent-repository';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { auditRepository } from '@/db/repositories/audit-repository';
-import { agentRepository } from '@/db/repositories/agent-repository';
-import { agentLogger } from '@/utils/logger';
-import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
+import type { CLIAgentConfig } from '@/db/schema/models';
+import { getModelRegistry } from '@/models/model-registry';
 import { getQuotaTracker } from '@/models/quota-tracker';
-import { getCLIToolConfig } from './cli-agent-factory';
+import { agentLogger, coreLogger } from '@/utils/logger';
+import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser } from './cli-adapters';
+import { getCLIToolConfig } from './cli-agent-factory';
 import type { AgentContext, AgentMessage } from './types';
-import type { AgentWorkerConfig, ToolHandler } from './agent-base';
-import type { CLIAgentConfig } from '@/db/schema/models';
 
 /**
  * CLIAgentWorker — spawns a CLI binary (Claude Code, Gemini CLI, Codex)
@@ -342,6 +341,26 @@ export class CLIAgentWorker extends BaseAgentWorker {
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
+
+      // Isolate spawned CLI subprocesses from the host user's global config
+      // (plugins, hooks, skills). Without this, any `SessionStart` hook
+      // installed on the user's workstation runs inside the spawned agent
+      // and leaks into its output — caveman plugin's statusline-setup
+      // offer was leaking into the chat response. User can override
+      // isolation by setting `ASSISTANT_CLI_PRESERVE_HOST_CONFIG=1`.
+      if (process.env.ASSISTANT_CLI_PRESERVE_HOST_CONFIG !== '1') {
+        const isolatedDir =
+          process.env.ASSISTANT_CLI_CONFIG_DIR ||
+          `${process.env.HOME || '/tmp'}/.assistant/cli-isolated`;
+        // These env names are the ones Claude Code / Gemini CLI / Codex
+        // honor for config-dir overrides. Setting each is safe — binaries
+        // that don't recognize one just ignore it.
+        env.CLAUDE_CONFIG_DIR = isolatedDir;
+        env.CLAUDE_HOME = isolatedDir;
+        // Disable hooks + plugins if the binary supports the flag via env.
+        env.CLAUDE_DISABLE_HOOKS = '1';
+        env.CLAUDE_DISABLE_PLUGINS = '1';
+      }
 
       const proc = spawn(binary, args, {
         env,

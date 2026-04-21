@@ -96,9 +96,11 @@ POST /api/chat
 | Technical Writer | Documentation | filesystem, browser |
 | Communications | Email, calendar, messaging | google-workspace, microsoft365 |
 
-## Agent Teams (Parallel)
+## Swarm Delegation (`spawn_child`)
 
-Agent teams run multiple specialists simultaneously. Trigger by requesting work that naturally requires multiple perspectives:
+Delegation is a 3-level tree: **Orchestrator → Agent → Subagent**. The orchestrator (and depth-1 Agents) call `spawn_child` to hand a focused sub-topic to a specialist. Multiple `spawn_child` calls in one LLM turn with the same `parallelGroup` run in parallel via `Promise.all` (capped 4/turn).
+
+Trigger by requesting work that naturally splits across specialists:
 
 ```
 Research the latest React frameworks, then build a comparison table
@@ -111,12 +113,28 @@ Check our production logs for errors, review the deployment pipeline
 configuration, and audit the Docker container resource limits.
 ```
 
-The orchestrator recognizes multi-faceted tasks and spawns a team. You can also be explicit:
+The orchestrator recognizes multi-faceted tasks and fans out via parallel `spawn_child` calls. You can also be explicit:
 
 ```
-Use a team: have one agent research competitors, another analyze
+Use the swarm: have one agent research competitors, another analyze
 our pricing data, and a third draft a market positioning document.
 ```
+
+### Delegation Priority
+
+1. **Single `spawn_child`** — default for a single-role task with structured output.
+2. **Multiple `spawn_child`** — when the task has distinct sub-topics; use `parallelGroup` to fan out.
+3. **`create_pipeline`** — last resort, only when you explicitly want staged/reviewable handover or a human gate between stages. Pipelines are Orchestrator-only.
+
+Children inherit the model bound to their role's topic (via `ModelRegistry.getModelForTopic`), not the parent's model. If a topic has no binding the spawner throws loudly — no silent default model.
+
+### Role Selection for `spawn_child`
+
+Pick the child's `role` from the same 16 roles as direct experts (see below). The spawner auto-matches a system expert by role unless you pass an explicit `expertId`. If an Agent exhausts its fan-out budget and children return `budget`/`timeout`, it can call `escalate_to_different_expert` once per lifetime to retry with a different expert of the same role.
+
+### Deprecated Primitives
+
+`spawn_worker` and `spawn_team` are **removed from the LLM-visible tool surface**. If you're reading old prompts or logs that reference them, they now map to `spawn_child`. The internal `worker-spawner.ts` still backs pipeline stages (non-LLM, sequential handover).
 
 ## Pipelines (Sequential Stages)
 

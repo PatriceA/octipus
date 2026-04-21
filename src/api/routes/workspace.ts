@@ -1,11 +1,11 @@
-import { coreLogger } from '@/utils/logger';
+import { execSync } from 'child_process';
 import { Elysia, t } from 'elysia';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { homedir } from 'os';
+import { join, resolve } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
-import { resolve, join } from 'path';
-import { existsSync, statSync, readdirSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
-import { execSync } from 'child_process';
+import { coreLogger } from '@/utils/logger';
 
 // System directories that must never be added as workspace paths
 const DENIED_PATHS = [

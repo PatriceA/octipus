@@ -1,13 +1,14 @@
 import OpenAI from 'openai';
 import type {
+  ChatCompletionCreateParams,
   ChatCompletionMessageParam,
   ChatCompletionTool,
-  ChatCompletionCreateParams,
 } from 'openai/resources/chat/completions';
 import { getConfig } from '@/config';
-import { modelLogger } from '@/utils/logger';
-import { transformMessagesForProvider } from '@/models/message-transform';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage, ToolCall } from '@/core/types';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
   model: string;
@@ -135,28 +136,35 @@ export class LiteLLMClient {
 
   /**
    * Create a chat completion.
-   * Tries a direct provider (Ollama, OpenAI, Anthropic, Gemini, DeepSeek, CLI)
-   * first. Falls through to the LiteLLM proxy when no direct provider matches.
+   *
+   * A model is BOUND to its registered provider. Resolution is strict:
+   *   - provider=litellm      → goes to the LiteLLM proxy
+   *   - any other provider    → goes to that provider's direct implementation
+   * There is NO fallback. If the bound provider fails, the error propagates
+   * with its real cause. We never re-route one provider's model name to a
+   * different provider — that masks bugs (stale config, missing API key,
+   * provider down) behind confusing "model not found" errors.
    */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    // Try direct provider first
     const resolvedModel = options.model || this.defaultModel;
-    try {
-      const { getProviderRouter } = await import('@/models/providers');
-      const router = getProviderRouter();
-      const provider = await router.resolveProvider(resolvedModel);
-      if (provider.name !== 'litellm') {
-        modelLogger.debug(
-          { model: resolvedModel, provider: provider.name },
-          'Routing completion through direct provider'
-        );
-        return await provider.complete({ ...options, model: resolvedModel });
-      }
-    } catch {
-      // Fall through to LiteLLM proxy path
+
+    const { getProviderRouter } = await import('@/models/providers');
+    const router = getProviderRouter();
+    const provider = await router.resolveProvider(resolvedModel);
+
+    if (provider.name === 'litellm') {
+      modelLogger.debug(
+        { model: resolvedModel, provider: 'litellm' },
+        'Routing completion through LiteLLM proxy',
+      );
+      return this.completeViaProxy({ ...options, model: resolvedModel });
     }
 
-    return this.completeViaProxy({ ...options, model: resolvedModel });
+    modelLogger.debug(
+      { model: resolvedModel, provider: provider.name },
+      'Routing completion through direct provider',
+    );
+    return provider.complete({ ...options, model: resolvedModel });
   }
 
   /**
@@ -194,7 +202,7 @@ export class LiteLLMClient {
       const response = await this.client.chat.completions.create(params);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
-        throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
+        throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'litellm');
       }
       const choice = response.choices[0];
 
@@ -253,7 +261,7 @@ export class LiteLLMClient {
       return result;
     } catch (error) {
       modelLogger.error({ error, model: params.model }, 'Completion failed');
-      throw error;
+      throw classifyError(error, 'litellm');
     }
   }
 
@@ -310,7 +318,12 @@ export class LiteLLMClient {
 
     modelLogger.debug({ model: params.model }, 'Starting streaming completion via LiteLLM proxy');
 
-    const stream = await this.client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await this.client.chat.completions.create(params);
+    } catch (err) {
+      throw classifyError(err, 'litellm');
+    }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
     let insideThinkBlock = false;
@@ -378,38 +391,80 @@ export class LiteLLMClient {
   }
 
   /**
-   * Generate embeddings.
-   * Tries a direct provider first (Ollama, OpenAI), falls through to LiteLLM proxy.
+   * Generate embeddings. Model is BOUND to its registered provider — no
+   * fallbacks. If the bound provider doesn't implement embeddings, or the
+   * provider call fails, the error propagates with its real cause.
    */
   async embed(text: string | string[], model?: string): Promise<number[][]> {
     const input = Array.isArray(text) ? text : [text];
-    const embeddingModel = model || 'text-embedding-3-small';
 
-    // Try direct provider first
-    try {
-      const { getProviderRouter } = await import('@/models/providers');
-      const router = getProviderRouter();
-      const provider = router.getProvider(embeddingModel);
-      if (provider.name !== 'litellm' && provider.embed) {
-        modelLogger.debug(
-          { model: embeddingModel, provider: provider.name, inputCount: input.length },
-          'Routing embed through direct provider'
-        );
-        return await provider.embed(input, embeddingModel);
-      }
-    } catch {
-      // Fall through to LiteLLM proxy path
+    // Model resolution:
+    //   1. Explicit arg (caller knows what they want) — wins.
+    //   2. Topic binding for 'embedding' — user-configured.
+    //   3. Fail LOUD — no hardcoded default.
+    let embeddingModel = model;
+    if (!embeddingModel) {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const bound = await getModelRegistry().getModelForTopic('embedding');
+      embeddingModel = bound?.modelId;
+    }
+    if (!embeddingModel) {
+      throw classifyError(
+        new Error(
+          "No embedding model configured. Bind a model to the 'embedding' topic in the Models page.",
+        ),
+        'embedding',
+      );
     }
 
+    const { getProviderRouter } = await import('@/models/providers');
+    const router = getProviderRouter();
+    const provider = await router.resolveProvider(embeddingModel);
+
+    if (provider.name === 'litellm') {
+      modelLogger.debug(
+        { model: embeddingModel, provider: 'litellm', inputCount: input.length },
+        'Routing embed through LiteLLM proxy',
+      );
+      return this.embedViaProxy(input, embeddingModel);
+    }
+
+    if (!provider.embed) {
+      throw classifyError(
+        new Error(
+          `Provider '${provider.name}' bound to model '${embeddingModel}' does not implement embeddings. ` +
+            `Re-register the model under a provider with embed support (ollama, openai, voyage) or change the model.`,
+        ),
+        provider.name,
+      );
+    }
+
+    modelLogger.debug(
+      { model: embeddingModel, provider: provider.name, inputCount: input.length },
+      'Routing embed through direct provider',
+    );
+    return provider.embed(input, embeddingModel);
+  }
+
+  /** Internal: call embeddings against the LiteLLM proxy. */
+  private async embedViaProxy(input: string[], embeddingModel: string): Promise<number[][]> {
     modelLogger.debug({ model: embeddingModel, inputCount: input.length }, 'Generating embeddings via LiteLLM proxy');
 
-    const response = await this.client.embeddings.create({
-      model: embeddingModel,
-      input,
-      encoding_format: 'float',
-    });
-
-    return response.data.map((d) => d.embedding);
+    try {
+      const response = await this.client.embeddings.create({
+        model: embeddingModel,
+        input,
+        encoding_format: 'float',
+      });
+      return response.data.map((d) => d.embedding);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      modelLogger.error(
+        { err, message, model: embeddingModel, proxyUrl: getConfig().litellm.proxyUrl },
+        'LiteLLM proxy embedding request failed',
+      );
+      throw classifyError(err, 'litellm');
+    }
   }
 
   /**
@@ -478,7 +533,7 @@ export class LiteLLMClient {
         };
 
         const pe = providerEndpoints[provider.name];
-        if (!pe) throw new Error(`Unsupported provider for vision: ${provider.name}`);
+        if (!pe) throw classifyError(new Error(`Unsupported provider for vision: ${provider.name}`), provider.name);
 
         let apiKey = 'ollama';
         if (provider.name !== 'ollama') {
@@ -486,7 +541,7 @@ export class LiteLLMClient {
             || await vault.getByName('system', pe.vaultName)
             || process.env[pe.envVar]
             || '';
-          if (!apiKey) throw new Error(`No API key for ${provider.name}`);
+          if (!apiKey) throw classifyError(new Error(`No API key for ${provider.name}`), provider.name);
         } else if (modelApiKeyRef) {
           apiKey = await vault.getByName('system', modelApiKeyRef) || 'ollama';
         }
@@ -507,7 +562,7 @@ export class LiteLLMClient {
 
         const latencyMs = Date.now() - startTime;
         if (!response.choices?.length) {
-          throw new Error(`Provider returned empty response (no choices) for model ${options.model}`);
+          throw classifyError(new Error(`Provider returned empty response (no choices) for model ${options.model}`), provider.name);
         }
         const choice = response.choices[0];
         const msg = choice?.message as unknown as Record<string, unknown>;
@@ -528,39 +583,44 @@ export class LiteLLMClient {
           latencyMs,
         };
       }
+
+      // provider.name === 'litellm' — route through the proxy for LiteLLM-bound
+      // vision models. Any other fall-through here is a programmer error.
+      const startTime = Date.now();
+      modelLogger.info({ model: options.model }, 'Vision request via LiteLLM proxy');
+
+      const response = await this.client.chat.completions.create({
+        model: options.model,
+        messages: visionMessages,
+        max_tokens: maxTokens,
+        stream: false,
+      });
+
+      const latencyMs = Date.now() - startTime;
+      let content = response.choices[0]?.message?.content || '';
+      if (content.includes('<think>')) {
+        content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      }
+
+      modelLogger.info({ model: options.model, latencyMs, tokens: response.usage?.total_tokens }, 'Vision response');
+
+      return {
+        content,
+        usage: {
+          inputTokens: response.usage?.prompt_tokens || 0,
+          outputTokens: response.usage?.completion_tokens || 0,
+          totalTokens: response.usage?.total_tokens || 0,
+        },
+        latencyMs,
+      };
     } catch (err) {
-      // Fall through to LiteLLM proxy path
-      modelLogger.debug({ error: (err as Error).message, model: options.model }, 'Direct vision provider failed, falling back to LiteLLM proxy');
+      // Don't swallow. The bound provider failed — surface the real cause.
+      modelLogger.error(
+        { err, message: (err as Error).message, model: options.model },
+        'Vision request failed',
+      );
+      throw err;
     }
-
-    // Fall through to LiteLLM proxy
-    const startTime = Date.now();
-    modelLogger.info({ model: options.model }, 'Vision request via LiteLLM proxy');
-
-    const response = await this.client.chat.completions.create({
-      model: options.model,
-      messages: visionMessages,
-      max_tokens: maxTokens,
-      stream: false,
-    });
-
-    const latencyMs = Date.now() - startTime;
-    let content = response.choices[0]?.message?.content || '';
-    if (content.includes('<think>')) {
-      content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    }
-
-    modelLogger.info({ model: options.model, latencyMs, tokens: response.usage?.total_tokens }, 'Vision response');
-
-    return {
-      content,
-      usage: {
-        inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0,
-        totalTokens: response.usage?.total_tokens || 0,
-      },
-      latencyMs,
-    };
   }
 
   /**

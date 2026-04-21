@@ -1,7 +1,7 @@
-import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
 import { ProfileRepository } from '@/db/repositories/profile-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class ProfilesTool extends BaseTool {
   readonly id = 'profiles';

@@ -1,7 +1,14 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { randomUUID } from 'crypto';
+import { Elysia } from 'elysia';
+import {
+  isIntegration,
+  setupIntegrationDb,
+  teardownIntegration,
+  truncateTables,
+} from '@/test-helpers/integration';
 
-// Note: Search API tests require the full server + database.
-// Integration tests are skipped; unit tests verify result shapes and logic.
+type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
 interface SearchResult {
   id: string;
@@ -13,29 +20,121 @@ interface SearchResult {
 
 const VALID_TYPES: SearchResult['type'][] = ['session', 'hook', 'model', 'skill', 'knowledge', 'tool'];
 
-describe.skip('Search API (Integration)', () => {
-  const BASE_URL = 'http://localhost:3005/api';
-  const AUTH_TOKEN = process.env.API_TOKEN || 'test-token';
+// Integration tests exercise the real search route against Postgres. Run via:
+//   bun run test:integration -- src/api/routes/search.test.ts
+
+describe.skipIf(!isIntegration)('Search API (Integration)', () => {
+  let app: ElysiaLike;
+  let testUserId: string;
+
+  beforeAll(async () => {
+    await setupIntegrationDb();
+
+    // Seed a user to own the sessions we'll search against (sessions.user_id is FK).
+    const { getDb } = await import('@/db/postgres');
+    const { users } = await import('@/db/schema/users');
+    const { sessions } = await import('@/db/schema/sessions');
+    const { hooks } = await import('@/db/schema/hooks');
+    const db = getDb();
+
+    await truncateTables(['sessions', 'hooks', 'users']);
+
+    const [user] = await db
+      .insert(users)
+      .values({ username: `tester-${Date.now()}` })
+      .returning();
+    testUserId = user.id;
+
+    await db.insert(sessions).values([
+      {
+        userId: testUserId,
+        channelType: 'webchat',
+        channelId: 'ch-1',
+        title: 'Docker deployment plan',
+      },
+      {
+        userId: testUserId,
+        channelType: 'webchat',
+        channelId: 'ch-2',
+        title: 'Weather notes',
+      },
+    ]);
+
+    await db.insert(hooks).values([
+      {
+        id: randomUUID(),
+        name: 'Docker rebuild hook',
+        description: 'Rebuilds docker on schedule',
+        trigger: 'schedule',
+        triggerConfig: {},
+        action: 'notify',
+        actionConfig: {},
+        userId: testUserId,
+      } as any,
+      {
+        id: randomUUID(),
+        name: 'Weather summary',
+        description: 'Fetches weather',
+        trigger: 'schedule',
+        triggerConfig: {},
+        action: 'notify',
+        actionConfig: {},
+        userId: testUserId,
+      } as any,
+    ]);
+
+    // Mount the real search route with an injected user context.
+    const { searchRoutes } = await import('./search');
+    app = new Elysia()
+      .derive({ as: 'global' }, () => ({
+        user: { id: testUserId, username: 'tester', isAdmin: true },
+        session: null,
+      }))
+      .use(searchRoutes);
+  });
+
+  afterAll(async () => {
+    await teardownIntegration();
+  });
 
   test('returns empty results for short queries', async () => {
-    const response = await fetch(`${BASE_URL}/search?q=a`, {
-      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
-    });
-    const data = await response.json();
-
-    expect(data.results).toBeDefined();
+    const res = await app.handle(new Request('http://localhost/search?q=a'));
+    const data = (await res.json()) as { results: SearchResult[] };
     expect(data.results).toBeInstanceOf(Array);
     expect(data.results.length).toBe(0);
   });
 
-  test('returns results for valid queries', async () => {
-    const response = await fetch(`${BASE_URL}/search?q=test`, {
-      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
-    });
-    const data = await response.json();
+  test('returns session + hook matches for a real query', async () => {
+    const res = await app.handle(new Request('http://localhost/search?q=docker'));
+    const data = (await res.json()) as { results: SearchResult[] };
 
-    expect(data.results).toBeDefined();
     expect(data.results).toBeInstanceOf(Array);
+    expect(data.results.length).toBeGreaterThan(0);
+
+    for (const r of data.results) {
+      expect(VALID_TYPES).toContain(r.type);
+      expect(r.id).toBeDefined();
+      expect(r.title).toBeDefined();
+      expect(r.href.startsWith('/')).toBe(true);
+    }
+
+    const types = new Set(data.results.map((r) => r.type));
+    expect(types.has('session')).toBe(true);
+    expect(types.has('hook')).toBe(true);
+  });
+
+  test('query for weather matches both session and hook', async () => {
+    const res = await app.handle(new Request('http://localhost/search?q=weather'));
+    const data = (await res.json()) as { results: SearchResult[] };
+
+    const sessionHits = data.results.filter((r) => r.type === 'session');
+    expect(sessionHits.some((r) => r.title.toLowerCase().includes('weather'))).toBe(true);
+  });
+
+  test('nonsense query returns empty', async () => {
+    const res = await app.handle(new Request('http://localhost/search?q=xyzzy-nope'));
+    const data = (await res.json()) as { results: SearchResult[] };
+    expect(data.results.length).toBe(0);
   });
 });
 

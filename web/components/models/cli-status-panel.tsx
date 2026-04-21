@@ -1,8 +1,8 @@
 'use client';
 
+import { Plus, Terminal } from 'lucide-react';
 import { useState } from 'react';
-import { Terminal, Plus } from 'lucide-react';
-import type { Model, CLITool } from '@/lib/types/models';
+import type { CLITool, Model } from '@/lib/types/models';
 
 export interface CLIStatusPanelProps {
   tools: CLITool[];

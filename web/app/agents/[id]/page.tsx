@@ -1,14 +1,14 @@
 'use client';
 
-import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ArrowLeft, Bot, Clock, Cpu, Hash, Square, Loader2, Trash2,
+  ArrowLeft, Bot, Clock, Cpu, Hash, Loader2, Square, Trash2,
 } from 'lucide-react';
-import { api } from '@/lib/api';
-import { useAgentEvents } from '@/hooks/useAgentEvents';
+import { useParams, useRouter } from 'next/navigation';
 import { AgentTimeline } from '@/components/agent-timeline';
 import { PipelineView } from '@/components/pipeline-view';
+import { useAgentEvents } from '@/hooks/useAgentEvents';
+import { api } from '@/lib/api';
 
 interface AgentDetail {
   id: string;

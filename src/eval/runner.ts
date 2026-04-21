@@ -5,15 +5,15 @@
  *   - Integration mode: calls the running backend via HTTP API
  */
 
+import { evaluateAllAssertions, type GraderFunction } from './assertions';
 import type {
-  EvalSuite,
-  EvalTest,
   EvalResult,
-  EvalSuiteResult,
   EvalRunnerOptions,
+  EvalSuite,
+  EvalSuiteResult,
+  EvalTest,
   TestExecutionContext,
 } from './types';
-import { evaluateAllAssertions, type GraderFunction } from './assertions';
 
 // ── Default model resolution ────────────────────────────────────────
 

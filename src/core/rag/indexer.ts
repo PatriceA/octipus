@@ -1,6 +1,6 @@
-import { getEmbeddingService } from './embeddings';
-import { coreLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
+import { coreLogger } from '@/utils/logger';
+import { getEmbeddingService } from './embeddings';
 
 export interface IndexResult {
   filesIndexed: number;

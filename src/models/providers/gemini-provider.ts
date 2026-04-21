@@ -1,12 +1,13 @@
 import OpenAI from 'openai';
 import type {
-  ChatCompletionMessageParam,
   ChatCompletionCreateParams,
+  ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import type { ModelProvider, ProviderHealthStatus } from './interface';
-import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import { modelLogger } from '@/utils/logger';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { modelLogger } from '@/utils/logger';
+import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
@@ -89,7 +90,7 @@ export class GeminiProvider implements ModelProvider {
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const apiKey = await this.getApiKey();
-    if (!apiKey) throw new Error('Gemini API key not available');
+    if (!apiKey) throw classifyError(new Error('Gemini API key not available'), 'gemini');
     const startTime = Date.now();
 
     // Build request body — only include params that are set.
@@ -119,12 +120,17 @@ export class GeminiProvider implements ModelProvider {
       'Sending completion request to Gemini',
     );
 
-    const res = await fetch(`${GEMINI_BASE_URL}chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${GEMINI_BASE_URL}chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (err) {
+      throw classifyError(err, 'gemini');
+    }
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
@@ -135,13 +141,13 @@ export class GeminiProvider implements ModelProvider {
         errMsg = errObj?.error?.message || errMsg;
       } catch { errMsg = errText.slice(0, 300) || errMsg; }
       modelLogger.error({ status: res.status, error: errMsg, model: options.model, provider: this.name }, 'Gemini completion failed');
-      throw new Error(errMsg);
+      throw classifyError({ status: res.status, message: errMsg }, 'gemini');
     }
 
     const data = await res.json() as any;
     const latencyMs = Date.now() - startTime;
     const choice = data.choices?.[0];
-    if (!choice) throw new Error('Gemini returned no choices');
+    if (!choice) throw classifyError(new Error('Gemini returned no choices'), 'gemini');
 
     // Cache the raw assistant message keyed by tool_call IDs (preserves thought_signature)
     if (choice.message?.tool_calls?.length) {
@@ -259,7 +265,12 @@ export class GeminiProvider implements ModelProvider {
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Gemini');
 
-    const stream = await client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await client.chat.completions.create(params);
+    } catch (err) {
+      throw classifyError(err, 'gemini');
+    }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
@@ -335,13 +346,14 @@ export class GeminiProvider implements ModelProvider {
       return process.env.GEMINI_API_KEY;
     }
 
-    // Fall back to vault
+    // Fall back to vault — recoverable: null return triggers a classified AUTH_FAILED on createClient()
     try {
       const { getVault } = await import('@/security/vault');
       const vault = getVault();
       const value = await vault.getByName('system', 'gemini_api_key');
       return value || null;
-    } catch {
+    } catch (err) {
+      modelLogger.warn({ err: (err as Error).message, provider: this.name }, 'Gemini vault lookup failed; falling back to env var');
       return null;
     }
   }
@@ -349,7 +361,7 @@ export class GeminiProvider implements ModelProvider {
   private async createClient(): Promise<OpenAI> {
     const apiKey = await this.getApiKey();
     if (!apiKey) {
-      throw new Error('Gemini API key not available. Set GEMINI_API_KEY or store it in the vault.');
+      throw classifyError(new Error('Gemini API key not available. Set GEMINI_API_KEY or store it in the vault.'), 'gemini');
     }
 
     return new OpenAI({

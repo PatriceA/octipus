@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Smartphone, QrCode, RefreshCw, Check, Copy, Loader2 } from 'lucide-react';
+import { Check, Copy, Loader2, QrCode, RefreshCw, Smartphone } from 'lucide-react';
 import QRCode from 'qrcode';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 
 interface PairingData {

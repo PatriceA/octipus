@@ -1,22 +1,22 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Cable,
-  Plus,
-  Trash2,
-  Power,
-  PowerOff,
-  Loader2,
-  X,
   ChevronDown,
   ChevronRight,
-  Wrench,
   Eye,
   EyeOff,
+  Loader2,
+  Plus,
+  Power,
+  PowerOff,
+  Trash2,
+  Wrench,
+  X,
   Zap,
 } from 'lucide-react';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -354,6 +354,18 @@ export default function MCPPage() {
     refetchInterval: 10000,
   });
 
+  const { data: circuitStates } = useQuery({
+    queryKey: ['mcp-circuits'],
+    queryFn: async () => {
+      try {
+        return await api.get<{ circuits: Array<{ serverId: string; state: string; failureCount: number; cooldownRemainingMs: number }> }>('/mcp/circuit');
+      } catch {
+        return { circuits: [] };
+      }
+    },
+    refetchInterval: 10000,
+  });
+
   const servers = data?.servers || [];
 
   const toggleExpand = (id: string) => {
@@ -484,6 +496,14 @@ export default function MCPPage() {
                           <span className="flex items-center gap-0.5 text-[10px] text-on-surface-variant shrink-0">
                             <Wrench className="w-3 h-3" />
                             {server.toolCount}
+                          </span>
+                        )}
+                        {circuitStates?.circuits?.find?.((c: any) => c.serverId === server.id && c.state !== 'closed') && (
+                          <span
+                            className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-900/30 text-amber-300 shrink-0"
+                            title={`Circuit ${circuitStates.circuits.find((c: any) => c.serverId === server.id)?.state} — ${circuitStates.circuits.find((c: any) => c.serverId === server.id)?.failureCount} failures`}
+                          >
+                            circuit: {circuitStates.circuits.find((c: any) => c.serverId === server.id)?.state}
                           </span>
                         )}
                       </div>

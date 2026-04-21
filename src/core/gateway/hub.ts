@@ -2,10 +2,10 @@ import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
 import { ConnectionManager } from './connection-manager';
 import { GatewayEventBus } from './event-bus';
-import { GatewayRateLimiter } from './rate-limiter';
 import { ensureLocalToken } from './local-auth';
-import type { ConnectionContext, GatewayEvent, ClientMessage } from './protocol';
+import type { ClientMessage, ConnectionContext, GatewayEvent } from './protocol';
 import { PROTOCOL_VERSION } from './protocol';
+import { GatewayRateLimiter } from './rate-limiter';
 
 /**
  * GatewayHub — central WebSocket hub that all clients connect to.

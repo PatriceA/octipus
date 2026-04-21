@@ -1,5 +1,100 @@
 # Changelog
 
+## 2026-04-20 — Swarm, Topic-Bound Routing, Fail-Loud, MCP Circuit Breaker
+
+### Swarm Orchestration (3-Level Hierarchy)
+- **3-level fixed hierarchy** — Orchestrator (depth 0) → Agent (depth 1) → Subagent (depth 2). Depth is structural, not configurable. Subagent is a hard leaf.
+- **New LLM-facing meta-tool `spawn_child`** — replaces `spawn_worker` and `spawn_team` on the orchestrator surface. Accepts `role`/`expertId`, `topic`/`subtopic`, `taskBrief`, `expectedOutput` (shape + maxTokens), and `parallelGroup`. Multiple calls in one turn with the same `parallelGroup` run via `Promise.all`.
+- **`escalate_to_different_expert`** — depth-1 Agents get one-shot escalation to a different expert of the same role when children return budget/timeout. Capped 1/Agent lifetime, slot stays claimed on failure (anti-thrash).
+- **Removed from LLM surface**: `spawn_worker`, `spawn_team`. The `worker-spawner.ts` internals still back pipeline stages.
+- **New module `src/core/swarm/`** — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`.
+- **DB table `swarm_nodes`** — tracks every node with budget caps/used, status, brief hash, result jsonb, cache hits. Migration 0025 (+ 0026 for `taskBriefPreview` column).
+- **`agents.parentAgentId`** nullable FK added.
+
+### Budget & Control
+- **Per-node hard budget envelope** — tokens, wall-clock, fan-out — enforced pre-LLM-call inside `AgentWorker.loop()`. Defaults in `LEVEL_DEFAULT`: Orchestrator 200k/10min/6, Agent 80k/4min/4, Subagent 30k/4min/0.
+- **Tokens cascade** (pool-shared): `child.cap = min(LEVEL_DEFAULT, parent.remaining − 10% RESERVE)`. **Wall-clock does NOT cascade** — each node gets its full LEVEL_DEFAULT, and the parent excludes time spent awaiting children via `AgentWorker.pausedMs`. Subagent wall cap raised from 90s → 4min.
+- **Structured errors** — `BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`, `DuplicateSpawnError`, `PermissionDeniedError` in `src/core/swarm/errors.ts`.
+- **Cycle / duplicate protection** — `SwarmCallGraph` per-root-session keeps a fingerprint set over `(topicPath, normalized(taskBrief), inputArtifact refs)`. Duplicates return `cancelled` with a `parentNotice`; ancestor-chain collisions rejected as second guard. Failed spawns release the fingerprint.
+- **Cascade cancel** — `AbortSignal` tree rooted on the Orchestrator. `AgentManager.stop(id, { cascade:true })` walks in-memory `childrenByParent` sync + background DB walk for zombies.
+- **Orphan reaper** — on process start, stale `swarm_nodes` (status `running` older than threshold) are flipped to `cancelled` with `error='orphaned_at_restart'`. Interval configurable via `config.swarm.orphanReaperIntervalMs`.
+- **Per-user fan-out rate limit** — `config.swarm.perUserSpawnsPerMinute` (default 30) gates swarm spawns via `rate-limiter.ts`.
+- **Parallel fan-out safety net** — `tool-executor.ts` groups `spawn_child` calls sharing a non-empty `parallelGroup` and runs up to 4 in parallel per turn; overflow short-circuits with synthetic `concurrency_limit` results.
+
+### Topic → Model Routing (Authoritative)
+- **`ModelRegistry.getModelForTopic(role)` is the single source of truth.** No hardcoded model defaults anywhere. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models from topic bindings or throw. The provider router never falls back from a direct provider to LiteLLM on error — each failure surfaces cleanly.
+- **Children inherit topic bindings, not parent model.** A research Agent spawning a security Subagent resolves the model bound to `security`, not the parent's model. Fixed a bug where children silently used the orchestrator's model.
+- **Expert `modelPreference` is a fallback**, applied only when no topic binding exists.
+
+### Fail-Loud Migration
+- Silent `catch` blocks removed from the KB embedding path (`src/core/rag/embeddings.ts`), `src/core/rag/health.ts` now runs a startup self-check (DB + embedding model + vector write probe) and exposes `/api/knowledge/readiness` returning 503 with reasons when KB is not ready.
+- All model providers (openai, anthropic, gemini, deepseek, openrouter, cli, litellm, voyage, ollama) migrated off ad-hoc string matching onto `src/core/errors/classification.ts` (`FailoverReason`, `RecoveryAction`, `ClassifiedError`, `classifyError()`).
+- Skill loading throws a loud error when an expert lists a `skillId` that doesn't exist in the `skills` table.
+- Scheduler date bug fixed; previously-skipped test re-enabled.
+
+### MCP Circuit Breaker
+- `src/mcp/circuit-breaker.ts` — closed → open → half-open with exponential backoff per MCP server. 3 consecutive failures open the circuit.
+- `GET /api/mcp/circuit` returns state for all servers; `POST /api/mcp/circuit/:serverId/reset` force-closes a breaker (admin). Web UI shows a state badge per server.
+
+### Trajectory Learning (Observer-Only)
+- `src/core/trajectories/` records one JSONL line per `handleMessage` run to `${workspace}/trajectories/YYYY-MM-DD.jsonl`.
+- `trajectory_runs` pointer table. `GET /api/trajectories` endpoint.
+- `scripts/trajectories/compress.ts` gzip companion for daily rollup.
+- Opt-out: `TRAJECTORY_LOGGING=false`.
+
+### Skill Auto-Extension (Detector Only)
+- Fingerprint over `(topic, toolSequence, briefShape)`; ≥3 occurrences in 14 days → `skill_proposals` row.
+- `/api/skills/proposals` CRUD (`GET`, `POST /:id/approve`, `POST /:id/reject` with 90-day suppression). Web page at `/skills/proposals`. Proposals **never auto-promote** — approval required.
+- Opt-out: `SKILL_AUTO_EXTENSION=false`. Migration 0024 (trajectories + skill proposals).
+
+### Anti-Thrash Session Compaction
+- `src/core/orchestrator/session-compaction.ts` — pure `decideCompaction` function reads `CompactionState` on sessions.
+- Stall flag clears only when a pass clears ≥`compaction.minSavingsRatio` (default 10%) savings.
+- Hard ceiling safety valve at `compaction.hardCeiling` (default 1M tokens). New config: `config.compaction.*`.
+
+### Wake-Gate Cron
+- `ScheduledTask.wakeGate` (`command` / `http` / `tool`) evaluated just-before-run.
+- Failing gate emits `skipped_by_wakegate` event instead of executing.
+
+### Exit-Code Semantics for Shell
+- `src/tools/shell/exit-code-semantics.ts` maps known "normal non-zero" codes (grep=1 "no match", diff=1 "files differ", test=1 "false") to semantic labels so the agent stops reporting them as errors.
+
+### Tool Preview Extraction
+- `src/core/tool-preview.ts` with `ToolHandler.previewFn` / `previewParam`.
+- Wired into the agent timeline for compact rendering of tool invocations.
+
+### TUI / UI Polish
+- **KawaiiSpinner** (`src/utils/spinner.ts`) — TTY-aware animated spinner. Env `SPINNER_STYLE=classic|kawaii` (default `classic`).
+- **Unified diff renderer** (`src/utils/diff-renderer.ts`) — shared with unit coverage.
+- **Web side panel reorganized** — Connection & Model → Session Stats → Swarm. The new collapsible Swarm section (`web/components/swarm-tree.tsx`) replaces the old Agent Activity panel, with per-node brief and result modals. Session Stats now sums swarm tokens + durations. MCP circuit state badge.
+- **Skill proposals page** at `/skills/proposals`.
+- **CLI (Codex)** — multi-line prompts and prompts >1KB are now piped via stdin instead of a positional arg.
+
+### Send Status Update Loop Protection
+- `tool-executor.ts` terminates a tool when `progress: 100` is sent.
+- `agent-worker.ts` has a same-tool-name repeat guard.
+- Orchestrator falls back to `lastStatusMessage` when a worker returns empty output.
+
+### Security Preamble Deduplication
+- `stripSecurityPreamble` helper; expert prompts no longer double-include `SECURITY_PREAMBLE`.
+
+### Permission Intersection Fix
+- Root orchestrator's `allowedToolIds` is now the **union** of all role `toolIds`. Children inherit their role's full toolbox via intersection. Previously the empty intersection produced tool-less children.
+
+### Health Check
+- Skips OCR/vision/TTS/transcription models (they fail probe semantics differently) AND OpenRouter (has its own `/auth/key` endpoint; free-tier models get rate-limited on minute probes).
+
+### Testing
+- **Web E2E (Playwright)** — `tests/web/` with 61 tests. Config at `playwright.config.ts`. Auto-starts backend + Next.js dev servers via `webServer` block.
+- **TUI tests** — 26 tests in `src/tui/*.test.tsx` with ink v4 ↔ v3 shim (`src/tui/test-utils.tsx`).
+- **Swarm flow E2E** — `scripts/e2e/tests/swarm-flow.ts`.
+- **Swarm unit coverage** — `call-graph.test.ts` (+12), `budget-enforcement.test.ts` (+5), `cascade-cancel.test.ts` (+5), `spawner.test.ts` (+6 extended). Totals: 855 pass / 62 skip / 0 fail across 917 tests.
+
+### Migrations
+- `0024` — trajectories + skill proposals.
+- `0025` — `swarm_nodes` table + `agents.parentAgentId`.
+- `0026` — `swarm_nodes.taskBriefPreview` column.
+
 ## 2026-04-10 — Concurrent Safety, Execution Backends, Steering, Reasoning Budgets
 
 ### File Mutation Queue

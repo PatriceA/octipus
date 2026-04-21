@@ -1,8 +1,8 @@
-export * from './types';
-export { Gateway, getGateway, type GatewayStatus } from './gateway';
-export { AgentManager, getAgentManager, type SpawnOptions, type AgentInfo, type AnyAgentWorker } from './agent-manager';
-export { AgentWorker, type AgentWorkerConfig, type ToolHandler, type AgentEvent, type AgentEventHandler } from './agent-worker';
+export { type AgentInfo, AgentManager, type AnyAgentWorker, getAgentManager, type SpawnOptions } from './agent-manager';
+export { type AgentEvent, type AgentEventHandler, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
+export { getCLIToolConfig, isCLIProvider } from './cli-agent-factory';
 export { CLIAgentWorker } from './cli-agent-worker';
-export { isCLIProvider, getCLIToolConfig } from './cli-agent-factory';
-export { Router, getRouter, type RoutingDecision } from './router';
-export { Scheduler, getScheduler, type ScheduledTask, type TaskEvent } from './scheduler';
+export { Gateway, type GatewayStatus, getGateway } from './gateway';
+export { getRouter, Router, type RoutingDecision } from './router';
+export { getScheduler, type ScheduledTask, Scheduler, type TaskEvent } from './scheduler';
+export * from './types';

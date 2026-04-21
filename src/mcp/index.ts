@@ -1,2 +1,2 @@
-export { MCPProtocol, MCPMethods, MCPErrorCodes, type MCPMessage, type MCPError, type MCPCapabilities, type MCPToolDefinition, type MCPResource, type MCPPrompt } from './protocol';
-export { MCPBridge, getMCPBridge, type MCPServerConnection } from './bridge';
+export { getMCPBridge, MCPBridge, type MCPServerConnection } from './bridge';
+export { type MCPCapabilities, type MCPError, MCPErrorCodes, type MCPMessage, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';

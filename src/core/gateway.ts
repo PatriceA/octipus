@@ -1,12 +1,13 @@
-import { initializeDb, closeDb, initializeExtensions, checkDbHealth } from '@/db/postgres';
-import { checkRedisHealth } from '@/db/redis';
-import { initializeStorage, closeStorage } from '@/db/storage';
+import { getConfig, loadConfig } from '@/config';
+import { runKBSelfCheck } from '@/core/rag/health';
 import { runMigrations } from '@/db/migrate';
-import { loadConfig, getConfig } from '@/config';
-import { getAgentManager, type AgentInfo } from './agent-manager';
-import { getModelRegistry } from '@/models/model-registry';
+import { checkDbHealth, closeDb, initializeDb, initializeExtensions } from '@/db/postgres';
+import { checkRedisHealth } from '@/db/redis';
+import { closeStorage, initializeStorage } from '@/db/storage';
 import { getHealthChecker } from '@/models/health-checker';
+import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { type AgentInfo, getAgentManager } from './agent-manager';
 import type { HealthStatus } from './types';
 
 export interface GatewayStatus {
@@ -75,6 +76,16 @@ export class Gateway {
       const agentManager = getAgentManager();
       const cleanupAgents = agentManager.startPeriodicCleanup();
       this.cleanupHandlers.push(cleanupAgents);
+
+      // Knowledge-base self-check: verify DB + embedding provider + vector
+      // store write path before marking the gateway ready. Never blocks
+      // startup — a failure here surfaces via LOUD log + KB endpoints return
+      // 503 until the user fixes the config.
+      try {
+        await runKBSelfCheck();
+      } catch (err) {
+        coreLogger.error({ err }, 'KB self-check threw unexpectedly — continuing startup; KB endpoints will 503');
+      }
 
       // Set up graceful shutdown
       this.setupShutdownHandlers();

@@ -1,10 +1,11 @@
-import { configSchema, type Config } from './schema';
-import { defaultConfig } from './defaults';
 import { logger } from '@/utils/logger';
-import { getSettingsService } from './settings-service';
-import { SETTINGS_REGISTRY, settingKeyToConfigPath } from './settings-registry';
 import { loadBootstrapConfig } from './bootstrap-loader';
+import { defaultConfig } from './defaults';
+import { type Config, configSchema } from './schema';
+import { SETTINGS_REGISTRY, settingKeyToConfigPath } from './settings-registry';
+import { getSettingsService } from './settings-service';
 import { deepMerge } from './utils';
+
 // Lazy import to avoid circular dependency during module init
 // (vault → audit-repository → getDb, but DB isn't ready at import time)
 let _getVault: typeof import('@/security/vault').getVault | null = null;

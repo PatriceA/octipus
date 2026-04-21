@@ -78,10 +78,23 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 
 The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmitter patterns:
 
-- **Pattern matching**: Subscribe to `agent.*`, `chat.message`, or `*` (all events)
-- **Replay buffer**: Last 200 events per session for reconnection
+- **Pattern matching**: Subscribe to `agent.*`, `swarm.*`, `chat.message`, or `*` (all events)
+- **Replay buffer**: Last 200 events per session for reconnection (`swarm.*` events included)
 - **Error isolation**: One handler throwing doesn't break other handlers
 - **Security filtering**: Events are only delivered to connections authorized to see them
+
+### Event Families
+
+| Family | Events | Emitter |
+|---|---|---|
+| `chat.*` | `chat.message`, `chat.response`, `chat.typing` | Orchestrator |
+| `agent.*` | `agent.spawned`, `agent.completed`, `agent.failed`, `agent.stopped`, `agent.status`, `agent.event` | AgentManager |
+| `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.node_status`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked` | SwarmSpawner / AgentWorker / SwarmCallGraph |
+| `permission.*` | `permission.request`, `permission.response` | PermissionManager |
+| `approval.*` | `approval.request`, `approval.response` | PipelineManager |
+| `tool.*` | `tool.invoked`, `tool.result` | ToolExecutor |
+
+`swarm.node_spawned` payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, and a `taskBriefPreview` (first 200 chars). The web UI composes the live swarm tree from these events and falls back to `GET /api/swarm/nodes` for rehydration.
 
 ### Event Bridge
 

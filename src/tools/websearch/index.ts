@@ -1,8 +1,7 @@
-import { coreLogger } from '@/utils/logger';
 import type { Browser, } from 'playwright';
-import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
-import { toolLogger } from '@/utils/logger';
+import { coreLogger, toolLogger } from '@/utils/logger';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
  * Web search tool — tries SearXNG first, falls back to DuckDuckGo via Playwright.

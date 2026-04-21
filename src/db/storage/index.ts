@@ -2,11 +2,11 @@
  * Storage provider factory — singleton access to the active provider.
  */
 import { dbLogger } from '@/utils/logger';
-import type { StorageProvider } from './types';
-import { RedisStorageProvider, type RedisProviderConfig } from './redis-provider';
 import { MemoryStorageProvider } from './memory-provider';
+import { type RedisProviderConfig, RedisStorageProvider } from './redis-provider';
+import type { StorageProvider } from './types';
 
-export type { StorageProvider, CacheProvider, QueueProvider, PubSubProvider } from './types';
+export type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './types';
 
 let provider: StorageProvider | null = null;
 

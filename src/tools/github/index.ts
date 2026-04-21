@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 export class GitHubTool extends BaseTool {
   readonly id = 'github';

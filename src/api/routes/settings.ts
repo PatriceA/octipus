@@ -1,17 +1,17 @@
 import { Elysia, t } from 'elysia';
-import { apiContext } from '@/api/context';
-import { getSettingsService } from '@/config/settings-service';
-import { getVault } from '@/security/vault';
-import {
-  SETTINGS_REGISTRY,
-  getSettingDefinition,
-  getSettingsByCategory,
-  getCategories,
-} from '@/config/settings-registry';
-import { auditRepository } from '@/db/repositories/audit-repository';
-import { apiLogger } from '@/utils/logger';
 import { existsSync, statSync } from 'fs';
 import { resolve } from 'path';
+import { apiContext } from '@/api/context';
+import {
+  getCategories,
+  getSettingDefinition,
+  getSettingsByCategory,
+  SETTINGS_REGISTRY,
+} from '@/config/settings-registry';
+import { getSettingsService } from '@/config/settings-service';
+import { auditRepository } from '@/db/repositories/audit-repository';
+import { getVault } from '@/security/vault';
+import { apiLogger } from '@/utils/logger';
 
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)

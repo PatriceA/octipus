@@ -1,11 +1,10 @@
 'use client';
 
+import { CheckCircle, ChevronDown, ChevronRight, Clock, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import { cn } from '@/lib/utils';
-import { truncate } from '@/lib/utils';
-import { ScoreBar } from './ScoreBar';
+import { cn, truncate } from '@/lib/utils';
 import { AssertionBadge } from './AssertionBadge';
-import { ChevronDown, ChevronRight, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { ScoreBar } from './ScoreBar';
 
 interface AssertionResult {
   type: string;

@@ -1,6 +1,6 @@
-import { spawn, type Subprocess } from 'bun';
+import { type Subprocess, spawn } from 'bun';
 import { EventEmitter } from 'events';
-import { resolve, dirname } from 'path';
+import { dirname, resolve } from 'path';
 import { logger } from '../utils/logger';
 
 /** Resolve the bundled whisper-cpp binary shipped with the project */

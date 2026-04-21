@@ -1,12 +1,13 @@
 import OpenAI from 'openai';
 import type {
-  ChatCompletionMessageParam,
   ChatCompletionCreateParams,
+  ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
-import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import { modelLogger } from '@/utils/logger';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { modelLogger } from '@/utils/logger';
+import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -65,7 +66,7 @@ export class OpenRouterProvider implements ModelProvider {
       const latencyMs = Date.now() - startTime;
 
       if (!response.choices?.length) {
-        throw new Error(`OpenRouter returned empty response (no choices) for model ${params.model}. The model may be unavailable or overloaded.`);
+        throw classifyError(new Error(`OpenRouter returned empty response (no choices) for model ${params.model}. The model may be unavailable or overloaded.`), 'openrouter');
       }
 
       const choice = response.choices[0];
@@ -117,13 +118,13 @@ export class OpenRouterProvider implements ModelProvider {
 
       if (status === 429) {
         const detail = providerName ? ` (upstream: ${providerName})` : '';
-        throw new Error(`OpenRouter rate limit${detail}: ${raw}`);
+        throw classifyError({ status: 429, message: `OpenRouter rate limit${detail}: ${raw}` }, 'openrouter');
       }
       if (status === 402) {
-        throw new Error(`OpenRouter credit exhausted: ${raw}. Add credits at https://openrouter.ai/settings/credits`);
+        throw classifyError({ status: 402, message: `OpenRouter credit exhausted: ${raw}. Add credits at https://openrouter.ai/settings/credits` }, 'openrouter');
       }
 
-      throw error;
+      throw classifyError(error, 'openrouter');
     }
   }
 
@@ -151,7 +152,12 @@ export class OpenRouterProvider implements ModelProvider {
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via OpenRouter');
 
-    const stream = await client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await client.chat.completions.create(params);
+    } catch (err) {
+      throw classifyError(err, 'openrouter');
+    }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
@@ -252,12 +258,14 @@ export class OpenRouterProvider implements ModelProvider {
       return process.env.OPENROUTER_API_KEY;
     }
 
+    // Recoverable: null return triggers a classified AUTH_FAILED on createClient()
     try {
       const { getVault } = await import('@/security/vault');
       const vault = getVault();
       const value = await vault.getByName('system', 'openrouter_api_key');
       return value || null;
-    } catch {
+    } catch (err) {
+      modelLogger.warn({ err: (err as Error).message, provider: this.name }, 'OpenRouter vault lookup failed; falling back to env var');
       return null;
     }
   }
@@ -265,7 +273,7 @@ export class OpenRouterProvider implements ModelProvider {
   private async createClient(): Promise<OpenAI> {
     const apiKey = await this.getApiKey();
     if (!apiKey) {
-      throw new Error('OpenRouter API key not available. Set OPENROUTER_API_KEY or store it in the vault.');
+      throw classifyError(new Error('OpenRouter API key not available. Set OPENROUTER_API_KEY or store it in the vault.'), 'openrouter');
     }
 
     return new OpenAI({

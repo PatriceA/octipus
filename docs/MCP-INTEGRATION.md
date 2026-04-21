@@ -210,3 +210,40 @@ curl http://localhost:3005/api/mcp/servers | jq
 | SSE hangs | If behind reverse proxy, disable buffering for `/mcp*` routes |
 | Tools not appearing | Ensure workflow is **activated** (not just saved) |
 | Test URL works but production doesn't | Activate the workflow (toggle at top right) |
+| Server stuck disconnected after repeated failures | Circuit breaker opened — see below |
+
+---
+
+## Circuit Breaker
+
+`src/mcp/circuit-breaker.ts` wraps each MCP server connection with a three-state circuit breaker to stop bad servers from pinning the event loop.
+
+| State | Meaning |
+|-------|---------|
+| `closed` | Normal operation. Failures are counted. |
+| `open` | Three consecutive failures tripped the breaker. Calls fail fast without hitting the server. Exponential backoff controls when the breaker tests recovery. |
+| `half_open` | A single probe call is allowed; success → `closed`, failure → `open` again with longer backoff. |
+
+Behaviour:
+- **3 consecutive failures** on a server flip the breaker from `closed` to `open`.
+- **Exponential backoff** governs when the breaker tries a half-open probe.
+- The web UI shows a **state badge** per server in Settings → MCP.
+- Admins can **force a reset** via API.
+
+### API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/mcp/circuit` | Current state of every server's breaker (admin only) |
+| POST | `/api/mcp/circuit/:serverId/reset` | Force a breaker back to `closed` for the given server (admin only) |
+
+```bash
+# Inspect breakers
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3005/api/mcp/circuit
+
+# Force-reset a stuck breaker
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3005/api/mcp/circuit/n8n/reset
+```
+
+Reset the breaker after you've fixed the underlying issue (restarted the server, fixed auth, etc.). The reset is not a workaround — if failures continue, the breaker will trip again.

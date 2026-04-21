@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getLoadedPlugins, getLoadedPlugin, reloadPlugin, PluginTool } from '@/plugins';
+import { getLoadedPlugin, getLoadedPlugins, PluginTool, reloadPlugin } from '@/plugins';
 import { getToolRegistry } from '@/tools/registry';
 
 export const pluginRoutes = new Elysia({ prefix: '/plugins' })

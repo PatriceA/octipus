@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, XCircle, AlertCircle, Trash2, Star, Terminal, Pencil, Cpu } from 'lucide-react';
+import { AlertCircle, CheckCircle, Cpu, Pencil, Star, Terminal, Trash2, XCircle } from 'lucide-react';
 import type { Model } from '@/lib/types/models';
 
 function isLocalProvider(provider: string): boolean {

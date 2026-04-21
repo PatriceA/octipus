@@ -1,5 +1,5 @@
 import { coreLogger } from '@/utils/logger';
-import type { ConnectionContext, ClientType, TrustLevel } from './protocol';
+import type { ClientType, ConnectionContext, TrustLevel } from './protocol';
 
 // ── Types ─────────────────────────────────────────────────────────
 

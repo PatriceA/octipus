@@ -1,23 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
 import {
-  GitBranch,
-  Plus,
-  Trash2,
-  Pencil,
-  X,
-  GripVertical,
   ChevronDown,
   ChevronUp,
-  Shield,
-  RotateCcw,
+  GitBranch,
+  GripVertical,
   List,
   Network,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Shield,
+  Trash2,
+  X,
 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { PipelineGraph } from '@/components/pipeline-graph';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS } from '@/lib/types/models';
-import { PipelineGraph } from '@/components/pipeline-graph';
 
 interface PipelineStep {
   name: string;

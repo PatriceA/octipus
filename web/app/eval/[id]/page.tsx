@@ -1,22 +1,22 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
-  FlaskConical,
-  RefreshCw,
   ArrowLeft,
   CheckCircle,
-  XCircle,
+  FlaskConical,
   GitCompare,
+  RefreshCw,
+  XCircle,
 } from 'lucide-react';
+import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useState } from 'react';
+import { AssertionBreakdown, LatencyHistogram, PassRateDonut } from '@/components/eval/EvalCharts';
+import { ResultsTable } from '@/components/eval/ResultsTable';
+import { ScoreBar } from '@/components/eval/ScoreBar';
+import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { cn, formatDate } from '@/lib/utils';
-import { Card, CardContent } from '@/components/ui/card';
-import { ScoreBar } from '@/components/eval/ScoreBar';
-import { ResultsTable } from '@/components/eval/ResultsTable';
-import { PassRateDonut, AssertionBreakdown, LatencyHistogram } from '@/components/eval/EvalCharts';
 
 interface AssertionResult {
   type: string;

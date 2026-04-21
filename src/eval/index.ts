@@ -2,21 +2,21 @@
  * Agent evaluation harness — public API.
  */
 
+export { evaluateAllAssertions, evaluateAssertion } from './assertions';
+
+export { loadSuiteFromFile, loadSuites } from './loader';
+export { reportDetailedToConsole, reportToConsole, saveResults, toJSON } from './reporter';
+export { runAllSuites, runSuite, runTest } from './runner';
 export type {
-  EvalSuite,
-  EvalTest,
   Assertion,
+  AssertionResult,
   AssertionType,
   EvalResult,
-  AssertionResult,
-  EvalSuiteResult,
-  EvalTestResult,
   EvalRunnerOptions,
+  EvalSuite,
+  EvalSuiteResult,
+  EvalTest,
+  EvalTestResult,
   TestExecutionContext,
   TestStatus,
 } from './types';
-
-export { loadSuites, loadSuiteFromFile } from './loader';
-export { runTest, runSuite, runAllSuites } from './runner';
-export { evaluateAssertion, evaluateAllAssertions } from './assertions';
-export { reportToConsole, reportDetailedToConsole, saveResults, toJSON } from './reporter';

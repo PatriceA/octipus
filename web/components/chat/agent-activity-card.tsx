@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Loader2, CheckCircle, XCircle, ChevronDown, ChevronUp, Wrench, Users } from 'lucide-react';
+import { CheckCircle, ChevronDown, ChevronUp, Loader2, Users, Wrench, XCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface ToolCallInfo {

@@ -1,22 +1,22 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Brain,
-  Search,
-  Loader2,
-  X,
-  FileText,
-  Code,
-  MessageSquare,
   Bot,
-  FolderUp,
-  File,
-  FolderOpen,
+  Brain,
   ChevronDown,
+  Code,
   Database,
+  File,
+  FileText,
+  FolderOpen,
+  FolderUp,
+  Loader2,
+  MessageSquare,
+  Search,
+  X,
 } from 'lucide-react';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -56,6 +56,17 @@ interface KnowledgeStats {
   total: number;
   bySourceType: Record<string, number>;
   models: string[];
+}
+
+interface KBReadiness {
+  ready: boolean;
+  reason?: string;
+  checks: {
+    db: { ok: boolean; detail?: string };
+    embeddingModel: { ok: boolean; detail?: string; modelId?: string };
+    vectorWrite: { ok: boolean; detail?: string };
+  };
+  lastCheckedAt: string;
 }
 
 // --- Constants ---
@@ -439,17 +450,26 @@ export default function KnowledgePage() {
 
   const BROWSE_LIMIT = 20;
 
-  // Stats query
-  const { data: stats } = useQuery({
+  // Stats query — surface errors in the banner instead of swallowing them.
+  const { data: stats, error: statsError } = useQuery({
     queryKey: ['knowledge-stats'],
-    queryFn: async () => {
-      try {
-        return await api.get<KnowledgeStats>('/knowledge/stats');
-      } catch {
-        return { total: 0, bySourceType: {}, models: [] } as KnowledgeStats;
-      }
-    },
+    queryFn: () => api.get<KnowledgeStats>('/knowledge/stats'),
+    retry: false,
   });
+
+  // Readiness check — 503 means the KB is broken; we show a banner with the reason.
+  const { data: readiness, error: readinessError } = useQuery({
+    queryKey: ['knowledge-readiness'],
+    queryFn: () => api.get<KBReadiness>('/knowledge/readiness'),
+    retry: false,
+    refetchInterval: 30000, // re-check every 30s so the banner clears once fixed
+  });
+
+  const kbNotReadyMessage = (() => {
+    if (readiness && readiness.ready === false) return readiness.reason || 'Knowledge base is not ready';
+    if (readinessError instanceof Error) return readinessError.message;
+    return null;
+  })();
 
   // Browse query
   const { data: browseData, isLoading: browseLoading } = useQuery({
@@ -540,11 +560,33 @@ export default function KnowledgePage() {
         <button
           onClick={() => setShowIndexDialog(true)}
           className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 cursor-pointer"
+          disabled={!!kbNotReadyMessage}
+          title={kbNotReadyMessage ? 'Knowledge base is not ready — fix configuration below' : undefined}
         >
           <FolderUp className="w-4 h-4" />
           Index Files
         </button>
       </div>
+
+      {/* KB readiness / stats error banner — matches existing error-display pattern */}
+      {kbNotReadyMessage && (
+        <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2 border border-red-900/40">
+          <div className="font-medium">Knowledge base is not ready</div>
+          <div className="text-xs mt-1 opacity-90 break-words">{kbNotReadyMessage}</div>
+          {readiness && (
+            <ul className="text-xs mt-2 space-y-0.5 list-disc list-inside opacity-90">
+              <li>Database: {readiness.checks.db.ok ? 'OK' : `FAIL — ${readiness.checks.db.detail || 'unknown'}`}</li>
+              <li>Embedding model: {readiness.checks.embeddingModel.ok ? `OK (${readiness.checks.embeddingModel.modelId || 'resolved'})` : `FAIL — ${readiness.checks.embeddingModel.detail || 'unknown'}`}</li>
+              <li>Vector write: {readiness.checks.vectorWrite.ok ? 'OK' : `FAIL — ${readiness.checks.vectorWrite.detail || 'unknown'}`}</li>
+            </ul>
+          )}
+        </div>
+      )}
+      {statsError instanceof Error && !kbNotReadyMessage && (
+        <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+          Failed to load stats: {statsError.message}
+        </div>
+      )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

@@ -1,12 +1,12 @@
-import { getSettingsService } from './settings-service';
-import { getSettingDefinition } from './settings-registry';
-import { refreshConfigKey } from './index';
-import { resetLiteLLMClient } from '@/models/litellm-client';
 import { reinitializeChannel } from '@/channels';
-import { resetTelephonyProvider } from '@/voice/telephony';
+import type { ChannelType } from '@/core/types';
+import { resetLiteLLMClient } from '@/models/litellm-client';
 import { getVault } from '@/security/vault';
 import { logger } from '@/utils/logger';
-import type { ChannelType } from '@/core/types';
+import { resetTelephonyProvider } from '@/voice/telephony';
+import { refreshConfigKey } from './index';
+import { getSettingDefinition } from './settings-registry';
+import { getSettingsService } from './settings-service';
 
 /**
  * Initialize hot-reload: subscribe to settings changes and route them

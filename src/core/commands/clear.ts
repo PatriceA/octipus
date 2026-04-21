@@ -1,6 +1,6 @@
-import { registerCommand } from './registry';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { SessionContext } from '@/db/schema/sessions';
+import { registerCommand } from './registry';
 
 registerCommand({
   name: 'clear',

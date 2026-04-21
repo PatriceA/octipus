@@ -1,22 +1,22 @@
 import {
-  generateRegistrationOptions,
-  verifyRegistrationResponse,
   generateAuthenticationOptions,
-  verifyAuthenticationResponse,
-  type VerifiedRegistrationResponse,
+  generateRegistrationOptions,
   type VerifiedAuthenticationResponse,
+  type VerifiedRegistrationResponse,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import type {
-  RegistrationResponseJSON,
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,
+  RegistrationResponseJSON,
 } from '@simplewebauthn/types';
 import { getConfig } from '@/config';
-import { userRepository } from '@/db/repositories/user-repository';
-import { auditRepository } from '@/db/repositories/audit-repository';
 import { RedisCache } from '@/db/redis';
-import { securityLogger } from '@/utils/logger';
+import { auditRepository } from '@/db/repositories/audit-repository';
+import { userRepository } from '@/db/repositories/user-repository';
 import type { PasskeyCredential } from '@/db/schema/users';
+import { securityLogger } from '@/utils/logger';
 
 // Redis-backed challenge storage with 5-minute TTL
 const challengeCache = new RedisCache(300);

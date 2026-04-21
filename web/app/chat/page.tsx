@@ -1,19 +1,20 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { PanelRightClose, PanelRight } from 'lucide-react';
-import { api, createWebSocket } from '@/lib/api';
-import { usePermissions } from '@/lib/permission-context';
+import { PanelRight, PanelRightClose } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import MessageTimeline, {
   type ChatMessageData,
   type MessageMetadata,
-  type TrackedAgent,
   type TeamState,
+  type TrackedAgent,
 } from '@/components/chat/message-timeline';
-import { SessionList, type SessionInfo } from '@/components/chat/session-list';
-import SidePanel from '@/components/chat/side-panel';
-import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
+import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
+import { type SessionInfo, SessionList } from '@/components/chat/session-list';
+import SidePanel from '@/components/chat/side-panel';
+import SwarmTree, { type SwarmTreeEvent } from '@/components/swarm-tree';
+import { api, createWebSocket } from '@/lib/api';
+import { usePermissions } from '@/lib/permission-context';
 
 interface ToolCallInfo {
   id: string;
@@ -37,6 +38,8 @@ interface SessionState {
   trackedAgents: Map<string, TrackedAgent>;
   teams: Map<string, TeamState>;
   totalTokens: number;
+  /** Cumulative wall-clock across all completed swarm nodes (ms). */
+  swarmDurationMs: number;
   fileChanges: FileChange[];
 }
 
@@ -60,6 +63,7 @@ function newSessionState(): SessionState {
     trackedAgents: new Map(),
     teams: new Map(),
     totalTokens: 0,
+    swarmDurationMs: 0,
     fileChanges: [],
   };
 }
@@ -88,6 +92,7 @@ export default function ChatPage() {
   const [showSidePanel, setShowSidePanel] = useState(true);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
+  const [latestSwarmEvent, setLatestSwarmEvent] = useState<SwarmTreeEvent | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Active session state
@@ -96,6 +101,7 @@ export default function ChatPage() {
   const trackedAgents = activeState?.trackedAgents || new Map();
   const teams = activeState?.teams || new Map();
   const sessionTotalTokens = activeState?.totalTokens || 0;
+  const swarmDurationMs = activeState?.swarmDurationMs || 0;
 
   // Update a session's state
   const updateSessionState = useCallback((sessionId: string, updater: (prev: SessionState) => SessionState) => {
@@ -150,7 +156,7 @@ export default function ChatPage() {
   const loadSessionMessages = useCallback(async (sessionId: string) => {
     try {
       const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
-        `/sessions/${sessionId}/messages?roles=user,assistant,system`
+        `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`
       );
       const msgs = data?.messages?.length
         ? data.messages.map((m) => ({
@@ -514,6 +520,33 @@ export default function ChatPage() {
           action: data.action || data.toolName,
           args: data.args,
         });
+        break;
+
+      case 'swarm_event':
+        // Swarm lifecycle events — funnel into the SwarmTree component.
+        if (
+          typeof data.event === 'string' &&
+          (data.event === 'swarm.node_spawned' || data.event === 'swarm.node_completed')
+        ) {
+          setLatestSwarmEvent({
+            type: data.event,
+            payload: data.payload,
+          } as SwarmTreeEvent);
+          // Aggregate session totals from node completions so Session Stats
+          // reflects the swarm's cumulative token/duration cost (not just
+          // the orchestrator's own tokens, which the /chat response metadata
+          // tracked before the swarm took over most of the work).
+          if (data.event === 'swarm.node_completed' && eventSessionId) {
+            const p = data.payload as { usedTokens?: number; durationMs?: number };
+            const tokens = typeof p.usedTokens === 'number' ? p.usedTokens : 0;
+            const duration = typeof p.durationMs === 'number' ? p.durationMs : 0;
+            updateSessionState(eventSessionId, (prev) => ({
+              ...prev,
+              totalTokens: (prev.totalTokens || 0) + tokens,
+              swarmDurationMs: (prev.swarmDurationMs || 0) + duration,
+            }));
+          }
+        }
         break;
 
     }
@@ -929,17 +962,40 @@ export default function ChatPage() {
 
     setIsLoading(true);
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'chat',
-        content: userInput,
-        sessionId: sid,
-        expertId: selectedPresetId || undefined,
-      }));
-      return;
+    // WS is the primary transport. If it's OPEN → send.
+    // If it's CONNECTING → wait up to 5 s for open, then send. This avoids a
+    // race where we fall back to REST mid-connect, fire a 30 s+ orchestrator
+    // request against a proxy with a shorter timeout, and see a transient
+    // "Request failed" pop up while the real answer is still streaming in
+    // via the WS that finally opened.
+    const ws = wsRef.current;
+    if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+      const sendOverWs = () => {
+        ws.send(JSON.stringify({
+          type: 'chat',
+          content: userInput,
+          sessionId: sid,
+          expertId: selectedPresetId || undefined,
+        }));
+      };
+      if (ws.readyState === WebSocket.OPEN) {
+        sendOverWs();
+        return;
+      }
+      // CONNECTING — wait for open (bounded).
+      const opened = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 5_000);
+        const onOpen = () => { clearTimeout(timer); ws.removeEventListener('open', onOpen); resolve(true); };
+        ws.addEventListener('open', onOpen, { once: true });
+      });
+      if (opened && ws.readyState === WebSocket.OPEN) {
+        sendOverWs();
+        return;
+      }
+      // fall through to REST only if WS never opened
     }
 
-    // REST fallback
+    // REST fallback (WS unavailable)
     try {
       const result = await api.post<{
         response: string;
@@ -1033,9 +1089,11 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Right panel — Side panel */}
+      {/* Right panel — single SidePanel containing: Connection & Model →
+          Session Stats → Swarm Tree. Agent Activity was removed; SwarmTree
+          replaces it as the canonical live view. */}
       {showSidePanel && (
-        <div className="w-72 border-l border-outline-variant/10 flex-shrink-0 bg-surface-container">
+        <div className="w-72 border-l border-outline-variant/10 flex-shrink-0 bg-surface-container flex flex-col overflow-y-auto">
           <SidePanel
             totalTokens={sessionTotalTokens}
             maxTokenBudget={maxTokenBudget}
@@ -1048,6 +1106,20 @@ export default function ChatPage() {
             selectedPresetId={selectedPresetId}
             presets={presets}
             onPresetChange={setSelectedPresetId}
+            swarmSessionId={activeSessionId}
+            latestSwarmEvent={latestSwarmEvent}
+            swarmDurationMs={swarmDurationMs}
+            onSwarmHydratedTotals={(totals) => {
+              if (!activeSessionId) return;
+              // Seed session totals on cold reload: prefer the hydrated sum
+              // (authoritative historical state) over whatever in-memory
+              // counter happened to survive page navigation.
+              updateSessionState(activeSessionId, (prev) => ({
+                ...prev,
+                totalTokens: totals.tokens,
+                swarmDurationMs: totals.durationMs,
+              }));
+            }}
           />
         </div>
       )}

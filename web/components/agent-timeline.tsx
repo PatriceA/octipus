@@ -1,12 +1,41 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import {
-  Brain, Wrench, Eye, AlertCircle, CheckCircle, Loader2,
-  Shield, ChevronDown, ChevronRight,
+import {AlertCircle, 
+  Brain, CheckCircle, ChevronDown, ChevronRight,Eye, Loader2,
+  Shield, Wrench, 
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentTimelineEvent } from '@/hooks/useAgentEvents';
+import { cn } from '@/lib/utils';
+
+// Preview hints — mirror `src/core/tool-preview.ts` static registry so the UI
+// stays informative without a round-trip to the backend.
+const TOOL_PREVIEW_PARAMS: Record<string, string> = {
+  bash: 'command', shell: 'command', run_command: 'command',
+  shell__run_command: 'command', shell__run_background: 'command',
+  read: 'path', read_file: 'path', write: 'path', write_file: 'path', edit: 'path',
+  filesystem__read: 'path', filesystem__write: 'path', filesystem__edit: 'path',
+  grep: 'pattern', glob: 'pattern', search: 'query',
+  web_search: 'query', web_fetch: 'url', websearch__search: 'query',
+  spawn_child: 'subtopic', escalate_to_different_expert: 'subtopic',
+  create_pipeline: 'name',
+  knowledge__search: 'query', knowledge__index: 'path',
+};
+
+function extractToolPreview(toolName: string, params: Record<string, unknown> | undefined): string {
+  if (!params) return '';
+  const key = TOOL_PREVIEW_PARAMS[toolName]
+    ?? (toolName.includes('__') ? TOOL_PREVIEW_PARAMS[toolName.split('__').pop()!] : undefined);
+  const val = key ? params[key] : undefined;
+  let out = '';
+  if (val !== undefined && val !== null && val !== '') {
+    out = typeof val === 'string' ? val : JSON.stringify(val);
+  } else {
+    const count = Object.keys(params).length;
+    return count === 0 ? '' : `${count} param${count === 1 ? '' : 's'}`;
+  }
+  return out.length > 80 ? out.slice(0, 79) + '…' : out;
+}
 
 const EVENT_CONFIG: Record<string, {
   icon: typeof Brain;
@@ -36,6 +65,16 @@ function TimelineCard({ event }: TimelineCardProps) {
     ? JSON.stringify(event.data, null, 2)
     : String(event.data || '');
 
+  // Action events render a compact `toolName(preview)` headline before the raw JSON.
+  let actionHeadline: string | null = null;
+  if (event.type === 'action' && typeof event.data === 'object' && event.data) {
+    const d = event.data as { tool?: string; args?: Record<string, unknown>; params?: Record<string, unknown> };
+    if (d.tool) {
+      const preview = extractToolPreview(d.tool, d.args ?? d.params);
+      actionHeadline = preview ? `${d.tool}(${preview})` : `${d.tool}()`;
+    }
+  }
+
   const preview = dataStr.length > 120 ? dataStr.slice(0, 120) + '...' : dataStr;
   const hasMore = dataStr.length > 120;
 
@@ -53,8 +92,11 @@ function TimelineCard({ event }: TimelineCardProps) {
             {event.timestamp.toLocaleTimeString()}
           </span>
         </div>
+        {actionHeadline && !expanded && (
+          <div className="text-xs text-blue-200 font-mono mb-1 break-all">{actionHeadline}</div>
+        )}
         <pre className="text-xs text-white/80 whitespace-pre-wrap font-mono break-all">
-          {expanded ? dataStr : preview}
+          {expanded ? dataStr : (actionHeadline ? '' : preview)}
         </pre>
         {hasMore && (
           <button

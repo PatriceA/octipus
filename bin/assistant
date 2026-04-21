@@ -31,12 +31,21 @@ WEB_LOG_FILE="$STATE_DIR/web.log"
 API_PORT="${API_PORT:-3005}"
 WEB_PORT="${WEB_PORT:-3007}"
 
-# Detect storage mode from .env
+# Detect storage mode from .env.
+# Resolution order matches the backend (src/db/postgres.ts):
+#   1. Explicit STORAGE_MODE= line → use that
+#   2. DATABASE_URL present (non-empty) → 'external' (backend will connect)
+#   3. Fallback → 'embedded' (backend uses PGlite)
 STORAGE_MODE="embedded"
 if [[ -f "$PROJECT_DIR/.env" ]]; then
   _mode=$(grep -E '^STORAGE_MODE=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
   if [[ -n "$_mode" ]]; then
     STORAGE_MODE="$_mode"
+  else
+    _db_url=$(grep -E '^DATABASE_URL=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    if [[ -n "$_db_url" ]]; then
+      STORAGE_MODE="external"
+    fi
   fi
 fi
 

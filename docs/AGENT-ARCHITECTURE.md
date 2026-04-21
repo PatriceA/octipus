@@ -41,9 +41,23 @@ Runtime instances that execute tasks using an LLM tool loop. Each agent has a co
 **Location:** `src/core/agent-worker.ts`, managed by `AgentManager`
 
 ### Orchestrator
-Classifies incoming messages and routes them to the appropriate execution path. Uses meta-tools to spawn workers, teams, or pipelines.
+Depth-0 root of the swarm. Classifies incoming messages and either responds directly (casual / read-only) or delegates sub-topics to specialist Agents via the `spawn_child` meta-tool. Owns the final user-facing reply.
 
-**Location:** `src/core/orchestrator/service.ts`
+**Location:** `src/core/orchestrator/service.ts`, role prompt at `src/core/orchestrator/roles/orchestrator/prompt.md`
+
+### Swarm (3-Level Hierarchy)
+
+Delegation runs through a fixed 3-level tree: **Orchestrator → Agent → Subagent**. Depth is structural, not configurable.
+
+| Kind | Depth | Spawned by | Can spawn? | Lifetime |
+|---|---|---|---|---|
+| **Orchestrator** | 0 | `OrchestratorService.handleMessage()` | Yes → Agents | Per session |
+| **Agent** | 1 | Parent's `spawn_child` | Yes → Subagents | Ephemeral, per topic |
+| **Subagent** | 2 | Parent's `spawn_child` | **No** (leaf) | Ephemeral, per subtopic |
+
+The LLM-facing tool is `spawn_child`. Agents also get `escalate_to_different_expert` (1/Agent lifetime) to retry a task with a different expert of the same role when children hit budget or timeout.
+
+**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.assistant/swarm-design.md`.
 
 ## Execution Paths
 
@@ -51,21 +65,67 @@ Classifies incoming messages and routes them to the appropriate execution path. 
 User Message
     │
     ▼
-Orchestrator
+Orchestrator (depth 0)
     │
     ├─ Expert bypass? ──► Spawn worker with expert's role + tools + skills
     │
     ├─ Casual message? ──► Direct LLM response (no tools)
     │
-    └─ Task message? ──► Spawn orchestrator agent with meta-tools
+    └─ Task message? ──► Orchestrator runs with meta-tools
                               │
-                              ├─ spawn_worker(role) ──► Auto-match expert ──► Specialist worker
+                              ├─ spawn_child(role, topic, subtopic, taskBrief)
+                              │     ──► Agent (depth 1) with resolved expert,
+                              │         topic-bound model, intersected tools
+                              │         │
+                              │         └─ spawn_child / escalate_to_different_expert
+                              │                ──► Subagent (depth 2), hard leaf
                               │
-                              ├─ spawn_team(members) ──► Parallel workers
+                              ├─ Multiple spawn_child calls with same parallelGroup
+                              │     ──► Promise.all fan-out (cap 4/turn)
                               │
                               └─ create_pipeline(type) ──► Sequential stages
                                     Stage 1 → Stage 2 → ... → Stage N
 ```
+
+### Delegation Priority
+
+1. **`spawn_child`** (single) — default for single-role delegation with structured output.
+2. **`spawn_child`** (multiple, parallel or sequential) — when the task has distinct sub-topics.
+3. **`create_pipeline`** — last resort; only when the user explicitly asks for staged/reviewable handover, or the task requires a human gate between stages. Pipelines are Orchestrator-only; Agents and Subagents cannot call `create_pipeline`.
+
+The legacy `spawn_worker` and `spawn_team` meta-tools are **removed from the LLM-visible tool surface**. The `worker-spawner.ts` internals still back pipeline stages (sequential handover, non-LLM) but the LLM no longer sees either primitive.
+
+### Swarm Budgets
+
+Every node has a hard budget envelope enforced pre-LLM-call inside `AgentWorker.loop()`. Breach throws a structured error (`BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`) which the spawner maps to `ChildResult.status`.
+
+| Level | Tokens (cap) | Wall-clock (cap) | Fan-out (cap) |
+|---|---|---|---|
+| Orchestrator (0) | 200k | 10 min | 6 |
+| Agent (1) | 80k | 4 min | 4 |
+| Subagent (2) | 30k | 4 min | 0 |
+
+- **Tokens cascade** (pool-shared): `child.tokens.cap = min(LEVEL_DEFAULT[depth], parent.remaining.tokens − 10% RESERVE)`.
+- **Wall-clock does NOT cascade**: each node gets its own `LEVEL_DEFAULT` wall cap. Parent's clock excludes time spent awaiting children via `AgentWorker.pausedMs`.
+- **Fan-out**: per-node cap enforced synchronously by the spawner before concurrency/cache/budget math. Per-turn parallel cap (4) is a secondary guard in `tool-executor.ts`; overflow returns `concurrency_limit`.
+
+Defaults live in `src/core/swarm/types.ts` (`LEVEL_DEFAULT`, `BUDGET_RESERVE_FRACTION`).
+
+### Cycle / Duplicate Protection
+
+`SwarmCallGraph` per-root-session keeps a fingerprint set of `(topicPath, normalized(taskBrief), inputArtifact refs)`. Duplicate spawns within a session return `cancelled` with a `parentNotice` so the parent LLM can synthesize against the in-flight result. Ancestor-chain collisions are rejected as a second guard. Fingerprints are released on child failure so the parent may respawn with a refined brief.
+
+### Cascade Cancel
+
+Parent abort propagates to children via an `AbortSignal` chain rooted on the Orchestrator. `AgentManager.stop(id, { cascade: true })` walks the in-memory `childrenByParent` index synchronously and fires a background DB walk so zombie descendants flip to `cancelled` in `swarm_nodes`.
+
+### Permission Inheritance
+
+`child.allowedToolIds = parent.allowedToolIds ∩ requiredToolIds`. The root Orchestrator's `allowedToolIds` is the **union** of all role `toolIds` — so children inherit their role's full toolbox via intersection rather than an empty set. Children that need a tool the parent lacks escalate via `request_user_approval`.
+
+### Observability
+
+Gateway events (`src/core/gateway/protocol.ts`): `swarm.node_spawned`, `swarm.node_completed`, `swarm.node_status`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`. UI subscribes with the `swarm.*` pattern and renders a live tree per session. The replay buffer keeps swarm events for reconnection; `/api/swarm/nodes?rootSessionId=…` is the REST fallback for tree rehydration after the buffer ages out.
 
 ### QA Retry Loop
 
@@ -93,15 +153,23 @@ The full handoff chain is accumulated across all stages, so later stages have vi
 
 ### Automatic Expert Selection
 
-When the orchestrator spawns a worker via `spawn_worker(role)`, it automatically matches a system expert from the database by role. The matched expert provides:
+When the orchestrator (or an Agent) calls `spawn_child` with a `role` and no explicit `expertId`, the swarm spawner matches a system expert from the database by role. The matched expert provides:
 
-- **System prompt** — expert-specific instructions and persona
-- **Domain knowledge** — skills are loaded via `SkillRegistry.buildPromptFragment()` and appended to the prompt
-- **Model preference** — the expert's preferred model (if configured)
+- **System prompt** — expert-specific instructions and persona (with `SECURITY_PREAMBLE` deduplicated)
+- **Domain knowledge** — skills loaded via `SkillRegistry.buildPromptFragment()` and appended
+- **Model preference** — the expert's preferred model (as a fallback; see topic→model below)
 
-**Priority chain:** Explicit UI expert selection > Auto-matched expert by role > Generic role config
+**Priority chain:** Explicit `expertId` on `spawn_child` > Explicit UI expert selection > Auto-matched expert by role > Generic role config.
 
-This means workers automatically receive expert-level capabilities without manual selection. For example, `spawn_worker("coding")` finds the Coder expert and injects software architecture, data structures, and API design knowledge into the worker's context.
+### Topic → Model Routing (Authoritative)
+
+Children resolve their model strictly (no parent-model inheritance, no hardcoded defaults):
+
+1. Expert `modelPreference` — if the matched expert has an explicit preference, use it.
+2. `ModelRegistry.getModelForTopic(role)` — otherwise, use the model bound to the child's topic.
+3. Fail loud — if neither resolves, `SwarmSpawner.resolveChildModelAndExpert` throws with a message pointing the user at the Models page. No default-model fallback.
+
+Children **inherit topic bindings, not the parent's model**. If a research Agent spawns a security Subagent, the Subagent resolves the model bound to `security`, not the parent's research model. `ModelRegistry.getModelForTopic()` is the single authoritative entry point. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models the same way (or throw if unbound).
 
 ## How They Relate
 
@@ -110,9 +178,10 @@ This means workers automatically receive expert-level capabilities without manua
 | **Tool** | Executable module (shell, git...) | App startup | Singleton |
 | **Skill** | Domain knowledge | App startup | Singleton |
 | **Expert** | Agent configuration | DB seed / user-created | Persistent |
-| **Agent** | Running worker instance | Per-request | Request-scoped |
-| **Team** | Parallel agent group | Per-request | Request-scoped |
-| **Pipeline** | Sequential stage chain | Per-request | DB-tracked |
+| **Agent** | Running worker instance (depth 1) | Per `spawn_child` | Request-scoped, tracked in `swarm_nodes` |
+| **Subagent** | Leaf worker (depth 2) | Per `spawn_child` from an Agent | Request-scoped |
+| **Swarm** | Full tree for a session | Per root message | Session-scoped, persisted in `swarm_nodes` |
+| **Pipeline** | Sequential stage chain | Per-request | DB-tracked (pipelines table) |
 
 ## Agent Roles
 

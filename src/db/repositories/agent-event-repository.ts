@@ -1,6 +1,6 @@
-import { eq, lt, gt, and } from 'drizzle-orm';
+import { and, eq, gt, lt } from 'drizzle-orm';
 import { getDb } from '../postgres';
-import { agentEvents, type AgentEventRecord, type NewAgentEventRecord } from '../schema/agent-events';
+import { type AgentEventRecord, agentEvents, type NewAgentEventRecord } from '../schema/agent-events';
 
 export class AgentEventRepository {
   private get db() { return getDb(); }

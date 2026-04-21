@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import type { UserProfile } from '@/lib/types/settings';
 

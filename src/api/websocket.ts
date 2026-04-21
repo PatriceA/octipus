@@ -1,14 +1,14 @@
 import type { Elysia } from 'elysia';
-import { getSessionManager } from '@/security/auth/session';
-import { getAgentManager } from '@/core/agent-manager';
 import { webChatChannel } from '@/channels/webchat';
-import { getPermissionManager } from '@/security/permissions';
-import { getOrchestratorService } from '@/core/orchestrator';
-import { getBrowserBridge } from './browser-bridge';
-import { getDocumentQueue } from '@/core/documents/queue';
 import { getConfig } from '@/config';
+import { getAgentManager } from '@/core/agent-manager';
+import { getDocumentQueue } from '@/core/documents/queue';
+import { getOrchestratorService } from '@/core/orchestrator';
+import { getSessionManager } from '@/security/auth/session';
+import { getPermissionManager } from '@/security/permissions';
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
+import { getBrowserBridge } from './browser-bridge';
 
 interface WebSocketData {
   userId?: string;
@@ -138,6 +138,27 @@ export function setupWebSocket(app: Elysia): void {
         }
       });
 
+      // Subscribe to swarm events on the shared GatewayEventBus so the legacy
+      // /ws endpoint also receives Phase 1 swarm lifecycle events. We relay
+      // them as `swarm_event` messages so the web client can route them.
+      let unsubscribeSwarm: (() => void) | undefined;
+      try {
+        const { getGatewayHub } = await import('@/core/gateway/hub');
+        const hub = getGatewayHub();
+        unsubscribeSwarm = hub.eventBus.subscribe('swarm.*', (event) => {
+          if (event.userId && event.userId !== session.userId) return;
+          safeSend({
+            type: 'swarm_event',
+            event: event.type,
+            sessionId: event.sessionId,
+            payload: event.payload,
+            timestamp: event.timestamp,
+          });
+        });
+      } catch (err) {
+        apiLogger.debug({ err }, 'swarm event subscription skipped');
+      }
+
       // Store unsubscribe functions
       wsData(ws).unsubscribeAgentEvents = unsubscribe;
       wsData(ws).unsubscribeOrchestrator = unsubscribeOrchestrator;
@@ -148,6 +169,7 @@ export function setupWebSocket(app: Elysia): void {
         unsubscribe();
         unsubscribeOrchestrator();
         if (unsubscribePermissions) unsubscribePermissions();
+        if (unsubscribeSwarm) unsubscribeSwarm();
         for (const { event, handler } of docHandlers) {
           docQueue.off(event, handler);
         }

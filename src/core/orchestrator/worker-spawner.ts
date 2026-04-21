@@ -1,18 +1,18 @@
 import { resolve } from 'path';
-import type { ProfileFact } from '@/db/schema/profiles';
-import { getAgentManager } from '@/core/agent-manager';
-import type { AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
+import { getAgentManager } from '@/core/agent-manager';
+import { getNotificationService } from '@/core/notification-service';
+import type { AgentContext } from '@/core/types';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { sessionRepository } from '@/db/repositories/session-repository';
-import { messageRepository } from '@/db/repositories/message-repository';
-import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE } from './roles';
 import { buildSecurityReminder } from './input-guard';
-import { getNotificationService } from '@/core/notification-service';
 import type { ModelSelector } from './model-selector';
-import type { AgentRole, WorkerResult } from './types';
+import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import type { OrchestratorEvent } from './service';
+import type { AgentRole, WorkerResult } from './types';
 
 type EmitFn = (event: OrchestratorEvent) => void;
 
@@ -70,9 +70,13 @@ export async function handleExpertMessage(
     // Build expert identity prompt — role config as base, then expert-specific overrides
     let expertPrompt = SECURITY_PREAMBLE;
 
-    // Expert identity: name, description, and role-specific system prompt
+    // Expert identity: name, description, and role-specific system prompt.
+    // Strip a leading SECURITY_PREAMBLE from the concatenated body — both
+    // `expert.systemPrompt` (legacy expert rows seeded with the preamble
+    // baked in) and `roleConfig.systemPromptTemplate` (always prepended by
+    // getRoleConfig) can carry it, which would duplicate the block above.
     expertPrompt += `\nYou are **${expert.name}**${expert.description ? ` — ${expert.description}` : ''}.\n\n`;
-    expertPrompt += expert.systemPrompt || roleConfig.systemPromptTemplate;
+    expertPrompt += stripSecurityPreamble(expert.systemPrompt || roleConfig.systemPromptTemplate);
 
     // Critical rules
     const criticalRules = (expert.criticalRules as string[]) || [];
@@ -110,9 +114,19 @@ export async function handleExpertMessage(
     const skillIds = (expert.skillIds as string[]) || [];
     if (skillIds.length > 0) {
       const { getSkillRegistry } = await import('@/skills/registry');
-      const fragment = await getSkillRegistry().buildPromptFragment(skillIds);
+      const skillReg = getSkillRegistry();
+      const found = await skillReg.getByIds(skillIds);
+      if (found.length < skillIds.length) {
+        const foundSet = new Set(found.map((s) => s.id));
+        const missing = skillIds.filter((id) => !foundSet.has(id));
+        coreLogger.error(
+          { expertId, expertName: expert.name, expectedSkillIds: skillIds, missing },
+          'Expert lists skillIds missing from registry — expert worker runs with partial domain knowledge',
+        );
+      }
+      const fragment = await skillReg.buildPromptFragment(skillIds);
       if (fragment) {
-        expertPrompt += '\n\n# Domain Knowledge\n' + fragment;
+        expertPrompt += `\n\n# Domain Knowledge\n${fragment}`;
       }
     }
 
@@ -209,9 +223,19 @@ export async function spawnWorker(
         const skillIds = (matchingExpert.skillIds as string[]) || [];
         if (skillIds.length > 0) {
           const { getSkillRegistry } = await import('@/skills/registry');
-          const fragment = await getSkillRegistry().buildPromptFragment(skillIds);
+          const skillReg = getSkillRegistry();
+          const found = await skillReg.getByIds(skillIds);
+          if (found.length < skillIds.length) {
+            const foundSet = new Set(found.map((s) => s.id));
+            const missing = skillIds.filter((id) => !foundSet.has(id));
+            coreLogger.error(
+              { role: agentRole, expert: matchingExpert.name, expectedSkillIds: skillIds, missing },
+              'Expert lists skillIds missing from registry — worker runs with partial domain knowledge',
+            );
+          }
+          const fragment = await skillReg.buildPromptFragment(skillIds);
           if (fragment) {
-            expertPrompt = (expertPrompt || '') + '\n\n# Domain Knowledge\n' + fragment;
+            expertPrompt = `${expertPrompt || ''}\n\n# Domain Knowledge\n${fragment}`;
           }
         }
 
@@ -234,7 +258,13 @@ export async function spawnWorker(
       coreLogger.debug({ topic: roleConfig.defaultTopic }, 'Injected topic-assigned skills');
     }
   } catch (err) {
-    coreLogger.debug({ err, topic: roleConfig.defaultTopic }, 'Topic skill injection skipped');
+    // Fail loud: topic-skill injection shouldn't throw under normal
+    // operation. Previously debug-level — promoted to error so misconfigs
+    // (e.g. DB offline, schema drift) surface in logs.
+    coreLogger.error(
+      { err, topic: roleConfig.defaultTopic },
+      'Topic skill injection failed — worker runs WITHOUT topic skills',
+    );
   }
 
   const routing = await deps.modelSelector.selectForWorker(
@@ -484,66 +514,6 @@ Use these when the task benefits from them — especially for people-related que
   } catch (error) {
     return handleWorkerFailure(error as Error, worker, workerId, routing.model, agentRole, roleConfig, roleTools, task, input, context, startTime, deps);
   }
-}
-
-/**
- * Spawn a team of parallel workers.
- */
-export async function spawnTeam(
-  members: Array<{ role: string; task: string; input?: string }>,
-  context: AgentContext,
-  deps: WorkerSpawnerDeps,
-): Promise<unknown> {
-  const teamId = `team-${Date.now()}`;
-  const startTime = Date.now();
-
-  deps.emit({
-    type: 'team_started',
-    sessionId: context.sessionId,
-    userId: context.userId,
-    data: {
-      teamId,
-      members: members.map(m => ({ role: m.role, task: m.task.slice(0, 100) })),
-    },
-    timestamp: new Date(),
-  });
-
-  const results = await Promise.all(
-    members.map(async (member) => {
-      try {
-        const result = await spawnWorker(
-          member.role,
-          member.task,
-          member.input || '',
-          context,
-          deps,
-        );
-        return { role: member.role, task: member.task, result: String(result), error: null };
-      } catch (error) {
-        return { role: member.role, task: member.task, result: null, error: (error as Error).message };
-      }
-    }),
-  );
-
-  const durationMs = Date.now() - startTime;
-
-  deps.emit({
-    type: 'team_completed',
-    sessionId: context.sessionId,
-    userId: context.userId,
-    data: { teamId, results: results.map(r => ({ role: r.role, error: r.error })), durationMs },
-    timestamp: new Date(),
-  });
-
-  const allFailed = results.every(r => r.error !== null);
-  if (allFailed) {
-    const errorSummary = results.map(r => `${r.role}: ${r.error}`).join('; ');
-    throw new Error(`All team members failed: ${errorSummary}`);
-  }
-
-  return results.map(r =>
-    `### ${r.role} Agent\n**Task:** ${r.task}\n**Result:**\n${r.error ? `ERROR: ${r.error}` : r.result}`
-  ).join('\n\n---\n\n');
 }
 
 /**

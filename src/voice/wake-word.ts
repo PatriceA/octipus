@@ -1,4 +1,4 @@
-import { spawn, type Subprocess } from 'bun';
+import { type Subprocess, spawn } from 'bun';
 import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
 

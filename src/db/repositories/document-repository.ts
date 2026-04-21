@@ -1,6 +1,6 @@
-import { eq, desc, and } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '../postgres';
-import { documents, type DocumentRecord, type NewDocumentRecord } from '../schema/documents';
+import { type DocumentRecord, documents, type NewDocumentRecord } from '../schema/documents';
 
 export class DocumentRepository {
   private get db() { return getDb(); }

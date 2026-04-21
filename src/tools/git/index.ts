@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
-import { BaseTool, createParameterSchema } from '../base-tool';
 import type { ToolManifest } from '@/core/types';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class GitTool extends BaseTool {
   readonly id = 'git';

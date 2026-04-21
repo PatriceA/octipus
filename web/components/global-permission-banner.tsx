@@ -1,8 +1,8 @@
 'use client';
 
+import { CheckCircle, ChevronDown, ChevronUp, Clock, Shield, Square, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import { CheckCircle, XCircle, ChevronDown, ChevronUp, Shield, Clock, Square } from 'lucide-react';
-import { usePermissions, type PermissionRequest, type ApprovalRequest } from '@/lib/permission-context';
+import { type ApprovalRequest, type PermissionRequest, usePermissions } from '@/lib/permission-context';
 
 export function GlobalPermissionBanner() {
   const {

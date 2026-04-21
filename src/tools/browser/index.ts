@@ -1,8 +1,7 @@
-import { coreLogger } from '@/utils/logger';
-import type { Browser, Page, BrowserContext } from 'playwright';
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import type { ToolManifest } from '@/core/types';
-import { toolLogger } from '@/utils/logger';
+import { coreLogger, toolLogger } from '@/utils/logger';
+import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 const DEFAULT_TIMEOUT = 30000;
 const _MAX_SCREENSHOT_SIZE = 5 * 1024 * 1024; // 5MB

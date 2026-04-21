@@ -4,7 +4,7 @@
  */
 
 import { resolve } from 'path';
-import type { EvalSuiteResult, AssertionResult } from './types';
+import type { AssertionResult, EvalSuiteResult } from './types';
 
 // ── ANSI helpers ─────────────────────────────────────────────────────
 

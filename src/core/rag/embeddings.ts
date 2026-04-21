@@ -1,8 +1,8 @@
-import { getLiteLLMClient } from '@/models/litellm-client';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { embeddings, cosineSimilarity, type EmbeddingMetadata } from '@/db/schema/embeddings';
 import { cleanupAuditLog } from '@/db/schema/cleanup-log';
-import { desc, eq, and, sql, inArray } from 'drizzle-orm';
+import { cosineSimilarity, type EmbeddingMetadata, embeddings } from '@/db/schema/embeddings';
+import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
 
 export interface SearchResult {
@@ -53,12 +53,30 @@ export class EmbeddingService {
 
   async generateEmbedding(text: string): Promise<number[]> {
     const client = getLiteLLMClient();
-    const modelId = await this.resolveModel();
+    let modelId: string;
+    try {
+      modelId = await this.resolveModel();
+    } catch (err) {
+      coreLogger.error(
+        { err, component: 'embeddings' },
+        'Embedding failed: no model mapped to topic="embedding". Assign one in the Models page.',
+      );
+      throw err;
+    }
     try {
       const [embedding] = await client.embed(text, modelId);
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        throw new Error(`Embedding provider returned empty vector for model ${modelId}`);
+      }
       return embedding;
     } catch (err) {
-      coreLogger.warn({ err, model: modelId }, 'Embedding generation failed — model may not be available');
+      // Log at error level with full context (model + provider-surfaced message + stack)
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      coreLogger.error(
+        { err, message, stack, model: modelId, textLength: text.length, component: 'embeddings' },
+        'Embedding generation failed — provider/model unreachable or rejected the request',
+      );
       throw err;
     }
   }
@@ -89,8 +107,14 @@ export class EmbeddingService {
     metadata?: EmbeddingMetadata,
   ): Promise<number> {
     const chunks = this.chunkText(content);
+    if (chunks.length === 0) {
+      // Not an error — caller passed empty/whitespace content.
+      return 0;
+    }
+
     let stored = 0;
     const storedIds: string[] = [];
+    const errors: Array<{ chunk: number; message: string }> = [];
 
     for (let i = 0; i < chunks.length; i++) {
       try {
@@ -104,8 +128,38 @@ export class EmbeddingService {
         storedIds.push(id);
         stored++;
       } catch (err) {
-        coreLogger.error({ err, sourceId, chunk: i }, 'Failed to index chunk');
+        const message = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack : undefined;
+        errors.push({ chunk: i, message });
+        coreLogger.error(
+          { err, message, stack, sourceType, sourceId, chunk: i, totalChunks: chunks.length },
+          'Failed to index chunk',
+        );
       }
+    }
+
+    // FAIL LOUD: if every chunk failed, surface the error to the caller.
+    // Previously this returned 0 silently — uploads appeared to succeed with
+    // nothing written to the vector store.
+    if (stored === 0 && errors.length > 0) {
+      const first = errors[0];
+      const err = new Error(
+        `Indexing failed for all ${errors.length} chunk(s) of ${sourceType}:${sourceId}. ` +
+          `First error (chunk ${first.chunk}): ${first.message}`,
+      );
+      coreLogger.error(
+        { sourceType, sourceId, totalChunks: chunks.length, failedChunks: errors.length, errors },
+        'Indexing failed for every chunk — nothing was written to the knowledge base',
+      );
+      throw err;
+    }
+
+    // Partial failure is still logged loudly but does not throw — some content made it.
+    if (errors.length > 0 && stored > 0) {
+      coreLogger.warn(
+        { sourceType, sourceId, stored, failed: errors.length, totalChunks: chunks.length },
+        'Partial indexing: some chunks failed — see prior error logs for details',
+      );
     }
 
     // Generate abstracts for stored chunks (fire-and-forget)
@@ -123,8 +177,11 @@ export class EmbeddingService {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
-    } catch {
-      coreLogger.warn('Embedding search unavailable — returning empty results');
+    } catch (err) {
+      coreLogger.error(
+        { err, queryLength: query.length },
+        'Semantic search unavailable — embedding provider failed. Returning empty results.',
+      );
       return [];
     }
     const db = getDb();
@@ -200,8 +257,13 @@ export class EmbeddingService {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
-    } catch {
-      // Fall back to FTS-only if embedding unavailable
+    } catch (err) {
+      // Fall back to FTS-only if embedding unavailable — but log loudly so
+      // users see WHY hybrid search degraded to keyword-only.
+      coreLogger.warn(
+        { err, queryLength: query.length },
+        'Hybrid search: embedding failed, falling back to keyword-only (FTS)',
+      );
       return this.ftsSearch(query, limit, sourceType);
     }
 
@@ -323,8 +385,10 @@ export class EmbeddingService {
             .set({ abstract: abstract.slice(0, 500) })
             .where(eq(embeddings.id, ids[i]));
         }
-      } catch {
-        // Non-critical — skip silently
+      } catch (err) {
+        // Non-critical — abstract generation is a nice-to-have. Log at debug
+        // so it's available when troubleshooting but doesn't spam in normal use.
+        coreLogger.debug({ err, id: ids[i] }, 'Abstract generation failed for chunk');
       }
     }
   }

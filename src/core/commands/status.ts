@@ -1,7 +1,7 @@
-import { registerCommand } from './registry';
 import { getAgentManager } from '@/core/agent-manager';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { SessionContext } from '@/db/schema/sessions';
+import { registerCommand } from './registry';
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;

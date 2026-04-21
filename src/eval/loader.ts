@@ -4,8 +4,8 @@
  * parses them into EvalSuite objects, and validates against schema.
  */
 
-import { resolve, extname, basename } from 'path';
-import type { EvalSuite, EvalTest, Assertion, AssertionType } from './types';
+import { basename, extname, resolve } from 'path';
+import type { Assertion, AssertionType, EvalSuite, EvalTest } from './types';
 
 const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'routes_to_role', 'uses_tool', 'not_uses_tool',

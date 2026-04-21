@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Code2, MessageSquare, FolderOpen, Loader2, X, ChevronDown, Plus, GitBranch, Check } from 'lucide-react';
+import { Check, ChevronDown, Code2, FolderOpen, GitBranch, Loader2, MessageSquare, Plus, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 

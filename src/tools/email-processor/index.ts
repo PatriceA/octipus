@@ -1,5 +1,5 @@
+import type { AgentContext, ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
-import type { ToolManifest, AgentContext } from '@/core/types';
 
 export class EmailProcessorTool extends BaseTool {
   readonly id = 'email-processor';

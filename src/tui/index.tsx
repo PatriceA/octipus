@@ -1,8 +1,8 @@
 
-import { render } from 'ink';
-import { TuiApp } from './app';
 import { existsSync, readFileSync } from 'fs';
+import { render } from 'ink';
 import { resolve } from 'path';
+import { TuiApp } from './app';
 
 // ── Synchronized output (CSI 2026) ─────────────────────────────
 // Wraps each render frame in sync markers so the terminal can

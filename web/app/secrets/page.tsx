@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
 import { KeyRound } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { ALL_VAULT_KEYS, type Credential } from '@/lib/vault-config';
 
 const MANAGED_NAMES = new Set(ALL_VAULT_KEYS.map((k) => k.vaultName));
-import { ProviderCards } from './provider-cards';
+
 import { OAuthCards } from './oauth-cards';
+import { ProviderCards } from './provider-cards';
 import { VaultTable } from './vault-table';
 
 export default function SecretsPage() {

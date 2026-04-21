@@ -1,8 +1,8 @@
+import crypto from 'crypto';
+import type { ChannelType } from '@/core/types';
 import { getRedis } from '@/db/redis';
 import { userRepository } from '@/db/repositories/user-repository';
-import type { ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
-import crypto from 'crypto';
 
 const LINK_CODE_PREFIX = 'link:';
 const LINK_CODE_TTL = 300; // 5 minutes

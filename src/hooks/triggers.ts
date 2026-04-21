@@ -1,4 +1,4 @@
-import type { TriggerType, Hook, UnifiedMessage, AgentContext } from '@/core/types';
+import type { AgentContext, Hook, TriggerType, UnifiedMessage } from '@/core/types';
 import { safeRegExp } from '@/utils/sanitize';
 
 export interface TriggerEvent {

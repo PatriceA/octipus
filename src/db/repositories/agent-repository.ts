@@ -1,6 +1,6 @@
-import { eq, desc, inArray } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '../postgres';
-import { agents, type AgentRecord, type NewAgentRecord } from '../schema/agents';
+import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 
 export class AgentRepository {
   private get db() { return getDb(); }

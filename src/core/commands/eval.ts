@@ -1,15 +1,15 @@
-import { registerCommand } from './registry';
-import { getModelRegistry } from '@/models/model-registry';
-import { getProviderRouter } from '@/models/providers';
-import { getLiteLLMClient } from '@/models/litellm-client';
-import { runConformanceTests, getTestCaseNames } from '@/models/testing/conformance';
-import type { ConformanceReport, ConformanceResult } from '@/models/testing/conformance';
-import { runEvaluation } from '@/models/evaluation/runner';
+import { evaluationRepository } from '@/db/repositories/evaluation-repository';
 import { generalQA } from '@/models/evaluation/datasets';
 import { ALL_EVALUATORS } from '@/models/evaluation/evaluators';
-import { evaluationRepository } from '@/db/repositories/evaluation-repository';
+import { runEvaluation } from '@/models/evaluation/runner';
 import type { EvalDataPoint } from '@/models/evaluation/types';
+import { getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
+import { getProviderRouter } from '@/models/providers';
 import type { ModelProvider } from '@/models/providers/interface';
+import type { ConformanceReport, ConformanceResult } from '@/models/testing/conformance';
+import { getTestCaseNames, runConformanceTests } from '@/models/testing/conformance';
+import { registerCommand } from './registry';
 
 // ── Formatting helpers ──────────────────────────────────────────────────────
 

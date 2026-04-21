@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, boolean, index, pgEnum } from 'drizzle-orm/pg-core';
+import { boolean, index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const credentialTypeEnum = pgEnum('credential_type', [
   'api_key',

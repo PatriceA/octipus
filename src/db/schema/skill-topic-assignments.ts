@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, uuid, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { skills } from './skills';
 
 export const skillTopicAssignments = pgTable(

@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, uuid, jsonb, index, customType } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { customType, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 // Note: pgvector extension must be installed
 // CREATE EXTENSION IF NOT EXISTS vector;

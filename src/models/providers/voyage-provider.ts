@@ -1,7 +1,7 @@
-import { coreLogger } from '@/utils/logger';
-import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { classifyError } from '@/core/errors/classification';
+import { coreLogger, modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import { modelLogger } from '@/utils/logger';
+import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 const VOYAGE_BASE_URL = 'https://api.voyageai.com/v1';
 
@@ -35,7 +35,9 @@ export class VoyageProvider implements ModelProvider {
       const vault = getVault();
       const value = await vault.getByName('system', 'voyage_api_key');
       return value || null;
-    } catch (err) { coreLogger.error({ err }, 'silent failure in voyage-provider'); }
+    } catch (err) {
+      coreLogger.warn({ err: (err as Error).message }, 'Voyage vault lookup failed; falling back to env var');
+    }
     return null;
   }
 
@@ -60,7 +62,8 @@ export class VoyageProvider implements ModelProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Voyage AI error (${response.status}): ${error}`);
+      const classified = classifyError({ status: response.status, message: error }, 'voyage');
+      throw classified;
     }
 
     const data = await response.json() as { data: Array<{ embedding: number[] }> };

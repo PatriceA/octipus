@@ -182,6 +182,49 @@ export const rateLimitConfigSchema = z.object({
   queueTimeout: z.number().min(0).default(30000),
 }).optional();
 
+// Session compaction configuration schema
+//
+// Used by the anti-thrashing guard in
+// `src/core/orchestrator/session-compaction.ts` to avoid looping when a
+// compaction pass fails to meaningfully reduce token usage.
+export const compactionConfigSchema = z.object({
+  /**
+   * Minimum savings ratio — (tokensBefore - tokensAfter) / tokensBefore —
+   * for a pass to be considered effective. Below this a stall flag is set.
+   */
+  minSavingsRatio: z.number().min(0).max(1).default(0.10),
+  /**
+   * Once stalled, the session must grow by this multiple of its pre-compact
+   * size before another pass is attempted.
+   */
+  growthMultiplier: z.number().min(1).default(2.0),
+  /**
+   * Safety valve — once the session exceeds this many tokens we always run
+   * a compaction pass, even if the session is marked stalled.
+   */
+  hardCeiling: z.number().min(1).default(1_000_000),
+});
+
+// Swarm (agent delegation tree) configuration schema.
+// See `.assistant/swarm-design.md`. Phase 3 adds per-user fan-out caps +
+// orphan reaper cadence; both have safe defaults so existing deployments
+// don't need to set anything.
+export const swarmConfigSchema = z.object({
+  /**
+   * Max swarm child spawns allowed per user per minute. Enforced by
+   * `SwarmSpawner` via `rate-limiter.ts` bucket `swarmFanOutBudget`.
+   * When exceeded the spawner returns `ChildResult{status:'concurrency_limit',
+   * reason:'user_rate_limit'}` without charging the node's own fan-out cap.
+   */
+  perUserSpawnsPerMinute: z.number().min(1).max(1000).default(30),
+  /**
+   * Orphan reaper interval (ms). On process start any `swarm_nodes` row
+   * with `status='running'` older than this threshold is force-marked
+   * `cancelled` with `error='orphaned_at_restart'`.
+   */
+  orphanReaperIntervalMs: z.number().min(30_000).default(600_000),
+});
+
 // Workspace configuration schema
 export const workspaceConfigSchema = z.object({
   rootPath: z.string().default('./workspace'),
@@ -215,8 +258,10 @@ export const configSchema = z.object({
   orchestrator: orchestratorConfigSchema.default({}),
   cliModels: cliModelsConfigSchema.default({}),
   workspace: workspaceConfigSchema.default({}),
+  compaction: compactionConfigSchema.default({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
+  swarm: swarmConfigSchema.default({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -238,6 +283,8 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+export type CompactionConfig = z.infer<typeof compactionConfigSchema>;
 export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type RateLimitConfig = z.infer<typeof rateLimitConfigSchema>;
+export type SwarmConfig = z.infer<typeof swarmConfigSchema>;

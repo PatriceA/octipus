@@ -1,19 +1,19 @@
-import { eq, desc } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
-import { pipelines, pipelineStages } from '@/db/schema/pipelines';
-import { pipelineTemplates } from '@/db/schema/pipeline-templates';
-import { pipelineRepository } from '@/db/repositories/pipeline-repository';
-import type { Pipeline, NewPipeline, PipelineStageRow, NewPipelineStage } from '@/db/schema/pipelines';
-import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
+import { desc, eq } from 'drizzle-orm';
+import { getNotificationService } from '@/core/notification-service';
 import type { AgentContext } from '@/core/types';
-import type { QAValidationResult } from './types';
+import { getDb } from '@/db/postgres';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { pipelineRepository } from '@/db/repositories/pipeline-repository';
+import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
+import { pipelineTemplates } from '@/db/schema/pipeline-templates';
+import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '@/db/schema/pipelines';
+import { pipelineStages, pipelines } from '@/db/schema/pipelines';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { getNotificationService } from '@/core/notification-service';
-import { getOrchestratorService } from './service';
-import { getPipelineTemplate, expandPromptTemplate, buildStagesFromTemplate } from './templates';
 import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
-import { messageRepository } from '@/db/repositories/message-repository';
+import { getOrchestratorService } from './service';
+import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
+import type { QAValidationResult } from './types';
 
 export class PipelineManager {
   private get db() { return getDb(); }

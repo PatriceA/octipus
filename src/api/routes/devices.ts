@@ -1,11 +1,11 @@
+import { randomBytes } from 'crypto';
 import { Elysia, t } from 'elysia';
 import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
+import { getSettingsService } from '@/config/settings-service';
+import { getRedis } from '@/db/redis';
 import { getSessionManager } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';
-import { randomBytes } from 'crypto';
-import { getRedis } from '@/db/redis';
-import { getSettingsService } from '@/config/settings-service';
 
 /** Get the first non-internal IPv4 address */
 function getLanIp(): string | null {

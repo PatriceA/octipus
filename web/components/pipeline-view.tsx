@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, Loader2, Clock, XCircle, SkipForward, Shield, } from 'lucide-react';
+import { CheckCircle, Clock, Loader2, Shield, SkipForward, XCircle, } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface PipelineStage {

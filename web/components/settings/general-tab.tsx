@@ -2,12 +2,12 @@
 
 import { useQuery } from '@tanstack/react-query';
 import {
-  KeyRound,
   ArrowRight,
+  KeyRound,
 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import type { UserProfile, HealthStatus } from '@/lib/types/settings';
+import type { HealthStatus, UserProfile } from '@/lib/types/settings';
 
 export function GeneralTab() {
   const { data: profile } = useQuery({

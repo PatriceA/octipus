@@ -1,6 +1,6 @@
-import type { Hook } from '@/core/types';
-import { getAgentManager } from '@/core/agent-manager';
 import { getUMI } from '@/channels/interface';
+import { getAgentManager } from '@/core/agent-manager';
+import type { Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
 import type { TriggerContext } from './triggers';
 

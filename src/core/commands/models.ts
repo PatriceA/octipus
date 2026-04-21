@@ -1,5 +1,5 @@
-import { registerCommand } from './registry';
 import { getModelRegistry } from '@/models/model-registry';
+import { registerCommand } from './registry';
 
 registerCommand({
   name: 'models',

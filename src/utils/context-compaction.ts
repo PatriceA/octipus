@@ -1,15 +1,15 @@
-import { getLiteLLMClient } from '@/models/litellm-client';
-import { getModelRegistry } from '@/models/model-registry';
 import {
-  serializeConversation,
-  extractFileOperations,
   buildSummarizationPrompt,
+  extractFileOperations,
+  serializeConversation,
 } from '@/core/context-compaction';
 import type { AgentMessage } from '@/core/types';
+import { getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
 
+export type { CompactionResult } from '@/core/context-compaction';
 // Re-export for convenience
 export { compactWithSummarization, extractFileOperations } from '@/core/context-compaction';
-export type { CompactionResult } from '@/core/context-compaction';
 
 interface CompactionOptions {
   maxMessages?: number;

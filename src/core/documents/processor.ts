@@ -1,13 +1,13 @@
-import { readFile, mkdir, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, basename, join, extname } from 'path';
-import { documentRepository } from '@/db/repositories/document-repository';
+import { mkdir, readFile, rename } from 'fs/promises';
+import { basename, dirname, extname, join } from 'path';
+import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import type { AgentMessage } from '@/core/types';
+import { documentRepository } from '@/db/repositories/document-repository';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
-import type { AgentMessage } from '@/core/types';
 
 // ── File type classification ─────────────────────────────────────────
 // Instead of sending everything through OCR, we classify files into
@@ -171,7 +171,7 @@ export class DocumentProcessor {
         spawnSync('convert', [filePath, tmpOut], { timeout: 15000 });
         fileBuffer = await readFile(tmpOut);
         mimeType = 'image/png';
-        try { unlinkSync(tmpOut); } catch (err) { coreLogger.error({ err }, 'silent failure in processor'); }
+        try { unlinkSync(tmpOut); } catch (err) { coreLogger.warn({ err, tmpOut }, 'Failed to unlink temp OCR file (non-fatal)'); }
         this.logger.info({ from: ext, filePath }, 'Converted image to PNG');
       } catch (convErr) {
         this.logger.warn({ err: convErr, ext }, 'Image conversion failed, sending original format');
@@ -696,15 +696,27 @@ export class DocumentProcessor {
 
   /**
    * Index document text into the knowledge base.
+   *
+   * Throws on failure — the caller (process()) turns that into a 'failed'
+   * status on the document row so the user sees it in the UI. Previously
+   * this swallowed the error and the document was marked 'completed' with
+   * nothing in the knowledge base.
    */
-  private async indexDocument(documentId: string, text: string, filename: string, category: string): Promise<void> {
+  private async indexDocument(documentId: string, text: string, filename: string, _category: string): Promise<void> {
+    const service = getEmbeddingService();
     try {
-      const service = getEmbeddingService();
-      await service.indexText('document', `doc:${documentId}`, text, {
+      const stored = await service.indexText('document', `doc:${documentId}`, text, {
         filePath: filename,
       });
+      this.logger.info({ documentId, filename, chunksStored: stored }, 'Document indexed into knowledge base');
     } catch (err) {
-      this.logger.warn({ err, documentId }, 'Knowledge indexing failed — document still saved');
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      this.logger.error(
+        { err, message, stack, documentId, filename, sourceType: 'document' },
+        'Knowledge indexing failed — document will be marked as failed',
+      );
+      throw err;
     }
   }
 

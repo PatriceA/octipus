@@ -1,21 +1,21 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import Link from 'next/link';
 import {
-  Shield,
-  RefreshCw,
-  ArrowLeft,
-  XCircle,
   AlertTriangle,
+  ArrowLeft,
+  RefreshCw,
+  Shield,
   ShieldAlert,
   ShieldCheck,
+  XCircle,
 } from 'lucide-react';
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AssertionBadge } from '@/components/eval/AssertionBadge';
+import { ScoreBar } from '@/components/eval/ScoreBar';
+import { Card, CardContent, } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { cn, truncate } from '@/lib/utils';
-import { Card, CardContent, } from '@/components/ui/card';
-import { ScoreBar } from '@/components/eval/ScoreBar';
-import { AssertionBadge } from '@/components/eval/AssertionBadge';
 
 type AttackCategory = 'injection' | 'confusion' | 'misuse' | 'leakage' | 'drift';
 type Severity = 'low' | 'medium' | 'high' | 'critical';

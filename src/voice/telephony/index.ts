@@ -5,8 +5,9 @@
 
 import { coreLogger } from '@/utils/logger';
 import type { TelephonyProvider } from './interface';
+
+export type { CallDirection, CallEvent, CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } from './interface';
 export { CallManager, getCallManager } from './interface';
-export type { TelephonyProvider, CallSession, CallStatus, CallDirection, InitiateCallOptions, CallEvent } from './interface';
 
 let cachedProvider: TelephonyProvider | null = null;
 let cachedProviderName: string | null = null;

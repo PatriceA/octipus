@@ -21,10 +21,12 @@ Built for developers who want full control. Runs locally. No vendor lock-in. Eve
 The orchestrator analyzes your request, classifies it, and deploys the right specialist agents with the right tools and knowledge. A coding question spawns a Coder agent with filesystem, shell, and git access plus software architecture expertise. A security audit spawns a Security Analyst with OWASP knowledge and penetration testing tools. Complex tasks get broken into sub-tasks and distributed across parallel agent teams.
 
 ### Intelligent Agent Orchestration
+- **3-level Swarm** — Orchestrator → Agent → Subagent hierarchy with one meta-tool (`spawn_child`). Parallel fan-out via `parallelGroup`, per-node hard budgets (tokens / wall-clock / fan-out), `AbortSignal` cascade cancel, per-session fingerprint cycle protection, and one-shot `escalate_to_different_expert` per Agent when children hit budget. See [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) and [.assistant/swarm-design.md](.assistant/swarm-design.md).
 - **16 specialist roles** — coding, research, review, QA, design, DevOps, security, data engineering, AI/ML, finance, automation, project management, technical writing, communication, and more
-- **15 pre-built expert personas** — Coder, Reviewer, UI/UX Designer, DevOps Engineer, Security Analyst, Data Engineer, AI Engineer, Financial Analyst, and others — each pre-loaded with relevant domain knowledge. Every expert now includes **structured prompts**: critical rules (constraints), deliverable templates (expected output format), and success metrics (evaluation criteria)
+- **15 pre-built expert personas** — Coder, Reviewer, UI/UX Designer, DevOps Engineer, Security Analyst, Data Engineer, AI Engineer, Financial Analyst, and others — each pre-loaded with relevant domain knowledge. Every expert includes **structured prompts**: critical rules (constraints), deliverable templates (expected output format), and success metrics (evaluation criteria)
 - **20 domain knowledge skills** — software architecture, test automation, security practices, cloud platforms, database design, API design, machine learning, and more — injected into agent system prompts for grounded, expert-level responses
-- **Dynamic teams and pipelines** — orchestrator spawns parallel agent teams or sequential multi-stage pipelines with approval gates. Pipelines support **QA retry loops** (failed QA stages automatically retry the previous implementation stage with feedback, up to 3 retries) and **handoff context documents** (structured summaries of completed work, decisions, open questions, and artifacts passed between stages)
+- **Topic → model routing** — strict, config-driven. `ModelRegistry.getModelForTopic()` is the single source of truth; no hardcoded defaults, unbound topics fail loud. Children inherit topic bindings, not the parent's model.
+- **Pipelines with approval gates** — Orchestrator-only for explicit staged handover. Pipelines support **QA retry loops** (failed QA stages automatically retry the previous implementation stage with feedback, up to 3 retries) and **handoff context documents** (structured summaries of completed work, decisions, open questions, and artifacts passed between stages)
 
 ### Every Model Provider, One Interface
 - **Local models** via Ollama — complete privacy, zero cost
@@ -90,7 +92,7 @@ The orchestrator analyzes your request, classifies it, and deploys the right spe
 - **Agent eval harness** — YAML-based test runner (`bun run eval`) with 13 assertion types for routing accuracy, tool usage, and response quality
 - **Red-team testing** — 5 attack plugins, 49 test cases covering prompt injection, role confusion, tool misuse, data leakage, and off-topic drift
 - **Eval UI** — web dashboard at `/eval` with pass rate charts, run comparison, regression detection, and red-team results
-- **112 E2E API tests** — 22 test modules covering all major subsystems
+- **Test harness matrix** — `bun test` (unit + integration, 855+ tests), `bun run test:e2e` (API + WebSocket E2E, 26 modules), `bun run test:web` (Playwright headless, 61 specs with backend auto-started), `bun run test:integration` (Docker-compose-backed integration). See [docs/TESTING.md](docs/TESTING.md).
 
 ### Full Web UI
 - **Web dashboard** (Next.js) — editor-style 3-panel chat, agent monitoring, model management, pipeline builder, vault, hooks, eval dashboard, profiles, settings
@@ -222,7 +224,7 @@ Make globally available: `bun link`
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers) → Teams & Pipelines (parallel/sequential execution)
+**Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (explicit sequential handover with approval gates)
 
 ## Documentation
 
@@ -265,4 +267,4 @@ For security issues, see [SECURITY.md](./SECURITY.md). **Do not** file security 
 
 [MIT](./LICENSE) — free to use, copy, modify, distribute, sublicense, and sell. No warranty. Use at your own risk.
 
-Copyright © 2026 Patrice and contributors.
+Copyright © 2026 Patrice Allegue and contributors.

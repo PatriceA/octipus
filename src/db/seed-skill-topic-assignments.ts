@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
 import { logger } from '@/utils/logger';

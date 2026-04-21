@@ -1,13 +1,14 @@
 import OpenAI from 'openai';
 import type {
-  ChatCompletionMessageParam,
   ChatCompletionCreateParams,
+  ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import type { ModelProvider, ProviderHealthStatus } from './interface';
-import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getConfig } from '@/config';
-import { modelLogger } from '@/utils/logger';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { modelLogger } from '@/utils/logger';
+import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 /**
  * Known cloud provider model prefixes. If a model name starts with any of these,
@@ -220,7 +221,7 @@ export class OllamaProvider implements ModelProvider {
 
     if (!response.ok) {
       const err = await response.text().catch(() => '');
-      throw new Error(`Ollama native API error (${response.status}): ${err}`);
+      throw classifyError({ status: response.status, message: err || 'Ollama native API error' }, 'ollama');
     }
 
     const data = await response.json() as {

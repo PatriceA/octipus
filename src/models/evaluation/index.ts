@@ -1,20 +1,19 @@
-export type {
-  EvalDataPoint,
-  EvalScore,
-  Evaluator,
-  EvalResult,
-  EvalRun,
-} from './types';
-
-export { defineEvaluator, ALL_EVALUATORS } from './evaluators';
-
 export {
-  generalQA,
-  toolCalling,
-  instructionFollowing,
   codeGeneration,
+  generalQA,
+  instructionFollowing,
   STANDARD_DATASETS,
+  toolCalling,
 } from './datasets';
 
-export { runEvaluation } from './runner';
+export { ALL_EVALUATORS, defineEvaluator } from './evaluators';
 export type { RunEvaluationOptions } from './runner';
+
+export { runEvaluation } from './runner';
+export type {
+  EvalDataPoint,
+  EvalResult,
+  EvalRun,
+  EvalScore,
+  Evaluator,
+} from './types';

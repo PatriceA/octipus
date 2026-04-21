@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
+import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { logger } from '@/utils/logger';
 
 /**

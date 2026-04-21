@@ -1,7 +1,7 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
-import { coreLogger } from '@/utils/logger';
 import type { AgentContext } from '@/core/types';
+import { coreLogger } from '@/utils/logger';
 
 /**
  * Auto-update .assistant/project-summary.md after pipeline/agent completion.

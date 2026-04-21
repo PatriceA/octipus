@@ -169,6 +169,27 @@
       "when": 1712800000000,
       "tag": "0023_skill_topic_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1713500000000,
+      "tag": "0024_trajectories_and_skill_proposals",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1714000000000,
+      "tag": "0025_swarm_nodes",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1714600000000,
+      "tag": "0026_swarm_task_brief_preview",
+      "breakpoints": true
     }
   ]
 }

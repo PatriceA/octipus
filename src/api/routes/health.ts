@@ -1,9 +1,9 @@
 import { Elysia } from 'elysia';
+import { getUMI } from '@/channels/interface';
 import { getGateway } from '@/core/gateway';
 import { checkDbHealth } from '@/db/postgres';
 import { checkRedisHealth } from '@/db/redis';
 import { getHealthChecker } from '@/models/health-checker';
-import { getUMI } from '@/channels/interface';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
 

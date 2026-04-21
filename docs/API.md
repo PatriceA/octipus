@@ -149,6 +149,58 @@ Interactive documentation available at `http://localhost:3005/swagger`.
 | POST | `/api/chat` | Send a chat message (optional `expertId` for expert routing) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
+## Swarm
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/swarm/nodes?rootSessionId=<id>` | List swarm nodes in a session (tree rehydration after WS replay ages out). Session owner or admin. |
+| GET | `/api/swarm/nodes/:id` | Full node detail including `result` jsonb. |
+| POST | `/api/swarm/nodes/:id/cancel` | Cancel a node and all descendants. Runs `AgentManager.stop` on each plus a DB walk; returns `{ cancelled, nodeId, descendantIds, stoppedLive }`. |
+
+## Trajectories
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/trajectories?outcome=&from=&to=&limit=` | List trajectory runs (one per `handleMessage`). Filters by outcome (`success` / `failure` / `partial` / `cancelled`) and date range, capped at 1000. |
+| GET | `/api/trajectories/:id` | Single trajectory record. |
+
+## Skill Proposals
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/skills/proposals` | List pending skill proposals (detector-auto-generated). |
+| POST | `/api/skills/proposals/:id/approve` | Promote a proposal to a custom expert. Body: `{ name?, role?, systemPrompt? }`. |
+| POST | `/api/skills/proposals/:id/reject` | Reject and suppress for 90 days. |
+
+## Knowledge
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/knowledge/readiness` | Run the KB self-check (DB + embedding model + vector write probe). Returns 503 with `{ kb: { ready: false, reasons: [...] } }` if the KB is not ready. |
+| GET | `/api/knowledge` | Browse entries (lightweight, no vectors). |
+| GET | `/api/knowledge/stats` | Counts per source type. |
+| POST | `/api/knowledge/search` | Search (`mode`: `hybrid` / `semantic` / `keyword`). 503 if KB not ready. |
+| GET | `/api/knowledge/:id` | Full entry. |
+| DELETE | `/api/knowledge/:id` | Delete entry. |
+| POST | `/api/knowledge/cleanup` | Orphan / stale / short / duplicate cleanup with optional `dryRun`. |
+| GET | `/api/knowledge/cleanup-history` | Recent cleanup runs. |
+| POST | `/api/knowledge/index` | Index a file or directory. 503 if KB not ready. |
+
+## MCP
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/mcp/servers` | List MCP servers with connection status (admin). |
+| POST | `/api/mcp/servers` | Add a server (admin). |
+| POST | `/api/mcp/servers/:id/toggle` | Enable/disable. |
+| POST | `/api/mcp/servers/:id/connect` | Connect manually. |
+| POST | `/api/mcp/servers/:id/disconnect` | Disconnect. |
+| DELETE | `/api/mcp/servers/:id` | Remove. |
+| GET | `/api/mcp/tools` | All tools across connected servers. |
+| GET | `/api/mcp/servers/:id/tools` | Tools for one server. |
+| GET | `/api/mcp/circuit` | Circuit-breaker state for every server (admin). |
+| POST | `/api/mcp/circuit/:serverId/reset` | Force-close a server's breaker (admin). |
+
 ## Voice
 
 | Method | Endpoint | Description |

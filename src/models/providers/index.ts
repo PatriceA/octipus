@@ -1,30 +1,29 @@
-import { coreLogger } from '@/utils/logger';
-import type { ModelProvider } from './interface';
-import { LiteLLMProvider } from './litellm-provider';
-import { CLIProvider } from './cli-provider';
-import { OllamaProvider } from './ollama-provider';
-import { OpenAIProvider } from './openai-provider';
-import { AnthropicProvider } from './anthropic-provider';
-import { GeminiProvider } from './gemini-provider';
-import { DeepSeekProvider } from './deepseek-provider';
-import { OpenRouterProvider } from './openrouter-provider';
-import { VoyageProvider } from './voyage-provider';
+import { getConfig } from '@/config';
+import { coreLogger, modelLogger } from '@/utils/logger';
+import { CircuitOpenError, getCircuitBreakerRegistry } from '../circuit-breaker';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { transformMessagesForProvider } from '../message-transform';
-import { getConfig } from '@/config';
-import { modelLogger } from '@/utils/logger';
 import { getRateLimitManager, } from '../rate-limiter';
-import { getCircuitBreakerRegistry, CircuitOpenError } from '../circuit-breaker';
-import { supportsThinking, adjustMaxTokensForThinking, type ThinkingLevel } from '../thinking-budget';
+import { adjustMaxTokensForThinking, supportsThinking, type ThinkingLevel } from '../thinking-budget';
+import { AnthropicProvider } from './anthropic-provider';
+import { CLIProvider } from './cli-provider';
+import { DeepSeekProvider } from './deepseek-provider';
+import { GeminiProvider } from './gemini-provider';
+import type { ModelProvider } from './interface';
+import { LiteLLMProvider } from './litellm-provider';
+import { OllamaProvider } from './ollama-provider';
+import { OpenAIProvider } from './openai-provider';
+import { OpenRouterProvider } from './openrouter-provider';
+import { VoyageProvider } from './voyage-provider';
 
-export type { ModelProvider, ProviderType, ProviderHealthStatus, QuotaStatus } from './interface';
-export { LiteLLMProvider } from './litellm-provider';
+export { AnthropicProvider } from './anthropic-provider';
 export { CLIProvider } from './cli-provider';
+export { DeepSeekProvider } from './deepseek-provider';
+export { GeminiProvider } from './gemini-provider';
+export type { ModelProvider, ProviderHealthStatus, ProviderType, QuotaStatus } from './interface';
+export { LiteLLMProvider } from './litellm-provider';
 export { OllamaProvider } from './ollama-provider';
 export { OpenAIProvider } from './openai-provider';
-export { AnthropicProvider } from './anthropic-provider';
-export { GeminiProvider } from './gemini-provider';
-export { DeepSeekProvider } from './deepseek-provider';
 export { OpenRouterProvider } from './openrouter-provider';
 export { VoyageProvider } from './voyage-provider';
 
@@ -126,7 +125,12 @@ export class ProviderRouter {
         const dbProvider = this.getProviderByName(dbModel.provider);
         if (dbProvider) return dbProvider;
       }
-    } catch (err) { coreLogger.error({ err }, 'silent failure in index'); }
+    } catch (err) {
+      coreLogger.warn(
+        { err, modelName },
+        'Provider registry lookup failed — falling back to name-based heuristic',
+      );
+    }
     return this.getProvider(modelName);
   }
 

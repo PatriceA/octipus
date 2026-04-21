@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, ArrowRight } from 'lucide-react';
+import { ArrowRight, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 const inputClasses =

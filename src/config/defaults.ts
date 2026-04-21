@@ -81,6 +81,15 @@ export const defaultConfig: Partial<Config> = {
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',
   },
+  compaction: {
+    minSavingsRatio: 0.10,
+    growthMultiplier: 2.0,
+    hardCeiling: 1_000_000,
+  },
+  swarm: {
+    perUserSpawnsPerMinute: 30,
+    orphanReaperIntervalMs: 600_000,
+  },
 };
 
 /** Required env vars — DATABASE_URL and REDIS_URL only needed in external mode */

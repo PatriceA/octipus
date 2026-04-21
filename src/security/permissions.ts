@@ -1,20 +1,19 @@
-import { coreLogger } from '@/utils/logger';
-import { eq, and, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+import type { PermissionLevel } from '@/core/types';
 import { getDb } from '@/db/postgres';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import {
-  toolPermissions,
-  permissionRequests,
-  type ToolPermission,
-  type PermissionRequest,
   type NewPermissionRequest,
   type PermissionCondition,
+  type PermissionRequest,
+  permissionRequests,
+  type ToolPermission,
+  toolPermissions,
 } from '@/db/schema/permissions';
-import { auditRepository } from '@/db/repositories/audit-repository';
 import { getToolRegistry } from '@/tools/registry';
-import { securityLogger } from '@/utils/logger';
 import { generateId } from '@/utils/crypto';
+import { coreLogger, securityLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
-import type { PermissionLevel } from '@/core/types';
 
 const PERMISSION_REQUEST_TTL = 300000; // 5 minutes
 

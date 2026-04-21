@@ -3,15 +3,15 @@
  * and enqueues them for document processing (OCR, categorization, indexing).
  */
 
-import { resolve, join, extname } from 'path';
-import { mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
+import { existsSync } from 'fs';
+import { mkdir } from 'fs/promises';
+import { extname, join, resolve } from 'path';
 import { getConfig } from '@/config';
-import { documentRepository } from '@/db/repositories/document-repository';
 import { getDocumentQueue } from '@/core/documents/queue';
-import { channelLogger } from '@/utils/logger';
 import type { Attachment, UnifiedMessage } from '@/core/types';
+import { documentRepository } from '@/db/repositories/document-repository';
+import { channelLogger } from '@/utils/logger';
 
 /** MIME types worth processing for document extraction */
 const PROCESSABLE_MIMES = new Set([

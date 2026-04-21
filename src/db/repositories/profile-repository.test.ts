@@ -1,11 +1,138 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { randomUUID } from 'crypto';
+import {
+  isIntegration,
+  setupIntegrationDb,
+  teardownIntegration,
+  truncateTables,
+} from '@/test-helpers/integration';
+import type { ProfileRepository } from './profile-repository';
 
-// Note: ProfileRepository tests require a live database connection.
-// Integration tests are skipped; unit-level tests verify data shapes and logic.
+// Integration tests require a running Postgres (docker-compose.test.yml).
+// Run via:  bun run test:integration -- src/db/repositories/profile-repository.test.ts
 
-describe.skip('ProfileRepository (Integration)', () => {
-  test('placeholder — requires database', () => {
-    expect(true).toBe(true);
+describe.skipIf(!isIntegration)('ProfileRepository (Integration)', () => {
+  let repo: ProfileRepository;
+  const userId = randomUUID();
+
+  beforeAll(async () => {
+    await setupIntegrationDb();
+    const mod = await import('./profile-repository');
+    repo = new mod.ProfileRepository();
+  });
+
+  afterAll(async () => {
+    await teardownIntegration();
+  });
+
+  beforeEach(async () => {
+    await truncateTables(['profiles']);
+  });
+
+  test('create + findById', async () => {
+    const created = await repo.create({
+      name: 'Alice',
+      relationship: 'friend',
+      category: 'person',
+      userId,
+      isUserProfile: false,
+      facts: [],
+    });
+
+    expect(created.id).toBeDefined();
+    expect(created.name).toBe('Alice');
+
+    const found = await repo.findById(created.id);
+    expect(found?.name).toBe('Alice');
+  });
+
+  test('findByUserId returns only that user', async () => {
+    const otherUserId = randomUUID();
+    await repo.create({ name: 'Alice', category: 'person', userId });
+    await repo.create({ name: 'Charlie', category: 'person', userId });
+    await repo.create({ name: 'Bob', category: 'person', userId: otherUserId });
+
+    const mine = await repo.findByUserId(userId);
+    expect(mine.length).toBe(2);
+    expect(mine.map((p) => p.name).sort()).toEqual(['Alice', 'Charlie']);
+  });
+
+  test('findByName uses ILIKE (case-insensitive, partial)', async () => {
+    await repo.create({ name: 'Alice Smith', category: 'person', userId });
+    await repo.create({ name: 'Bob ALICE', category: 'person', userId });
+    await repo.create({ name: 'Charlie', category: 'person', userId });
+
+    const results = await repo.findByName(userId, 'alice');
+    expect(results.length).toBe(2);
+  });
+
+  test('findUserProfile returns the isUserProfile=true row', async () => {
+    await repo.create({ name: 'Friend', category: 'person', userId, isUserProfile: false });
+    await repo.create({ name: 'Me', category: 'person', userId, isUserProfile: true });
+
+    const me = await repo.findUserProfile(userId);
+    expect(me?.name).toBe('Me');
+  });
+
+  test('addFact appends, and replaces existing key', async () => {
+    const p = await repo.create({ name: 'Alice', category: 'person', userId, facts: [] });
+
+    await repo.addFact(p.id, { key: 'location', value: 'Munich' });
+    await repo.addFact(p.id, { key: 'birthday', value: 'March 15' });
+    const afterAdd = await repo.findById(p.id);
+    expect(afterAdd?.facts?.length).toBe(2);
+
+    // Replacing same key keeps count at 2
+    await repo.addFact(p.id, { key: 'location', value: 'Berlin' });
+    const afterReplace = await repo.findById(p.id);
+    expect(afterReplace?.facts?.length).toBe(2);
+    expect(afterReplace?.facts?.find((f) => f.key === 'location')?.value).toBe('Berlin');
+  });
+
+  test('removeFact drops the matching key', async () => {
+    const p = await repo.create({
+      name: 'Alice',
+      category: 'person',
+      userId,
+      facts: [
+        { key: 'location', value: 'Berlin' },
+        { key: 'likes', value: 'chocolate' },
+      ],
+    });
+
+    await repo.removeFact(p.id, 'location');
+    const after = await repo.findById(p.id);
+    expect(after?.facts?.length).toBe(1);
+    expect(after?.facts?.[0].key).toBe('likes');
+  });
+
+  test('search matches name or fact values', async () => {
+    await repo.create({
+      name: 'Alice',
+      category: 'person',
+      userId,
+      facts: [{ key: 'location', value: 'Berlin' }],
+    });
+    await repo.create({
+      name: 'Bob',
+      category: 'person',
+      userId,
+      facts: [{ key: 'location', value: 'Munich' }],
+    });
+
+    const byName = await repo.search(userId, 'alice');
+    expect(byName.length).toBe(1);
+    expect(byName[0].name).toBe('Alice');
+
+    const byFact = await repo.search(userId, 'berlin');
+    expect(byFact.length).toBe(1);
+    expect(byFact[0].name).toBe('Alice');
+  });
+
+  test('delete returns true for existing, false otherwise', async () => {
+    const p = await repo.create({ name: 'Alice', category: 'person', userId });
+    expect(await repo.delete(p.id)).toBe(true);
+    expect(await repo.delete(p.id)).toBe(false);
   });
 });
 

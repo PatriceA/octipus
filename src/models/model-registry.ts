@@ -1,10 +1,10 @@
-import { eq, and, asc, desc, sql } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
-import { modelConfig, type ModelConfigEntry, type NewModelConfigEntry } from '@/db/schema/models';
-import { RedisCache } from '@/db/redis';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
-import { modelLogger } from '@/utils/logger';
+import { getDb } from '@/db/postgres';
+import { RedisCache } from '@/db/redis';
+import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
+import { modelLogger } from '@/utils/logger';
 
 const CACHE_TTL = 300; // 5 minutes
 

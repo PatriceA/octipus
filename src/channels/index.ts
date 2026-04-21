@@ -1,18 +1,20 @@
-export { BaseChannel, UnifiedMessageInterface, getUMI, type ChannelConfig, type ChannelEvents } from './interface';
+export { BaseChannel, type ChannelConfig, type ChannelEvents, getUMI, UnifiedMessageInterface } from './interface';
+
 import { coreLogger } from '@/utils/logger';
-export { TelegramChannel, telegramChannel } from './telegram';
+
 export { SlackChannel, slackChannel } from './slack';
 export { TeamsChannel, teamsChannel } from './teams';
+export { TelegramChannel, telegramChannel } from './telegram';
+export { WebChatChannel, type WebChatConnection, type WebChatMessage, webChatChannel } from './webchat';
 export { WhatsAppChannel, whatsappChannel } from './whatsapp';
-export { WebChatChannel, webChatChannel, type WebChatConnection, type WebChatMessage } from './webchat';
 
-import { getUMI } from './interface';
 import { getConfig } from '@/config';
-import { channelLogger } from '@/utils/logger';
-import { getPermissionManager } from '@/security/permissions';
+import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { getPermissionManager } from '@/security/permissions';
+import { channelLogger } from '@/utils/logger';
 import { processChannelAttachments } from './attachment-handler';
-import type { UnifiedMessage, ChannelType, Attachment } from '@/core/types';
+import { getUMI } from './interface';
 
 /**
  * Summarize a response for external channels (Telegram, Slack, etc.).
@@ -554,22 +556,9 @@ export async function initializeChannels(): Promise<void> {
               }
               break;
             }
-            case 'team_started': {
-              const d = event.data as { members?: Array<{ role: string }> };
-              const roles = d.members?.map(m => m.role).join(', ') || 'multiple';
-              react('🧠');
-              umi.send(message.channelType, message.channelId, {
-                content: `Started a team of agents (${roles}).`,
-                replyTo: platformMessageId,
-              }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
-              break;
-            }
-            case 'team_completed': {
-              isTerminal = true;
-              stopTypingAndStall();
-              react('✅');
-              break;
-            }
+            // 'team_started' / 'team_completed' events were emitted by the
+            // deprecated spawn_team meta-tool; those have been removed in
+            // favor of spawn_child + parallelGroup. No handler needed.
             case 'approval_required': {
               react('⏳');
               const ad = event.data as { requestId?: string; summary?: string; question?: string; options?: string[] };

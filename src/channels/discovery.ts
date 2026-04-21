@@ -1,8 +1,8 @@
 import { readdirSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { BaseChannel } from './interface';
 import { channelLogger } from '@/utils/logger';
+import { BaseChannel } from './interface';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 

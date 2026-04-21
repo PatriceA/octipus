@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
-import type { ShellOperations, ShellExecResult } from './operations';
 import { coreLogger } from '@/utils/logger';
+import type { ShellExecResult, ShellOperations } from './operations';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 

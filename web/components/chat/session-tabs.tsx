@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
 import { Plus, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface SessionTab {

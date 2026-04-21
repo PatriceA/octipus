@@ -1,7 +1,8 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getMCPBridge } from '@/mcp/bridge';
 import type { MCPServer } from '@/core/types';
+import { getMCPBridge } from '@/mcp/bridge';
+import { getMcpCircuitBreaker } from '@/mcp/circuit-breaker';
 
 export const mcpRoutes = new Elysia({ prefix: '/mcp' })
   .use(apiContext)
@@ -237,4 +238,24 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
       params: t.Object({ id: t.String() }),
       detail: { tags: ['mcp'] },
     }
+  )
+
+  // Circuit breaker state for all MCP servers
+  .get('/circuit', async ({ user }) => {
+    if (!user?.isAdmin) return { error: 'Admin access required' };
+    return { circuits: getMcpCircuitBreaker().getAllStates() };
+  })
+
+  // Force-close a server's circuit breaker
+  .post(
+    '/circuit/:serverId/reset',
+    async ({ params, user, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+      getMcpCircuitBreaker().reset(params.serverId);
+      return { reset: true, state: getMcpCircuitBreaker().getState(params.serverId) };
+    },
+    { params: t.Object({ serverId: t.String() }), detail: { tags: ['mcp'] } },
   );

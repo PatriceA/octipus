@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Send, Mic, MicOff } from 'lucide-react';
+import { Mic, MicOff, Send } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 interface ChatInputProps {

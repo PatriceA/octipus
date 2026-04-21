@@ -1,16 +1,16 @@
 import {
+  type Activity,
+  ActivityTypes,
   CloudAdapter,
   ConfigurationBotFrameworkAuthentication,
-  type Activity,
-  type TurnContext,
-  ActivityTypes,
   MessageFactory,
+  type TurnContext,
 } from 'botbuilder';
-import { BaseChannel } from '../interface';
 import { getConfig } from '@/config';
+import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
-import type { ChannelType, ChannelResponse, Attachment } from '@/core/types';
+import { BaseChannel } from '../interface';
 
 export class TeamsChannel extends BaseChannel {
   readonly type: ChannelType = 'teams';

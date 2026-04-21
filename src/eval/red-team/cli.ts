@@ -12,8 +12,8 @@
  */
 
 import { parseArgs } from 'util';
-import { runRedTeam, redTeamPlugins, generateRedTeamSuite } from './index';
-import type { Severity, RedTeamTest } from './types';
+import { generateRedTeamSuite, redTeamPlugins, runRedTeam } from './index';
+import type { RedTeamTest, Severity } from './types';
 
 const PLUGIN_ALIASES: Record<string, string> = {
   injection: 'prompt-injection',

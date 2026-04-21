@@ -1,25 +1,25 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Loader2,
-  FolderOpen,
-  Plus,
-  Trash2,
-  XCircle,
-  RefreshCw,
-  Workflow,
   Cable,
   ChevronRight,
+  FolderOpen,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Workflow,
+  XCircle,
 } from 'lucide-react';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import { OAuthIntegrationsSection } from './oauth-section';
 import {
-  type SettingItem,
-  useSettingActions,
-  SettingsGroup,
   SecretsRedirectBanner,
+  type SettingItem,
+  SettingsGroup,
+  useSettingActions,
 } from './setting-field';
 
 interface WorkspaceConfig {

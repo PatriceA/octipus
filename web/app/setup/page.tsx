@@ -1,27 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  CheckCircle,
+  FolderOpen,
+  Loader2,
+  MessageSquare,
+  Server,
+  Sparkles,
+  UserPlus,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { AccountStep } from '@/components/setup/account-step';
+import { ChannelsStep } from '@/components/setup/channels-step';
+import { DefaultModelStep, LLMProviderStep } from '@/components/setup/llm-step';
+import { type StepDefinition, StepIndicator } from '@/components/setup/step-indicator';
+import { WorkspaceStep } from '@/components/setup/workspace-step';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import {
-  Loader2,
-  CheckCircle,
-  ArrowRight,
-  ArrowLeft,
-  Server,
-  Bot,
-  MessageSquare,
-  FolderOpen,
-  UserPlus,
-  Sparkles,
-} from 'lucide-react';
-
-import { StepIndicator, type StepDefinition } from '@/components/setup/step-indicator';
-import { LLMProviderStep, DefaultModelStep } from '@/components/setup/llm-step';
-import { ChannelsStep } from '@/components/setup/channels-step';
-import { WorkspaceStep } from '@/components/setup/workspace-step';
-import { AccountStep } from '@/components/setup/account-step';
 
 const STEPS: StepDefinition[] = [
   { id: 'welcome', label: 'Welcome', icon: Sparkles },

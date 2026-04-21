@@ -1,11 +1,12 @@
 import { spawn } from 'child_process';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { resolve } from 'path';
+import { getConfig } from '@/config';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
-import { getConfig } from '@/config';
-import { resolve } from 'path';
-import type { ShellOperations } from './operations';
+import { BaseTool, createParameterSchema } from '../base-tool';
+import { interpretExit } from './exit-code-semantics';
 import { LocalShellOperations } from './local-operations';
+import type { ShellOperations } from './operations';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
@@ -133,7 +134,13 @@ export class ShellTool extends BaseTool {
 
         const result = await this.ops.exec(command, cwd, { timeout, env, unsafe });
 
-        if (result.exitCode !== 0 || result.killed) {
+        // Classify the exit code so the agent isn't misled by non-zero codes
+        // that are semantically normal (grep=1 "no match", diff=1 "files differ").
+        const interpretation = result.exitCode !== null && !result.killed
+          ? interpretExit(command, result.exitCode)
+          : { outcome: 'error' as const };
+
+        if (interpretation.outcome === 'error') {
           toolLogger.warn({
             command: command.slice(0, 200),
             exitCode: result.exitCode,
@@ -143,7 +150,11 @@ export class ShellTool extends BaseTool {
           }, 'Shell command failed');
         }
 
-        return result;
+        return {
+          ...result,
+          outcome: interpretation.outcome,
+          ...(interpretation.semantic ? { semantic: interpretation.semantic } : {}),
+        };
       },
       { permissionAction: this.getPermissionAction(args => args.command as string) }
     );

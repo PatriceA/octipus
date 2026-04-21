@@ -1,187 +1,43 @@
 import type { ToolHandler } from '@/core/agent-worker';
+import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
+import type { AgentNode } from '@/core/swarm/types';
 import type { OrchestratorService } from './service';
-import { createHandoffContext, formatHandoff } from './handoff';
-import { coreLogger } from '@/utils/logger';
 
 /**
  * Create meta-tools for the orchestrator agent.
  * These are ToolHandlers that the orchestrator LLM can call via function calling.
  * Instead of filesystem/shell/git, these control the orchestration flow.
  *
- * A unified `delegationDone` guard prevents the orchestrator from spawning
- * multiple workers or pipelines.  After a delegation tool returns, the
- * orchestrator MUST respond with plain text — any further delegation calls
- * are rejected with an error telling the LLM to just answer.
+ * `spawn_child` is the primary delegation mechanism (see swarm-design.md);
+ * `create_pipeline` is a last-resort tool for user-requested staged handover.
+ * Pipelines are single-shot — once one is created, no further delegation is
+ * allowed in this turn.
  */
-export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[] {
-  // Unified guard: once ANY delegation tool (spawn_worker / spawn_team / create_pipeline)
-  // has been called, no further delegation is allowed.
-  let delegationDone = false;
+export function createMetaTools(
+  orchestrator: OrchestratorService,
+  options?: { parentNode?: AgentNode },
+): ToolHandler[] {
+  // Pipeline gate: once `create_pipeline` runs, further delegation is blocked.
+  // `spawn_child` is NOT gated — multiple swarm calls per turn are explicitly
+  // allowed (swarm-design.md §Spawn Mechanics).
+  let pipelineCreated = false;
 
-  const ALREADY_DELEGATED_MSG =
-    'A worker/team/pipeline has already completed for this request. ' +
+  const PIPELINE_ALREADY_CREATED_MSG =
+    'A pipeline has already been created for this request. ' +
     'You MUST now respond to the user with a plain-text summary of the result. ' +
     'Do NOT call any more tools. Just write your final answer.';
 
-  return [
-    {
-      name: 'spawn_worker',
-      final: true,
-      description:
-        'Spawn a specialist worker agent to perform a specific task. ' +
-        'The worker runs autonomously and returns its result. ' +
-        'You may only delegate ONCE per request (spawn_worker OR create_pipeline, not both). ' +
-        'After receiving the result, respond to the user directly with plain text.',
-      parameters: {
-        type: 'object',
-        properties: {
-          role: {
-            type: 'string',
-            enum: ['research', 'coding', 'review', 'qa', 'communication', 'design', 'devops', 'security', 'data', 'ai', 'finance', 'automation', 'pm', 'writing', 'general'],
-            description:
-              'The specialist role. research=web browsing/search, coding=filesystem/shell/git, review=code analysis, qa=browser testing, communication=email/calendar/contacts, design=UI/UX, devops=CI/CD/infra/containers/docker, security=security analysis, data=databases/data engineering, ai=ML/AI tasks, finance=financial analysis, automation=workflows, pm=project management, writing=documentation, general=basic tasks including real browser interaction',
-          },
-          task: {
-            type: 'string',
-            description: 'Clear description of what the worker should accomplish',
-          },
-          input: {
-            type: 'string',
-            description: 'Optional context, data, or previous results to pass to the worker',
-          },
-        },
-        required: ['role', 'task'],
-      },
-      execute: async (args, context) => {
-        if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
-        delegationDone = true;
-        const role = args.role as string;
-        const task = args.task as string;
-        const result = await orchestrator.spawnWorker(
-          role, task, (args.input as string) || '', context,
-        );
+  const tools: ToolHandler[] = [];
 
-        // Generate a brief structured handoff summary for the orchestrator
-        const resultStr = String(result || '');
-        coreLogger.info({
-          role, task: task.slice(0, 100),
-          resultLength: resultStr.length,
-          agentId: context.id,
-        }, 'Worker result received by orchestrator');
+  // Swarm: register `spawn_child` on the Orchestrator (depth 0). Only
+  // available when the service has built a parent node — it's a no-op hook
+  // in contexts where the swarm wiring hasn't been threaded (e.g. legacy
+  // unit tests that call createMetaTools directly).
+  if (options?.parentNode) {
+    tools.push(createSpawnChildTool(options.parentNode));
+  }
 
-        try {
-          const handoff = await createHandoffContext({
-            from: { role },
-            to: { role: 'orchestrator' },
-            originalRequest: task,
-            stageOutput: resultStr,
-          });
-
-          // Cap result size to prevent context overflow in orchestrator's next LLM call.
-          // The handoff summary contains the essential structured info.
-          const MAX_RESULT_FOR_ORCHESTRATOR = 6000;
-          let cappedResult = resultStr;
-          if (resultStr.length > MAX_RESULT_FOR_ORCHESTRATOR) {
-            coreLogger.info({
-              role, originalLength: resultStr.length,
-              cappedLength: MAX_RESULT_FOR_ORCHESTRATOR,
-              agentId: context.id,
-            }, 'Capping worker result for orchestrator context');
-            cappedResult = resultStr.slice(0, MAX_RESULT_FOR_ORCHESTRATOR)
-              + `\n\n[... result truncated from ${resultStr.length} chars — see handoff summary below for key details ...]`;
-          }
-
-          return `${cappedResult}\n\n---\n${formatHandoff(handoff)}`;
-        } catch {
-          // Still cap even without handoff
-          if (resultStr.length > 8000) {
-            return resultStr.slice(0, 8000) + `\n\n[... truncated from ${resultStr.length} chars]`;
-          }
-          return result;
-        }
-      },
-    },
-    {
-      name: 'spawn_team',
-      final: true,
-      description:
-        'Spawn multiple specialist workers in parallel to handle a task that needs simultaneous expertise. ' +
-        'Each member runs concurrently and results are merged into a structured report. ' +
-        'Use this ONLY when the task genuinely needs multiple specialists working at the same time. ' +
-        'You may only delegate ONCE per request (spawn_worker, spawn_team, OR create_pipeline). ' +
-        'After receiving the result, respond to the user directly with plain text.',
-      parameters: {
-        type: 'object',
-        properties: {
-          members: {
-            type: 'array',
-            description: 'Team members to spawn in parallel',
-            minItems: 2,
-            maxItems: 5,
-            items: {
-              type: 'object',
-              properties: {
-                role: {
-                  type: 'string',
-                  enum: ['research', 'coding', 'review', 'qa', 'communication', 'general'],
-                  description: 'The specialist role for this team member',
-                },
-                task: {
-                  type: 'string',
-                  description: 'Clear description of what this member should accomplish',
-                },
-                input: {
-                  type: 'string',
-                  description: 'Optional context or data to pass to this member',
-                },
-              },
-              required: ['role', 'task'],
-            },
-          },
-        },
-        required: ['members'],
-      },
-      execute: async (args, context) => {
-        if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
-        delegationDone = true;
-        const members = args.members as Array<{ role: string; task: string; input?: string }>;
-        const result = await orchestrator.spawnTeam(members, context);
-
-        const resultStr = String(result || '');
-        coreLogger.info({
-          members: members.map(m => m.role),
-          resultLength: resultStr.length,
-          agentId: context.id,
-        }, 'Team result received by orchestrator');
-
-        try {
-          const handoff = await createHandoffContext({
-            from: { role: members.map(m => m.role).join('+') },
-            to: { role: 'orchestrator' },
-            originalRequest: members.map(m => m.task).join('; '),
-            stageOutput: resultStr,
-          });
-
-          const MAX_RESULT_FOR_ORCHESTRATOR = 8000;
-          let cappedResult = resultStr;
-          if (resultStr.length > MAX_RESULT_FOR_ORCHESTRATOR) {
-            coreLogger.info({
-              originalLength: resultStr.length,
-              cappedLength: MAX_RESULT_FOR_ORCHESTRATOR,
-              agentId: context.id,
-            }, 'Capping team result for orchestrator context');
-            cappedResult = resultStr.slice(0, MAX_RESULT_FOR_ORCHESTRATOR)
-              + `\n\n[... result truncated from ${resultStr.length} chars — see handoff summary below ...]`;
-          }
-          return `${cappedResult}\n\n---\n${formatHandoff(handoff)}`;
-        } catch {
-          if (resultStr.length > 10000) {
-            return resultStr.slice(0, 10000) + `\n\n[... truncated from ${resultStr.length} chars]`;
-          }
-          return result;
-        }
-      },
-    },
+  tools.push(
     {
       name: 'create_pipeline',
       final: true,
@@ -189,11 +45,10 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         'LAST RESORT delegation. Create a multi-stage sequential pipeline with handover between stages. ' +
         'Use ONLY when the user EXPLICITLY asks for staged execution with handover ' +
         '(e.g., "first research, then implement, then review"). ' +
-        'DO NOT use for analysis/audit/review/quality-check requests — use spawn_team instead. ' +
+        'DO NOT use for analysis/audit/review/quality-check requests — use multiple spawn_child calls instead. ' +
         'DO NOT use because you think it will be "more thorough" — pipelines lose context between stages and are slow. ' +
-        'If multiple roles are needed in parallel without handover, use spawn_team. ' +
-        'If a single role can do it, use spawn_worker. ' +
-        'You may only delegate ONCE per request. ' +
+        'For any single- or parallel-role task, use spawn_child (multiple calls per turn allowed). ' +
+        'create_pipeline may only be invoked ONCE per request. ' +
         'IMPORTANT: You MUST call list_pipeline_templates first to get valid template names. Do NOT invent template names.',
       parameters: {
         type: 'object',
@@ -219,7 +74,7 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         required: ['title', 'templateName', 'description'],
       },
       execute: async (args, context) => {
-        if (delegationDone) throw new Error(ALREADY_DELEGATED_MSG);
+        if (pipelineCreated) throw new Error(PIPELINE_ALREADY_CREATED_MSG);
 
         // Validate template exists before creating pipeline
         const templateName = args.templateName as string;
@@ -233,11 +88,11 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         if (!match) {
           return `Template "${templateName}" not found. Available templates: ${templateNames.join(', ') || 'none'}. ` +
             (templateNames.length === 0
-              ? 'No templates exist. Use spawn_worker instead, or ask the user to create a pipeline template.'
-              : 'Use one of the listed templates, or use spawn_worker for simpler tasks.');
+              ? 'No templates exist. Use spawn_child for any delegation needs, or ask the user to create a pipeline template.'
+              : 'Use one of the listed templates, or use spawn_child for simpler tasks.');
         }
 
-        delegationDone = true;
+        pipelineCreated = true;
         return orchestrator.createAndRunPipeline(
           args.title as string,
           match.name,
@@ -321,17 +176,21 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
     {
       name: 'send_status_update',
       description:
-        'Send a progress update to the user. Use this to keep the user informed about long-running tasks.',
+        'Send an OPTIONAL progress update to the user during a long-running task. ' +
+        'DO NOT use this to deliver the final answer — the final answer is your plain-text ' +
+        'reply in the next LLM turn after all tool calls return. ' +
+        'NEVER call send_status_update as your terminal action: after a child returns, respond directly. ' +
+        'This tool is for mid-flight heartbeat messages only, and must NOT be called more than 2 times per request.',
       parameters: {
         type: 'object',
         properties: {
           message: {
             type: 'string',
-            description: 'Status message to display to the user',
+            description: 'Short progress message (e.g., "Spawning research agent…", "Compiling results…"). Not the final answer.',
           },
           stage: {
             type: 'string',
-            description: 'Current stage name (e.g., "Research", "Implementation")',
+            description: 'Current stage name (e.g., "Research", "Synthesis")',
           },
           progress: {
             type: 'number',
@@ -341,13 +200,24 @@ export function createMetaTools(orchestrator: OrchestratorService): ToolHandler[
         required: ['message'],
       },
       execute: async (args, context) => {
+        const message = args.message as string;
+        // Safety net: some LLMs use `send_status_update` as their terminal
+        // action instead of returning plain text. Stash the last message on
+        // the agent context — if the worker ends with empty content, the
+        // orchestrator service falls back to this so the user sees SOMETHING
+        // instead of a blank reply.
+        const meta = context.metadata as Record<string, unknown>;
+        meta.lastStatusMessage = message;
+        if (typeof args.progress === 'number') meta.lastStatusProgress = args.progress;
         return orchestrator.sendStatusUpdate(
-          args.message as string,
+          message,
           context,
           args.stage as string | undefined,
           args.progress as number | undefined,
         );
       },
     },
-  ];
+  );
+
+  return tools;
 }

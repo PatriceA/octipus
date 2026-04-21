@@ -1,7 +1,7 @@
-import { getVault } from './vault';
 import { auditRepository } from '@/db/repositories/audit-repository';
-import { securityLogger } from '@/utils/logger';
 import { SECRET_PLACEHOLDER_PATTERN } from '@/db/schema/vault';
+import { securityLogger } from '@/utils/logger';
+import { getVault } from './vault';
 
 export interface InjectionContext {
   userId: string;

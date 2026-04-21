@@ -1,12 +1,12 @@
-import { readFile, writeFile, readdir, stat, mkdir, rm, copyFile, rename } from 'fs/promises';
-import { join, resolve, dirname, relative, basename, extname } from 'path';
 import { existsSync, realpathSync } from 'fs';
-import { BaseTool, createParameterSchema } from '../base-tool';
-import type { ToolManifest, AgentContext } from '@/core/types';
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
+import { basename, dirname, extname, join, relative, resolve } from 'path';
 import { getConfig } from '@/config';
-import { safeRegExp } from '@/utils/sanitize';
-import { coreLogger } from '@/utils/logger';
+import type { AgentContext, ToolManifest } from '@/core/types';
 import { withFileMutationQueue } from '@/utils/file-mutation-queue';
+import { coreLogger } from '@/utils/logger';
+import { safeRegExp } from '@/utils/sanitize';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 function getWorkspacePaths(): { root: string; additional: string[] } {
   try {

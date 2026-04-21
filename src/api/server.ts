@@ -1,51 +1,53 @@
-import { Elysia, } from 'elysia';
 import { cors } from '@elysiajs/cors';
 import { swagger } from '@elysiajs/swagger';
+import { eq } from 'drizzle-orm';
+import { Elysia, } from 'elysia';
 import { getConfig } from '@/config';
-import { apiLogger } from '@/utils/logger';
-import { getSessionManager } from '@/security/auth/session';
-import { secureCompare } from '@/utils/crypto';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
-import { eq } from 'drizzle-orm';
-
-// Import routes
-import { authRoutes } from './routes/auth';
-import { agentRoutes } from './routes/agents';
-import { sessionRoutes } from './routes/sessions';
-import { modelRoutes } from './routes/models';
-import { hookRoutes } from './routes/hooks';
-import { healthRoutes } from './routes/health';
-import { vaultRoutes } from './routes/vault';
-import { chatRoutes } from './routes/chat';
-import { pipelineRoutes } from './routes/pipelines';
-import { webhookRoutes } from './routes/webhooks';
-import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
-import { teamsWebhookRoutes } from './routes/teams-webhook';
-import { webhookIncomingRoutes } from './routes/webhook-incoming';
-import { mcpRoutes } from './routes/mcp';
-import { toolRoutes } from './routes/tools';
-import { voiceRoutes } from './routes/voice';
-import { notificationRoutes } from './routes/notifications';
-import { workspaceRoutes } from './routes/workspace';
-import { oauthRoutes } from './routes/oauth';
-import { settingsRoutes } from './routes/settings';
-import { expertRoutes } from './routes/experts';
-import { skillRoutes } from './routes/skills';
-import { skillTopicAssignmentRoutes } from './routes/skill-topic-assignments';
-import { recurringTaskRoutes } from './routes/recurring-tasks';
-import { evalRoutes } from './routes/eval';
-import { evaluationRoutes } from './routes/evaluations';
-import { documentRoutes } from './routes/documents';
-import { knowledgeRoutes } from './routes/knowledge';
-import { pluginRoutes } from './routes/plugins';
-import { searchRoutes } from './routes/search';
-import { deviceRoutes } from './routes/devices';
+import { getSessionManager } from '@/security/auth/session';
+import { secureCompare } from '@/utils/crypto';
+import { apiLogger } from '@/utils/logger';
+import { setupGatewayWebSocket } from './gateway-ws';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
-import { setupWebSocket } from './websocket';
-import { setupGatewayWebSocket } from './gateway-ws';
+import { agentRoutes } from './routes/agents';
+// Import routes
+import { authRoutes } from './routes/auth';
+import { chatRoutes } from './routes/chat';
+import { deviceRoutes } from './routes/devices';
+import { documentRoutes } from './routes/documents';
+import { evalRoutes } from './routes/eval';
+import { evaluationRoutes } from './routes/evaluations';
+import { expertRoutes } from './routes/experts';
 import { gatewayRoutes } from './routes/gateway';
+import { healthRoutes } from './routes/health';
+import { hookRoutes } from './routes/hooks';
+import { knowledgeRoutes } from './routes/knowledge';
+import { mcpRoutes } from './routes/mcp';
+import { modelRoutes } from './routes/models';
+import { notificationRoutes } from './routes/notifications';
+import { oauthRoutes } from './routes/oauth';
+import { pipelineRoutes } from './routes/pipelines';
+import { pluginRoutes } from './routes/plugins';
+import { recurringTaskRoutes } from './routes/recurring-tasks';
+import { searchRoutes } from './routes/search';
+import { sessionRoutes } from './routes/sessions';
+import { settingsRoutes } from './routes/settings';
+import { skillProposalRoutes } from './routes/skill-proposals';
+import { skillTopicAssignmentRoutes } from './routes/skill-topic-assignments';
+import { skillRoutes } from './routes/skills';
+import { swarmRoutes } from './routes/swarm';
+import { teamsWebhookRoutes } from './routes/teams-webhook';
+import { toolRoutes } from './routes/tools';
+import { trajectoryRoutes } from './routes/trajectories';
+import { vaultRoutes } from './routes/vault';
+import { voiceRoutes } from './routes/voice';
+import { webhookIncomingRoutes } from './routes/webhook-incoming';
+import { webhookRoutes } from './routes/webhooks';
+import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
+import { workspaceRoutes } from './routes/workspace';
+import { setupWebSocket } from './websocket';
 
 export function createServer() {
   const config = getConfig();
@@ -199,6 +201,9 @@ export function createServer() {
         .use(searchRoutes)
         .use(deviceRoutes)
         .use(gatewayRoutes)
+        .use(trajectoryRoutes)
+        .use(skillProposalRoutes)
+        .use(swarmRoutes)
     );
 
   // Webhooks — unauthenticated, outside /api group

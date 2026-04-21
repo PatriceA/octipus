@@ -1,9 +1,9 @@
-export { loadPlugins, getLoadedPlugins, getLoadedPlugin, reloadPlugin } from './loader';
+export { getLoadedPlugin, getLoadedPlugins, loadPlugins, reloadPlugin } from './loader';
 export { PluginTool } from './plugin-tool';
 export type {
-  PluginManifest,
-  PluginToolDef,
-  PluginContext,
-  PluginModule,
   LoadedPlugin,
+  PluginContext,
+  PluginManifest,
+  PluginModule,
+  PluginToolDef,
 } from './types';

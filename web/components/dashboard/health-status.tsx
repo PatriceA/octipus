@@ -1,7 +1,7 @@
 'use client';
 
-import { RefreshCw, Database, Server, Layers, Cpu, Brain, Sparkles, Zap } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Brain, Cpu, Database, Layers, RefreshCw, Server, Sparkles, Zap } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface ServiceHealth {
   status: string;

@@ -12,13 +12,13 @@
  */
 
 import { parseArgs } from 'util';
-import { getLiteLLMClient } from '../litellm-client';
-import { getProviderRouter } from '../providers';
-import { getModelRegistry } from '../model-registry';
-import type { ModelProvider } from '../providers/interface';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { runConformanceTests, getTestCaseNames } from './conformance';
+import { getLiteLLMClient } from '../litellm-client';
+import { getModelRegistry } from '../model-registry';
+import { getProviderRouter } from '../providers';
+import type { ModelProvider } from '../providers/interface';
 import type { ConformanceReport, ConformanceResult } from './conformance';
+import { getTestCaseNames, runConformanceTests } from './conformance';
 
 // ── Arg parsing ───────────────────────────────────────────────
 

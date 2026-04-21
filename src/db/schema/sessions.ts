@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, integer, pgEnum } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 export const sessionStatusEnum = pgEnum('session_status', ['active', 'paused', 'completed', 'failed']);
@@ -30,6 +30,30 @@ export interface PlanningState {
   createdAt: string;
 }
 
+/**
+ * Per-session compaction effectiveness state.
+ *
+ * The anti-thrashing guard uses this to avoid looping on compaction passes
+ * that fail to meaningfully reduce token usage. See
+ * `src/core/orchestrator/session-compaction.ts` for the decision logic.
+ */
+export interface CompactionState {
+  /** ISO timestamp of the most recent compaction pass (effective or not). */
+  lastCompactedAt?: string;
+  /** Savings ratio of the most recent pass: (before - after) / before. */
+  lastSavingsRatio?: number;
+  /** Number of consecutive ineffective passes (< minSavingsRatio). */
+  ineffectivePasses?: number;
+  /** Token count before the most recent compaction pass. */
+  lastCompactTokens?: number;
+  /**
+   * When true, further compaction attempts are suppressed until the session
+   * grows past `lastCompactTokens * growthMultiplier` or hits `hardCeiling`.
+   * Cleared on an effective pass (>= 15% savings).
+   */
+  compactionIneffective?: boolean;
+}
+
 export interface SessionContext {
   workspaceId?: string;
   currentTopic?: string;
@@ -43,6 +67,8 @@ export interface SessionContext {
    * boundary when building system-prompt history.
    */
   clearedAt?: string;
+  /** Anti-thrashing compaction guard state. */
+  compactionState?: CompactionState;
   // Development Mode
   devMode?: boolean;
   projectPath?: string;

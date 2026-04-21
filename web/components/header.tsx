@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, Search, User, LogOut, Settings, KeyRound, MessageSquare, Webhook, Cpu, BookOpen, Brain, Wrench, Loader2 } from 'lucide-react';
+import { Bell, BookOpen, Brain, Cpu, KeyRound, Loader2, LogOut, MessageSquare, Search, Settings, User, Webhook, Wrench } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -254,6 +254,7 @@ export function Header() {
         <div className="relative" ref={notifRef}>
           <button
             onClick={() => { setIsNotifOpen(!isNotifOpen); if (!isNotifOpen) fetchNotifications(); }}
+            aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
             className="p-2 text-on-surface-variant hover:bg-[#1a1a1a] rounded-full transition-colors cursor-pointer relative"
           >
             <Bell className="w-5 h-5" />

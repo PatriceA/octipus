@@ -1,7 +1,7 @@
-import { eq, or, inArray, and } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { getDb } from '../postgres';
-import { skills, type Skill } from '../schema/skills';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
+import { type Skill, skills } from '../schema/skills';
 
 /**
  * Repository for skills + skill-topic assignments. The high-level

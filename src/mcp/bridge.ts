@@ -1,14 +1,15 @@
 import { EventEmitter } from 'events';
-import { MCPProtocol, MCPMethods, type MCPToolDefinition, type MCPResource, type MCPPrompt, type MCPCapabilities } from './protocol';
-import type { MCPTransport } from './transports/interface';
-import { StdioTransport } from './transports/stdio';
-import { SSETransport } from './transports/sse';
-import { StreamableHTTPTransport } from './transports/streamable-http';
 import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
-import { coreLogger } from '@/utils/logger';
-import type { MCPServer, MCPTool } from '@/core/types';
 import type { ToolHandler } from '@/core/agent-worker';
+import type { MCPServer, MCPTool } from '@/core/types';
+import { coreLogger } from '@/utils/logger';
+import { getMcpCircuitBreaker } from './circuit-breaker';
+import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
+import type { MCPTransport } from './transports/interface';
+import { SSETransport } from './transports/sse';
+import { StdioTransport } from './transports/stdio';
+import { StreamableHTTPTransport } from './transports/streamable-http';
 
 export interface MCPServerConnection {
   id: string;
@@ -261,8 +262,15 @@ export class MCPBridge extends EventEmitter {
    * Call a tool on an MCP server
    */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
+    const breaker = getMcpCircuitBreaker();
+    if (!breaker.canCall(serverId)) {
+      const st = breaker.getState(serverId);
+      throw new Error(`MCP server circuit open: ${serverId} (cooldown ${st.cooldownRemainingMs}ms remaining)`);
+    }
+
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
+      breaker.recordFailure(serverId);
       throw new Error(`MCP server not connected: ${serverId}`);
     }
 
@@ -270,12 +278,17 @@ export class MCPBridge extends EventEmitter {
       connection.transport.send(message);
     };
 
-    const result = await connection.protocol.sendRequest(send, MCPMethods.CallTool, {
-      name: toolName,
-      arguments: args,
-    });
-
-    return result;
+    try {
+      const result = await connection.protocol.sendRequest(send, MCPMethods.CallTool, {
+        name: toolName,
+        arguments: args,
+      });
+      breaker.recordSuccess(serverId);
+      return result;
+    } catch (err) {
+      breaker.recordFailure(serverId);
+      throw err;
+    }
   }
 
   /**

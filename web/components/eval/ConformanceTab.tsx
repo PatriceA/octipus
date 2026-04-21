@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Play, RefreshCw, CheckCircle, XCircle, Minus, ChevronDown, ChevronRight, Clock } from 'lucide-react';
+import { CheckCircle, ChevronDown, ChevronRight, Clock, Minus, Play, RefreshCw, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Card, CardContent } from '@/components/ui/card';
 import { ScoreBar } from './ScoreBar';
 
 interface ConformanceResult {

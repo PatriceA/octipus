@@ -1,20 +1,21 @@
 'use client';
 
-import { useState, useEffect, } from 'react';
 import {
   Activity,
-  Coins,
-  Clock,
   Bot,
-  Users,
+  CheckCircle,
   ChevronDown,
   ChevronUp,
+  Clock,
+  Coins,
+  Layers,
   Loader2,
-  CheckCircle,
-  XCircle,
-  Wrench,
   Settings2,
+  Wrench,
+  XCircle,
 } from 'lucide-react';
+import { useEffect, useState, } from 'react';
+import SwarmTree, { type SwarmTreeEvent } from '@/components/swarm-tree';
 import { cn } from '@/lib/utils';
 
 // --- Types ---
@@ -54,6 +55,13 @@ interface SidePanelProps {
   selectedPresetId: string | null;
   presets: Array<{ id: string; name: string; description?: string; role: string }>;
   onPresetChange: (presetId: string | null) => void;
+  /** Swarm tree lives under Session Stats as the third section. */
+  swarmSessionId: string | null;
+  latestSwarmEvent?: SwarmTreeEvent | null;
+  /** Cumulative wall-clock across all completed swarm nodes (ms). */
+  swarmDurationMs?: number;
+  /** Called after SwarmTree hydrates from REST with aggregate totals. */
+  onSwarmHydratedTotals?: (totals: { tokens: number; durationMs: number }) => void;
 }
 
 // --- Constants ---
@@ -181,7 +189,7 @@ function CollapsibleSection({
   );
 }
 
-function AgentCard({ agent }: { agent: TrackedAgent }) {
+function _AgentCard({ agent }: { agent: TrackedAgent }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
   return (
@@ -261,6 +269,10 @@ export default function SidePanel({
   selectedPresetId,
   presets,
   onPresetChange,
+  swarmSessionId,
+  latestSwarmEvent,
+  swarmDurationMs = 0,
+  onSwarmHydratedTotals,
 }: SidePanelProps) {
   const agentArray = Array.from(trackedAgents.values()).filter((a) => a.role !== 'orchestrator');
 
@@ -276,7 +288,7 @@ export default function SidePanel({
   teams.forEach((team) => team.memberIds.forEach((id) => teamMemberIds.add(id)));
 
   // Standalone agents (not in any team)
-  const standaloneAgents = sortedAgents.filter((a) => !teamMemberIds.has(a.id));
+  const _standaloneAgents = sortedAgents.filter((a) => !teamMemberIds.has(a.id));
 
   const isUnlimited = maxTokenBudget === 0;
   const tokenPercent = isUnlimited ? 0 : Math.min((totalTokens / maxTokenBudget) * 100, 100);
@@ -401,88 +413,28 @@ export default function SidePanel({
             </span>
           </div>
 
-          {/* Session duration */}
-          {firstStartTime && (
+          {/* Swarm duration — sum of every completed swarm node's wall-clock */}
+          {swarmDurationMs > 0 && (
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1 text-xs text-on-surface-variant">
                 <Clock className="h-3 w-3" />
-                Session Duration
+                Swarm Duration
               </span>
-              <ElapsedTimer
-                startTime={firstStartTime}
-                endTime={
-                  runningAgents.length === 0 && agentArray.length > 0
-                    ? Math.max(...agentArray.map((a) => a.endTime ?? a.startTime))
-                    : undefined
-                }
-              />
+              <span className="tabular-nums text-xs text-on-surface-variant">
+                {formatDuration(swarmDurationMs)}
+              </span>
             </div>
           )}
         </div>
       </CollapsibleSection>
 
-      {/* Section 3: Agent Activity */}
-      <CollapsibleSection title="Agent Activity" icon={Bot} defaultOpen={true}>
-        <div className="max-h-[60vh] space-y-2 overflow-y-auto">
-          {sortedAgents.length === 0 && (
-            <p className="py-4 text-center text-xs text-on-surface-variant">
-              No agent activity yet
-            </p>
-          )}
-
-          {/* Team groups */}
-          {Array.from(teams.values()).map((team) => {
-            const members = team.memberIds
-              .map((id) => trackedAgents.get(id))
-              .filter((a): a is TrackedAgent => a != null && a.role !== 'orchestrator')
-              .sort((a, b) => {
-                if (a.status === 'running' && b.status !== 'running') return -1;
-                if (a.status !== 'running' && b.status === 'running') return 1;
-                return 0;
-              });
-
-            if (members.length === 0) return null;
-
-            return (
-              <div
-                key={team.id}
-                className="rounded-lg border border-outline-variant/10 bg-surface-container-high/50 p-2"
-              >
-                <div className="mb-1.5 flex items-center gap-1.5">
-                  <Users className="h-3 w-3 text-on-surface-variant" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant">
-                    Team
-                  </span>
-                  <span
-                    className={cn(
-                      'ml-auto inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none',
-                      team.status === 'running'
-                        ? 'bg-blue-900/40 text-blue-300'
-                        : 'bg-green-900/40 text-green-300',
-                    )}
-                  >
-                    {team.status}
-                  </span>
-                  {team.durationMs != null && (
-                    <span className="text-[10px] tabular-nums text-on-surface-variant">
-                      {formatDuration(team.durationMs)}
-                    </span>
-                  )}
-                </div>
-                <div className="space-y-1.5">
-                  {members.map((agent) => (
-                    <AgentCard key={agent.id} agent={agent} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Standalone agents */}
-          {standaloneAgents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
-          ))}
-        </div>
+      {/* Section 3: Swarm Tree (replaces the old Agent Activity section) */}
+      <CollapsibleSection title="Swarm" icon={Layers} defaultOpen={true}>
+        <SwarmTree
+          sessionId={swarmSessionId}
+          latestEvent={latestSwarmEvent}
+          onHydratedTotals={onSwarmHydratedTotals}
+        />
       </CollapsibleSection>
     </div>
   );

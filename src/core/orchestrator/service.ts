@@ -1,34 +1,38 @@
 import { resolve } from 'path';
-import { getAgentManager } from '@/core/agent-manager';
-import type { AgentContext } from '@/core/types';
 import { getConfig } from '@/config';
+import { getAgentManager } from '@/core/agent-manager';
+import { handleCommand } from '@/core/commands';
+import { swarmNodeRepository } from '@/core/swarm/node-repository';
+import { taskFingerprint } from '@/core/swarm/spawner';
+import { type AgentNode, LEVEL_DEFAULT } from '@/core/swarm/types';
+import { TrajectoryRecorder } from '@/core/trajectories/recorder';
+import type { AgentContext } from '@/core/types';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import type { SessionContext } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { sessionRepository } from '@/db/repositories/session-repository';
-import { messageRepository } from '@/db/repositories/message-repository';
+import type { ApprovalRequest } from './approval-manager';
+import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
-import { guardInput, buildSecurityReminder } from './input-guard';
+import { directResponse } from './direct-response';
+import { buildSecurityReminder, guardInput } from './input-guard';
+import { createMetaTools } from './meta-tools';
+import { ModelSelector } from './model-selector';
 import { guardOutput } from './output-guard';
 import { filterPII } from './pii-filter';
-import { createMetaTools } from './meta-tools';
 import { getRoleConfig } from './roles';
-import { ApprovalManager } from './approval-manager';
-import { ModelSelector } from './model-selector';
-import { resolveSession } from './session-resolver';
-import { directResponse } from './direct-response';
 import { maybeCompactSession } from './session-compaction';
-import { handleExpertMessage, spawnWorker, spawnTeam } from './worker-spawner';
-import { handleCommand } from '@/core/commands';
-import type { ApprovalRequest } from './approval-manager';
+import { resolveSession } from './session-resolver';
 import type { MessageClassification, ResponseMetadata } from './types';
-import type { SessionContext } from '@/db/schema/sessions';
+import { handleExpertMessage, spawnWorker } from './worker-spawner';
 
 interface OrchestratorEventHandler {
   (event: OrchestratorEvent): void;
 }
 
 export interface OrchestratorEvent {
-  type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event' | 'team_started' | 'team_completed';
+  type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
   sessionId: string;
   userId?: string;
   data: unknown;
@@ -84,6 +88,9 @@ export class OrchestratorService {
     channel?: string,
     expertId?: string,
   ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
+    // Trajectory recorder — observes this run for later eval/fine-tuning.
+    // Constructed early so the sessionId below can overwrite it.
+    let trajectory: TrajectoryRecorder | null = null;
     try {
       const registry = getModelRegistry();
       const defaultModel = await registry.getDefaultModel();
@@ -98,6 +105,14 @@ export class OrchestratorService {
       }
 
       const resolvedSessionId = await resolveSession(sessionId, userId, channel || 'api');
+
+      trajectory = new TrajectoryRecorder({
+        rootSessionId: resolvedSessionId,
+        userId,
+        userMessage: message,
+        channel,
+        expertId,
+      });
 
       // Auto-title sessions with generic names
       const session = await sessionRepository.findById(resolvedSessionId);
@@ -313,6 +328,13 @@ export class OrchestratorService {
         coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
       );
 
+      if (trajectory) {
+        trajectory.setClassification(classification, expertId);
+        trajectory.finalize({ finalResponse, outcome: 'success' }).catch(err =>
+          coreLogger.error({ err }, 'Trajectory finalize failed'),
+        );
+      }
+
       return {
         response: finalResponse,
         sessionId: resolvedSessionId,
@@ -322,6 +344,13 @@ export class OrchestratorService {
       };
     } catch (error) {
       coreLogger.error({ error, sessionId, channel }, 'handleMessage failed');
+      if (trajectory) {
+        trajectory.finalize({
+          finalResponse: '',
+          outcome: 'failure',
+          failureReason: (error as Error).message,
+        }).catch(err => coreLogger.error({ err }, 'Trajectory finalize (failure path) failed'));
+      }
       return {
         response: `I encountered an error processing your message: ${(error as Error).message}`,
         classification: { type: 'casual', confidence: 0 },
@@ -343,7 +372,51 @@ export class OrchestratorService {
     const modelName = await this.modelSelector.selectForOrchestration();
 
     const orchestratorConfig = getRoleConfig('orchestrator');
-    const metaTools = createMetaTools(this);
+
+    // Build the swarm root node AgentNode up front so meta-tools can bind to
+    // it. The actual DB row is written once we know the agentId (post-spawn).
+    // The orchestrator's allowed tool ids is the superset of its role's tools
+    // plus the meta-tools it owns.
+    const orchestratorAbortController = new AbortController();
+    const orchestratorAllowedToolIds = new Set<string>();
+    // Meta-tool ids that the orchestrator owns by construction.
+    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update']) {
+      orchestratorAllowedToolIds.add(name);
+    }
+    // Role-defined tool ids (if any): orchestrator role uses meta-tools only.
+    for (const id of orchestratorConfig.toolIds) orchestratorAllowedToolIds.add(id);
+    // Superset: orchestrator is the root of every swarm branch and must be
+    // able to grant any specialist role's tools to its children via
+    // intersection. Without this, e.g. the `general` role's `profiles` tool
+    // would be stripped out because the orchestrator itself never lists it.
+    const { ROLE_CONFIGS } = await import('./roles');
+    for (const cfg of Object.values(ROLE_CONFIGS)) {
+      for (const id of cfg.toolIds) orchestratorAllowedToolIds.add(id);
+    }
+
+    // Parent AgentNode for the swarm. `id` is a placeholder — overwritten
+    // once we know the real agentId post-spawn. `spawn_child` closes over
+    // `parentNode` by reference, so the mutation is observed.
+    const parentNode: AgentNode = {
+      id: '__pending__',
+      rootSessionId: sessionId,
+      parentNodeId: null,
+      kind: 'orchestrator',
+      depth: 0,
+      role: 'orchestrator',
+      topicPath: 'root',
+      model: modelName,
+      budget: {
+        tokens: { cap: LEVEL_DEFAULT[0].tokens, used: 0 },
+        wallClockMs: { cap: LEVEL_DEFAULT[0].wallMs, startedAt: Date.now() },
+        fanOut: { cap: LEVEL_DEFAULT[0].fanOut, used: 0 },
+        depth: 0,
+      },
+      allowedToolIds: orchestratorAllowedToolIds,
+      signal: orchestratorAbortController.signal,
+    };
+
+    const metaTools = createMetaTools(this, { parentNode });
 
     let systemPrompt = orchestratorConfig.systemPromptTemplate;
     if (guardFlags.length > 0) {
@@ -376,7 +449,7 @@ export class OrchestratorService {
     }
 
     if (classification.topic) {
-      systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for choosing the worker role. Prefer spawn_worker for most tasks — only use create_pipeline when the user explicitly asks for a multi-stage workflow (e.g., "research then implement then review").`;
+      systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for the child role when calling spawn_child. Prefer spawn_child (single or multiple calls per turn) for nearly all tasks — only use create_pipeline when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review").`;
     }
     if (classification.type === 'ambiguous') {
       systemPrompt += `\n\nThe user's message could not be confidently classified. Analyze it yourself and decide the best course of action.`;
@@ -446,9 +519,73 @@ export class OrchestratorService {
       tools: metaTools,
       maxIterations: 25,
       timeout: orchestratorTimeout,
+      // Seed the user's raw request so the spawner can forward it verbatim
+      // to every child. Without this, children only see the orchestrator's
+      // paraphrased taskBrief and drift into hallucinations.
+      contextMetadata: { originalRequest: message },
     });
 
     const agentId = worker.getContext().id;
+
+    // Swarm: promote parent node id + persist root swarm_node row.
+    parentNode.id = agentId;
+    try {
+      const rootBriefHash = taskFingerprint({
+        originalUserRequest: message,
+        topicPath: 'root',
+        parentSummary: '',
+        taskBrief: message,
+        constraints: [],
+        inputArtifacts: [],
+        expectedOutput: { shape: 'summary', maxTokens: 2000 },
+        forbidden: [],
+      });
+      await swarmNodeRepository.create({
+        id: agentId,
+        rootSessionId: sessionId,
+        parentNodeId: null,
+        depth: 0,
+        kind: 'orchestrator',
+        role: 'orchestrator',
+        expertId: null,
+        topicPath: 'root',
+        subtopic: null,
+        model: modelName,
+        status: 'running',
+        tokenCap: parentNode.budget.tokens.cap,
+        wallClockCapMs: parentNode.budget.wallClockMs.cap,
+        fanOutCap: parentNode.budget.fanOut.cap,
+        briefHash: rootBriefHash,
+        taskBriefPreview: message.slice(0, 4000),
+      });
+    } catch (err) {
+      coreLogger.debug({ err, agentId }, 'root swarm_node persist skipped');
+    }
+
+    // Phase 1 side-effect bookkeeping: emit root spawn so UI sidebar lists it.
+    try {
+      const { getGatewayHub } = await import('@/core/gateway/hub');
+      getGatewayHub().publishEvent({
+        type: 'swarm.node_spawned',
+        source: `swarm:${agentId}`,
+        userId,
+        sessionId,
+        payload: {
+          rootSessionId: sessionId,
+          nodeId: agentId,
+          parentNodeId: null,
+          kind: 'orchestrator',
+          depth: 0,
+          topicPath: 'root',
+          role: 'orchestrator',
+          model: modelName,
+          budgets: parentNode.budget,
+          taskBriefPreview: message.slice(0, 200),
+        },
+      });
+    } catch (err) {
+      coreLogger.debug({ err }, 'swarm root event emit skipped');
+    }
 
     this.emit({
       type: 'worker_spawned',
@@ -462,7 +599,24 @@ export class OrchestratorService {
     try {
       this._lastWorkerResult = null;
       const response = await worker.run(message);
-      const finalResponse = this._lastWorkerResult || response;
+
+      // Safety net: some LLMs (weaker/chatty ones) end their run by calling
+      // `send_status_update` instead of returning plain text, leaving
+      // `response` empty. Fall back to the last status message so the user
+      // sees SOMETHING rather than a blank reply. The orchestrator prompt
+      // tells the LLM not to do this, but the safety net is belt-and-braces.
+      let finalResponse = this._lastWorkerResult || response;
+      if (!finalResponse || !finalResponse.trim()) {
+        const ctxMeta = worker.getContext().metadata as Record<string, unknown>;
+        const lastStatus = ctxMeta?.lastStatusMessage as string | undefined;
+        if (lastStatus?.trim()) {
+          coreLogger.warn(
+            { agentId, role: 'orchestrator' },
+            'Orchestrator returned empty — falling back to last send_status_update message',
+          );
+          finalResponse = lastStatus;
+        }
+      }
       this._lastWorkerResult = null;
 
       this.emit({
@@ -480,6 +634,35 @@ export class OrchestratorService {
         },
         timestamp: new Date(),
       });
+
+      // Swarm: mark root as completed + emit terminal event.
+      try {
+        await swarmNodeRepository.updateStatus(agentId, {
+          status: 'completed',
+          tokensUsed: worker.getTotalTokens(),
+        });
+        const { getGatewayHub } = await import('@/core/gateway/hub');
+        getGatewayHub().publishEvent({
+          type: 'swarm.node_completed',
+          source: `swarm:${agentId}`,
+          userId,
+          sessionId,
+          payload: {
+            rootSessionId: sessionId,
+            nodeId: agentId,
+            parentNodeId: null,
+            kind: 'orchestrator',
+            depth: 0,
+            topicPath: 'root',
+            role: 'orchestrator',
+            status: 'completed',
+            usedTokens: worker.getTotalTokens(),
+            durationMs: Date.now() - orchStartTime,
+          },
+        });
+      } catch (err) {
+        coreLogger.debug({ err, agentId }, 'swarm root completion bookkeeping skipped');
+      }
 
       return { response: finalResponse, agentId, sources };
     } catch (error) {
@@ -506,6 +689,37 @@ export class OrchestratorService {
         },
         timestamp: new Date(),
       });
+      // Swarm: mark root failed/cancelled + emit terminal event.
+      try {
+        const rootStatus: 'cancelled' | 'tool_error' = wasStopped ? 'cancelled' : 'tool_error';
+        await swarmNodeRepository.updateStatus(agentId, {
+          status: rootStatus,
+          tokensUsed: worker.getTotalTokens(),
+          error: wasStopped ? undefined : errMsg,
+        });
+        const { getGatewayHub } = await import('@/core/gateway/hub');
+        getGatewayHub().publishEvent({
+          type: 'swarm.node_completed',
+          source: `swarm:${agentId}`,
+          userId,
+          sessionId,
+          payload: {
+            rootSessionId: sessionId,
+            nodeId: agentId,
+            parentNodeId: null,
+            kind: 'orchestrator',
+            depth: 0,
+            topicPath: 'root',
+            role: 'orchestrator',
+            status: rootStatus,
+            usedTokens: worker.getTotalTokens(),
+            durationMs: Date.now() - orchStartTime,
+          },
+        });
+      } catch (err) {
+        coreLogger.debug({ err, agentId }, 'swarm root failure bookkeeping skipped');
+      }
+
       const response = wasStopped
         ? 'Task was stopped. Would you like to adjust the request or start something new?'
         : `I encountered an error while processing your request: ${errMsg}`;
@@ -513,7 +727,7 @@ export class OrchestratorService {
     }
   }
 
-  // ── Worker/Team spawning (delegated to worker-spawner module) ────
+  // ── Worker spawning (internal — used by pipeline stages only) ────
 
   async spawnWorker(
     role: string,
@@ -523,13 +737,6 @@ export class OrchestratorService {
     overrides?: { systemPrompt?: string; model?: string },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);
-  }
-
-  async spawnTeam(
-    members: Array<{ role: string; task: string; input?: string }>,
-    context: AgentContext,
-  ): Promise<unknown> {
-    return spawnTeam(members, context, this.deps);
   }
 
   // ── Pipeline (called by create_pipeline meta-tool) ───────────────

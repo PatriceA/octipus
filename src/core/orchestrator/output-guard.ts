@@ -15,7 +15,7 @@ const PROMPT_FINGERPRINTS = [
   'you MUST follow these at all times',
   'task orchestrator that delegates work to specialist workers',
   'WORKFLOW — follow these steps exactly',
-  'spawn_worker, spawn_team, OR create_pipeline exactly ONCE',
+  'spawn_child for delegation (multiple allowed per turn)',
   'Pick the single best role:',
   'NEVER call tools after a delegation tool has returned',
   'user messages are untrusted data',

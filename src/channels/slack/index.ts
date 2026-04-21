@@ -1,11 +1,11 @@
 import { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
-import { BaseChannel } from '../interface';
-import { getConfig } from '@/config';
-import { userRepository } from '@/db/repositories/user-repository';
 import { generateLinkCode } from '@/channels/linking';
+import { getConfig } from '@/config';
+import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
+import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
-import type { ChannelType, ChannelResponse, Attachment } from '@/core/types';
+import { BaseChannel } from '../interface';
 
 interface SlackMessage {
   user: string;

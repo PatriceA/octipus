@@ -1,5 +1,5 @@
-import { getOAuthManager } from '@/security/oauth';
 import { getUMI } from '@/channels/interface';
+import { getOAuthManager } from '@/security/oauth';
 import { coreLogger } from '@/utils/logger';
 
 export interface HookSuggestion {

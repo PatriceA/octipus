@@ -8,10 +8,9 @@
  * - Webhook signature verification
  */
 
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { logger } from '@/utils/logger';
-import type { TelephonyProvider, InitiateCallOptions, CallSession, CallStatus } from './interface';
-import { randomBytes } from 'crypto';
+import type { CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } from './interface';
 
 const log = logger.child({ component: 'twilio-provider' });
 

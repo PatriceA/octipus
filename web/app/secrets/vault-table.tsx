@@ -1,13 +1,13 @@
 'use client';
 
+import { Plus, RotateCcw, Search, Trash2, } from 'lucide-react';
 import { useState, } from 'react';
-import { Search, RotateCcw, Trash2, Plus, } from 'lucide-react';
-import { api } from '@/lib/api';
 import { Modal } from '@/components/ui/modal';
+import { api } from '@/lib/api';
 import {
+  CREDENTIAL_TYPE_COLORS,
   type Credential,
   type CredentialType,
-  CREDENTIAL_TYPE_COLORS,
 } from '@/lib/vault-config';
 
 interface VaultTableProps {

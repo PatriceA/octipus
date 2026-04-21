@@ -1,21 +1,21 @@
 export { ConnectionManager, type GatewayConnection } from './connection-manager';
+export { connectEventBridge } from './event-bridge';
 export { GatewayEventBus } from './event-bus';
-export { GatewayRateLimiter } from './rate-limiter';
-export { ensureLocalToken, validateLocalAuth, regenerateLocalToken } from './local-auth';
+export { GatewayHub, getGatewayHub } from './hub';
+export { ensureLocalToken, regenerateLocalToken, validateLocalAuth } from './local-auth';
+export { wireMessageHandler } from './message-handler';
+export { type PresenceEntry, type PresenceStats, PresenceTracker } from './presence';
 export {
   type ClientMessage,
-  type GatewayMessage,
-  type GatewayEvent,
+  type ClientType,
   type ConnectionContext,
   type ConnectionState,
-  type TrustLevel,
-  type ClientType,
-  parseClientMessage,
+  type GatewayEvent,
+  type GatewayMessage,
   matchesPattern,
   PROTOCOL_VERSION,
+  parseClientMessage,
   SUPPORTED_VERSIONS,
+  type TrustLevel,
 } from './protocol';
-export { PresenceTracker, type PresenceEntry, type PresenceStats } from './presence';
-export { GatewayHub, getGatewayHub } from './hub';
-export { connectEventBridge } from './event-bridge';
-export { wireMessageHandler } from './message-handler';
+export { GatewayRateLimiter } from './rate-limiter';

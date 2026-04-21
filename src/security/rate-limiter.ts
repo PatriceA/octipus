@@ -131,6 +131,31 @@ export class RateLimiter {
     const key = `login_attempts:${username}`;
     await this.cache.delete(key);
   }
+
+  /**
+   * Swarm per-user fan-out budget (Phase 3).
+   *
+   * Caps the number of `spawn_child` invocations a single user may trigger
+   * per minute across all of their sessions. Enforced inside
+   * `SwarmSpawner.spawnChild` before anything else — when the bucket is
+   * exhausted the spawner returns `ChildResult{status:'concurrency_limit',
+   * reason:'user_rate_limit'}` without charging the node's own fan-out cap.
+   *
+   * @param userId   The owning user whose bucket is checked + incremented.
+   * @param limit    Max spawns per window (from `config.swarm.perUserSpawnsPerMinute`).
+   * @returns `{ allowed, remaining, retryAfter? }` — caller decides how to
+   *          translate the denial into a `ChildResult`.
+   */
+  async checkSwarmFanOutBudget(
+    userId: string,
+    limit: number,
+  ): Promise<RateLimitResult> {
+    if (!userId) {
+      // Defensive: never rate-limit when we can't identify the user.
+      return { allowed: true, remaining: limit };
+    }
+    return this.check(`swarmFanOutBudget:${userId}`, limit, 60);
+  }
 }
 
 // Singleton

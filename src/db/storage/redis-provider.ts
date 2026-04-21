@@ -3,7 +3,7 @@
  */
 import Redis from 'ioredis';
 import { dbLogger } from '@/utils/logger';
-import type { StorageProvider, CacheProvider, QueueProvider, PubSubProvider } from './types';
+import type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './types';
 
 export interface RedisProviderConfig {
   url: string;

@@ -1,4 +1,4 @@
-import { registerCommand, getAllCommands } from './registry';
+import { getAllCommands, registerCommand } from './registry';
 
 registerCommand({
   name: 'help',

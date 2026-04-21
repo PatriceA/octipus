@@ -1,11 +1,11 @@
-import { BaseTool, type ToolAvailability } from '../base-tool';
 import type { ToolManifest, } from '@/core/types';
 import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
-import { registerMailTools } from './mail';
+import { BaseTool, type ToolAvailability } from '../base-tool';
 import { registerCalendarTools } from './calendar';
+import { registerContactsTools } from './contacts';
+import { registerMailTools } from './mail';
 import { registerOneDriveTools } from './onedrive';
 import { registerTodoTools } from './todo';
-import { registerContactsTools } from './contacts';
 
 export class Microsoft365Tool extends BaseTool {
   readonly id = 'microsoft365';

@@ -1,7 +1,7 @@
-import { eq, and } from 'drizzle-orm';
-import { getDb } from '../postgres';
-import { users, type User, type NewUser, type ChannelBinding } from '../schema/users';
+import { and, eq } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
+import { getDb } from '../postgres';
+import { type ChannelBinding, type NewUser, type User, users } from '../schema/users';
 
 export class UserRepository {
   private get db() { return getDb(); }

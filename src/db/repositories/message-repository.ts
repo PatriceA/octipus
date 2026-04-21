@@ -1,7 +1,7 @@
-import { eq, desc, asc, sql, and, gte, lte, inArray } from 'drizzle-orm';
-import { getDb } from '../postgres';
-import { messages, type Message, type NewMessage } from '../schema/messages';
+import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
+import { getDb } from '../postgres';
+import { type Message, messages, type NewMessage } from '../schema/messages';
 
 export class MessageRepository {
   private get db() { return getDb(); }

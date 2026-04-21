@@ -1,10 +1,10 @@
-import { eq, and } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
-import { vault, type VaultEntry, type NewVaultEntry, } from '@/db/schema/vault';
-import { auditRepository } from '@/db/repositories/audit-repository';
-import { encrypt, decrypt } from '@/utils/crypto';
-import { pbkdf2Sync, createHash } from 'crypto';
+import { createHash, pbkdf2Sync } from 'crypto';
+import { and, eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
+import { getDb } from '@/db/postgres';
+import { auditRepository } from '@/db/repositories/audit-repository';
+import { type NewVaultEntry, type VaultEntry, vault, } from '@/db/schema/vault';
+import { decrypt, encrypt } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
 
 let masterKey: Buffer | null = null;

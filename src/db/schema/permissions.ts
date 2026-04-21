@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, jsonb, index, pgEnum, unique } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgEnum, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 export const permissionLevelEnum = pgEnum('permission_level', ['ALLOW', 'ASK', 'DENY']);

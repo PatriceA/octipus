@@ -1,22 +1,20 @@
-export { SpeechToText, createSTTEngine, WhisperEngine, FasterWhisperEngine } from './stt';
-export type { STTOptions, STTEngine, TranscriptionResult } from './stt';
-
-export { TextToSpeech, createTTSEngine, PiperEngine, EdgeTTSEngine, CoquiTTSEngine } from './tts';
-export type { TTSOptions, TTSEngine } from './tts';
-
+export type { STTEngine, STTOptions, TranscriptionResult } from './stt';
+export { createSTTEngine, FasterWhisperEngine, SpeechToText, WhisperEngine } from './stt';
+export type { TTSEngine, TTSOptions } from './tts';
+export { CoquiTTSEngine, createTTSEngine, EdgeTTSEngine, PiperEngine, TextToSpeech } from './tts';
+export type { WakeWordDetection, WakeWordEngine, WakeWordOptions } from './wake-word';
 export {
-  WakeWordDetector,
   createWakeWordEngine,
-  SherpaWakeWordEngine,
   PicovoiceWakeWordEngine,
+  SherpaWakeWordEngine,
   VADActivationEngine,
+  WakeWordDetector,
 } from './wake-word';
-export type { WakeWordOptions, WakeWordEngine, WakeWordDetection } from './wake-word';
 
+import { logger } from '../utils/logger';
 import { SpeechToText, } from './stt';
 import { TextToSpeech, } from './tts';
 import { WakeWordDetector, } from './wake-word';
-import { logger } from '../utils/logger';
 
 export interface VoiceServiceConfig {
   stt?: {

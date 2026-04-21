@@ -1,8 +1,8 @@
-import { Elysia, t } from 'elysia';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { Elysia, t } from 'elysia';
 import { getHookManager } from '@/hooks';
+import type { TriggerContext, TriggerEvent } from '@/hooks/triggers';
 import { apiLogger } from '@/utils/logger';
-import type { TriggerEvent, TriggerContext } from '@/hooks/triggers';
 
 /**
  * Verify HMAC-SHA256 signature from the X-Hub-Signature-256 header.

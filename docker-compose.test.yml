@@ -1,0 +1,33 @@
+services:
+  assistant-test-db:
+    image: pgvector/pgvector:pg16
+    container_name: assistant-test-db
+    environment:
+      - POSTGRES_DB=assistant_test
+      - POSTGRES_USER=assistant
+      - POSTGRES_PASSWORD=test
+    # tmpfs-backed: no volume mount => data wiped when container stops
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - "${TEST_POSTGRES_PORT:-5443}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assistant -d assistant_test"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  assistant-test-redis:
+    image: redis:7-alpine
+    container_name: assistant-test-redis
+    # No volume mount — ephemeral by default
+    command: redis-server --save "" --appendonly no
+    ports:
+      - "${TEST_REDIS_PORT:-6390}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s

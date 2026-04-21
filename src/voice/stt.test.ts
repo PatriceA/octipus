@@ -1,10 +1,16 @@
 import { describe, test, expect } from 'bun:test';
 
-// Note: STT tests require whisper binaries and audio files
-// Skip integration tests for now
+// STT integration tests require the bundled whisper-cpp binary at
+// models/whisper/whisper-cpp plus a downloaded model file and a WAV audio
+// fixture. They do NOT depend on Postgres/Redis, so they are intentionally
+// left out of the INTEGRATION=1 Docker-backed runner.
+//
+// TODO: when a stable test audio fixture + whisper binary are available in
+// CI, gate this with `describe.skipIf(!process.env.WHISPER_BINARY)` and
+// load the model from process.env.WHISPER_MODEL_PATH.
 
 describe.skip('Speech-to-Text (Integration)', () => {
-  test('placeholder', () => {
+  test('placeholder — needs whisper binary + audio fixture, not DB/Redis', () => {
     expect(true).toBe(true);
   });
 });

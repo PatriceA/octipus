@@ -1,11 +1,10 @@
 'use client';
 
+import { CheckCircle, Clock, FlaskConical, XCircle } from 'lucide-react';
 import Link from 'next/link';
-import { cn } from '@/lib/utils';
-import { formatDate } from '@/lib/utils';
-import { ScoreBar } from './ScoreBar';
-import { CheckCircle, XCircle, Clock, FlaskConical } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { cn, formatDate } from '@/lib/utils';
+import { ScoreBar } from './ScoreBar';
 
 interface EvalSuiteSummary {
   suite: string;

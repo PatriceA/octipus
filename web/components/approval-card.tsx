@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, XCircle, Shield } from 'lucide-react';
+import { CheckCircle, Shield, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ApprovalCardProps {

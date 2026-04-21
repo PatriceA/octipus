@@ -1,8 +1,8 @@
 'use client';
 
+import { Terminal, X } from 'lucide-react';
 import { useState } from 'react';
-import { X, Terminal } from 'lucide-react';
-import { type Model, AVAILABLE_TOPICS } from '@/lib/types/models';
+import { AVAILABLE_TOPICS, type Model } from '@/lib/types/models';
 
 export interface EditModelModalProps {
   model: Model;

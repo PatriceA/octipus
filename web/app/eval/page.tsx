@@ -1,15 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { BarChart3, CheckCircle, FlaskConical, GitCompare, Hash, Microscope, Play, RefreshCw, ShieldAlert, ShieldCheck, XCircle } from 'lucide-react';
 import Link from 'next/link';
-import { FlaskConical, RefreshCw, Play, BarChart3, CheckCircle, XCircle, Hash, GitCompare, ShieldAlert, ShieldCheck, Microscope } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { ConformanceTab } from '@/components/eval/ConformanceTab';
+import { EvalCard } from '@/components/eval/EvalCard';
+import { ModelEvalTab } from '@/components/eval/ModelEvalTab';
+import { ScoreBar } from '@/components/eval/ScoreBar';
+import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatNumber } from '@/lib/utils';
-import { Card, CardContent } from '@/components/ui/card';
-import { EvalCard } from '@/components/eval/EvalCard';
-import { ScoreBar } from '@/components/eval/ScoreBar';
-import { ConformanceTab } from '@/components/eval/ConformanceTab';
-import { ModelEvalTab } from '@/components/eval/ModelEvalTab';
 
 type TabId = 'suite' | 'conformance' | 'model-eval';
 

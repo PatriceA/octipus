@@ -1,24 +1,24 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Loader2,
-  Link2,
   CheckCircle,
-  XCircle,
-  Send,
-  Settings2,
   ChevronDown,
   ChevronRight,
+  Link2,
+  Loader2,
+  Send,
+  Settings2,
+  XCircle,
 } from 'lucide-react';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import type { UserProfile } from '@/lib/types/settings';
 import {
-  type SettingItem,
-  useSettingActions,
-  SettingsGroup,
   SecretsRedirectBanner,
+  type SettingItem,
+  SettingsGroup,
+  useSettingActions,
 } from './setting-field';
 
 export function ChannelsTab() {

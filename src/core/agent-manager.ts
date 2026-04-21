@@ -1,16 +1,15 @@
-import { coreLogger } from '@/utils/logger';
-import { AgentWorker, type AgentWorkerConfig, type ToolHandler, type AgentEvent } from './agent-worker';
-import { CLIAgentWorker } from './cli-agent-worker';
-import { isCLIProvider } from './cli-agent-factory';
-import { getRouter } from './router';
-import { getModelRegistry } from '@/models/model-registry';
-import { sessionRepository } from '@/db/repositories/session-repository';
-import { auditRepository } from '@/db/repositories/audit-repository';
-import { agentRepository } from '@/db/repositories/agent-repository';
-import { agentEventRepository } from '@/db/repositories/agent-event-repository';
 import { getConfig } from '@/config';
-import { agentLogger } from '@/utils/logger';
+import { agentEventRepository } from '@/db/repositories/agent-event-repository';
+import { agentRepository } from '@/db/repositories/agent-repository';
+import { auditRepository } from '@/db/repositories/audit-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import { getModelRegistry } from '@/models/model-registry';
 import { generateId } from '@/utils/crypto';
+import { agentLogger, coreLogger } from '@/utils/logger';
+import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
+import { isCLIProvider } from './cli-agent-factory';
+import { CLIAgentWorker } from './cli-agent-worker';
+import { getRouter } from './router';
 import type { AgentContext, AgentStatus } from './types';
 
 /** Union type for all agent worker implementations */
@@ -27,6 +26,12 @@ export interface SpawnOptions {
   timeout?: number;
   maxIterations?: number;
   maxTokenBudget?: number;
+  /** Parent AbortSignal — the spawned worker aborts when this does (Swarm Phase 2). */
+  parentSignal?: AbortSignal;
+  /** Parent agent id (Swarm Phase 2). Used by `stop(id,{cascade:true})` to walk descendants. */
+  parentAgentId?: string;
+  /** Seed metadata on the agent context (e.g. `originalRequest`). */
+  contextMetadata?: Record<string, unknown>;
 }
 
 export interface AgentInfo {
@@ -55,6 +60,12 @@ export class AgentManager {
   private eventBuffers: Map<string, BufferedEvent[]> = new Map();
   private eventSeqCounter: number = 0;
   private static MAX_BUFFERED_EVENTS = 200;
+  /**
+   * Swarm Phase 2: parent → children index for cascade cancellation.
+   * Populated by `spawn()` when `parentAgentId` is provided.
+   * `stop(id, {cascade:true})` walks this to abort descendants transitively.
+   */
+  private childrenByParent: Map<string, Set<string>> = new Map();
 
   /**
    * Register a global tool available to all agents
@@ -81,7 +92,7 @@ export class AgentManager {
     const config = getConfig();
 
     // If both topic and model are already specified, skip re-routing
-    // (the caller has already routed, e.g. spawnWorker)
+    // (the caller has already routed, e.g. SwarmSpawner or internal spawnWorker)
     let routedTopic = options.topic || 'general';
     let routedModel = options.model || '';
 
@@ -105,7 +116,7 @@ export class AgentManager {
       status: 'idle',
       createdAt: new Date(),
       updatedAt: new Date(),
-      metadata: {},
+      metadata: { ...(options.contextMetadata ?? {}) },
     };
 
     const workerConfig: AgentWorkerConfig = {
@@ -129,7 +140,18 @@ export class AgentManager {
         'Spawning CLI sub-agent (autonomous mode)',
       );
     } else {
-      worker = new AgentWorker(context, workerConfig);
+      // Swarm Phase 2: chain parent AbortSignal into the worker.
+      worker = new AgentWorker(context, workerConfig, { parentSignal: options.parentSignal });
+    }
+
+    // Swarm Phase 2: track parent→child edges for cascade cancel.
+    if (options.parentAgentId) {
+      let set = this.childrenByParent.get(options.parentAgentId);
+      if (!set) {
+        set = new Set();
+        this.childrenByParent.set(options.parentAgentId, set);
+      }
+      set.add(agentId);
     }
 
     // Register global tools (no-op for CLI workers)
@@ -243,19 +265,90 @@ export class AgentManager {
   }
 
   /**
-   * Stop an agent
+   * Stop an agent.
+   *
+   * Swarm Phase 2: `cascade: true` walks the in-memory parent→child index
+   * and DB `swarm_nodes.parent_node_id` to stop every descendant. Default
+   * cascade when the agent has a swarm node (any agent spawned with
+   * `parentAgentId`). CLI-triggered root cancel (`gateway agent.stop`) should
+   * pass `cascade: true` explicitly.
    */
-  stop(agentId: string): boolean {
+  stop(agentId: string, opts: { cascade?: boolean } = {}): boolean {
     const agent = this.agents.get(agentId);
+    const cascade = opts.cascade ?? false;
+
+    // Stop the local agent.
     if (agent) {
       agent.stop();
-      agentLogger.info({ agentId }, 'Agent stopped');
-      return true;
+      agentLogger.info({ agentId, cascade }, 'Agent stopped');
+    } else {
+      // Agent not in memory — may be a zombie DB record. Mark it as stopped.
+      agentRepository.updateStatus(agentId, { status: 'stopped', error: 'Stopped manually (not in memory)' })
+        .catch(err => agentLogger.error({ err, agentId }, 'Failed to update zombie agent status'));
     }
-    // Agent not in memory — may be a zombie DB record. Mark it as stopped.
-    agentRepository.updateStatus(agentId, { status: 'stopped', error: 'Stopped manually (not in memory)' })
-      .catch(err => agentLogger.error({ err, agentId }, 'Failed to update zombie agent status'));
+
+    if (!cascade) return true;
+
+    // ── Cascade: in-memory children first (synchronous) ──────────────
+    const directChildren = this.childrenByParent.get(agentId);
+    if (directChildren && directChildren.size > 0) {
+      for (const childId of directChildren) {
+        // Recurse — each child cascades in turn.
+        this.stop(childId, { cascade: true });
+      }
+      this.childrenByParent.delete(agentId);
+    }
+
+    // ── Cascade: DB descendants (handles cross-process zombies) ──────
+    // Fire-and-forget — best-effort cleanup for agents no longer in memory.
+    void this.cascadeStopFromDb(agentId);
+
     return true;
+  }
+
+  /**
+   * Walk `swarm_nodes` transitively and stop every descendant. Silent
+   * best-effort (no throw) because the swarm schema is optional — agents
+   * that never joined a swarm have no rows and this is a no-op.
+   */
+  private async cascadeStopFromDb(rootAgentId: string): Promise<void> {
+    try {
+      const { swarmNodeRepository } = await import('./swarm/node-repository');
+      const { getDb } = await import('@/db/postgres');
+      const { swarmNodes } = await import('@/db/schema/swarm-nodes');
+      const { eq } = await import('drizzle-orm');
+
+      const visited = new Set<string>([rootAgentId]);
+      const queue: string[] = [rootAgentId];
+      while (queue.length > 0) {
+        const parentId = queue.shift()!;
+        const children = await getDb()
+          .select()
+          .from(swarmNodes)
+          .where(eq(swarmNodes.parentNodeId, parentId));
+        for (const row of children) {
+          if (visited.has(row.id)) continue;
+          visited.add(row.id);
+          queue.push(row.id);
+
+          // Stop in-memory worker if still present (no recurse — DB walk is
+          // already transitive).
+          const worker = this.agents.get(row.id);
+          if (worker) {
+            try { worker.stop(); } catch { /* best effort */ }
+          }
+          // Mark row as cancelled.
+          try {
+            await swarmNodeRepository.updateStatus(row.id, {
+              status: 'cancelled',
+              error: 'cascade_cancelled_from_ancestor',
+            });
+          } catch { /* best effort */ }
+        }
+      }
+    } catch (err) {
+      agentLogger.debug({ err, rootAgentId }, 'cascadeStopFromDb skipped');
+    }
   }
 
   /**
@@ -285,6 +378,9 @@ export class AgentManager {
       }
       this.agents.delete(agentId);
       this.eventBuffers.delete(agentId);
+      this.childrenByParent.delete(agentId);
+      // Remove self from any parent's children set.
+      for (const set of this.childrenByParent.values()) set.delete(agentId);
       agentLogger.info({ agentId }, 'Agent removed');
       return true;
     }

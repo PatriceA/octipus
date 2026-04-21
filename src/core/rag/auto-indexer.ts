@@ -5,8 +5,8 @@
  * so future agents can retrieve past work via search_knowledge.
  */
 
-import { getEmbeddingService } from './embeddings';
 import { coreLogger } from '@/utils/logger';
+import { getEmbeddingService } from './embeddings';
 
 const MIN_OUTPUT_LENGTH = 100; // Skip trivially short outputs
 

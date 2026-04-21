@@ -70,8 +70,12 @@ function makeMockClient(
   } as unknown as LiteLLMClient;
 }
 
-/** A minimal mock ModelProvider. */
-function makeMockProvider(name = 'test', content = 'ok'): ModelProvider {
+/** A minimal mock ModelProvider.
+ * Default content is "4" so it matches the basic-completion math question
+ * ("What is 2+2?") by default — tests that need a failing response override
+ * this (e.g. the "fails when response does not contain 4" test below).
+ */
+function makeMockProvider(name = 'test', content = '4'): ModelProvider {
   return {
     name,
     type: 'direct',
@@ -204,7 +208,9 @@ describe('runConformanceTests', () => {
       model: 'test-model',
       latencyMs: 50,
     }));
-    const providers = new Map([['test', makeMockProvider()]]);
+    // Provider must also return a failing content since non-litellm models
+    // route through provider.complete() (not the litellm client).
+    const providers = new Map([['test', makeMockProvider('test', 'I do not know.')]]);
 
     const report = await runConformanceTests(client, [model], providers, {
       tests: ['basic-completion'],

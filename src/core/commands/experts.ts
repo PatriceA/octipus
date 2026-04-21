@@ -45,11 +45,11 @@ async function handleExpert(ctx: import('./registry').CommandContext): Promise<i
 
       const lines = allExperts.map(e => {
         const emoji = iconToEmoji[e.icon || ''] || '🤖';
-        return `  ${emoji} ${e.name} — ${e.description || e.role}`;
+        return `- ${emoji} **${e.name}** — ${e.description || e.role}`;
       });
 
       return {
-        response: `Available experts:\n${lines.join('\n')}\n\nUse /expert <name> to switch, /expert reset to auto-route.`,
+        response: `**Available experts:**\n\n${lines.join('\n')}\n\nUse \`/expert <name>\` to switch, \`/expert reset\` to auto-route.`,
       };
     }
 

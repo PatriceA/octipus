@@ -1,6 +1,6 @@
 'use client';
 
-import { Shield, RotateCcw } from 'lucide-react';
+import { RotateCcw, Shield } from 'lucide-react';
 
 interface Step {
   name: string;

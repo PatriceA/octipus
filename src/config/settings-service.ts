@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { settings, type SettingEntry } from '@/db/schema/settings';
 import { RedisCache, RedisPubSub } from '@/db/redis';
+import { type SettingEntry, settings } from '@/db/schema/settings';
 import { logger } from '@/utils/logger';
-import { SETTINGS_REGISTRY, getSettingDefinition, type SettingValueType } from './settings-registry';
+import { getSettingDefinition, SETTINGS_REGISTRY, type SettingValueType } from './settings-registry';
 
 const PUBSUB_CHANNEL = 'settings:changed';
 const CACHE_TTL = 60; // seconds

@@ -1,7 +1,7 @@
-import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { getConfig } from '@/config';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getLiteLLMClient } from '../litellm-client';
-import { getConfig } from '@/config';
+import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 /**
  * LiteLLM proxy provider — routes through the LiteLLM Docker container.

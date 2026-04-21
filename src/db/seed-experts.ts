@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { experts } from '@/db/schema/experts';
 import type { ExpertParameters } from '@/db/schema/experts';
+import { experts } from '@/db/schema/experts';
 import { logger } from '@/utils/logger';
 
 const SYSTEM_EXPERTS: Array<{

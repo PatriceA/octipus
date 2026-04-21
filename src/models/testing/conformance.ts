@@ -6,20 +6,20 @@
  * structured output, vision, embeddings, and error handling.
  */
 
+import type { AgentMessage } from '@/core/types';
+import type { ModelConfigEntry } from '@/db/schema/models';
 import type { LiteLLMClient, StreamChunk } from '../litellm-client';
 import type { ModelProvider } from '../providers/interface';
-import type { ModelConfigEntry } from '@/db/schema/models';
-import type { AgentMessage } from '@/core/types';
 import {
-  PROMPTS,
   ADD_NUMBERS_TOOL,
+  PROMPTS,
   TINY_RED_PNG_BASE64,
   validateBasicCompletion,
-  validateMultiTurn,
-  validateFrenchResponse,
-  validateToolCall,
-  validateJSON,
   validateEmbeddings,
+  validateFrenchResponse,
+  validateJSON,
+  validateMultiTurn,
+  validateToolCall,
 } from './test-fixtures';
 
 // ── Types ─────────────────────────────────────────────────────
