@@ -33,6 +33,12 @@ jobs:
 
       - name: Test
         run: bun run test
+        env:
+          # Dummy 32+ char secrets to satisfy config-load validation in tests.
+          # Code paths that construct LiteLLMClient eagerly call loadConfig().
+          MASTER_KEY: ci-dummy-master-key-for-unit-tests-only-1234567890
+          JWT_SECRET: ci-dummy-jwt-secret-for-unit-tests-only-1234567890
+          SESSION_SECRET: ci-dummy-session-secret-for-unit-tests-only-1234567890
 
       - name: Audit dependencies
         run: bun audit --prod
