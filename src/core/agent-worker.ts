@@ -259,10 +259,13 @@ export class AgentWorker extends BaseAgentWorker {
         error: (error as Error).message,
       }, 'Agent failed');
 
-      await auditRepository.logAgentFailed(
+      // Never let an audit-log write failure mask the real error — if the
+      // DB is unreachable, we still want the caller to see the original
+      // cause (e.g. BudgetExceededError), not a Postgres ECONNREFUSED.
+      auditRepository.logAgentFailed(
         this.context.userId, this.context.sessionId, this.context.id,
         { error: (error as Error).message, iteration: this.iteration, elapsedMs: failDurationMs, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
-      );
+      ).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure audit'));
 
       // Persist final state to DB
       agentRepository.updateStatus(this.context.id, {
