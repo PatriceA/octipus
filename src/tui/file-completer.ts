@@ -43,13 +43,4 @@ export function cancelFileCompletions(): void {
   if (lastAbort) lastAbort.abort();
 }
 
-/**
- * Extract the file-path token being typed at the end of the input string.
- * Returns null if the cursor isn't on a path-like token.
- */
-export function extractPathToken(input: string): { token: string; start: number } | null {
-  // Match a token that looks like a path at the end of the string
-  const match = input.match(/((?:\.{0,2}\/)[^\s]*)$/);
-  if (match) return { token: match[1], start: input.length - match[1].length };
-  return null;
-}
+export { extractPathToken } from './path-token';

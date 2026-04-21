@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { extractPathToken } from './file-completer';
+import { extractPathToken } from './path-token';
 
 describe('extractPathToken', () => {
   it('returns null for plain text with no path', () => {
