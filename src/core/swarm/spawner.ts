@@ -25,11 +25,13 @@ import {
   BUDGET_RESERVE_FRACTION,
   type ChildResult,
   type ChildResultStatus,
-  LEVEL_DEFAULT,
+  getLevelDefault,
   type NodeBudget,
+  type PendingChild,
   type SpawnChildParams,
   type TaskBrief,
 } from './types';
+import type { AgentWorker } from '@/core/agent-worker';
 
 /** Re-exported (moved into `call-graph.ts` in Phase 2). */
 export const taskFingerprint = _taskFingerprint;
@@ -103,11 +105,15 @@ export class SwarmSpawner {
     const topicPath = this.buildTopicPath(parent.topicPath, params.topic, params.subtopic);
 
     // ── Same-role guard ─────────────────────────────────────────────
-    // An Agent of role X must not spawn a Subagent of role X, and escalation
-    // must not pick the same role — that's repetitive and defeats the point
-    // of specialist delegation. Orchestrator → specialist always differs
-    // because the Orchestrator's role is 'orchestrator', never a specialist.
-    if (parent.role === childRole) {
+    // At depth 0→1 (Orchestrator → Agent): Orchestrator role is unique, so
+    // same-role is effectively impossible — but we keep the guard for
+    // escalation safety.
+    // At depth 1→2 (Agent → Subagent): ALLOWED. Lets a research agent fan
+    // out to per-datapoint research subagents (per-page scrape, per-row
+    // audit, etc.). The Agent still has to justify it against the
+    // "datapoint vs dependency" rule in the role prompt — the system
+    // doesn't block the fan-out, but bad uses burn budget fast.
+    if (parent.role === childRole && childDepth === 1) {
       return this.denialResult(
         parent,
         `spawn_child refused: child role '${childRole}' equals parent role '${parent.role}'. ` +
@@ -357,6 +363,7 @@ export class SwarmSpawner {
       briefHash,
       childMessage: finalChildMessage,
       reason: internal.reason ?? 'normal',
+      spawnMode: params.mode ?? 'await',
     });
 
     return result;
@@ -381,6 +388,7 @@ export class SwarmSpawner {
     briefHash: string;
     childMessage: string;
     reason: 'normal' | 'escalation' | 'retry';
+    spawnMode: 'await' | 'detach';
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -447,11 +455,41 @@ export class SwarmSpawner {
       childNode.allowedToolIds.add('spawn_child');
       childNode.allowedToolIds.add('escalate_to_different_expert');
 
+      // Late-bound worker reference — the AgentWorker is created by
+      // `agentManager.spawn(...)` below, but spawn_child / collect_children
+      // need a handle to the worker's pending-child map before their
+      // `execute` runs. We hand a `{ current: null }` ref to both tool
+      // factories and fill it in after spawn returns. All tool executes
+      // happen inside `worker.run(...)` which is called after the ref is
+      // populated, so the race is theoretical.
+      // Late-bind worker handles. The child's AgentWorker doesn't exist
+      // yet (agentManager.spawn below creates it) but `spawn_child` and
+      // `collect_children` need to read the worker's pending-child map.
+      // We stash two refs on childNode itself; both are populated post-spawn.
+      const detachHookRef: {
+        current: {
+          registerPendingChild: (pc: PendingChild) => void;
+          pendingDetachedCount: () => number;
+        } | null;
+      } = { current: null };
+      const workerRef: { current: AgentWorker | null } = { current: null };
+      (childNode as unknown as { detachHookRef: typeof detachHookRef }).detachHookRef = detachHookRef;
+      (childNode as unknown as { workerRef: typeof workerRef }).workerRef = workerRef;
+
       try {
         const { createSpawnChildTool } = await import('./swarm-tool');
         const { createEscalateTool } = await import('./escalate-tool');
-        tools.push(createSpawnChildTool(childNode, this));
+        const { createCollectChildrenTool } = await import('./collect-tool');
+        tools.push(
+          createSpawnChildTool(childNode, this, {
+            registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
+            pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
+            maxPendingDetached: () => getLevelDefault(1).maxPendingDetached,
+          }),
+        );
         tools.push(createEscalateTool(childNode, this));
+        tools.push(createCollectChildrenTool(childNode, workerRef));
+        childNode.allowedToolIds.add('collect_children');
       } catch (err) {
         coreLogger.error({ err }, 'Failed to load swarm meta-tools — Agent will run without them');
       }
@@ -496,6 +534,39 @@ export class SwarmSpawner {
 
     const childId = worker.getContext().id;
 
+    // Late-bind the worker ref onto the childNode. Only the full
+    // `AgentWorker` class exposes detach-mode methods — CLI workers never
+    // own detached swarm children so we skip them silently.
+    const maybeWorker = worker as unknown as {
+      registerPendingChild?: (pc: PendingChild) => void;
+      pendingDetachedCount?: () => number;
+    };
+    if (
+      typeof maybeWorker.registerPendingChild === 'function' &&
+      typeof maybeWorker.pendingDetachedCount === 'function' &&
+      childNode
+    ) {
+      const holder = (childNode as unknown as {
+        workerRef?: { current: AgentWorker | null };
+      })?.workerRef;
+      if (holder) holder.current = worker as unknown as AgentWorker;
+      // Also populate the detach-hook ref used by spawn_child.
+      const hookHolder = (childNode as unknown as {
+        detachHookRef?: {
+          current: {
+            registerPendingChild: (pc: PendingChild) => void;
+            pendingDetachedCount: () => number;
+          } | null;
+        };
+      }).detachHookRef;
+      if (hookHolder) {
+        hookHolder.current = {
+          registerPendingChild: maybeWorker.registerPendingChild.bind(worker),
+          pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
+        };
+      }
+    }
+
     // Promote the pending childNode.id so spawn_child/escalate resolve to
     // the real child for its descendants.
     if (childNode) childNode.id = childId;
@@ -530,6 +601,7 @@ export class SwarmSpawner {
         fanOutCap: opts.budget.fanOut.cap,
         briefHash: opts.briefHash,
         taskBriefPreview: opts.brief.taskBrief.slice(0, 4000),
+        spawnMode: opts.spawnMode,
       });
     } catch (err) {
       coreLogger.error({ err, childId }, 'Failed to persist swarm_node row');
@@ -650,12 +722,15 @@ export class SwarmSpawner {
       role: opts.role,
       topicPath: opts.topicPath || 'root',
       model: opts.model,
-      budget: {
-        tokens: { cap: LEVEL_DEFAULT[0].tokens, used: 0 },
-        wallClockMs: { cap: LEVEL_DEFAULT[0].wallMs, startedAt: Date.now() },
-        fanOut: { cap: LEVEL_DEFAULT[0].fanOut, used: 0 },
-        depth: 0,
-      },
+      budget: (() => {
+        const d = getLevelDefault(0);
+        return {
+          tokens: { cap: d.tokens, used: 0 },
+          wallClockMs: { cap: d.wallMs, startedAt: Date.now() },
+          fanOut: { cap: d.fanOut, used: 0 },
+          depth: 0 as const,
+        };
+      })(),
       allowedToolIds: new Set(opts.allowedToolIds),
       signal: opts.signal,
     };
@@ -857,7 +932,7 @@ export class InsufficientBudgetError extends Error {
 }
 
 export function deriveChildBudget(parent: NodeBudget, childDepth: 0 | 1 | 2): NodeBudget {
-  const defaults = LEVEL_DEFAULT[childDepth];
+  const defaults = getLevelDefault(childDepth);
 
   const parentRemainingTokens = Math.max(0, parent.tokens.cap - parent.tokens.used);
   const tokenReserve = Math.ceil(parent.tokens.cap * BUDGET_RESERVE_FRACTION);
@@ -965,11 +1040,28 @@ function composeChildMessage(
   if (opts.canSpawnChildren) {
     parts.push(
       'DELEGATION POLICY: Before calling `spawn_child`, check whether the task ' +
-        'can be done with the tools above. Only spawn a subagent when (a) a ' +
-        "specific sub-topic needs a DIFFERENT specialist's toolset, or (b) " +
-        'independent sub-tasks can run in parallel. Do NOT spawn a subagent ' +
-        'of the same role as yours — you are already that specialist. Synthesize ' +
-        'directly whenever possible.',
+        'can be done with the tools above. Spawn subagents when you have 2+ ' +
+        'INDEPENDENT units of non-trivial work to run in parallel (per-page ' +
+        'research, per-file audit, per-endpoint probe), or when a sub-topic ' +
+        "needs a DIFFERENT specialist's toolset. It IS OK to spawn a subagent " +
+        'of the same role as you for parallel fan-out (e.g. you are a research ' +
+        'agent and you spawn three research subagents, one per source). What ' +
+        'is NOT OK is delegating a single task to one same-role subagent — you ' +
+        'ARE that specialist; synthesize directly.',
+    );
+    parts.push(
+      'DETACH MODE (`spawn_child` mode="detach"): the default is "await" and is ' +
+        'always safe. Use "detach" ONLY when the child output is a DATAPOINT to ' +
+        'collect at the end, not a DEPENDENCY for your next step.\n' +
+        '- Datapoint (detach OK): scrape a page, probe an endpoint, fetch one ' +
+        'row — parallelize so you keep exploring.\n' +
+        '- Dependency (MUST await): decide which approach to use, compute an ' +
+        'input for your next call.\n' +
+        'Rules: (1) default to "await"; (2) at most 3 detached subagents pending ' +
+        'at any time; (3) call `collect_children` BEFORE your final answer, or the ' +
+        'framework will force-wait with a hard timeout and you may run out of ' +
+        'budget for synthesis; (4) don\'t detach trivial work (<30s); (5) if you ' +
+        'finalize without collecting, your pending children are cancelled.',
     );
   } else {
     parts.push(

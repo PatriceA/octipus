@@ -8,8 +8,8 @@ import type { SwarmNodeRepository } from './node-repository';
  * admin-API integration slice once the test DB is wired up.
  */
 
-function makeRepoMock(reapedCount: number): {
-  repo: Pick<SwarmNodeRepository, 'reapOrphans'>;
+function makeRepoMock(reapedCount: number, detachedOrphans: number = 0): {
+  repo: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'>;
   calls: number[];
 } {
   const calls: number[] = [];
@@ -19,6 +19,12 @@ function makeRepoMock(reapedCount: number): {
       async reapOrphans(olderThanMs: number): Promise<number> {
         calls.push(olderThanMs);
         return reapedCount;
+      },
+      async reapUncollectedDetached(): Promise<Array<{ id: string; parentNodeId: string | null }>> {
+        return Array.from({ length: detachedOrphans }, (_, i) => ({
+          id: `detached-${i}`,
+          parentNodeId: 'parent-x',
+        }));
       },
     },
   };
@@ -56,8 +62,11 @@ describe('reapOrphanedSwarmNodes', () => {
   });
 
   test('fails safe: repo throw returns 0 and does not propagate', async () => {
-    const throwingRepo: Pick<SwarmNodeRepository, 'reapOrphans'> = {
+    const throwingRepo: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'> = {
       async reapOrphans(): Promise<number> {
+        throw new Error('db_down');
+      },
+      async reapUncollectedDetached(): Promise<Array<{ id: string; parentNodeId: string | null }>> {
         throw new Error('db_down');
       },
     };
@@ -67,5 +76,12 @@ describe('reapOrphanedSwarmNodes', () => {
     });
     // Must not throw — boot path can't crash on a DB blip.
     expect(result.reaped).toBe(0);
+    expect(result.uncollectedDetached).toBe(0);
+  });
+
+  test('reports detached-uncollected orphans in second pass', async () => {
+    const { repo } = makeRepoMock(0, 2);
+    const result = await reapOrphanedSwarmNodes({ olderThanMs: 600_000, repo });
+    expect(result.uncollectedDetached).toBe(2);
   });
 });

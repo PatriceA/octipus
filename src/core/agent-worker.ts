@@ -19,6 +19,7 @@ import {
   ChildTimeoutError,
 } from './swarm/errors';
 import { ToolExecutor } from './tool-executor';
+import type { ChildResult, PendingChild } from './swarm/types';
 import type { AgentMessage, } from './types';
 
 // Re-export types for backward compatibility
@@ -60,6 +61,121 @@ export class AgentWorker extends BaseAgentWorker {
   /** Increment the paused counter by `durationMs`. Called by ToolExecutor around `spawn_child`. */
   addPausedMs(durationMs: number): void {
     if (durationMs > 0) this.pausedMs += durationMs;
+  }
+
+  /**
+   * Detached subagents spawned by this worker that have not yet been
+   * picked up via `collect_children` (or auto-collect). Key is the
+   * childHandle issued by `createSpawnChildTool`.
+   */
+  private pendingDetached: Map<string, PendingChild> = new Map();
+  private collectedDetached: Map<string, ChildResult> = new Map();
+
+  registerPendingChild(pc: PendingChild): void {
+    this.pendingDetached.set(pc.childId, pc);
+    // Settle eagerly into collectedDetached so auto-collect and ad-hoc
+    // collect_children calls can both find results without racing on the
+    // shared promise. We keep the entry in pendingDetached until the LLM
+    // (or framework) explicitly collects — that's what drives the cap.
+    pc.promise.then(
+      (result) => { this.collectedDetached.set(pc.childId, result); },
+      (err) => {
+        const failMsg = (err as Error)?.message || 'detached spawn threw';
+        this.collectedDetached.set(pc.childId, {
+          nodeId: pc.childId,
+          kind: 'subagent',
+          status: 'tool_error',
+          output: null,
+          usedTokens: 0,
+          durationMs: Date.now() - pc.startedAt,
+          spawnedChildren: [],
+          notes: failMsg,
+        });
+      },
+    );
+  }
+
+  pendingDetachedCount(): number {
+    return this.pendingDetached.size;
+  }
+
+  listPendingDetached(): PendingChild[] {
+    return [...this.pendingDetached.values()];
+  }
+
+  /** Mark a pending child as collected. Returns its result (awaiting if needed). */
+  async collectDetached(childId: string, timeoutMs: number): Promise<ChildResult | null> {
+    const pc = this.pendingDetached.get(childId);
+    if (!pc) return null;
+    const settled = this.collectedDetached.get(childId);
+    if (settled) {
+      this.pendingDetached.delete(childId);
+      return settled;
+    }
+    try {
+      const result = await Promise.race([
+        pc.promise,
+        new Promise<ChildResult>((_, reject) =>
+          setTimeout(() => reject(new Error(`collect_children timeout after ${timeoutMs}ms`)), timeoutMs),
+        ),
+      ]);
+      this.pendingDetached.delete(childId);
+      return result;
+    } catch (err) {
+      // Leave it in pending for a later retry; surface failure as a result
+      // object so the LLM keeps going instead of throwing.
+      return {
+        nodeId: childId,
+        kind: 'subagent',
+        status: 'timeout',
+        output: null,
+        usedTokens: 0,
+        durationMs: Date.now() - pc.startedAt,
+        spawnedChildren: [],
+        notes: (err as Error).message,
+      };
+    }
+  }
+
+  /**
+   * Timeout for the final auto-collect — reserve the last ~20% of the
+   * worker's configured wall-clock so the merge-turn has budget to run.
+   */
+  private computeAutoCollectTimeoutMs(): number {
+    const wall = this.config.timeout ?? 240_000;
+    return Math.min(60_000, Math.max(10_000, Math.floor(wall * 0.2)));
+  }
+
+  /** Cancel all pending detached children. Fire-and-forget — call on worker fail/abort. */
+  private cancelAllDetached(reason: string): void {
+    if (this.pendingDetached.size === 0) return;
+    agentLogger.warn(
+      { agentId: this.context.id, pending: this.pendingDetached.size, reason },
+      'Cancelling pending detached children (parent worker terminating)',
+    );
+    for (const [, pc] of this.pendingDetached) {
+      // The detached promise is already in flight inside the spawner; we
+      // don't have a direct AbortController handle for each child. The
+      // parent's AbortController (this.abortController) has already been
+      // aborted by the fail/abort path — children that listen to the
+      // parent signal (set in spawner.ts parentSignal) will tear down.
+      // Emit a breadcrumb so ops can see the cascade in logs.
+      coreLogger.info({ childId: pc.childId, startedAt: pc.startedAt }, 'detached child cancel-cascade');
+    }
+    this.pendingDetached.clear();
+  }
+
+  /** Collect every still-pending detached child. Used by collect_children and auto-collect. */
+  async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
+    const entries = [...this.pendingDetached.entries()];
+    if (entries.length === 0) return [];
+    const results = await Promise.all(
+      entries.map(async ([childId]) => {
+        const r = await this.collectDetached(childId, timeoutMs);
+        return r;
+      }),
+    );
+    return results.filter((r): r is ChildResult => r !== null);
   }
 
   /** Milliseconds of *active* work since agent start (excludes child-wait time). */
@@ -196,9 +312,50 @@ export class AgentWorker extends BaseAgentWorker {
 
     try {
       const result = await this.loop();
+
+      // Auto-collect any still-pending detached children before finalizing.
+      // The LLM should have called `collect_children` explicitly; this is
+      // the forget-to-collect safety net. We inject the results as a
+      // system message and re-enter the loop ONCE more so the parent can
+      // synthesize with them. If that synthesis turn doesn't produce a
+      // meaningful output we fall back to `result`.
+      let finalResult = result;
+      if (this.pendingDetached.size > 0) {
+        const autoTimeoutMs = this.computeAutoCollectTimeoutMs();
+        agentLogger.warn(
+          { agentId: this.context.id, pending: this.pendingDetached.size, autoTimeoutMs },
+          'Auto-collecting forgotten detached children before finalizing',
+        );
+        const collected = await this.collectAllDetached(autoTimeoutMs);
+        if (collected.length > 0) {
+          const summary = collected
+            .map((r) => {
+              const out = typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
+              return `- [${r.status}] node ${r.nodeId}: ${out.slice(0, 500)}${(r.notes ? ` (${r.notes})` : '')}`;
+            })
+            .join('\n');
+          this.addSystemMessage(
+            `SYSTEM: You had ${collected.length} detached subagent${collected.length > 1 ? 's' : ''} ` +
+              `you did not collect before finalizing. Results auto-collected:\n${summary}\n\n` +
+              `Synthesize these into your final answer now.`,
+          );
+          try {
+            const withMerge = await this.loop();
+            if (typeof withMerge === 'string' && withMerge.trim().length > 0) {
+              finalResult = withMerge;
+            }
+          } catch (mergeErr) {
+            agentLogger.error(
+              { err: mergeErr, agentId: this.context.id },
+              'Auto-collect synthesis turn failed; returning pre-merge result',
+            );
+          }
+        }
+      }
+
       this.context.status = 'completed';
       this.emit('status_change', { status: 'completed' });
-      this.emit('complete', { result });
+      this.emit('complete', { result: finalResult });
 
       const durationMs = Date.now() - this.startTime;
       agentLogger.info({
@@ -227,15 +384,15 @@ export class AgentWorker extends BaseAgentWorker {
         userId: this.context.userId,
         role: this.context.role,
         topic: this.context.topic,
-        output: typeof result === 'string' ? result : JSON.stringify(result),
+        output: typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult),
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker')); // Never block on indexing failures
 
       // Auto-update project summary for roles that work on projects
       const summaryRoles = ['coding', 'research', 'review', 'general', 'qa', 'devops', 'design', 'security', 'data', 'ai'];
-      if (summaryRoles.includes(this.context.role) && typeof result === 'string' && result.length > 50) {
+      if (summaryRoles.includes(this.context.role) && typeof finalResult === 'string' && finalResult.length > 50) {
         import('@/core/orchestrator/project-summary').then(({ autoUpdateProjectSummary }) => {
           const title = `${this.context.role} — ${this.context.topic || 'task'}`;
-          autoUpdateProjectSummary(this.context, title, result).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
+          autoUpdateProjectSummary(this.context, title, finalResult).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
         }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
       }
 
@@ -244,11 +401,18 @@ export class AgentWorker extends BaseAgentWorker {
         closeAgentTabs(this.context.id).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
 
-      return result;
+      return finalResult;
     } catch (error) {
       this.context.status = 'failed';
       this.emit('status_change', { status: 'failed' });
       this.emit('error', { error: (error as Error).message });
+
+      // Cancel-cascade: detached children never see a collect, and their
+      // parent AbortSignal is already aborted (this.abortController). We
+      // clear the pending map so the Promise references drop and the
+      // orphan reaper can flip any `running` rows to `cancelled`.
+      this.abortController.abort((error as Error).message || 'parent failed');
+      this.cancelAllDetached((error as Error).message || 'parent failed');
 
       const failDurationMs = Date.now() - this.startTime;
       agentLogger.error({
@@ -334,6 +498,21 @@ export class AgentWorker extends BaseAgentWorker {
         iteration: this.iteration, elapsedMs: this.elapsed(),
         role: this.context.role, model: this.context.model,
       }, 'Agent loop iteration');
+
+      // ── Periodic nudge for uncollected detached children ────────────
+      // If the LLM spawned detached subagents and keeps working for many
+      // turns without calling collect_children, inject a reminder. Cheap
+      // way to prevent the 22h-shell anti-pattern: agents forgetting the
+      // side tasks they kicked off.
+      if (this.pendingDetached.size > 0 && this.iteration > 0 && this.iteration % 5 === 0) {
+        const list = [...this.pendingDetached.values()]
+          .map((pc) => `${pc.childId} (topic: ${pc.topic}${pc.subtopic ? '/' + pc.subtopic : ''}, running ${Math.round((Date.now() - pc.startedAt) / 1000)}s)`)
+          .join('; ');
+        this.addSystemMessage(
+          `Reminder: ${this.pendingDetached.size} detached subagent${this.pendingDetached.size > 1 ? 's are' : ' is'} still running — ${list}. ` +
+            `Call \`collect_children\` before your final answer so you can synthesize with their results.`,
+        );
+      }
 
       // ── Pre-LLM-call budget enforcement (Swarm Phase 2) ─────────────
       // Per design §Budget Envelope: hard cap, fires abort, status='budget'.

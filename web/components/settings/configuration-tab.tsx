@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Bot, Cpu, Loader2, Server } from 'lucide-react';
+import { Bot, Cpu, GitBranch, Loader2, Server } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   SecretsRedirectBanner,
@@ -16,6 +16,7 @@ const SERVER_CATEGORIES = new Set([
   'ollama',
   'agent',
   'orchestrator',
+  'swarm',
   'api',
   'logging',
   'security',
@@ -42,6 +43,15 @@ const SECTIONS = [
     subsections: [
       { category: 'agent', label: 'Agent' },
       { category: 'orchestrator', label: 'Orchestrator' },
+    ],
+  },
+  {
+    id: 'swarm',
+    title: 'Swarm',
+    description: 'Per-level budgets and rate limits for the 3-level agent tree (Orchestrator → Agent → Subagent)',
+    icon: GitBranch,
+    subsections: [
+      { category: 'swarm', label: 'Swarm' },
     ],
   },
   {

@@ -210,6 +210,32 @@ describe('SwarmSpawner — Phase 2 depth enforcement', () => {
     expect(result.status).toBe('denied');
     expect(result.notes).toMatch(/depth 2/i);
   });
+
+  test('same-role at depth 0→1 is still blocked (orchestrator never maps to agent anyway, but the guard stands)', async () => {
+    const spawner = new SwarmSpawner({} as never);
+    // Use a non-orchestrator role at depth 0 just to exercise the guard —
+    // real orchestrators have role 'orchestrator' which never collides
+    // with a specialist role, but the guard must still fire if collision
+    // somehow happens (e.g. bad role resolution).
+    const parent = makeNode({
+      id: 'depth0-research',
+      depth: 0,
+      role: 'research',
+    });
+    const result = await spawner.spawnChild(
+      parent,
+      {
+        role: 'research',
+        topic: 'research',
+        subtopic: 's',
+        taskBrief: 'x',
+        expectedOutput: { shape: 'summary' },
+      },
+      makeCtx(),
+    );
+    expect(result.status).toBe('denied');
+    expect(result.notes).toMatch(/equals parent role/i);
+  });
 });
 
 describe('SwarmSpawner — fan-out cap', () => {

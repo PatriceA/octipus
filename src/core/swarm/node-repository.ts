@@ -86,6 +86,19 @@ export class SwarmNodeRepository {
       .where(eq(swarmNodes.id, id));
   }
 
+  /**
+   * Flip `collected_at` when the parent agent picks up a detached child.
+   * Distinguishes cleanly collected detached children from forgotten ones
+   * (the orphan reaper finds rows where spawn_mode='detach' AND
+   * collected_at IS NULL AND parent is already terminal).
+   */
+  async markCollected(id: string): Promise<void> {
+    await this.db
+      .update(swarmNodes)
+      .set({ collectedAt: new Date() })
+      .where(eq(swarmNodes.id, id));
+  }
+
   async incrementCacheHits(id: string): Promise<void> {
     const existing = await this.findById(id);
     if (!existing) return;
@@ -121,6 +134,51 @@ export class SwarmNodeRepository {
       )
       .returning({ id: swarmNodes.id });
     return rows.length;
+  }
+
+  /**
+   * Cancel detached subagents whose parent is in a terminal state and who
+   * were never collected. Called by the orphan reaper. Returns the rows
+   * touched — each identifies a case where an agent kicked off a detached
+   * child and then finalized (or crashed) without collecting it.
+   */
+  async reapUncollectedDetached(): Promise<Array<{ id: string; parentNodeId: string | null }>> {
+    // Two-step: find candidates, then update. Drizzle pg doesn't have a
+    // clean "UPDATE ... WHERE EXISTS(..)" helper with the DSL we're using,
+    // and the cardinality here is tiny so the extra select is fine.
+    const parentTerminalStatuses: SwarmNodeStatus[] = [
+      'completed', 'budget', 'timeout', 'denied', 'tool_error',
+      'provider_error', 'cancelled', 'concurrency_limit', 'cache_hit',
+    ];
+    const candidates = await this.db
+      .select({ id: swarmNodes.id, parentNodeId: swarmNodes.parentNodeId })
+      .from(swarmNodes)
+      .where(
+        and(
+          eq(swarmNodes.spawnMode, 'detach'),
+          eq(swarmNodes.status, 'running' as SwarmNodeStatus),
+        ),
+      );
+    const orphans: Array<{ id: string; parentNodeId: string | null }> = [];
+    for (const c of candidates) {
+      if (!c.parentNodeId) continue;
+      const parent = await this.findById(c.parentNodeId);
+      if (!parent) continue;
+      if (!parentTerminalStatuses.includes(parent.status)) continue;
+      orphans.push(c);
+    }
+    if (orphans.length === 0) return orphans;
+    for (const o of orphans) {
+      await this.db
+        .update(swarmNodes)
+        .set({
+          status: 'cancelled' as SwarmNodeStatus,
+          error: 'detached_parent_terminated_without_collect',
+          completedAt: new Date(),
+        })
+        .where(eq(swarmNodes.id, o.id));
+    }
+    return orphans;
   }
 
   /**

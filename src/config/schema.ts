@@ -209,20 +209,21 @@ export const compactionConfigSchema = z.object({
 // See `.assistant/swarm-design.md`. Phase 3 adds per-user fan-out caps +
 // orphan reaper cadence; both have safe defaults so existing deployments
 // don't need to set anything.
+const swarmLevelSchema = z.object({
+  tokens: z.number().min(1_000),
+  wallMs: z.number().min(10_000),
+  fanOut: z.number().min(0).max(20),
+  maxPendingDetached: z.number().min(0).max(10).default(0),
+});
+
 export const swarmConfigSchema = z.object({
-  /**
-   * Max swarm child spawns allowed per user per minute. Enforced by
-   * `SwarmSpawner` via `rate-limiter.ts` bucket `swarmFanOutBudget`.
-   * When exceeded the spawner returns `ChildResult{status:'concurrency_limit',
-   * reason:'user_rate_limit'}` without charging the node's own fan-out cap.
-   */
   perUserSpawnsPerMinute: z.number().min(1).max(1000).default(30),
-  /**
-   * Orphan reaper interval (ms). On process start any `swarm_nodes` row
-   * with `status='running'` older than this threshold is force-marked
-   * `cancelled` with `error='orphaned_at_restart'`.
-   */
   orphanReaperIntervalMs: z.number().min(30_000).default(600_000),
+  levelDefaults: z.object({
+    orchestrator: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 0 }),
+    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 240_000, fanOut: 4, maxPendingDetached: 3 }),
+    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 240_000, fanOut: 0, maxPendingDetached: 0 }),
+  }).default({}),
 });
 
 // Workspace configuration schema

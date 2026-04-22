@@ -19,6 +19,13 @@ export interface ReapResult {
   reaped: number;
   /** Age threshold used (ms). */
   olderThanMs: number;
+  /**
+   * Detached-and-uncollected subagents whose parent was already terminal
+   * when the reaper ran. These are the canonical "forgot-to-collect"
+   * case — worth surfacing in metrics because they indicate an agent
+   * prompt / behaviour drift, not a crash.
+   */
+  uncollectedDetached: number;
 }
 
 /**
@@ -34,15 +41,18 @@ export async function reapOrphanedSwarmNodes(
     /** Override age threshold (ms). Defaults to `config.swarm.orphanReaperIntervalMs`. */
     olderThanMs?: number;
     /** Override repository (tests). */
-    repo?: Pick<SwarmNodeRepository, 'reapOrphans'>;
+    repo?: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'>;
   } = {},
 ): Promise<ReapResult> {
   const cfg = getConfig();
   const olderThanMs = opts.olderThanMs ?? cfg.swarm?.orphanReaperIntervalMs ?? 600_000;
   const repo = opts.repo ?? swarmNodeRepository;
 
+  let reaped = 0;
+  let uncollectedDetached = 0;
+
   try {
-    const reaped = await repo.reapOrphans(olderThanMs);
+    reaped = await repo.reapOrphans(olderThanMs);
     if (reaped > 0) {
       coreLogger.warn(
         { reaped, olderThanMs },
@@ -54,12 +64,33 @@ export async function reapOrphanedSwarmNodes(
         'Swarm orphan reaper — no stale nodes found',
       );
     }
-    return { reaped, olderThanMs };
   } catch (err) {
     coreLogger.error(
       { err, olderThanMs },
       'Swarm orphan reaper failed — continuing boot',
     );
-    return { reaped: 0, olderThanMs };
   }
+
+  // Second pass: detached subagents whose parent went terminal without
+  // calling collect_children. These are budget + memory orphans, not
+  // necessarily age-related, so the age threshold above would miss them.
+  try {
+    if (repo.reapUncollectedDetached) {
+      const rows = await repo.reapUncollectedDetached();
+      uncollectedDetached = rows.length;
+      if (uncollectedDetached > 0) {
+        coreLogger.warn(
+          { uncollectedDetached, sample: rows.slice(0, 5) },
+          'Swarm orphan reaper — cancelled detached subagents whose parent forgot to collect',
+        );
+      }
+    }
+  } catch (err) {
+    coreLogger.error(
+      { err },
+      'Swarm orphan reaper uncollected-detached pass failed',
+    );
+  }
+
+  return { reaped, olderThanMs, uncollectedDetached };
 }

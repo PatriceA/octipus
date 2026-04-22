@@ -44,24 +44,58 @@ export interface NodeBudget {
   depth: 0 | 1 | 2;
 }
 
+export interface LevelDefault {
+  tokens: number;
+  wallMs: number;
+  fanOut: number;
+  maxPendingDetached: number;
+}
+
 /**
- * Default budget envelope per depth.
+ * Hard-coded fallback envelope per depth. The live values are read from
+ * `config.swarm.levelDefaults` via `getLevelDefault(depth)` — this record
+ * is only used if config is not loaded (startup edge-cases and unit tests
+ * that don't boot the full config pipeline).
  *
- * Token cascade rule (pool sharing — parent's tokens count child's tokens too):
+ * Token cascade rule (pool sharing):
  *   child.tokens.cap = min(LEVEL_DEFAULT[child.depth].tokens, parent.remaining.tokens - RESERVE)
  *
- * Wall-clock: NO cascade. Each node's wall cap is its own LEVEL_DEFAULT.
- * The parent's `elapsed()` excludes time spent awaiting children (see
- * AgentWorker.pausedMs). Matches the user spec: "subagent should have the
- * same timeout as an agent — waiting for the subagent should not count
- * against the parent's timeout."
+ * Wall-clock: NO cascade. Parent's `elapsed()` excludes child-wait time
+ * (AgentWorker.pausedMs). Subagent shares the Agent wall so `await` on a
+ * subagent doesn't starve an agent that still has real work to do.
  */
-export const LEVEL_DEFAULT: Record<0 | 1 | 2, { tokens: number; wallMs: number; fanOut: number }> = {
-  0: { tokens: 200_000, wallMs: 10 * 60_000, fanOut: 6 },
-  1: { tokens: 80_000, wallMs: 4 * 60_000, fanOut: 4 },
-  // Subagent: same wall cap as Agent per user spec.
-  2: { tokens: 30_000, wallMs: 4 * 60_000, fanOut: 0 },
+export const LEVEL_DEFAULT: Record<0 | 1 | 2, LevelDefault> = {
+  0: { tokens: 200_000, wallMs: 10 * 60_000, fanOut: 6, maxPendingDetached: 0 },
+  1: { tokens: 80_000, wallMs: 4 * 60_000, fanOut: 4, maxPendingDetached: 3 },
+  2: { tokens: 30_000, wallMs: 4 * 60_000, fanOut: 0, maxPendingDetached: 0 },
 };
+
+/**
+ * Read the live per-depth default from config. Falls back to the hardcoded
+ * LEVEL_DEFAULT record when config hasn't been loaded yet (e.g. in
+ * isolated unit tests).
+ */
+export function getLevelDefault(depth: 0 | 1 | 2): LevelDefault {
+  try {
+    // Lazy require so this file stays importable without a config pipeline.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfig } = require('@/config');
+    const cfg = getConfig().swarm?.levelDefaults;
+    const key = depth === 0 ? 'orchestrator' : depth === 1 ? 'agent' : 'subagent';
+    const entry = cfg?.[key];
+    if (entry) {
+      return {
+        tokens: entry.tokens,
+        wallMs: entry.wallMs,
+        fanOut: entry.fanOut,
+        maxPendingDetached: entry.maxPendingDetached ?? LEVEL_DEFAULT[depth].maxPendingDetached,
+      };
+    }
+  } catch {
+    // Config not loaded or require failed → fall through to hardcoded.
+  }
+  return LEVEL_DEFAULT[depth];
+}
 
 /** Fraction of the parent's cap reserved for parent synthesis after child returns. */
 export const BUDGET_RESERVE_FRACTION = 0.1;
@@ -151,4 +185,26 @@ export interface SpawnChildParams {
   parallelGroup?: string;
   /** Optional hard constraints forwarded into the child's brief. */
   constraints?: string[];
+  /**
+   * 'await' (default): parent blocks until child returns, result surfaced
+   * inline, parent pausedMs ticks while waiting.
+   * 'detach': parent gets { childId, status: 'pending' } immediately and
+   * keeps working. Must later call `collect_children` (or framework
+   * auto-collects at finalize). Only valid at depth 1 (agent → subagent).
+   */
+  mode?: 'await' | 'detach';
+}
+
+/**
+ * Record of a detached child tracked on the parent's worker so the
+ * framework can enforce the max-pending cap, surface nudges, auto-collect
+ * at finalize, and cancel on parent failure.
+ */
+export interface PendingChild {
+  childId: string;
+  startedAt: number;
+  taskBrief: string;
+  topic: string;
+  subtopic?: string;
+  promise: Promise<ChildResult>;
 }

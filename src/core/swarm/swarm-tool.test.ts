@@ -222,4 +222,137 @@ describe('createSpawnChildTool', () => {
     expect(tool.final).toBe(false);
     expect(tool.name).toBe('spawn_child');
   });
+
+  // ── Detach-mode behaviour ────────────────────────────────────────────
+
+  function makeAgentParent(): AgentNode {
+    return {
+      id: 'agent-1',
+      rootSessionId: '00000000-0000-0000-0000-000000000000',
+      parentNodeId: 'parent-0',
+      kind: 'agent',
+      depth: 1,
+      role: 'research',
+      topicPath: 'root/research',
+      model: 'test-model',
+      budget: {
+        tokens: { cap: LEVEL_DEFAULT[1].tokens, used: 0 },
+        wallClockMs: { cap: LEVEL_DEFAULT[1].wallMs, startedAt: Date.now() },
+        fanOut: { cap: LEVEL_DEFAULT[1].fanOut, used: 0 },
+        depth: 1,
+      },
+      allowedToolIds: new Set(['read_file', 'spawn_child', 'collect_children']),
+      signal: new AbortController().signal,
+    };
+  }
+
+  test('detach mode: records a pending entry and returns synthetic pending result', async () => {
+    const parent = makeAgentParent();
+    const seen: Array<{ id: string }> = [];
+    let count = 0;
+    const spawner = {
+      spawnChild: async () => ({
+        nodeId: 'subagent-real',
+        kind: 'subagent' as const,
+        status: 'ok' as const,
+        output: 'done',
+        usedTokens: 10,
+        durationMs: 100,
+        spawnedChildren: [],
+      }),
+    } as unknown as SwarmSpawner;
+    const tool = createSpawnChildTool(parent, spawner, {
+      registerPending: (pc) => { seen.push({ id: pc.childId }); count++; },
+      pendingCount: () => count,
+      maxPendingDetached: () => 3,
+    });
+    const out = await tool.execute(
+      {
+        topic: 'research',
+        subtopic: 'page-1',
+        taskBrief: 'Summarize source 1',
+        expectedOutput: { shape: 'summary' },
+        mode: 'detach',
+      },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(seen).toHaveLength(1);
+    expect(String(out)).toContain('status="pending"');
+    expect(String(out)).toContain('mode="detach"');
+  });
+
+  test('detach mode: cap enforcement — 4th spawn rejected', async () => {
+    const parent = makeAgentParent();
+    let count = 3; // already at cap
+    const spawner = {
+      spawnChild: async () => { throw new Error('should not be called'); },
+    } as unknown as SwarmSpawner;
+    const tool = createSpawnChildTool(parent, spawner, {
+      registerPending: () => { count++; },
+      pendingCount: () => count,
+      maxPendingDetached: () => 3,
+    });
+    const out = await tool.execute(
+      {
+        topic: 'research',
+        subtopic: 'page-4',
+        taskBrief: 'Summarize source 4',
+        expectedOutput: { shape: 'summary' },
+        mode: 'detach',
+      },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(String(out)).toContain('already at max pending detached (3)');
+  });
+
+  test('detach mode: rejected at depth 0 (orchestrator cannot detach-spawn agents)', async () => {
+    const parent = makeParent(); // depth 0
+    const spawner = {
+      spawnChild: async () => { throw new Error('should not be called'); },
+    } as unknown as SwarmSpawner;
+    const tool = createSpawnChildTool(parent, spawner, {
+      registerPending: () => {},
+      pendingCount: () => 0,
+      maxPendingDetached: () => 3,
+    });
+    const out = await tool.execute(
+      {
+        topic: 'research',
+        subtopic: 'page-1',
+        taskBrief: 'brief',
+        expectedOutput: { shape: 'summary' },
+        mode: 'detach',
+      },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(String(out)).toContain("mode='detach' is only valid for agent");
+  });
+
+  test('detach mode without hooks falls back to await (no silent drop)', async () => {
+    const parent = makeAgentParent();
+    let awaitCalled = false;
+    const spawner = {
+      spawnChild: async () => {
+        awaitCalled = true;
+        return {
+          nodeId: 'n1', kind: 'subagent' as const, status: 'ok' as const,
+          output: 'ok', usedTokens: 5, durationMs: 10, spawnedChildren: [],
+        };
+      },
+    } as unknown as SwarmSpawner;
+    // No hooks passed — detach should downgrade to await.
+    const tool = createSpawnChildTool(parent, spawner);
+    const out = await tool.execute(
+      {
+        topic: 'research',
+        subtopic: 'page-1',
+        taskBrief: 'brief',
+        expectedOutput: { shape: 'summary' },
+        mode: 'detach',
+      },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(awaitCalled).toBe(true);
+    expect(String(out)).toContain('nodeId="n1"');
+  });
 });

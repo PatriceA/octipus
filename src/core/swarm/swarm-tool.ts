@@ -1,8 +1,25 @@
+import { randomUUID } from 'crypto';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentRole } from '@/core/orchestrator/types';
 import { coreLogger } from '@/utils/logger';
 import { getSwarmSpawner, type SwarmSpawner } from './spawner';
-import type { AgentNode, ChildResult, SpawnChildParams } from './types';
+import type { AgentNode, ChildResult, PendingChild, SpawnChildParams } from './types';
+
+/**
+ * Hooks passed in by the worker that owns this tool so detach-mode can
+ * register pending children, enforce the cap, and let `collect_children`
+ * pick up results later. If omitted, the tool treats every call as
+ * `mode: 'await'` regardless of what the LLM passes in — safe default
+ * for older call-sites that haven't wired the worker in.
+ */
+export interface SpawnChildHooks {
+  /** Called when a detach-mode spawn is accepted. */
+  registerPending: (pc: PendingChild) => void;
+  /** Current count of not-yet-collected detached children on this parent. */
+  pendingCount: () => number;
+  /** Cap from config (typically `swarm.levelDefaults.agent.maxPendingDetached`). */
+  maxPendingDetached: () => number;
+}
 
 const CHILD_ROLES_ENUM: AgentRole[] = [
   'research',
@@ -35,6 +52,7 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
 export function createSpawnChildTool(
   parent: AgentNode,
   spawner: SwarmSpawner = getSwarmSpawner(),
+  hooks?: SpawnChildHooks,
 ): ToolHandler {
   return {
     name: 'spawn_child',
@@ -42,7 +60,7 @@ export function createSpawnChildTool(
     // return. Multiple `spawn_child` calls per turn are allowed.
     final: false,
     description:
-      'Delegate a sub-topic to a better-fit specialist agent. The child runs autonomously with a restricted tool set and budget, then returns a structured result you must synthesize. Prefer a single `spawn_child` for simple tasks; use multiple calls (same parallelGroup) for truly independent sub-topics.',
+      'Delegate a sub-topic to a better-fit specialist agent. The child runs autonomously with a restricted tool set and budget, then returns a structured result you must synthesize. Default mode="await" blocks until the child returns; mode="detach" (agents only, depth 1 → 2) returns immediately so you can keep working — you must later call `collect_children` (or the framework auto-collects before your final answer). Detach when the child output is a datapoint, not a dependency.',
     previewParam: 'subtopic',
     parameters: {
       type: 'object',
@@ -98,6 +116,14 @@ export function createSpawnChildTool(
           items: { type: 'string' },
           description: 'Optional hard constraints the child must respect (e.g. "read-only").',
         },
+        mode: {
+          type: 'string',
+          enum: ['await', 'detach'],
+          description:
+            "'await' (default): block until the child returns, synthesize inline. " +
+            "'detach': return { nodeId, status: 'pending' } immediately and keep working — only valid for agent → subagent spawns. " +
+            'Call `collect_children` before your final answer, or the framework force-awaits.',
+        },
       },
       required: ['topic', 'subtopic', 'taskBrief', 'expectedOutput'],
     },
@@ -107,6 +133,60 @@ export function createSpawnChildTool(
         return `spawn_child: ${validated.error}`;
       }
       const params = validated.params;
+      const mode: 'await' | 'detach' = params.mode ?? 'await';
+
+      // ── Detach path ─────────────────────────────────────────────────
+      // Only valid at depth 1 (agent spawning subagent). Hooks carry the
+      // pending map + cap — if not wired, downgrade to await so old
+      // call-sites don't silently drop children.
+      if (mode === 'detach') {
+        if (parent.depth !== 1) {
+          return `spawn_child: mode='detach' is only valid for agent → subagent spawns (current depth ${parent.depth}). Re-call with mode='await'.`;
+        }
+        if (!hooks) {
+          coreLogger.warn({ parentNodeId: parent.id }, 'spawn_child detach requested but worker did not wire hooks — falling back to await');
+        } else {
+          const cap = hooks.maxPendingDetached();
+          if (cap <= 0) {
+            return `spawn_child: detach-mode disabled (maxPendingDetached=${cap}). Re-call with mode='await'.`;
+          }
+          if (hooks.pendingCount() >= cap) {
+            return `spawn_child: already at max pending detached (${cap}). Call collect_children to pick up results before spawning more.`;
+          }
+          const childHandle = randomUUID();
+          const promise = (async () => {
+            try {
+              return await spawner.spawnChild(parent, params, context);
+            } catch (err) {
+              coreLogger.error(
+                { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
+                'Detached spawn_child execution threw',
+              );
+              return {
+                nodeId: childHandle,
+                kind: 'subagent' as const,
+                status: 'tool_error' as const,
+                output: null,
+                usedTokens: 0,
+                durationMs: 0,
+                spawnedChildren: [],
+                notes: (err as Error).message || 'spawn failed',
+              };
+            }
+          })();
+          hooks.registerPending({
+            childId: childHandle,
+            startedAt: Date.now(),
+            taskBrief: params.taskBrief,
+            topic: params.topic,
+            subtopic: params.subtopic,
+            promise,
+          });
+          return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Detached subagent started. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
+        }
+      }
+
+      // ── Await path (default) ────────────────────────────────────────
       try {
         const result = await spawner.spawnChild(parent, params, context);
         return formatChildResult(result);
@@ -171,6 +251,10 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     };
   }
 
+  const modeRaw = typeof args.mode === 'string' ? args.mode : undefined;
+  const mode: 'await' | 'detach' | undefined =
+    modeRaw === 'detach' ? 'detach' : modeRaw === 'await' ? 'await' : undefined;
+
   const params: SpawnChildParams = {
     expertId: typeof args.expertId === 'string' ? args.expertId : undefined,
     role,
@@ -186,6 +270,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     constraints: Array.isArray(args.constraints)
       ? (args.constraints.filter((c) => typeof c === 'string') as string[])
       : undefined,
+    mode,
   };
 
   return { params };

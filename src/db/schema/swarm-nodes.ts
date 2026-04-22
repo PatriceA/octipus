@@ -78,6 +78,19 @@ export const swarmNodes = pgTable('swarm_nodes', {
   cacheHits: integer('cache_hits').notNull().default(0),
   result: jsonb('result').$type<SwarmChildResult | null>(),
   error: text('error'),
+  /**
+   * 'await' (default): parent blocks until this child returns.
+   * 'detach': parent gets the childId immediately and keeps working; must
+   * later call `collect_children` (or the framework auto-collects before
+   * the parent emits its final answer). Only valid for subagent nodes
+   * (depth 2) spawned by an agent (depth 1).
+   */
+  spawnMode: text('spawn_mode').notNull().default('await'),
+  /** Set by collect_children / auto-collect when the parent picks up this
+   *  detached child's result. NULL while pending; non-null after pickup.
+   *  Used by orphan-reaper to find detached children whose parent
+   *  terminated without collecting. */
+  collectedAt: timestamp('collected_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   completedAt: timestamp('completed_at'),
 }, (t) => ({
