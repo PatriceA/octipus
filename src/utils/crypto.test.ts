@@ -3,8 +3,11 @@ import {
   deriveKey,
   encrypt,
   decrypt,
+  encryptWithPassword,
+  decryptWithPassword,
   generateToken,
   generateId,
+  generateTotpSecret,
   sha256,
   hashPassword,
   verifyPassword,
@@ -166,6 +169,44 @@ describe('Crypto Utils', () => {
 
     test('returns false for different length strings', () => {
       expect(secureCompare('abc', 'abcd')).toBe(false);
+    });
+
+    test('returns true for empty equal strings', () => {
+      expect(secureCompare('', '')).toBe(true);
+    });
+  });
+
+  describe('encryptWithPassword/decryptWithPassword', () => {
+    test('round-trips data with password', async () => {
+      const enc = await encryptWithPassword('top secret', 'pw1');
+      expect(enc.salt).toBeTruthy();
+      const dec = await decryptWithPassword(enc, 'pw1');
+      expect(dec).toBe('top secret');
+    });
+
+    test('decrypt with wrong password throws', async () => {
+      const enc = await encryptWithPassword('payload', 'right');
+      await expect(decryptWithPassword(enc, 'wrong')).rejects.toThrow();
+    });
+
+    test('decryptWithPassword without salt throws', async () => {
+      const { key } = await deriveKey('pw');
+      const enc = encrypt('hi', key); // no salt set
+      await expect(decryptWithPassword(enc, 'pw')).rejects.toThrow(/Salt is required/);
+    });
+  });
+
+  describe('generateTotpSecret', () => {
+    test('returns base64 string', () => {
+      const s = generateTotpSecret();
+      expect(typeof s).toBe('string');
+      expect(s.length).toBeGreaterThan(0);
+      // base64 of 20 random bytes → 28 chars (with padding)
+      expect(s).toMatch(/^[A-Za-z0-9+/=]+$/);
+    });
+
+    test('generates unique secrets', () => {
+      expect(generateTotpSecret()).not.toBe(generateTotpSecret());
     });
   });
 });
