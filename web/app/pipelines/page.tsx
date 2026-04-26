@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { PipelineGraph } from '@/components/pipeline-graph';
+import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS } from '@/lib/types/models';
 
@@ -288,6 +288,8 @@ function TemplateEditor({
   const [description, setDescription] = useState(template?.description ?? '');
   const [steps, setSteps] = useState<PipelineStep[]>(template?.steps ?? []);
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
+  const [view, setView] = useState<'list' | 'graph'>('list');
+  const [errors, setErrors] = useState<string[]>([]);
 
   const addStep = () => {
     setSteps(prev => [
@@ -297,14 +299,54 @@ function TemplateEditor({
     setExpandedStep(steps.length);
   };
 
+  /**
+   * Insert a stage after `afterIndex` (use -1 to prepend). Re-targets
+   * any QA `retryTargetStage` that pointed to a later index so retries
+   * keep firing the right stage post-shift.
+   */
+  const insertAfter = (afterIndex: number) => {
+    const insertAt = afterIndex + 1;
+    const newStep: PipelineStep = { name: '', topic: 'general', requiresApproval: false };
+    setSteps(prev => {
+      const next = [...prev];
+      next.splice(insertAt, 0, newStep);
+      // Shift retry targets that pointed to a later stage.
+      return next.map((s, i) => {
+        if (i === insertAt) return s;
+        if (typeof s.retryTargetStage === 'number' && s.retryTargetStage >= insertAt) {
+          return { ...s, retryTargetStage: s.retryTargetStage + 1 };
+        }
+        return s;
+      });
+    });
+    setExpandedStep(insertAt);
+    setView('list'); // jump to list so the user can fill in the new stage's fields
+  };
+
+  /**
+   * Delete a stage and re-base every QA `retryTargetStage` that pointed
+   * to it or to a later stage. Targets that pointed to the deleted stage
+   * are cleared so the consumer must pick a valid earlier stage on the
+   * next save (validatePipelineStages will surface this).
+   */
+  const deleteStep = (index: number) => {
+    setSteps(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.map((s) => {
+        if (typeof s.retryTargetStage !== 'number') return s;
+        if (s.retryTargetStage === index) return { ...s, retryTargetStage: undefined };
+        if (s.retryTargetStage > index) return { ...s, retryTargetStage: s.retryTargetStage - 1 };
+        return s;
+      });
+    });
+    setExpandedStep(null);
+  };
+
   const updateStep = (index: number, update: Partial<PipelineStep>) => {
     setSteps(prev => prev.map((s, i) => i === index ? { ...s, ...update } : s));
   };
 
-  const removeStep = (index: number) => {
-    setSteps(prev => prev.filter((_, i) => i !== index));
-    setExpandedStep(null);
-  };
+  const removeStep = (index: number) => deleteStep(index);
 
   const moveStep = (index: number, direction: 'up' | 'down') => {
     const newIndex = direction === 'up' ? index - 1 : index + 1;
@@ -318,7 +360,17 @@ function TemplateEditor({
   };
 
   const handleSubmit = () => {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setErrors(['Template name is required.']);
+      return;
+    }
+    const stageErrors = validatePipelineStages(steps);
+    if (stageErrors.length > 0) {
+      setErrors(stageErrors);
+      setView('list'); // surface errors against the editable list
+      return;
+    }
+    setErrors([]);
     onSave({ name, description: description || undefined, steps });
   };
 
@@ -357,20 +409,66 @@ function TemplateEditor({
             />
           </div>
 
+          {/* Validation errors */}
+          {errors.length > 0 && (
+            <div className="rounded-lg border border-error/40 bg-error/10 px-3 py-2 text-xs text-error space-y-1">
+              {errors.map((err, idx) => (
+                <div key={idx}>{err}</div>
+              ))}
+            </div>
+          )}
+
           {/* Steps */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="block text-sm font-medium text-on-surface-variant">Steps</label>
-              <button
-                onClick={addStep}
-                className="text-xs text-primary hover:text-primary-container flex items-center gap-1"
-              >
-                <Plus className="w-3 h-3" />
-                Add Step
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-surface-container-high rounded-full p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setView('list')}
+                    title="List view"
+                    className={`p-1 rounded-full cursor-pointer ${view === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+                  >
+                    <List className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView('graph')}
+                    title="Graph view"
+                    className={`p-1 rounded-full cursor-pointer ${view === 'graph' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+                  >
+                    <Network className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <button
+                  onClick={addStep}
+                  className="text-xs text-primary hover:text-primary-container flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Step
+                </button>
+              </div>
             </div>
 
-            {steps.length === 0 ? (
+            {view === 'graph' ? (
+              <div className="rounded-lg border border-outline-variant/10 bg-surface-container-high p-3">
+                <PipelineGraph
+                  steps={steps}
+                  selectedIndex={expandedStep ?? undefined}
+                  onSelectStage={(i) => {
+                    setExpandedStep(i);
+                    setView('list');
+                  }}
+                  editable
+                  onDeleteStage={deleteStep}
+                  onInsertAfter={insertAfter}
+                />
+                <p className="mt-2 text-[11px] text-on-surface-variant">
+                  Click a stage to edit it in the list view. Use + to insert, × to delete. Reorder via the list view's arrows.
+                </p>
+              </div>
+            ) : steps.length === 0 ? (
               <div className="text-center py-8 border-2 border-dashed border-outline-variant/10 rounded-lg">
                 <p className="text-sm text-on-surface-variant mb-2">No steps yet</p>
                 <button

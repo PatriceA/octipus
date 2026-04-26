@@ -1,6 +1,6 @@
 'use client';
 
-import { RotateCcw, Shield } from 'lucide-react';
+import { Plus, RotateCcw, Shield, Trash2 } from 'lucide-react';
 
 interface Step {
   name: string;
@@ -14,25 +14,63 @@ interface Step {
 interface Props {
   steps: Step[];
   /**
-   * Optional click handler. When set, stage rectangles render as buttons —
-   * the consumer renders the matching list/code view side-by-side and
+   * Click handler. When set, stage rectangles render as buttons — the
+   * consumer renders the matching list/code view side-by-side and
    * highlights the same index. Foundation for the two-view (graph ↔ code)
    * abstraction described in DESIGN.md.
    */
   onSelectStage?: (index: number) => void;
   /** Index of the currently-selected stage (renders an accent stroke). */
   selectedIndex?: number;
+  /**
+   * Edit mode — when true, renders inline `+` insertion buttons between
+   * stages and a delete `×` button on each stage. The graph and the
+   * sibling list view share a single `steps` state in the consumer, so
+   * either surface can mutate the pipeline and the other re-renders.
+   */
+  editable?: boolean;
+  /** Called when the user removes a stage from the graph. */
+  onDeleteStage?: (index: number) => void;
+  /**
+   * Called when the user inserts a stage after the given index. Pass
+   * `-1` for "insert at the top" (rendered as a `+` above stage 0).
+   */
+  onInsertAfter?: (index: number) => void;
 }
 
 /**
  * Pure-SVG pipeline DAG view. Stages render top-to-bottom with arrows;
  * QA validation stages draw a curved retry arrow back to their target stage.
  *
- * Two-view abstraction (list ↔ graph) inspired by
- * https://github.com/WeaveMindAI/weft.
+ * In editable mode (`editable`), the graph is a first-class edit surface:
+ * delete a stage, insert between stages, or click to focus it in the
+ * sibling list editor.
  */
-export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
+export function PipelineGraph({
+  steps,
+  onSelectStage,
+  selectedIndex,
+  editable,
+  onDeleteStage,
+  onInsertAfter,
+}: Props) {
+  const interactive = !!onSelectStage;
+
   if (steps.length === 0) {
+    if (editable && onInsertAfter) {
+      return (
+        <div className="flex items-center justify-center py-8">
+          <button
+            type="button"
+            onClick={() => onInsertAfter(-1)}
+            className="flex items-center gap-2 px-4 py-2 rounded-full text-sm bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add first stage
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="text-sm text-on-surface-variant italic px-2 py-4">
         No stages yet — add stages to see the graph.
@@ -44,11 +82,14 @@ export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
   const BOX_H = 64;
   const GAP = 32;
   const PAD_X = 24;
+  const PAD_Y = editable ? 24 : 8; // top breathing room for the leading insertion button
   const RETRY_LANE_W = 80;
   const ROW_H = BOX_H + GAP;
 
-  const totalH = steps.length * BOX_H + (steps.length - 1) * GAP + 16;
+  const totalH = steps.length * ROW_H - GAP + PAD_Y * 2;
   const totalW = BOX_W + PAD_X * 2 + RETRY_LANE_W;
+
+  const cx = PAD_X + BOX_W / 2;
 
   return (
     <div className="overflow-x-auto">
@@ -59,53 +100,83 @@ export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
         className="text-white"
       >
         <defs>
-          <marker
-            id="arrow"
-            markerWidth="10"
-            markerHeight="10"
-            refX="8"
-            refY="3"
-            orient="auto"
-          >
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
             <path d="M0,0 L0,6 L9,3 z" fill="currentColor" className="text-on-surface-variant" />
           </marker>
-          <marker
-            id="arrow-retry"
-            markerWidth="10"
-            markerHeight="10"
-            refX="8"
-            refY="3"
-            orient="auto"
-          >
+          <marker id="arrow-retry" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
             <path d="M0,0 L0,6 L9,3 z" fill="currentColor" className="text-blue-400" />
           </marker>
         </defs>
 
-        {steps.map((step, i) => {
-          const y = i * ROW_H;
-          const cx = PAD_X + BOX_W / 2;
+        {/* Leading insertion button (insert at top, before stage 0) */}
+        {editable && onInsertAfter && (
+          <foreignObject x={cx - 12} y={PAD_Y - 22} width="24" height="20">
+            <button
+              type="button"
+              aria-label="Insert stage at the top"
+              onClick={() => onInsertAfter(-1)}
+              className="w-6 h-6 rounded-full bg-primary/15 text-primary hover:bg-primary/30 cursor-pointer flex items-center justify-center"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </foreignObject>
+        )}
 
-          const arrowDown = i < steps.length - 1 ? (
-            <line
-              x1={cx}
-              y1={y + BOX_H}
-              x2={cx}
-              y2={y + BOX_H + GAP}
-              stroke="currentColor"
-              strokeWidth="2"
-              className="text-on-surface-variant"
-              markerEnd="url(#arrow)"
-            />
-          ) : null;
+        {steps.map((step, i) => {
+          const y = PAD_Y + i * ROW_H;
+
+          // Down arrow OR insertion button between stages
+          let between: JSX.Element | null = null;
+          if (i < steps.length - 1) {
+            if (editable && onInsertAfter) {
+              between = (
+                <g>
+                  <line
+                    x1={cx}
+                    y1={y + BOX_H}
+                    x2={cx}
+                    y2={y + BOX_H + GAP}
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="text-on-surface-variant"
+                    markerEnd="url(#arrow)"
+                  />
+                  <foreignObject x={cx - 12} y={y + BOX_H + GAP / 2 - 10} width="24" height="20">
+                    <button
+                      type="button"
+                      aria-label={`Insert stage after stage ${i + 1}`}
+                      onClick={() => onInsertAfter(i)}
+                      className="w-6 h-6 rounded-full bg-primary/15 text-primary hover:bg-primary/30 cursor-pointer flex items-center justify-center"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </foreignObject>
+                </g>
+              );
+            } else {
+              between = (
+                <line
+                  x1={cx}
+                  y1={y + BOX_H}
+                  x2={cx}
+                  y2={y + BOX_H + GAP}
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="text-on-surface-variant"
+                  markerEnd="url(#arrow)"
+                />
+              );
+            }
+          }
 
           // QA retry arrow — from this stage back to retryTargetStage.
-          let retry = null;
+          let retry: JSX.Element | null = null;
           if (step.stageType === 'qa_validation' && typeof step.retryTargetStage === 'number') {
             const target = step.retryTargetStage;
             if (target >= 0 && target < i) {
               const startX = PAD_X + BOX_W;
               const startY = y + BOX_H / 2;
-              const endY = target * ROW_H + BOX_H / 2;
+              const endY = PAD_Y + target * ROW_H + BOX_H / 2;
               const laneX = PAD_X + BOX_W + 32;
               retry = (
                 <g>
@@ -118,12 +189,7 @@ export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
                     className="text-blue-400"
                     markerEnd="url(#arrow-retry)"
                   />
-                  <text
-                    x={laneX + 6}
-                    y={(startY + endY) / 2}
-                    fontSize="10"
-                    className="fill-blue-400"
-                  >
+                  <text x={laneX + 6} y={(startY + endY) / 2} fontSize="10" className="fill-blue-400">
                     retry × {step.maxRetries ?? 3}
                   </text>
                 </g>
@@ -135,22 +201,25 @@ export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
           const isSelected = i === selectedIndex;
           const stroke = isSelected ? '#73ffe3' : step.requiresApproval ? '#f97316' : '#374151';
           const strokeWidth = isSelected ? 2.5 : step.requiresApproval ? 2 : 1;
-          const interactive = !!onSelectStage;
 
           return (
             <g
               key={i}
               role={interactive ? 'button' : undefined}
               tabIndex={interactive ? 0 : undefined}
-              aria-label={interactive ? `Stage ${i + 1}: ${step.name}` : undefined}
+              aria-label={interactive ? `Stage ${i + 1}: ${step.name || 'Untitled'}` : undefined}
               aria-pressed={interactive ? isSelected : undefined}
               onClick={interactive ? () => onSelectStage(i) : undefined}
-              onKeyDown={interactive ? (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onSelectStage(i);
-                }
-              } : undefined}
+              onKeyDown={
+                interactive
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectStage(i);
+                      }
+                    }
+                  : undefined
+              }
               style={interactive ? { cursor: 'pointer', outline: 'none' } : undefined}
               className={interactive ? 'transition-opacity hover:opacity-90 focus:opacity-90' : undefined}
             >
@@ -164,22 +233,10 @@ export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
                 stroke={stroke}
                 strokeWidth={strokeWidth}
               />
-              <text
-                x={PAD_X + 16}
-                y={y + 24}
-                fontSize="14"
-                fontWeight="600"
-                fill="#fff"
-              >
-                {`${i + 1}. ${step.name.slice(0, 24)}${step.name.length > 24 ? '…' : ''}`}
+              <text x={PAD_X + 16} y={y + 24} fontSize="14" fontWeight="600" fill="#fff">
+                {`${i + 1}. ${(step.name || 'Untitled').slice(0, 24)}${(step.name || '').length > 24 ? '…' : ''}`}
               </text>
-              <text
-                x={PAD_X + 16}
-                y={y + 44}
-                fontSize="11"
-                fill="#9ca3af"
-                fontFamily="monospace"
-              >
+              <text x={PAD_X + 16} y={y + 44} fontSize="11" fill="#9ca3af" fontFamily="monospace">
                 {step.topic}
               </text>
               {step.requiresApproval && (
@@ -192,12 +249,82 @@ export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
                   <RotateCcw className="w-4 h-4 text-blue-400" />
                 </foreignObject>
               )}
-              {arrowDown}
+              {/* Delete button (edit mode) — sits in the trailing corner */}
+              {editable && onDeleteStage && (
+                <foreignObject x={PAD_X + BOX_W - 28} y={y + BOX_H - 28} width="24" height="24">
+                  <button
+                    type="button"
+                    aria-label={`Delete stage ${i + 1}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteStage(i);
+                    }}
+                    className="w-6 h-6 rounded-full bg-error/15 text-error hover:bg-error/30 cursor-pointer flex items-center justify-center"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </foreignObject>
+              )}
+              {between}
               {retry}
             </g>
           );
         })}
+
+        {/* Trailing insertion button (insert after last stage) */}
+        {editable && onInsertAfter && steps.length > 0 && (
+          <foreignObject
+            x={cx - 12}
+            y={PAD_Y + steps.length * ROW_H - GAP + 6}
+            width="24"
+            height="20"
+          >
+            <button
+              type="button"
+              aria-label="Append stage at the end"
+              onClick={() => onInsertAfter(steps.length - 1)}
+              className="w-6 h-6 rounded-full bg-primary/15 text-primary hover:bg-primary/30 cursor-pointer flex items-center justify-center"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </foreignObject>
+        )}
       </svg>
     </div>
   );
+}
+
+/**
+ * Pre-save validation for pipeline stages. Surfaces every problem in
+ * one pass so the consumer can render a single error block instead of
+ * fix-and-resubmit cycles.
+ */
+export function validatePipelineStages(steps: Step[]): string[] {
+  const errors: string[] = [];
+  if (steps.length === 0) errors.push('Pipeline must have at least one stage.');
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    if (!s.name || !s.name.trim()) {
+      errors.push(`Stage ${i + 1}: name is required.`);
+    }
+    if (!s.topic || !s.topic.trim()) {
+      errors.push(`Stage ${i + 1}: topic is required.`);
+    }
+    if (s.stageType === 'qa_validation') {
+      const target = s.retryTargetStage;
+      if (typeof target !== 'number') {
+        errors.push(`Stage ${i + 1} (QA): retryTargetStage is required.`);
+      } else if (target < 0 || target >= i) {
+        // Must point to an EARLIER stage. >=i would be a forward
+        // reference (forms a cycle once the QA fires).
+        errors.push(
+          `Stage ${i + 1} (QA): retry target ${target + 1} must be an earlier stage (1..${i}).`,
+        );
+      }
+      if (typeof s.maxRetries === 'number' && s.maxRetries < 1) {
+        errors.push(`Stage ${i + 1} (QA): maxRetries must be ≥ 1.`);
+      }
+    }
+  }
+  return errors;
 }

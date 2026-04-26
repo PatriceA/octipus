@@ -8,20 +8,20 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-- **Pipeline DAG view — bidirectional editing.** Visualization shipped
-  (interactive read-only graph with click-to-select, foundation for the
-  two-view abstraction). Editing in flight: graph→code drag/reorder,
-  add/delete stages from the canvas, cycle detection on save, persisted
-  back to DB. Will require pulling in `@xyflow/react` for proper
-  node/edge handling. See [DESIGN.md](./DESIGN.md) for the two-view
-  philosophy.
-
 - **Auto-discovery — typed-contract follow-up.** Tools and channels
   already auto-load (`src/tools/discovery.ts`, `src/channels/discovery.ts`).
   Remaining: tighten the typed contracts — channel `isEnabled(config)`
   hook is implicit, tool `BaseTool.initialize()` lifecycle is uneven
   across implementations. Worth a pass to make folder-add genuinely
   zero-config rather than convention-by-grep.
+
+- **Pipeline DAG — drag-to-reorder on the graph.** Bidirectional
+  editing is in (delete / insert / click-to-edit on the graph; all
+  edits stay synced with the list view), plus pre-save cycle and
+  field validation. Reordering still happens from the list view's
+  up/down arrows; pulling in `@xyflow/react` would give native
+  drag-and-drop on the canvas itself. Tracked here so the polish
+  doesn't get silently dropped.
 
 ## Next (months)
 
@@ -96,11 +96,19 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     ('telegram','slack','whatsapp','teams','discord')`. Prevents
     concurrent active rows per conversation. Existing
     `findAllByUserAndChannel(...)` cross-restart aggregation untouched.
-  - **Pipeline DAG view — visualization complete.** `PipelineGraph`
-    now accepts `onSelectStage` + `selectedIndex` (a11y-correct: role,
-    tabIndex, keyboard, aria-pressed). Foundation for the two-view
-    (graph ↔ code) abstraction. Bidirectional editing remains in
-    "Now".
+  - **Pipeline DAG view — bidirectional editing complete.**
+    `PipelineGraph` now accepts `editable`, `onDeleteStage`, and
+    `onInsertAfter` (in addition to `onSelectStage` / `selectedIndex`).
+    The graph renders inline `+` between stages, a leading `+` above
+    the first stage, a trailing `+` after the last, and a delete `×`
+    on each stage. `TemplateEditor` toggles between list and graph,
+    both views write to the same `steps` state — edits in either
+    surface re-render the other. Insert and delete re-base QA
+    `retryTargetStage` indices automatically, and a new
+    `validatePipelineStages()` helper surfaces all problems in one
+    pass on save (cycles, forward-reference QA targets, missing
+    required fields, sub-1 maxRetries). Native drag-to-reorder on
+    the canvas remains "Now".
 
 - **v0.1 release audit pass (2026-04-26).** Provider error-handling pass:
   every model provider now surfaces failures as `ClassifiedError` with
