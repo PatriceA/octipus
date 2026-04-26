@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
+import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
@@ -21,8 +22,8 @@ export class WhatsAppChannel extends BaseChannel {
   private verifyToken: string | null = null;
   private appSecret: string | null = null;
 
-  override isEnabled(config: unknown): boolean {
-    return Boolean((config as { whatsapp?: { accessToken?: string } })?.whatsapp?.accessToken);
+  override isEnabled(config: Config): boolean {
+    return Boolean(config.whatsapp?.accessToken);
   }
 
   async connect(): Promise<void> {

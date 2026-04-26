@@ -2,6 +2,7 @@ import { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
+import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
@@ -42,8 +43,8 @@ export class SlackChannel extends BaseChannel {
 
   private app: App | null = null;
 
-  override isEnabled(config: unknown): boolean {
-    return Boolean((config as { slack?: { botToken?: string } })?.slack?.botToken);
+  override isEnabled(config: Config): boolean {
+    return Boolean(config.slack?.botToken);
   }
 
   async connect(): Promise<void> {

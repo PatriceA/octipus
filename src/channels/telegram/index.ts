@@ -1,6 +1,7 @@
 import { Bot, type Context } from 'grammy';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
+import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
@@ -13,8 +14,8 @@ export class TelegramChannel extends BaseChannel {
   private bot: Bot | null = null;
   private allowedUsers: Set<string> = new Set();
 
-  override isEnabled(config: unknown): boolean {
-    return Boolean((config as { telegram?: { botToken?: string } })?.telegram?.botToken);
+  override isEnabled(config: Config): boolean {
+    return Boolean(config.telegram?.botToken);
   }
 
   async connect(): Promise<void> {

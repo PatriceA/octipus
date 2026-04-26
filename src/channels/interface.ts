@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType, UnifiedMessage } from '@/core/types';
 import { generateId } from '@/utils/crypto';
 import { channelLogger } from '@/utils/logger';
@@ -47,7 +48,7 @@ export abstract class BaseChannel extends EventEmitter {
    * return `false` when their tokens/secrets are not present. The auto-
    * discovery loader (`channels/discovery.ts`) skips disabled channels.
    */
-  isEnabled(_config: unknown): boolean {
+  isEnabled(_config: Config): boolean {
     return true;
   }
 

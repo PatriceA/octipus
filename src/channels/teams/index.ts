@@ -7,6 +7,7 @@ import {
   type TurnContext,
 } from 'botbuilder';
 import { getConfig } from '@/config';
+import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
@@ -19,8 +20,8 @@ export class TeamsChannel extends BaseChannel {
   private adapter: CloudAdapter | null = null;
   private conversationReferences: Map<string, Partial<Activity>> = new Map();
 
-  override isEnabled(config: unknown): boolean {
-    return Boolean((config as { teams?: { appId?: string } })?.teams?.appId);
+  override isEnabled(config: Config): boolean {
+    return Boolean(config.teams?.appId);
   }
 
   async connect(): Promise<void> {
