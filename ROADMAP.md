@@ -8,20 +8,7 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-- **Auto-discovery — typed-contract follow-up.** Tools and channels
-  already auto-load (`src/tools/discovery.ts`, `src/channels/discovery.ts`).
-  Remaining: tighten the typed contracts — channel `isEnabled(config)`
-  hook is implicit, tool `BaseTool.initialize()` lifecycle is uneven
-  across implementations. Worth a pass to make folder-add genuinely
-  zero-config rather than convention-by-grep.
-
-- **Pipeline DAG — drag-to-reorder on the graph.** Bidirectional
-  editing is in (delete / insert / click-to-edit on the graph; all
-  edits stay synced with the list view), plus pre-save cycle and
-  field validation. Reordering still happens from the list view's
-  up/down arrows; pulling in `@xyflow/react` would give native
-  drag-and-drop on the canvas itself. Tracked here so the polish
-  doesn't get silently dropped.
+_(Empty — both 2026-04 in-flight items shipped this week; see Done.)_
 
 ## Next (months)
 
@@ -64,6 +51,26 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ### 2026-04 batch
 
+- **Pipeline DAG — drag-to-reorder on the graph (2026-04-26).** Each
+  stage card in the editable graph now has a `GripVertical` drag handle
+  on its leading edge. Pointer-event drag converts client coords to SVG
+  space, snaps to the nearest stage row, and renders a `#73ffe3` drop
+  indicator at the target slot; dragged card dims to 0.4 opacity. New
+  pure helper `reorderStages(steps, from, to)` lives next to
+  `validatePipelineStages` and rebases QA `retryTargetStage` indices via
+  a permutation map (covered by 11 unit tests; same helper now also
+  powers the list-view up/down arrows, fixing a latent bug where
+  pre-existing arrows did not rebase retry pointers). Decided not to
+  pull in `@xyflow/react` — the hand-rolled SVG was already polished
+  and a 50KB dep for one feature wasn't worth it.
+- **Auto-discovery — typed-contract follow-up (2026-04-26).** Channel
+  `isEnabled(config)` hook is now typed against `Config` instead of
+  `unknown` — the four overrides (telegram/slack/whatsapp/teams) drop
+  their `(config as { … })` casts. Tool `BaseTool.initialize()` audited:
+  no subclass overrides it; the lifecycle was already uniform. Variance
+  lives on `checkAvailability()` (10+ overrides), which is the
+  intended extension point. New `is-enabled.test.ts` locks the contract
+  for each channel.
 - **Roadmap "Now" sweep (2026-04-26).** Six in-flight items audited
   against actual code; five closed. Done:
   - **Auto-discovery (tools + channels).** `discoverTools()` is wired
