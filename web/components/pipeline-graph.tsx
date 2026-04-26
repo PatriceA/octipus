@@ -1,6 +1,7 @@
 'use client';
 
-import { Plus, RotateCcw, Shield, Trash2 } from 'lucide-react';
+import { GripVertical, Plus, RotateCcw, Shield, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 
 interface Step {
   name: string;
@@ -36,6 +37,13 @@ interface Props {
    * `-1` for "insert at the top" (rendered as a `+` above stage 0).
    */
   onInsertAfter?: (index: number) => void;
+  /**
+   * Called when the user drags a stage to a new position. The graph
+   * renders a drag handle on each stage card when this is set; the
+   * consumer is expected to apply the move via `reorderStages()` so QA
+   * `retryTargetStage` indices stay aligned.
+   */
+  onReorder?: (from: number, to: number) => void;
 }
 
 /**
@@ -53,8 +61,13 @@ export function PipelineGraph({
   editable,
   onDeleteStage,
   onInsertAfter,
+  onReorder,
 }: Props) {
   const interactive = !!onSelectStage;
+  const draggable = !!(editable && onReorder);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  // While dragging: { from, targetIdx } in array indices.
+  const [drag, setDrag] = useState<{ from: number; targetIdx: number } | null>(null);
 
   if (steps.length === 0) {
     if (editable && onInsertAfter) {
@@ -91,9 +104,59 @@ export function PipelineGraph({
 
   const cx = PAD_X + BOX_W / 2;
 
+  // Convert a client (screen) Y coordinate into the SVG's local Y space.
+  const clientYToSvgY = (clientY: number): number => {
+    const svg = svgRef.current;
+    if (!svg) return clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return clientY;
+    const pt = svg.createSVGPoint();
+    pt.x = 0;
+    pt.y = clientY;
+    const local = pt.matrixTransform(ctm.inverse());
+    return local.y;
+  };
+
+  // Map an SVG Y coord to the stage index whose center it is closest to.
+  const svgYToTargetIdx = (svgY: number): number => {
+    const raw = Math.round((svgY - PAD_Y - BOX_H / 2) / ROW_H);
+    if (raw < 0) return 0;
+    if (raw > steps.length - 1) return steps.length - 1;
+    return raw;
+  };
+
+  // Pointer-drag wiring. `pointermove`/`pointerup` listen on `window` so a
+  // drag that exits the SVG bounds still resolves cleanly.
+  useEffect(() => {
+    if (!drag || !onReorder) return;
+    const onMove = (e: PointerEvent) => {
+      const y = clientYToSvgY(e.clientY);
+      const idx = svgYToTargetIdx(y);
+      setDrag(d => (d && d.targetIdx !== idx ? { ...d, targetIdx: idx } : d));
+    };
+    const onUp = () => {
+      setDrag(d => {
+        if (d && d.from !== d.targetIdx) onReorder(d.from, d.targetIdx);
+        return null;
+      });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    // The handlers close over `drag.from`; re-binding on every drag start is
+    // cheap and avoids a ref dance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag?.from, onReorder, steps.length]);
+
   return (
     <div className="overflow-x-auto">
       <svg
+        ref={svgRef}
         width={totalW}
         height={totalH}
         viewBox={`0 0 ${totalW} ${totalH}`}
@@ -202,6 +265,7 @@ export function PipelineGraph({
           const stroke = isSelected ? '#73ffe3' : step.requiresApproval ? '#f97316' : '#374151';
           const strokeWidth = isSelected ? 2.5 : step.requiresApproval ? 2 : 1;
 
+          const isDraggingThis = drag?.from === i;
           return (
             <g
               key={i}
@@ -209,7 +273,7 @@ export function PipelineGraph({
               tabIndex={interactive ? 0 : undefined}
               aria-label={interactive ? `Stage ${i + 1}: ${step.name || 'Untitled'}` : undefined}
               aria-pressed={interactive ? isSelected : undefined}
-              onClick={interactive ? () => onSelectStage(i) : undefined}
+              onClick={interactive && !drag ? () => onSelectStage(i) : undefined}
               onKeyDown={
                 interactive
                   ? (e) => {
@@ -222,6 +286,7 @@ export function PipelineGraph({
               }
               style={interactive ? { cursor: 'pointer', outline: 'none' } : undefined}
               className={interactive ? 'transition-opacity hover:opacity-90 focus:opacity-90' : undefined}
+              opacity={isDraggingThis ? 0.4 : 1}
             >
               <rect
                 x={PAD_X}
@@ -233,10 +298,10 @@ export function PipelineGraph({
                 stroke={stroke}
                 strokeWidth={strokeWidth}
               />
-              <text x={PAD_X + 16} y={y + 24} fontSize="14" fontWeight="600" fill="#fff">
+              <text x={PAD_X + (draggable ? 36 : 16)} y={y + 24} fontSize="14" fontWeight="600" fill="#fff">
                 {`${i + 1}. ${(step.name || 'Untitled').slice(0, 24)}${(step.name || '').length > 24 ? '…' : ''}`}
               </text>
-              <text x={PAD_X + 16} y={y + 44} fontSize="11" fill="#9ca3af" fontFamily="monospace">
+              <text x={PAD_X + (draggable ? 36 : 16)} y={y + 44} fontSize="11" fill="#9ca3af" fontFamily="monospace">
                 {step.topic}
               </text>
               {step.requiresApproval && (
@@ -247,6 +312,26 @@ export function PipelineGraph({
               {step.stageType === 'qa_validation' && (
                 <foreignObject x={PAD_X + BOX_W - 56} y={y + 8} width="20" height="20">
                   <RotateCcw className="w-4 h-4 text-blue-400" />
+                </foreignObject>
+              )}
+              {/* Drag handle (edit + reorder mode) — leading edge of the card */}
+              {draggable && (
+                <foreignObject x={PAD_X + 4} y={y + BOX_H / 2 - 12} width="24" height="24">
+                  <button
+                    type="button"
+                    aria-label={`Drag stage ${i + 1} to reorder`}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      // Capture so subsequent moves from this pointer fire.
+                      (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+                      setDrag({ from: i, targetIdx: i });
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-6 h-6 rounded text-on-surface-variant hover:bg-white/10 cursor-grab active:cursor-grabbing flex items-center justify-center touch-none"
+                  >
+                    <GripVertical className="w-4 h-4" />
+                  </button>
                 </foreignObject>
               )}
               {/* Delete button (edit mode) — sits in the trailing corner */}
@@ -271,6 +356,20 @@ export function PipelineGraph({
           );
         })}
 
+        {/* Drop indicator while dragging — horizontal accent at the target row's center */}
+        {drag && drag.from !== drag.targetIdx && (
+          <line
+            x1={PAD_X - 4}
+            x2={PAD_X + BOX_W + 4}
+            y1={PAD_Y + drag.targetIdx * ROW_H + BOX_H / 2}
+            y2={PAD_Y + drag.targetIdx * ROW_H + BOX_H / 2}
+            stroke="#73ffe3"
+            strokeWidth="3"
+            strokeLinecap="round"
+            opacity="0.9"
+          />
+        )}
+
         {/* Trailing insertion button (insert after last stage) */}
         {editable && onInsertAfter && steps.length > 0 && (
           <foreignObject
@@ -294,37 +393,7 @@ export function PipelineGraph({
   );
 }
 
-/**
- * Pre-save validation for pipeline stages. Surfaces every problem in
- * one pass so the consumer can render a single error block instead of
- * fix-and-resubmit cycles.
- */
-export function validatePipelineStages(steps: Step[]): string[] {
-  const errors: string[] = [];
-  if (steps.length === 0) errors.push('Pipeline must have at least one stage.');
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i];
-    if (!s.name || !s.name.trim()) {
-      errors.push(`Stage ${i + 1}: name is required.`);
-    }
-    if (!s.topic || !s.topic.trim()) {
-      errors.push(`Stage ${i + 1}: topic is required.`);
-    }
-    if (s.stageType === 'qa_validation') {
-      const target = s.retryTargetStage;
-      if (typeof target !== 'number') {
-        errors.push(`Stage ${i + 1} (QA): retryTargetStage is required.`);
-      } else if (target < 0 || target >= i) {
-        // Must point to an EARLIER stage. >=i would be a forward
-        // reference (forms a cycle once the QA fires).
-        errors.push(
-          `Stage ${i + 1} (QA): retry target ${target + 1} must be an earlier stage (1..${i}).`,
-        );
-      }
-      if (typeof s.maxRetries === 'number' && s.maxRetries < 1) {
-        errors.push(`Stage ${i + 1} (QA): maxRetries must be ≥ 1.`);
-      }
-    }
-  }
-  return errors;
-}
+// Re-export the validator from the shared (bun-test-covered) location.
+// `@/*` in this Next.js app resolves to `./web/*`, so we use a relative
+// path to reach `src/core/orchestrator/pipeline-validation.ts`.
+export { validatePipelineStages } from '../../src/core/orchestrator/pipeline-validation';

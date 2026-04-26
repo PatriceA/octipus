@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
+import { reorderStages } from '../../../src/core/orchestrator/pipeline-validation';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS } from '@/lib/types/models';
 
@@ -348,15 +349,24 @@ function TemplateEditor({
 
   const removeStep = (index: number) => deleteStep(index);
 
+  const reorder = (from: number, to: number) => {
+    if (from === to) return;
+    if (from < 0 || from >= steps.length || to < 0 || to >= steps.length) return;
+    setSteps(prev => reorderStages(prev, from, to));
+    // Follow the moved/displaced expanded step to its new position.
+    setExpandedStep(prev => {
+      if (prev === null) return prev;
+      if (prev === from) return to;
+      if (from < to && prev > from && prev <= to) return prev - 1;
+      if (from > to && prev >= to && prev < from) return prev + 1;
+      return prev;
+    });
+  };
+
   const moveStep = (index: number, direction: 'up' | 'down') => {
     const newIndex = direction === 'up' ? index - 1 : index + 1;
     if (newIndex < 0 || newIndex >= steps.length) return;
-    const newSteps = [...steps];
-    [newSteps[index], newSteps[newIndex]] = [newSteps[newIndex], newSteps[index]];
-    setSteps(newSteps);
-    // If the moved step was expanded, follow it to its new position
-    if (expandedStep === index) setExpandedStep(newIndex);
-    else if (expandedStep === newIndex) setExpandedStep(index);
+    reorder(index, newIndex);
   };
 
   const handleSubmit = () => {
@@ -463,9 +473,10 @@ function TemplateEditor({
                   editable
                   onDeleteStage={deleteStep}
                   onInsertAfter={insertAfter}
+                  onReorder={reorder}
                 />
                 <p className="mt-2 text-[11px] text-on-surface-variant">
-                  Click a stage to edit it in the list view. Use + to insert, × to delete. Reorder via the list view's arrows.
+                  Click a stage to edit. Drag the handle to reorder. Use + to insert, × to delete.
                 </p>
               </div>
             ) : steps.length === 0 ? (

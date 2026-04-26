@@ -46,3 +46,42 @@ export function validatePipelineStages(steps: PipelineStageInput[]): string[] {
   }
   return errors;
 }
+
+/**
+ * Move a stage from one index to another and re-base every QA
+ * `retryTargetStage` so retry pointers keep aiming at the same logical
+ * stage post-reorder.
+ *
+ * Out-of-range indices, or `from === to`, return the input as-is. The
+ * function does NOT validate the result — a reorder may push a QA's
+ * retry target past it (forward reference); the consumer should run
+ * `validatePipelineStages()` and surface those errors at save time.
+ */
+export function reorderStages<T extends PipelineStageInput>(
+  steps: readonly T[],
+  from: number,
+  to: number,
+): T[] {
+  if (from === to) return [...steps];
+  if (from < 0 || from >= steps.length || to < 0 || to >= steps.length) {
+    return [...steps];
+  }
+
+  // Permutation: order[newIdx] = oldIdx
+  const order = steps.map((_, i) => i);
+  const [moved] = order.splice(from, 1);
+  order.splice(to, 0, moved);
+
+  // oldIdx → newIdx lookup for retry-target rebasing
+  const oldToNew = new Map<number, number>();
+  order.forEach((oldIdx, newIdx) => oldToNew.set(oldIdx, newIdx));
+
+  return order.map(oldIdx => {
+    const s = steps[oldIdx];
+    if (typeof s.retryTargetStage === 'number') {
+      const remapped = oldToNew.get(s.retryTargetStage);
+      return { ...s, retryTargetStage: remapped };
+    }
+    return { ...s };
+  });
+}
