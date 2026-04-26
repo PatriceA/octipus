@@ -13,7 +13,7 @@ import { coreLogger } from '@/utils/logger';
 import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
-import type { QAValidationResult } from './types';
+import { appendSources, type QAValidationResult } from './types';
 
 export class PipelineManager {
   private get db() { return getDb(); }
@@ -79,6 +79,11 @@ export class PipelineManager {
     // Run stages sequentially with structured handoff context
     let previousOutput = '';
     const handoffChain: HandoffContext[] = [];
+    // Source attribution: every successfully completed stage (incl. QA
+    // retries) appends one entry. Rendered into the pipeline summary as
+    // `_Sources: stage(...), stage(...)_` to match the directResponse
+    // and orchestrator footers.
+    const pipelineSources: string[] = [];
     const stages = await this.getStages(pipeline.id);
     const stageConfBuilt = buildStagesFromTemplate(template, description);
     const retryCounts: Record<number, number> = {}; // Track retries per stage index
@@ -181,6 +186,7 @@ export class PipelineManager {
         );
 
         previousOutput = String(result || '');
+        pipelineSources.push(`stage(${i + 1}: ${stage.name}/${stage.role})`);
 
         await this.updateStage(stage.id, {
           status: 'completed',
@@ -399,7 +405,8 @@ export class PipelineManager {
     }
 
     // All stages complete
-    const summary = `Pipeline "${title}" completed successfully. Final output:\n\n${previousOutput}`;
+    const baseSummary = `Pipeline "${title}" completed successfully. Final output:\n\n${previousOutput}`;
+    const summary = appendSources(baseSummary, pipelineSources);
     await this.updatePipeline(pipeline.id, {
       status: 'completed',
       summary,
@@ -515,6 +522,7 @@ export class PipelineManager {
     const stages = await this.getStages(pipeline.id);
     let previousOutput = '';
     const handoffChain: HandoffContext[] = [];
+    const pipelineSources: string[] = [];
 
     // Retrieve step configs from the DB template to check stageType
     const [templateRecord] = await this.db
@@ -592,6 +600,7 @@ export class PipelineManager {
         );
 
         previousOutput = String(result || '');
+        pipelineSources.push(`stage(${i + 1}: ${stage.name}/${stage.role})`);
         await this.updateStage(stage.id, {
           status: 'completed',
           output: previousOutput,
@@ -739,7 +748,8 @@ export class PipelineManager {
       }
     }
 
-    const summary = `Pipeline "${pipeline.title}" completed.\n\n${previousOutput}`;
+    const baseSummary = `Pipeline "${pipeline.title}" completed.\n\n${previousOutput}`;
+    const summary = appendSources(baseSummary, pipelineSources);
     await this.updatePipeline(pipeline.id, { status: 'completed', summary, completedAt: new Date() });
 
     // Emit pipeline_completed event for UI

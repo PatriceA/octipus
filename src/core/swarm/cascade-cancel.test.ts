@@ -155,3 +155,57 @@ describe('parent AbortSignal wiring — construction path', () => {
     expect(worker.getAbortSignal().aborted).toBe(true);
   });
 });
+
+describe('CLIAgentWorker — parent AbortSignal wiring (Phase 3 polish)', () => {
+  test('CLIAgentWorker constructor accepts parentSignal; abort triggers stop()', async () => {
+    const { CLIAgentWorker } = await import('@/core/cli-agent-worker');
+    const parent = new AbortController();
+    const worker = new CLIAgentWorker(
+      {
+        id: 'cli-x',
+        sessionId: '00000000-0000-0000-0000-000000000000',
+        userId: 'u',
+        topic: '',
+        model: 'cli/claude',
+        role: 'research',
+        status: 'idle',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        metadata: {},
+      },
+      { maxIterations: 1, contextWindowSize: 1000, timeout: 1000, maxTokenBudget: 1000 },
+      { parentSignal: parent.signal },
+    );
+
+    // Sanity: aborted flag is private — read it via cast, same pattern as
+    // the AgentWorker tests above. Status is the public observable.
+    expect((worker as unknown as { aborted: boolean }).aborted).toBe(false);
+    parent.abort('parent-stop');
+    await new Promise((r) => setImmediate(r));
+    expect((worker as unknown as { aborted: boolean }).aborted).toBe(true);
+  });
+
+  test('CLIAgentWorker constructed with already-aborted parent signal stops on next tick', async () => {
+    const { CLIAgentWorker } = await import('@/core/cli-agent-worker');
+    const parent = new AbortController();
+    parent.abort('pre-aborted');
+    const worker = new CLIAgentWorker(
+      {
+        id: 'cli-y',
+        sessionId: '00000000-0000-0000-0000-000000000000',
+        userId: 'u',
+        topic: '',
+        model: 'cli/claude',
+        role: 'research',
+        status: 'idle',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        metadata: {},
+      },
+      { maxIterations: 1, contextWindowSize: 1000, timeout: 1000, maxTokenBudget: 1000 },
+      { parentSignal: parent.signal },
+    );
+    await new Promise((r) => setImmediate(r));
+    expect((worker as unknown as { aborted: boolean }).aborted).toBe(true);
+  });
+});

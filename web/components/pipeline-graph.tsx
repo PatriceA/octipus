@@ -13,6 +13,15 @@ interface Step {
 
 interface Props {
   steps: Step[];
+  /**
+   * Optional click handler. When set, stage rectangles render as buttons —
+   * the consumer renders the matching list/code view side-by-side and
+   * highlights the same index. Foundation for the two-view (graph ↔ code)
+   * abstraction described in DESIGN.md.
+   */
+  onSelectStage?: (index: number) => void;
+  /** Index of the currently-selected stage (renders an accent stroke). */
+  selectedIndex?: number;
 }
 
 /**
@@ -22,7 +31,7 @@ interface Props {
  * Two-view abstraction (list ↔ graph) inspired by
  * https://github.com/WeaveMindAI/weft.
  */
-export function PipelineGraph({ steps }: Props) {
+export function PipelineGraph({ steps, onSelectStage, selectedIndex }: Props) {
   if (steps.length === 0) {
     return (
       <div className="text-sm text-on-surface-variant italic px-2 py-4">
@@ -123,10 +132,28 @@ export function PipelineGraph({ steps }: Props) {
           }
 
           const fill = step.stageType === 'qa_validation' ? '#1e3a5f' : '#1f2937';
-          const stroke = step.requiresApproval ? '#f97316' : '#374151';
+          const isSelected = i === selectedIndex;
+          const stroke = isSelected ? '#73ffe3' : step.requiresApproval ? '#f97316' : '#374151';
+          const strokeWidth = isSelected ? 2.5 : step.requiresApproval ? 2 : 1;
+          const interactive = !!onSelectStage;
 
           return (
-            <g key={i}>
+            <g
+              key={i}
+              role={interactive ? 'button' : undefined}
+              tabIndex={interactive ? 0 : undefined}
+              aria-label={interactive ? `Stage ${i + 1}: ${step.name}` : undefined}
+              aria-pressed={interactive ? isSelected : undefined}
+              onClick={interactive ? () => onSelectStage(i) : undefined}
+              onKeyDown={interactive ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectStage(i);
+                }
+              } : undefined}
+              style={interactive ? { cursor: 'pointer', outline: 'none' } : undefined}
+              className={interactive ? 'transition-opacity hover:opacity-90 focus:opacity-90' : undefined}
+            >
               <rect
                 x={PAD_X}
                 y={y}
@@ -135,7 +162,7 @@ export function PipelineGraph({ steps }: Props) {
                 rx="12"
                 fill={fill}
                 stroke={stroke}
-                strokeWidth={step.requiresApproval ? 2 : 1}
+                strokeWidth={strokeWidth}
               />
               <text
                 x={PAD_X + 16}

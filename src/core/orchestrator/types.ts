@@ -98,4 +98,23 @@ export interface ResponseMetadata {
   latencyMs?: number;
   cached?: boolean;
   sessionTotalTokens?: number;
+  /**
+   * Source attribution — what context was pulled into the reply
+   * (recent messages, profile facts, knowledge hits, classifier topic,
+   * skills loaded, completed pipeline stages, etc). Rendered into the
+   * response body via `appendSources()`; also kept on metadata for
+   * instrumentation, logs, and offline eval.
+   */
+  sources?: string[];
+}
+
+/**
+ * Append a "_Sources: …_" footer to an assistant reply. Centralised so
+ * `directResponse`, the orchestrator, expert sessions, and pipeline
+ * stages all render the same shape. Returns the original content
+ * untouched when there are no sources.
+ */
+export function appendSources(content: string, sources: string[]): string {
+  if (!sources.length) return content;
+  return `${content}\n\n_Sources: ${sources.join(', ')}_`;
 }

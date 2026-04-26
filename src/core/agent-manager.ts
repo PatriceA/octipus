@@ -134,7 +134,7 @@ export class AgentManager {
     let worker: AnyAgentWorker;
 
     if (isCLI) {
-      worker = new CLIAgentWorker(context, workerConfig);
+      worker = new CLIAgentWorker(context, workerConfig, { parentSignal: options.parentSignal });
       agentLogger.info(
         { agentId, model: routedModel },
         'Spawning CLI sub-agent (autonomous mode)',

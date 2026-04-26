@@ -8,34 +8,20 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-- **Auto-discovery for tools and channels.** Roles got the drop-folder
-  pattern (`src/core/orchestrator/roles/<name>/`). Tools and channels are
-  still wired manually because (a) the `BaseTool` / `BaseChannel`
-  abstract surface is wider than `RoleConfig` (lifecycle hooks,
-  reaction/typing methods, channel-specific webhooks) and a folder
-  convention has to encode all of it, and (b) channels are conditionally
-  enabled by env vars, so a discovery loop has to stay opt-in. Doable
-  but needs a typed contract pass first; tracked here so the work isn't
-  silently dropped.
+- **Pipeline DAG view — bidirectional editing.** Visualization shipped
+  (interactive read-only graph with click-to-select, foundation for the
+  two-view abstraction). Editing in flight: graph→code drag/reorder,
+  add/delete stages from the canvas, cycle detection on save, persisted
+  back to DB. Will require pulling in `@xyflow/react` for proper
+  node/edge handling. See [DESIGN.md](./DESIGN.md) for the two-view
+  philosophy.
 
-- **Swarm Phase 3 polish.** Phases 1–3 shipped: 3-level spawner, budget
-  cascade (tokens pool-shared, wall-clock per-node, fan-out), call-graph
-  cycle protection with fingerprint set, cascade cancel via AbortSignal
-  tree + DB walk, orphan reaper, escalation (1/Agent lifetime), parallel
-  `parallelGroup`, per-user spawn rate limit, and the live `SwarmTree`
-  web component with `swarm.*` gateway replay. Remaining polish:
-  `swarm.budget_warning` emission at 80% cap (event type already declared),
-  `CLIAgentWorker` parent-signal chain (Phase 2 only wired `AgentWorker`),
-  and applying `guardInput` to outbound `taskBrief`/`parentSummary` before
-  child message composition (design says so; current code doesn't).
-
-- **Pipeline DAG view.** Render pipeline stages as a graph in the web UI. Edit either view, the other updates. First step toward the two-view (graph ↔ code) abstraction described in [DESIGN.md](./DESIGN.md).
-
-- **Source attribution everywhere.** Every assistant reply appends what it pulled from (profile facts, knowledge base hits, recent messages, classifier topic). Already in `directResponse` and the orchestrator path; expanding to expert sessions and pipeline stages.
-
-- **Per-channel `/clear` semantics.** Webchat clears UI; Telegram/Slack/etc. preserve transcript but reset orchestrator context boundary. `clearedAt` boundary now respected by orchestrator + direct response.
-
-- **Cross-session aggregation** for channel transcripts (telegram, slack, whatsapp, teams, discord). One continuous view per (user, channelType, channelId) instead of one row per restart.
+- **Auto-discovery — typed-contract follow-up.** Tools and channels
+  already auto-load (`src/tools/discovery.ts`, `src/channels/discovery.ts`).
+  Remaining: tighten the typed contracts — channel `isEnabled(config)`
+  hook is implicit, tool `BaseTool.initialize()` lifecycle is uneven
+  across implementations. Worth a pass to make folder-add genuinely
+  zero-config rather than convention-by-grep.
 
 ## Next (months)
 
@@ -77,6 +63,44 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 ## Done (recent)
 
 ### 2026-04 batch
+
+- **Roadmap "Now" sweep (2026-04-26).** Six in-flight items audited
+  against actual code; five closed. Done:
+  - **Auto-discovery (tools + channels).** `discoverTools()` is wired
+    into `registerBuiltinTools()` and called at boot; channels load via
+    `initializeChannels()` → `discoverChannels()` with `isEnabled(config)`
+    guards. Roles already had the drop-folder pattern. Folder-add is
+    the new norm. Typed-contract polish moved to "Now".
+  - **Swarm Phase 3 polish — complete.** `swarm.budget_warning` event
+    emits at 80% of token cap (with channel reaction). `CLIAgentWorker`
+    constructor now accepts `parentSignal` and chains abort cascades
+    same as `AgentWorker`; `cascade-cancel.test.ts` covers both.
+    `guardInput` runs on raw `taskBrief` and inherited `parentSummary`
+    BEFORE composition (defense-in-depth before the existing
+    post-compose guard).
+  - **Source attribution everywhere.** New `appendSources()` helper +
+    `sources?: string[]` on `ResponseMetadata`. Expert sessions
+    (worker-spawner) and pipeline stages (pipeline-manager, both
+    runPipeline + runStages paths) now emit a `_Sources: …_` footer
+    consistent with `directResponse` and the orchestrator path.
+  - **Per-channel `/clear` semantics.** Already shipped end-to-end;
+    new unit test coverage in `commands.test.ts` verifies (a)
+    webchat/tui/web/ide return the `[clear]` UI signal, (b)
+    telegram/slack/whatsapp/teams preserve transcript text, (c)
+    `clearedAt` is set with valid ISO-8601 and merges with existing
+    context, (d) `compactedSummary` is wiped, (e) `/cls` and `/reset`
+    aliases work.
+  - **Cross-session aggregation hardening.** Migration `0028` adds a
+    unique partial index on `sessions(user_id, channel_type, channel_id)`
+    where `status = 'active' AND channel_type IN
+    ('telegram','slack','whatsapp','teams','discord')`. Prevents
+    concurrent active rows per conversation. Existing
+    `findAllByUserAndChannel(...)` cross-restart aggregation untouched.
+  - **Pipeline DAG view — visualization complete.** `PipelineGraph`
+    now accepts `onSelectStage` + `selectedIndex` (a11y-correct: role,
+    tabIndex, keyboard, aria-pressed). Foundation for the two-view
+    (graph ↔ code) abstraction. Bidirectional editing remains in
+    "Now".
 
 - **v0.1 release audit pass (2026-04-26).** Provider error-handling pass:
   every model provider now surfaces failures as `ClassifiedError` with

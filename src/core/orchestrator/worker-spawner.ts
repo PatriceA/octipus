@@ -12,6 +12,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import type { OrchestratorEvent } from './service';
+import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
 
 type EmitFn = (event: OrchestratorEvent) => void;
@@ -135,7 +136,17 @@ export async function handleExpertMessage(
       model: expert.modelPreference || undefined,
     });
 
-    const response = String(result);
+    // Source attribution: which expert ran, which role, which skills were
+    // injected. Mirrors the directResponse / orchestrator footer so the
+    // user sees consistent provenance no matter which path served them.
+    const sources: string[] = [`expert(${expert.name})`, `role(${agentRole})`];
+    if (skillIds.length > 0) sources.push(`skills(${skillIds.length})`);
+    if (guardFlags.length > 0) sources.push(`guard(${guardFlags.join(',')})`);
+
+    const session = await sessionRepository.findById(sessionId);
+    const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
+    const response = showSources ? appendSources(String(result), sources) : String(result);
+
     await messageRepository.create({ sessionId, role: 'assistant', content: response });
     await sessionRepository.incrementMessageCount(sessionId);
 
@@ -143,7 +154,7 @@ export async function handleExpertMessage(
       response,
       sessionId,
       classification: { type: 'task', confidence: 1, complexity: 'moderate', topic: expert.role },
-      metadata: { latencyMs: Date.now() - startTime },
+      metadata: { latencyMs: Date.now() - startTime, sources },
     };
   } catch (error) {
     const errMsg = (error as Error).message || '';

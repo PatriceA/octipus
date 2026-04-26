@@ -34,9 +34,32 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * returns 0 for `getTotalTokens()`.
    */
   private totalTokens = 0;
+  /**
+   * Cleanup for the parent AbortSignal listener. Symmetric with `AgentWorker`
+   * (Swarm Phase 2): when an ancestor aborts, the cascade reaches the CLI
+   * worker too — it triggers `stop()` which kills the subprocess.
+   */
+  private parentSignalCleanup: (() => void) | null = null;
 
-  constructor(context: AgentContext, config: AgentWorkerConfig) {
+  constructor(
+    context: AgentContext,
+    config: AgentWorkerConfig,
+    opts?: { parentSignal?: AbortSignal },
+  ) {
     super(context, config);
+
+    if (opts?.parentSignal) {
+      const parent = opts.parentSignal;
+      if (parent.aborted) {
+        // Already aborted at construction — fire on next tick so the caller
+        // has a chance to wire onEvent handlers before the abort lands.
+        queueMicrotask(() => this.stop());
+      } else {
+        const onAbort = () => this.stop();
+        parent.addEventListener('abort', onAbort, { once: true });
+        this.parentSignalCleanup = () => parent.removeEventListener('abort', onAbort);
+      }
+    }
   }
 
   /** Return the running token count reported by the underlying CLI provider. */
@@ -157,6 +180,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   stop(): void {
     this.aborted = true;
+    if (this.parentSignalCleanup) {
+      this.parentSignalCleanup();
+      this.parentSignalCleanup = null;
+    }
     if (this.process && !this.process.killed) {
       const pid = this.process.pid;
 

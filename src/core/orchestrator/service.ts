@@ -24,7 +24,7 @@ import { filterPII } from './pii-filter';
 import { getRoleConfig } from './roles';
 import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
-import type { MessageClassification, ResponseMetadata } from './types';
+import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { handleExpertMessage, spawnWorker } from './worker-spawner';
 
 interface OrchestratorEventHandler {
@@ -317,8 +317,8 @@ export class OrchestratorService {
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
-      if (showSources && sources.length > 0) {
-        finalResponse += `\n\n_Sources: ${sources.join(', ')}_`;
+      if (showSources) {
+        finalResponse = appendSources(finalResponse, sources);
       }
 
       await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });

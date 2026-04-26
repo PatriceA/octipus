@@ -8,7 +8,7 @@ import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
-import type { ResponseMetadata } from './types';
+import { appendSources, type ResponseMetadata } from './types';
 
 /**
  * Generate a direct LLM response for casual messages (no orchestrator/worker needed).
@@ -113,9 +113,7 @@ export async function directResponse(
     const tokens = result.usage?.totalTokens || 0;
 
     const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
-    const finalContent = showSources && sources.length > 0
-      ? `${result.content}\n\n_Sources: ${sources.join(', ')}_`
-      : result.content;
+    const finalContent = showSources ? appendSources(result.content, sources) : result.content;
 
     await messageRepository.create({ sessionId, role: 'assistant', content: finalContent });
     await sessionRepository.incrementMessageCount(sessionId);

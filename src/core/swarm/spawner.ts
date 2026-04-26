@@ -121,15 +121,39 @@ export class SwarmSpawner {
       );
     }
 
+    // ── Defense-in-depth: guard raw inputs BEFORE composition ───────
+    // The composed child message is already guarded downstream, but
+    // guarding the inputs here means an injection attempt in
+    // `taskBrief` or the inherited `parentSummary` is rejected at the
+    // boundary — closer to the source, with a more specific error,
+    // and before any expensive composition work.
+    const rawTaskBrief = params.taskBrief;
+    const rawParentSummary =
+      ((parentContext.metadata as Record<string, unknown>)?.parentSummary as string) || '';
+
+    for (const [field, value] of [
+      ['taskBrief', rawTaskBrief] as const,
+      ['parentSummary', rawParentSummary] as const,
+    ]) {
+      if (!value) continue;
+      const guard = guardInput(value);
+      if (guard.action === 'block') {
+        return this.denialResult(
+          parent,
+          `spawn_child refused: ${field} blocked by input guard ` +
+            `(${guard.flags.join(', ')})${guard.blockReason ? `: ${guard.blockReason}` : ''}.`,
+        );
+      }
+    }
+
     // ── Assemble brief ──────────────────────────────────────────────
     const brief: TaskBrief = {
       originalUserRequest:
         ((parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ||
-        params.taskBrief,
+        rawTaskBrief,
       topicPath,
-      parentSummary:
-        ((parentContext.metadata as Record<string, unknown>)?.parentSummary as string) || '',
-      taskBrief: params.taskBrief,
+      parentSummary: rawParentSummary,
+      taskBrief: rawTaskBrief,
       constraints: params.constraints || [],
       inputArtifacts: [],
       expectedOutput: {

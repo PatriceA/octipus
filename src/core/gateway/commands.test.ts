@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, mock } from 'bun:test';
 import { CommandRegistry, registerBuiltinCommands } from './commands';
 
 describe('CommandRegistry', () => {
@@ -79,6 +79,78 @@ describe('CommandRegistry', () => {
       trustLevel: 'user',
     });
     expect(result!.text).toBe('No active session.');
+  });
+
+  test('/clear with webchat session sets clearedAt and returns [clear] signal', async () => {
+    const updateMock = mock(async () => undefined);
+    const findByIdMock = mock(async () => ({
+      id: 'sess-1',
+      userId: 'user1',
+      context: { lastTopic: 'coding' },
+    }));
+    mock.module('@/db/repositories/session-repository', () => ({
+      sessionRepository: { findById: findByIdMock, update: updateMock },
+    }));
+
+    const result = await registry.execute('/clear', {
+      userId: 'user1',
+      sessionId: 'sess-1',
+      clientType: 'webchat',
+      trustLevel: 'user',
+    });
+
+    expect(result!.text).toBe('[clear]');
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const updateCall = updateMock.mock.calls[0] as unknown as [string, { context: Record<string, unknown> }];
+    expect(updateCall[0]).toBe('sess-1');
+    expect(typeof updateCall[1].context.clearedAt).toBe('string');
+    // ISO-8601 round-trip — invalid string would NaN on Date parse.
+    expect(Number.isNaN(new Date(updateCall[1].context.clearedAt as string).getTime())).toBe(false);
+    // Pre-existing context survives (we merge, not replace).
+    expect(updateCall[1].context.lastTopic).toBe('coding');
+    // Compacted summary is wiped so the orchestrator doesn't pull stale context.
+    expect(updateCall[1].context.compactedSummary).toBeUndefined();
+  });
+
+  test('/clear preserves transcript on persistent channels (telegram/slack/etc)', async () => {
+    const updateMock = mock(async () => undefined);
+    const findByIdMock = mock(async () => ({
+      id: 'sess-tg',
+      userId: 'user1',
+      context: {},
+    }));
+    mock.module('@/db/repositories/session-repository', () => ({
+      sessionRepository: { findById: findByIdMock, update: updateMock },
+    }));
+
+    for (const clientType of ['telegram', 'slack', 'whatsapp', 'teams']) {
+      const result = await registry.execute('/clear', {
+        userId: 'user1',
+        sessionId: 'sess-tg',
+        clientType,
+        trustLevel: 'user',
+      });
+      expect(result!.text).not.toBe('[clear]');
+      expect(result!.text).toMatch(/start fresh|context reset|past messages/i);
+    }
+  });
+
+  test('/clear aliases /cls and /reset both work', async () => {
+    const updateMock = mock(async () => undefined);
+    const findByIdMock = mock(async () => ({ id: 'sess-1', userId: 'user1', context: {} }));
+    mock.module('@/db/repositories/session-repository', () => ({
+      sessionRepository: { findById: findByIdMock, update: updateMock },
+    }));
+
+    for (const cmd of ['/cls', '/reset']) {
+      const result = await registry.execute(cmd, {
+        userId: 'user1',
+        sessionId: 'sess-1',
+        clientType: 'webchat',
+        trustLevel: 'user',
+      });
+      expect(result!.text).toBe('[clear]');
+    }
   });
 
   test('/compact with no session returns message', async () => {
