@@ -18,8 +18,8 @@ import {
   CascadedCancellationError,
   ChildTimeoutError,
 } from './swarm/errors';
-import { ToolExecutor } from './tool-executor';
 import type { ChildResult, PendingChild } from './swarm/types';
+import { ToolExecutor } from './tool-executor';
 import type { AgentMessage, } from './types';
 
 // Re-export types for backward compatibility
@@ -583,6 +583,24 @@ export class AgentWorker extends BaseAgentWorker {
       } catch (err) {
         const errMsg = (err as Error).message || '';
 
+        // Connection failures to upstream model providers (DNS, refused, unreachable host)
+        // are not transient — they indicate a dead container or misconfigured endpoint.
+        // Surface to the user immediately so they can react (start container, change model)
+        // instead of spinning through 14s of retries that will all fail the same way.
+        const isConnectionError = errMsg.includes('APIConnectionError')
+          || errMsg.includes('Cannot connect to host')
+          || errMsg.includes('ECONNREFUSED')
+          || errMsg.includes('Name or service not known')
+          || errMsg.includes('ENOTFOUND')
+          || errMsg.includes('getaddrinfo');
+        if (isConnectionError) {
+          this.emit('error', {
+            error: `Model "${this.context.model}" unreachable: ${errMsg}`,
+            recoverable: false,
+          });
+          throw err;
+        }
+
         // Handle context window overflow — aggressively compact and retry
         if (errMsg.includes('ContextWindowExceeded') || errMsg.includes('context_length_exceeded') || errMsg.includes('maximum context length')) {
           agentLogger.warn({
@@ -660,6 +678,10 @@ export class AgentWorker extends BaseAgentWorker {
               { agentId: this.context.id, tool: completion.toolCalls[0].name },
               'Intercepted hallucinated respond tool, using message as final response',
             );
+            // Pair the dangling assistant tool_calls with synthetic tool
+            // responses so persisted/replayed history stays OpenAI-spec valid
+            // (DeepSeek 400's otherwise on 'insufficient tool messages').
+            this.appendSyntheticToolResults(completion.toolCalls, '[intercepted: treated as final response]');
             return msg;
           }
         }
@@ -676,6 +698,9 @@ export class AgentWorker extends BaseAgentWorker {
               iteration: this.iteration, tools: toolNames,
               repeats: this.consecutiveRepeatCount,
             }, 'Repetitive tool call loop detected, forcing completion');
+            // Close out the dangling assistant tool_calls with synthetic tool
+            // responses — strict providers (DeepSeek) 400 on orphan tool_calls.
+            this.appendSyntheticToolResults(completion.toolCalls, '[loop detected: tools not executed]');
             // Inject a nudge to stop looping and return a final response
             this.messages.push({
               role: 'user' as const,
@@ -702,6 +727,9 @@ export class AgentWorker extends BaseAgentWorker {
               repeats: this.consecutiveSameNameCount,
             }, 'Same tool name called repeatedly — disabling tools, forcing plain-text reply');
             this.toolExecutor.disableTools();
+            // Close out the dangling assistant tool_calls with synthetic tool
+            // responses — strict providers (DeepSeek) 400 on orphan tool_calls.
+            this.appendSyntheticToolResults(completion.toolCalls, '[spam detected: tools disabled]');
             this.messages.push({
               role: 'user' as const,
               content:
@@ -1039,6 +1067,27 @@ export class AgentWorker extends BaseAgentWorker {
     this.messages.push(assistantMessage);
 
     return result;
+  }
+
+  /**
+   * Append synthetic `tool` messages for a set of tool_calls. Used when we
+   * intercept/abandon an assistant tool-call round without actually executing
+   * the tools (loop detection, hallucinated respond tools, transient LLM
+   * errors). Without these the conversation has an assistant message with
+   * `tool_calls` not followed by matching `tool` responses — OpenAI spec
+   * requires the pairing, and strict providers (DeepSeek) return 400
+   * "insufficient tool messages following tool_calls message".
+   */
+  private appendSyntheticToolResults(toolCalls: { id: string; name: string }[], note: string): void {
+    for (const tc of toolCalls) {
+      this.messages.push({
+        role: 'tool',
+        content: note,
+        toolCallId: tc.id,
+        name: tc.name,
+        timestamp: new Date(),
+      });
+    }
   }
 
   /** Drain the steering queue into the message context. */

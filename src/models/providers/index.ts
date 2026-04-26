@@ -1,5 +1,6 @@
 import { getConfig } from '@/config';
 import { coreLogger, modelLogger } from '@/utils/logger';
+import { classifyError } from '@/core/errors/classification';
 import { CircuitOpenError, getCircuitBreakerRegistry } from '../circuit-breaker';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { transformMessagesForProvider } from '../message-transform';
@@ -175,7 +176,7 @@ export class ProviderRouter {
           return this.completeViaFallback(options);
         }
       }
-      throw error;
+      throw classifyError(error, provider.name);
     }
 
     // Acquire rate limit token
@@ -206,7 +207,7 @@ export class ProviderRouter {
         return this.completeViaFallback(options);
       }
 
-      throw error;
+      throw classifyError(error, provider.name);
     } finally {
       token.release();
     }
@@ -240,7 +241,7 @@ export class ProviderRouter {
         yield* this.streamViaFallback(options);
         return;
       }
-      throw error;
+      throw classifyError(error, provider.name);
     }
 
     // Acquire rate limit token
@@ -258,7 +259,7 @@ export class ProviderRouter {
       const isRL = isRateLimitResponse(error);
       token.reportError(isRL);
       circuitBreakers.recordFailure(rateLimitKey);
-      throw error;
+      throw classifyError(error, provider.name);
     } finally {
       token.release();
     }
@@ -356,7 +357,7 @@ export class ProviderRouter {
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
       getCircuitBreakerRegistry().recordFailure('litellm');
-      throw error;
+      throw classifyError(error, 'litellm');
     } finally {
       token.release();
     }
@@ -373,7 +374,7 @@ export class ProviderRouter {
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
       getCircuitBreakerRegistry().recordFailure('litellm');
-      throw error;
+      throw classifyError(error, 'litellm');
     } finally {
       token.release();
     }

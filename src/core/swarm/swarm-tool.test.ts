@@ -50,6 +50,25 @@ describe('validateSpawnChildArgs', () => {
     expect('error' in r).toBe(true);
   });
 
+  test('defaults expectedOutput when the LLM omits it', () => {
+    const { expectedOutput: _drop, ...noEO } = valid;
+    const r = validateSpawnChildArgs(noEO);
+    expect('params' in r).toBe(true);
+    if ('params' in r) {
+      expect(r.params.expectedOutput.shape).toBe('summary');
+      expect(r.params.expectedOutput.maxTokens).toBe(2000);
+    }
+  });
+
+  test('defaults expectedOutput when the LLM sends a non-object', () => {
+    const r = validateSpawnChildArgs({ ...valid, expectedOutput: 'summary' });
+    expect('params' in r).toBe(true);
+    if ('params' in r) {
+      expect(r.params.expectedOutput.shape).toBe('summary');
+      expect(r.params.expectedOutput.maxTokens).toBe(2000);
+    }
+  });
+
   test('rejects invalid role (no silent fallback to general)', () => {
     // Both role AND topic fail to resolve to a valid AgentRole.
     const r = validateSpawnChildArgs({

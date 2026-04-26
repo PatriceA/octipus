@@ -107,7 +107,7 @@ export class CLIArgumentBuilder {
       case 'Gemini CLI':
         return this.buildGeminiArgs(prompt, settings, systemPrompt);
       case 'Codex CLI':
-        return this.buildCodexArgs(prompt, systemPrompt);
+        return this.buildCodexArgs(prompt, systemPrompt, settings);
       default:
         throw new Error(`Unknown CLI tool: ${toolName}`);
     }
@@ -219,13 +219,30 @@ export class CLIArgumentBuilder {
     return filePath;
   }
 
-  private buildCodexArgs(prompt: string, systemPrompt?: string | null): { binary: string; args: string[]; stdinPrompt?: string } {
+  private buildCodexArgs(
+    prompt: string,
+    systemPrompt?: string | null,
+    settings?: CLIAgentConfig,
+  ): { binary: string; args: string[]; stdinPrompt?: string } {
     // Codex: positional prompt or '-' to read from stdin.
     // Multi-line prompts or oversized args break the positional path —
     // codex prints "Reading additional input from stdin..." then exits 1 when
     // the argv text contains newlines. Always pipe via stdin in that case.
     // Short single-line prompts may still go as a positional.
-    const baseArgs = ['exec', '--skip-git-repo-check', '--json', '--ephemeral'];
+    //
+    // Model override via `-c model="<name>"`: bypasses ~/.codex/config.toml so
+    // a host default like `gpt-5.2-codex` (blocked on ChatGPT-account auth)
+    // cannot silently exit 1 for every codex-routed swarm child. Default to
+    // gpt-5.4 (the successor per codex migration notice) unless overridden.
+    const modelOverride = settings?.model || process.env.CODEX_MODEL || 'gpt-5.4';
+    const baseArgs = [
+      'exec',
+      '--skip-git-repo-check',
+      '--json',
+      '--ephemeral',
+      '-c', `model="${modelOverride}"`,
+    ];
+    if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
 
     if (systemPrompt) {
       const combined = `${systemPrompt}\n\n---\n\n${prompt}`;
@@ -242,6 +259,13 @@ export class CLIArgumentBuilder {
 
 /**
  * Parses streaming JSON output from CLI agent tools.
+ *
+ * `onTokenUsage` is called whenever a terminal usage block is observed
+ * (Codex `turn.completed`, Claude `result`, Gemini `result`). The worker
+ * uses it to sum tokens across turns so `getTotalTokens()` returns a real
+ * number instead of the base-class zero. Without this hook, swarm nodes
+ * spawned on CLI providers record 0 tokens even though the provider told
+ * us the count.
  */
 export class CLIOutputParser {
   constructor(
@@ -249,6 +273,7 @@ export class CLIOutputParser {
     private model: string,
     private emitFn: (type: AgentEvent['type'], data: unknown) => void,
     private onIteration: () => void,
+    private onTokenUsage?: (tokens: { input: number; output: number; total: number }) => void,
   ) {}
 
   /**
@@ -346,11 +371,12 @@ export class CLIOutputParser {
       const cacheRead = (usage?.cache_read_input_tokens || 0) as number;
       const cacheCreation = (usage?.cache_creation_input_tokens || 0) as number;
 
+      const totalTokens = inputTokens + outputTokens + cacheRead + cacheCreation;
       this.emitFn('thought', {
         status: 'completed',
         sessionId: event.session_id,
         stats: {
-          totalTokens: inputTokens + outputTokens + cacheRead + cacheCreation,
+          totalTokens,
           inputTokens,
           outputTokens,
           cacheRead,
@@ -360,6 +386,7 @@ export class CLIOutputParser {
           totalCostUsd,
         },
       });
+      this.onTokenUsage?.({ input: inputTokens + cacheRead + cacheCreation, output: outputTokens, total: totalTokens });
 
       return result ? { text: result, replace: true } : null;
     }
@@ -438,16 +465,20 @@ export class CLIOutputParser {
     if (type === 'result') {
       const stats = event.stats as Record<string, unknown> | undefined;
       if (stats) {
+        const inputTokens = (stats.input_tokens || 0) as number;
+        const outputTokens = (stats.output_tokens || 0) as number;
+        const totalTokens = (stats.total_tokens as number | undefined) ?? (inputTokens + outputTokens);
         this.emitFn('thought', {
           status: 'completed',
           stats: {
-            totalTokens: stats.total_tokens,
-            inputTokens: stats.input_tokens,
-            outputTokens: stats.output_tokens,
+            totalTokens,
+            inputTokens,
+            outputTokens,
             durationMs: stats.duration_ms,
             toolCalls: stats.tool_calls,
           },
         });
+        this.onTokenUsage?.({ input: inputTokens, output: outputTokens, total: totalTokens });
       }
       return null;
     }
@@ -531,15 +562,17 @@ export class CLIOutputParser {
         const inputTokens = (usage.input_tokens || 0) as number;
         const cachedTokens = (usage.cached_input_tokens || 0) as number;
         const outputTokens = (usage.output_tokens || 0) as number;
+        const totalTokens = inputTokens + outputTokens;
         this.emitFn('thought', {
           status: 'completed',
           stats: {
-            totalTokens: inputTokens + outputTokens,
+            totalTokens,
             inputTokens,
             outputTokens,
             cacheRead: cachedTokens,
           },
         });
+        this.onTokenUsage?.({ input: inputTokens + cachedTokens, output: outputTokens, total: totalTokens });
       }
       return null;
     }

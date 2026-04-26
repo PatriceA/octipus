@@ -4,7 +4,7 @@ import type {
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
 import { getConfig } from '@/config';
-import { classifyError } from '@/core/errors/classification';
+import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -129,10 +129,18 @@ export class OllamaProvider implements ModelProvider {
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
-          let args: Record<string, unknown> = {};
-          try { args = JSON.parse(tc.function.arguments); }
-          catch { modelLogger.warn({ toolName: tc.function.name, raw: tc.function.arguments.slice(0, 200) }, 'Truncated tool call arguments, using empty object'); }
-          return { id: tc.id, name: tc.function.name, arguments: args };
+          try {
+            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) as Record<string, unknown> };
+          } catch (parseErr) {
+            throw new ClassifiedError({
+              reason: FailoverReason.TOOL_CALL_INVALID,
+              recovery: RecoveryAction.RETRY_NOW,
+              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
+              providerHint: this.name,
+              metadata: { toolName: tc.function.name, raw: tc.function.arguments?.slice(0, 300) },
+              cause: parseErr,
+            });
+          }
         });
       }
 
@@ -151,7 +159,7 @@ export class OllamaProvider implements ModelProvider {
       return result;
     } catch (error) {
       modelLogger.error({ error, model: params.model, provider: this.name }, 'Ollama completion failed');
-      throw error;
+      throw classifyError(error, this.name);
     }
   }
 

@@ -523,7 +523,13 @@ export default function ChatPage() {
         break;
 
       case 'swarm_event':
-        // Swarm lifecycle events — funnel into the SwarmTree component.
+        // Swarm lifecycle events — funnel into the SwarmTree component AND
+        // into the per-session trackedAgents map so the sidepanel's agent
+        // count / duration / iteration / token columns populate live.
+        // Previously only `worker_spawned` (orchestrator → pipeline worker
+        // path) touched trackedAgents, so swarm-spawned children were
+        // invisible to the sidepanel until a page reload re-hydrated the
+        // agent log from REST.
         if (
           typeof data.event === 'string' &&
           (data.event === 'swarm.node_spawned' || data.event === 'swarm.node_completed')
@@ -532,19 +538,74 @@ export default function ChatPage() {
             type: data.event,
             payload: data.payload,
           } as SwarmTreeEvent);
-          // Aggregate session totals from node completions so Session Stats
-          // reflects the swarm's cumulative token/duration cost (not just
-          // the orchestrator's own tokens, which the /chat response metadata
-          // tracked before the swarm took over most of the work).
+
+          const p = data.payload as {
+            nodeId: string;
+            parentNodeId?: string | null;
+            kind?: 'orchestrator' | 'agent' | 'subagent';
+            role?: string;
+            model?: string;
+            status?: string;
+            usedTokens?: number;
+            durationMs?: number;
+          };
+          const serverTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
+
+          if (data.event === 'swarm.node_spawned' && eventSessionId && p.kind !== 'orchestrator') {
+            updateSessionState(eventSessionId, (prev) => {
+              const next = new Map(prev.trackedAgents);
+              const existing = next.get(p.nodeId);
+              next.set(p.nodeId, {
+                id: p.nodeId,
+                role: p.role || existing?.role || 'unknown',
+                model: p.model || existing?.model || '',
+                status: 'running',
+                toolCalls: existing?.toolCalls ?? [],
+                startTime: existing?.startTime ?? serverTime,
+                parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
+              });
+              return { ...prev, trackedAgents: next };
+            });
+          }
+
           if (data.event === 'swarm.node_completed' && eventSessionId) {
-            const p = data.payload as { usedTokens?: number; durationMs?: number };
             const tokens = typeof p.usedTokens === 'number' ? p.usedTokens : 0;
             const duration = typeof p.durationMs === 'number' ? p.durationMs : 0;
-            updateSessionState(eventSessionId, (prev) => ({
-              ...prev,
-              totalTokens: (prev.totalTokens || 0) + tokens,
-              swarmDurationMs: (prev.swarmDurationMs || 0) + duration,
-            }));
+            // Session-level aggregates — drive Session Stats badges.
+            updateSessionState(eventSessionId, (prev) => {
+              const nextAgents = new Map(prev.trackedAgents);
+              // Only finalize non-orchestrator nodes in the sidepanel agent
+              // list. The orchestrator is not a tracked agent card.
+              if (p.kind !== 'orchestrator') {
+                const existing = nextAgents.get(p.nodeId);
+                const resolvedStatus: TrackedAgent['status'] =
+                  p.status === 'completed' || p.status === 'cache_hit'
+                    ? 'completed'
+                    : p.status === 'cancelled' || p.status === 'stopped'
+                      ? 'stopped'
+                      : 'failed';
+                const startTime = existing?.startTime ?? serverTime - duration;
+                nextAgents.set(p.nodeId, {
+                  id: p.nodeId,
+                  role: p.role || existing?.role || 'unknown',
+                  model: p.model || existing?.model || '',
+                  status: resolvedStatus,
+                  toolCalls: existing?.toolCalls ?? [],
+                  startTime,
+                  endTime: startTime + duration,
+                  durationMs: duration,
+                  totalTokens: tokens,
+                  iterations: existing?.iterations,
+                  parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
+                });
+              }
+              return {
+                ...prev,
+                trackedAgents: nextAgents,
+                totalTokens: (prev.totalTokens || 0) + tokens,
+                swarmDurationMs: (prev.swarmDurationMs || 0) + duration,
+              };
+            });
           }
         }
         break;

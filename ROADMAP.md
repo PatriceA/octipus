@@ -78,6 +78,16 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ### 2026-04 batch
 
+- **v0.1 release audit pass (2026-04-26).** Provider error-handling pass:
+  every model provider now surfaces failures as `ClassifiedError` with
+  `providerHint`. Fixed silent `{}` fallback on malformed tool-call JSON
+  (now throws `TOOL_CALL_INVALID` so the retry loop kicks in). Wrapped
+  `Voyage`'s plain `Error` and the 6 router-level rethrows in
+  `providers/index.ts`. Agent-worker connection-error fast-path: DNS /
+  refused / unreachable host failures emit a user-visible `error` event
+  immediately instead of looping retries for ~14s. `.env.docker`
+  scrubbed of placeholder-shaped real-looking secrets; redundant
+  `web/package-lock.json` removed (Bun is canonical).
 - **Swarm — 3-level agent hierarchy (Phases 1+2+3 core).** Orchestrator →
   Agent → Subagent with `spawn_child` meta-tool, budget cascade (tokens,
   wall-clock, fan-out), call-graph cycle protection, cascade cancel via

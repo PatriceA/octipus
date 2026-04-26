@@ -40,13 +40,23 @@ export function refreshConfigKey(key: string, value: unknown): void {
   if (section === 'security' && ['masterKey', 'jwtSecret', 'sessionSecret'].includes(field)) return;
   if (section === 'api' && ['host', 'port'].includes(field)) return;
 
-  const sectionObj = cachedConfig[section];
-  if (sectionObj && typeof sectionObj === 'object') {
-    (sectionObj as any)[field] = value;
-  } else if (value) {
+  // Walk the full dot-path and set the leaf. Handles deep keys like
+  // `swarm.levelDefaults.agent.wallMs` — the old 2-level implementation
+  // overwrote `swarm.levelDefaults` with a scalar, silently wiping the
+  // structure and leaving workers on the hardcoded defaults.
+  if (!cachedConfig[section] || typeof cachedConfig[section] !== 'object') {
     const def = defaultConfig[section] as Record<string, unknown> | undefined;
-    (cachedConfig as any)[section] = { ...def, [field]: value };
+    (cachedConfig as any)[section] = def ? { ...def } : {};
   }
+  let target: Record<string, unknown> = cachedConfig[section] as Record<string, unknown>;
+  for (let i = 1; i < path.length - 1; i++) {
+    const key = path[i];
+    if (!target[key] || typeof target[key] !== 'object') {
+      target[key] = {};
+    }
+    target = target[key] as Record<string, unknown>;
+  }
+  target[path[path.length - 1]] = value;
 
   // Handle derived fields
   if (key === 'voice.whisperModelPath') {

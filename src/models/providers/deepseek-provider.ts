@@ -3,7 +3,7 @@ import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError } from '@/core/errors/classification';
+import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -86,17 +86,19 @@ export class DeepSeekProvider implements ModelProvider {
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
-          let args: Record<string, unknown> = {};
           const rawArgs = tc.function.arguments || '';
           try {
-            args = JSON.parse(rawArgs);
-          } catch {
-            modelLogger.warn(
-              { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
-              'Failed to parse tool call arguments — JSON may be truncated',
-            );
+            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
+          } catch (parseErr) {
+            throw new ClassifiedError({
+              reason: FailoverReason.TOOL_CALL_INVALID,
+              recovery: RecoveryAction.RETRY_NOW,
+              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
+              providerHint: this.name,
+              metadata: { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
+              cause: parseErr,
+            });
           }
-          return { id: tc.id, name: tc.function.name, arguments: args };
         });
       }
 

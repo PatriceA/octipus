@@ -46,6 +46,8 @@ export interface CLIAgentConfig {
   mcpConfigPath?: string;
   /** Additional CLI flags */
   extraArgs?: string[];
+  /** Override the model the CLI uses (e.g. Codex — bypasses ~/.codex/config.toml default) */
+  model?: string;
 }
 
 export interface ModelMetadata {

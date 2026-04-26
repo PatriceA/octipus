@@ -219,15 +219,24 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     return { error: 'taskBrief exceeds 4000-char limit' };
   }
 
-  const eo = args.expectedOutput;
-  if (!eo || typeof eo !== 'object') {
-    return { error: 'missing required field `expectedOutput`' };
-  }
-  const shape = (eo as Record<string, unknown>).shape;
-  if (typeof shape !== 'string' || !['summary', 'json', 'markdown', 'code-diff', 'list'].includes(shape)) {
+  // Default expectedOutput when omitted or malformed. Nested required
+  // object params get dropped across providers (observed on deepseek-chat,
+  // also common on OpenAI/Anthropic), which otherwise bails the
+  // orchestrator mid-delegation. Only reject an *explicit* invalid shape
+  // so the LLM learns when it picks a bogus value on purpose.
+  const eoRaw = args.expectedOutput;
+  const eo = (eoRaw && typeof eoRaw === 'object' ? eoRaw : {}) as Record<string, unknown>;
+  const shapeRaw = eo.shape;
+  const validShapes = ['summary', 'json', 'markdown', 'code-diff', 'list'] as const;
+  let shape: (typeof validShapes)[number];
+  if (shapeRaw === undefined) {
+    shape = 'summary';
+  } else if (typeof shapeRaw === 'string' && (validShapes as readonly string[]).includes(shapeRaw)) {
+    shape = shapeRaw as (typeof validShapes)[number];
+  } else {
     return { error: 'expectedOutput.shape must be one of summary|json|markdown|code-diff|list' };
   }
-  const maxTokens = (eo as Record<string, unknown>).maxTokens;
+  const maxTokens = eo.maxTokens;
   const maxTokensNum =
     typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 2000;
 
@@ -263,7 +272,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     taskBrief,
     expectedOutput: {
       shape: shape as SpawnChildParams['expectedOutput']['shape'],
-      schema: (eo as Record<string, unknown>).schema as Record<string, unknown> | undefined,
+      schema: eo.schema as Record<string, unknown> | undefined,
       maxTokens: maxTokensNum,
     },
     parallelGroup: typeof args.parallelGroup === 'string' ? args.parallelGroup : undefined,

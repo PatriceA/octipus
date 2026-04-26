@@ -27,9 +27,21 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private process: ChildProcess | null = null;
   private aborted = false;
   private argBuilder = new CLIArgumentBuilder();
+  /**
+   * Running total of tokens reported by the CLI provider across all turns.
+   * Populated from `CLIOutputParser.onTokenUsage`. Without this, swarm nodes
+   * on CLI-backed models record `usedTokens = 0` because the base class
+   * returns 0 for `getTotalTokens()`.
+   */
+  private totalTokens = 0;
 
   constructor(context: AgentContext, config: AgentWorkerConfig) {
     super(context, config);
+  }
+
+  /** Return the running token count reported by the underlying CLI provider. */
+  override getTotalTokens(): number {
+    return this.totalTokens;
   }
 
   /** No-op — CLI models have their own tools */
@@ -250,7 +262,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
       this.context.id,
       this.context.model,
       (type, data) => this.emit(type, data),
-      () => { this.iteration++; },
+      () => {
+        this.iteration++;
+        // Surface iteration ticks so the chat UI can render live progress.
+        // Base `action` event with a per-tool-call entry already fires; this
+        // extra `thought` carries just the counter so the sidepanel can
+        // update `agent.iterations` without re-counting tool calls.
+        this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
+      },
+      (tokens) => {
+        this.totalTokens += tokens.total;
+      },
     );
 
     const startTime = Date.now();
@@ -341,26 +363,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
-
-      // Isolate spawned CLI subprocesses from the host user's global config
-      // (plugins, hooks, skills). Without this, any `SessionStart` hook
-      // installed on the user's workstation runs inside the spawned agent
-      // and leaks into its output — caveman plugin's statusline-setup
-      // offer was leaking into the chat response. User can override
-      // isolation by setting `ASSISTANT_CLI_PRESERVE_HOST_CONFIG=1`.
-      if (process.env.ASSISTANT_CLI_PRESERVE_HOST_CONFIG !== '1') {
-        const isolatedDir =
-          process.env.ASSISTANT_CLI_CONFIG_DIR ||
-          `${process.env.HOME || '/tmp'}/.assistant/cli-isolated`;
-        // These env names are the ones Claude Code / Gemini CLI / Codex
-        // honor for config-dir overrides. Setting each is safe — binaries
-        // that don't recognize one just ignore it.
-        env.CLAUDE_CONFIG_DIR = isolatedDir;
-        env.CLAUDE_HOME = isolatedDir;
-        // Disable hooks + plugins if the binary supports the flag via env.
-        env.CLAUDE_DISABLE_HOOKS = '1';
-        env.CLAUDE_DISABLE_PLUGINS = '1';
-      }
 
       const proc = spawn(binary, args, {
         env,

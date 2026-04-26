@@ -74,25 +74,61 @@ export class LiteLLMClient {
   }
 
   /**
-   * Remove orphaned tool messages that have no preceding assistant message
-   * with matching tool_calls. This prevents LLM API errors.
+   * Enforce the OpenAI tool-call <-> tool-message pairing invariant in BOTH
+   * directions:
+   *   (a) Drop tool messages whose tool_call_id has no matching assistant
+   *       tool_calls entry (lenient providers accept; strict ones don't).
+   *   (b) For every assistant `tool_calls` id that's missing a following
+   *       `tool` message in the slice sent upstream, synthesize a placeholder
+   *       tool message. Prevents DeepSeek's 400
+   *       "insufficient tool messages following tool_calls message"
+   *       after compaction, history re-slices, or bailed-out agent loops.
    */
   private sanitizeToolMessages(messages: AgentMessage[]): AgentMessage[] {
-    // Collect all tool_call IDs from assistant messages
+    // (a) Collect tool_call ids declared on assistant messages.
     const validToolCallIds = new Set<string>();
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        for (const tc of msg.toolCalls) {
-          validToolCallIds.add(tc.id);
-        }
+        for (const tc of msg.toolCalls) validToolCallIds.add(tc.id);
       }
     }
-
-    // Filter out tool messages whose toolCallId isn't in the set
-    return messages.filter((msg) => {
+    const filtered = messages.filter((msg) => {
       if (msg.role !== 'tool') return true;
       return msg.toolCallId && validToolCallIds.has(msg.toolCallId);
     });
+
+    // (b) Walk forward; after each assistant-with-tool_calls, make sure the
+    // immediately-following `tool` messages cover every expected id. Missing
+    // ones get a placeholder inserted at the boundary.
+    const out: AgentMessage[] = [];
+    for (let i = 0; i < filtered.length; i++) {
+      const msg = filtered[i];
+      out.push(msg);
+      if (msg.role !== 'assistant' || !msg.toolCalls?.length) continue;
+
+      const expected = new Map(msg.toolCalls.map((tc) => [tc.id, tc.name] as const));
+      let j = i + 1;
+      const seen = new Set<string>();
+      while (j < filtered.length && filtered[j].role === 'tool') {
+        const id = filtered[j].toolCallId;
+        if (id && expected.has(id)) seen.add(id);
+        out.push(filtered[j]);
+        j++;
+      }
+      for (const [id, name] of expected) {
+        if (!seen.has(id)) {
+          out.push({
+            role: 'tool',
+            content: '[no result recorded — tool response missing from history]',
+            toolCallId: id,
+            name,
+            timestamp: new Date(),
+          });
+        }
+      }
+      i = j - 1;
+    }
+    return out;
   }
 
   /**

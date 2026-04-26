@@ -1,4 +1,4 @@
-import { classifyError } from '@/core/errors/classification';
+import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import { coreLogger, modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -43,7 +43,14 @@ export class VoyageProvider implements ModelProvider {
 
   async embed(texts: string[], model: string): Promise<number[][]> {
     const apiKey = await this.getApiKey();
-    if (!apiKey) throw new Error('Voyage API key not configured. Set VOYAGE_API_KEY env var or add voyage_api_key in Secrets.');
+    if (!apiKey) {
+      throw new ClassifiedError({
+        reason: FailoverReason.AUTH_FAILED,
+        recovery: RecoveryAction.ROTATE_CREDENTIAL,
+        message: 'Voyage API key not configured. Set VOYAGE_API_KEY env var or add voyage_api_key in Secrets.',
+        providerHint: this.name,
+      });
+    }
 
     modelLogger.debug({ model, inputCount: texts.length, provider: this.name }, 'Generating embeddings via Voyage AI');
 
@@ -72,11 +79,21 @@ export class VoyageProvider implements ModelProvider {
 
   // Voyage AI is embeddings-only — chat completions are not supported
   async complete(_options: CompletionOptions): Promise<CompletionResult> {
-    throw new Error('Voyage AI only supports embeddings, not chat completions');
+    throw new ClassifiedError({
+      reason: FailoverReason.ABORT_FATAL,
+      recovery: RecoveryAction.ABORT,
+      message: 'Voyage AI only supports embeddings, not chat completions',
+      providerHint: this.name,
+    });
   }
 
   async *stream(_options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    throw new Error('Voyage AI only supports embeddings, not chat completions');
+    throw new ClassifiedError({
+      reason: FailoverReason.ABORT_FATAL,
+      recovery: RecoveryAction.ABORT,
+      message: 'Voyage AI only supports embeddings, not chat completions',
+      providerHint: this.name,
+    });
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

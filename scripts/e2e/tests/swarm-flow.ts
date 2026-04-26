@@ -104,17 +104,44 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     topicPath: string;
   }
 
+  interface CompletionEvent {
+    nodeId: string;
+    status: 'completed' | 'tool_error' | 'timeout' | 'cancelled' | 'budget_exceeded' | string;
+    error?: string | null;
+  }
+
+  /** Throw if any spawn node did not finish with status='completed'. */
+  function assertAllSpawnsSucceeded(spawns: SpawnEvent[], completions: CompletionEvent[]): void {
+    const byId = new Map(completions.map((c) => [c.nodeId, c]));
+    const failures: string[] = [];
+    for (const s of spawns) {
+      const c = byId.get(s.nodeId);
+      if (!c) {
+        failures.push(`${s.kind}:${s.role} (${s.nodeId.slice(0, 8)}) — no completion event`);
+        continue;
+      }
+      if (c.status !== 'completed') {
+        const trimmedErr = (c.error || '').slice(0, 160);
+        failures.push(`${s.kind}:${s.role} (${s.nodeId.slice(0, 8)}) status=${c.status} err="${trimmedErr}"`);
+      }
+    }
+    assert(
+      failures.length === 0,
+      `Swarm node(s) did not succeed:\n    - ${failures.join('\n    - ')}`,
+    );
+  }
+
   async function runTurn(
     sessionId: string,
     message: string,
     timeoutMs: number,
-  ): Promise<{ spawns: SpawnEvent[]; completions: unknown[]; response: string | null; error: string | null }> {
+  ): Promise<{ spawns: SpawnEvent[]; completions: CompletionEvent[]; response: string | null; error: string | null }> {
     const ws = new GatewayWSClient();
     await ws.connect();
     // Subscribe to swarm events. GatewayWSClient auto-subscribes to '*' by default
     // but re-subscribing narrow keeps the test resilient if defaults change.
     const spawns: SpawnEvent[] = [];
-    const completions: unknown[] = [];
+    const completions: CompletionEvent[] = [];
 
     // Background collector — polls the WS buffer via waitFor(predicate).
     // Fire-and-forget; we just drain into local arrays.
@@ -135,7 +162,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
           if (evt.type === 'swarm.node_spawned') {
             spawns.push(evt.payload as unknown as SpawnEvent);
           } else {
-            completions.push(evt.payload);
+            completions.push(evt.payload as unknown as CompletionEvent);
           }
         } catch {
           // timeout — loop back and keep polling until the outer await resolves
@@ -197,7 +224,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   await runner.test('Simple job — orchestrator delegates once, answer returns', async () => {
     const sessionId = await newSession('simple');
     const timeoutMs = 90_000;
-    const { spawns, response, error } = await runTurn(
+    const { spawns, completions, response, error } = await runTurn(
       sessionId,
       'In one sentence: what is 2 + 2?',
       timeoutMs,
@@ -207,6 +234,11 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     assert(typeof response === 'string' && response.length > 0, 'expected a non-empty response');
     // Content check — must contain "4" somewhere. Loose: models ramble.
     assert(/\b4\b|\bfour\b/i.test(response || ''), `expected the answer to mention 4: ${response?.slice(0, 200)}`);
+
+    // Hard invariant: every spawned node must reach status='completed'.
+    // A tool_error / timeout is a test failure even if the top-level
+    // response string looked fine — the orchestrator hid the child failure.
+    assertAllSpawnsSucceeded(spawns, completions);
 
     // Depth constraint: simple job must NOT spawn Subagents.
     const subagents = spawns.filter(s => s.kind === 'subagent');
@@ -231,18 +263,31 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   await runner.test('Complex job — 3-level swarm fans out, results aggregate, answer returns', async () => {
     const sessionId = await newSession('complex');
     const timeoutMs = 240_000; // Complex takes longer — 4 min ceiling.
-    const { spawns, response, error } = await runTurn(
+    const { spawns, completions, response, error } = await runTurn(
       sessionId,
       // Multi-faceted prompt that maps cleanly to multiple specialist roles.
-      'Briefly: suggest (a) a SQL query pattern for paginated listings, ' +
+      //
+      // The instruction MUST explicitly order delegation. Left implicit,
+      // orchestrator LLMs (esp. deepseek-chat) often synthesize directly —
+      // which makes the fan-out contract untestable. We want to prove the
+      // routing works when delegation is chosen, not gamble on the LLM's
+      // mood.
+      'You are the orchestrator. Do NOT answer directly — you MUST use ' +
+        'spawn_child to delegate each of the three sub-parts below to the ' +
+        'best-fitting specialist role (data, security, devops, review, etc.), ' +
+        'then synthesize their outputs into the final answer. ' +
+        'Sub-parts (one sentence each in the final reply): ' +
+        '(a) a SQL query pattern for paginated listings, ' +
         '(b) one security concern when using session cookies, ' +
-        '(c) one Docker best practice for production images. ' +
-        'One sentence per item.',
+        '(c) one Docker best practice for production images.',
       timeoutMs,
     );
 
     assert(!error, `chat returned error: ${error}`);
     assert(typeof response === 'string' && response.length > 0, 'expected a non-empty response');
+
+    // Hard invariant: every spawned node must reach status='completed'.
+    assertAllSpawnsSucceeded(spawns, completions);
 
     // The Orchestrator itself should have registered as a depth-0 node.
     const roots = spawns.filter(s => s.kind === 'orchestrator');
@@ -285,7 +330,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   // still passes but logs the outcome so the user sees the signal.
   await runner.test('Agent spawns Subagent — 3-level chain when the task warrants it', async () => {
     const sessionId = await newSession('subagent');
-    const { spawns, response, error } = await runTurn(
+    const { spawns, completions, response, error } = await runTurn(
       sessionId,
       // Prompt framed as a single specialist domain (security audit) with
       // explicit sub-dimensions that map to DIFFERENT specialist roles
@@ -301,6 +346,9 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
     assert(!error, `chat returned error: ${error}`);
     assert(typeof response === 'string' && response.length > 0, 'expected a non-empty response');
+
+    // Hard invariant: every spawned node must reach status='completed'.
+    assertAllSpawnsSucceeded(spawns, completions);
 
     // Every spawned node honors its topic→model binding (the hard invariant).
     for (const s of spawns) assertModelMatchesTopic(s);
@@ -331,6 +379,100 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     }
   });
 
+  // ── 3c. Parallel fan-out ─────────────────────────────────────────────
+  // Proves orchestrator can spawn multiple children *concurrently*. The
+  // swarm-tool schema exposes `parallelGroup`; tool-executor runs same-
+  // group calls via `Promise.all`. If the orchestrator emits them
+  // serially (spawn → await → spawn), we lose this optimisation.
+  //
+  // Detection: look at the spawn wall-clock timestamps. Parallel siblings
+  // must overlap — i.e. the second sibling starts before the first one
+  // finishes. Serial execution would show them strictly non-overlapping.
+  await runner.test('Parallel fan-out — siblings overlap in wall-clock', async () => {
+    const sessionId = await newSession('parallel');
+    const timeoutMs = 240_000;
+    const { spawns, completions, response, error } = await runTurn(
+      sessionId,
+      // Three independent, orthogonal sub-questions. The prompt *explicitly*
+      // asks for parallelism so the orchestrator uses `parallelGroup`.
+      'You are the orchestrator. Use spawn_child THREE TIMES IN THE SAME ' +
+        'TURN with the same `parallelGroup` value (e.g. "q1") so the three ' +
+        'children run concurrently. Do NOT answer directly. The three ' +
+        'independent questions: ' +
+        '(A) name one SQL index type for range queries, ' +
+        '(B) name one OWASP top-10 risk category, ' +
+        '(C) name one Docker multi-stage-build benefit. ' +
+        'Delegate A → data, B → security, C → devops, then return one sentence per item.',
+      timeoutMs,
+    );
+
+    assert(!error, `chat returned error: ${error}`);
+    assert(typeof response === 'string' && response.length > 0, 'expected a non-empty response');
+    assertAllSpawnsSucceeded(spawns, completions);
+
+    const agents = spawns.filter((s) => s.kind === 'agent');
+    if (agents.length < 2) {
+      // Orchestrator refused to fan out enough — this scenario can't prove
+      // parallelism with <2 siblings. Surface as a soft skip rather than a
+      // false pass (the prompt was explicit; this usually means the LLM
+      // decided to answer directly, which scenario "Complex job" already
+      // flags).
+      console.log(`    \x1b[33m⊘ orchestrator produced ${agents.length} agent(s); cannot check overlap — skipping\x1b[0m`);
+      return;
+    }
+
+    // Map agent nodeId → spawn event (has `timestamp` injected by runTurn?
+    // The WS payload doesn't carry explicit start/complete ms, but
+    // completion payloads carry durationMs. We reconstruct overlap from
+    // (completion.timestamp - durationMs) windows per node.
+    const completionById = new Map(completions.map((c) => [c.nodeId, c]));
+
+    // Pull `createdAt` + `completedAt` from the REST list — the canonical
+    // wall-clock record. Event timestamps over WS are per-emit, not start.
+    interface TimingRow { id: string; created: number; completed: number }
+    const { data } = await client.request<{ nodes?: Array<{ id: string; createdAt: string; completedAt?: string | null; kind: string; }> }>(
+      'GET', `/swarm/nodes?rootSessionId=${sessionId}`,
+    );
+    const timings: TimingRow[] = [];
+    for (const n of data.nodes || []) {
+      if (n.kind !== 'agent') continue;
+      if (!n.completedAt) continue;
+      timings.push({
+        id: n.id,
+        created: new Date(n.createdAt).getTime(),
+        completed: new Date(n.completedAt).getTime(),
+      });
+    }
+    timings.sort((a, b) => a.created - b.created);
+    assert(timings.length >= 2, `expected ≥2 agent timings, got ${timings.length}`);
+
+    // Overlap check: for at least one pair (i, j<i), j.created must land
+    // before i.completed. In strict serial mode, j.created >= i.completed.
+    let anyOverlap = false;
+    for (let i = 1; i < timings.length && !anyOverlap; i++) {
+      for (let j = 0; j < i; j++) {
+        if (timings[i].created < timings[j].completed) {
+          anyOverlap = true;
+          break;
+        }
+      }
+    }
+
+    // Log the timeline so regressions are easy to eyeball.
+    const baseTs = timings[0].created;
+    const timeline = timings.map((t) =>
+      `${t.id.slice(0, 8)}: [${t.created - baseTs}ms → ${t.completed - baseTs}ms]`,
+    ).join('  ');
+    console.log(`    \x1b[2m→ ${timeline}\x1b[0m`);
+    console.log(`    \x1b[2m→ completion count: ${completionById.size}\x1b[0m`);
+
+    assert(
+      anyOverlap,
+      `All agent spawns ran strictly sequentially. Timeline:\n    ${timeline}\n    ` +
+        'Either orchestrator did not use parallelGroup, or tool-executor regressed to serial execution.',
+    );
+  });
+
   // ── 4. Sanity — no orphaned spawns (every spawn has a completion) ────
   await runner.test('Every spawned swarm node produced a completion event', async () => {
     const sessionId = await newSession('orphan-check');
@@ -341,13 +483,13 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     );
 
     const spawnIds = new Set(spawns.map(s => s.nodeId));
-    const completedIds = new Set(
-      completions.map(c => (c as { nodeId?: string }).nodeId).filter(Boolean) as string[],
-    );
+    const completedIds = new Set(completions.map(c => c.nodeId).filter(Boolean));
     const orphans = [...spawnIds].filter(id => !completedIds.has(id));
     assert(
       orphans.length === 0,
       `Swarm nodes spawned but never completed (leak): ${orphans.join(', ')}`,
     );
+    // And every completion must report status='completed' — not just "exited".
+    assertAllSpawnsSucceeded(spawns, completions);
   });
 }
