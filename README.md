@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Octipus" width="600">
+  <img src="docs/images/hero.png" alt="Octipus" width="600">
 </p>
 
 # Octipus
