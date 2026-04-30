@@ -1,6 +1,6 @@
 # Channels
 
-The Assistant supports multiple messaging channels so you can interact with your agents from wherever you work. All channels are optional except WebChat, which is always available.
+Octipus supports multiple messaging channels so you can interact with your agents from wherever you work. All channels are optional except WebChat, which is always available.
 
 ## Architecture
 
@@ -186,7 +186,7 @@ From the **WhatsApp > API Setup** page in the Meta developer dashboard:
 
 #### 4. Configure the Webhook
 
-Your assistant must be reachable from the internet. Use a reverse proxy (Cloudflare Tunnel, ngrok, etc.).
+Your Octipus instance must be reachable from the internet. Use a reverse proxy (Cloudflare Tunnel, ngrok, etc.).
 
 1. In Meta's **WhatsApp > Configuration > Webhook**:
    - **Callback URL**: `https://your-domain.com/api/channels/whatsapp/webhook`
@@ -210,7 +210,7 @@ The temporary token expires after 24 hours. For production:
 |---------|---------|-------------|
 | `whatsapp.accessToken` | `WHATSAPP_ACCESS_TOKEN` | Cloud API access token (stored in vault) |
 | `whatsapp.phoneNumberId` | `WHATSAPP_PHONE_NUMBER_ID` | Phone Number ID from Meta dashboard |
-| `whatsapp.verifyToken` | `WHATSAPP_VERIFY_TOKEN` | Webhook verification token (default: `assistant-whatsapp-verify`) |
+| `whatsapp.verifyToken` | `WHATSAPP_VERIFY_TOKEN` | Webhook verification token (default: `octipus-whatsapp-verify`) |
 | `whatsapp.appSecret` | `WHATSAPP_APP_SECRET` | Meta App Secret for signature verification (stored in vault) |
 | `whatsapp.businessAccountId` | `WHATSAPP_BUSINESS_ACCOUNT_ID` | WhatsApp Business Account ID (optional) |
 
@@ -293,7 +293,7 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=         # Business Account ID (optional)
 ### Channel not connecting
 
 - Check Settings > Channels in the web UI to verify your credentials are saved
-- Check the backend logs: `tail -f ~/.assistant/backend.log`
+- Check the backend logs: `tail -f ~/.octipus/backend.log`
 - Ensure secrets are stored in the vault (not as plain text in env vars)
 
 ### Messages not arriving

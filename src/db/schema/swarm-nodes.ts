@@ -3,7 +3,7 @@ import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'd
 /**
  * Swarm node schema — sibling table to `agents` representing a node in the
  * agent delegation tree (Orchestrator → Agent → Subagent). See
- * `.assistant/swarm-design.md` §Observability for the authoritative design.
+ * `.octipus/swarm-design.md` §Observability for the authoritative design.
  *
  * The `id` equals the corresponding `agents.id` (1:1 relationship). `agents`
  * remains the historical record; `swarm_nodes` drives the live tree view,

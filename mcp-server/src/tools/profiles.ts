@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerProfileTools(server: McpServer, client: AssistantClient): void {
+export function registerProfileTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_profiles',
+    'octipus_list_profiles',
     'List all people/organization/pet profiles stored for the current user.',
     {},
     async () => {
@@ -36,7 +36,7 @@ export function registerProfileTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_get_profile',
+    'octipus_get_profile',
     'Get a profile by ID or name. Returns full details including all stored facts.',
     {
       id: z.string().optional().describe('Profile ID (UUID)'),
@@ -61,7 +61,7 @@ export function registerProfileTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_create_profile',
+    'octipus_create_profile',
     'Create a new profile for a person, organization, or pet.',
     {
       name: z.string().describe('Name of the person or entity'),
@@ -87,7 +87,7 @@ export function registerProfileTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_add_profile_fact',
+    'octipus_add_profile_fact',
     'Add or update a fact on a profile. If the key already exists, it is replaced.',
     {
       id: z.string().describe('Profile ID (UUID)'),
@@ -113,7 +113,7 @@ export function registerProfileTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_search_profiles',
+    'octipus_search_profiles',
     'Search profiles by name or fact values. Use this to find people by any attribute.',
     {
       query: z.string().describe('Search query (matches name and fact values)'),

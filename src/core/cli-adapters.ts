@@ -9,11 +9,11 @@ import type { AgentEvent } from './agent-base';
 const IS_WIN = process.platform === 'win32';
 
 /**
- * Generate a temporary MCP config file that points CLI tools to the assistant's MCP server.
+ * Generate a temporary MCP config file that points CLI tools to Octipus's MCP server.
  * Returns the path to the generated config file, or null if the MCP server isn't available.
  */
 function getOrCreateMcpConfig(): string | null {
-  const dir = join(tmpdir(), 'assistant-cli');
+  const dir = join(tmpdir(), 'octipus-cli');
   const configPath = join(dir, 'mcp-config.json');
 
   // Reuse existing if fresh (< 1 hour old)
@@ -34,16 +34,16 @@ function getOrCreateMcpConfig(): string | null {
   const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
 
   const apiPort = process.env.API_PORT || process.env.PORT || '3005';
-  const apiKey = process.env.MASTER_KEY || process.env.ASSISTANT_API_KEY || '';
+  const apiKey = process.env.MASTER_KEY || process.env.OCTIPUS_API_KEY || '';
 
   const config = {
     mcpServers: {
-      assistant: {
+      octipus: {
         command: runtime,
         args: [entry],
         env: {
-          ASSISTANT_URL: `http://127.0.0.1:${apiPort}`,
-          ...(apiKey ? { ASSISTANT_API_KEY: apiKey } : {}),
+          OCTIPUS_URL: `http://127.0.0.1:${apiPort}`,
+          ...(apiKey ? { OCTIPUS_API_KEY: apiKey } : {}),
         },
       },
     },
@@ -130,8 +130,8 @@ export class CLIArgumentBuilder {
 
     // --bare: skip hooks, plugins, auto-memory, CLAUDE.md auto-discovery.
     // Prevents host-user plugins (e.g. caveman) from leaking into spawned
-    // agent output. Opt out by setting ASSISTANT_CLI_PRESERVE_HOST_CONFIG=1.
-    if (process.env.ASSISTANT_CLI_PRESERVE_HOST_CONFIG !== '1') {
+    // agent output. Opt out by setting OCTIPUS_CLI_PRESERVE_HOST_CONFIG=1.
+    if (process.env.OCTIPUS_CLI_PRESERVE_HOST_CONFIG !== '1') {
       args.push('--bare');
     }
 
@@ -186,7 +186,7 @@ export class CLIArgumentBuilder {
 
     // Note: Gemini CLI does NOT support --mcp-config or --system-instruction flags.
     // It uses its own `gemini mcp` subcommand to manage MCP servers.
-    // The assistant MCP server must be added via: gemini mcp add assistant
+    // The octipus MCP server must be added via: gemini mcp add octipus
 
     if (settings.extraArgs?.length) {
       args.push(...settings.extraArgs);
@@ -212,7 +212,7 @@ export class CLIArgumentBuilder {
    * Used on Windows to bypass the ~8191-char command-line limit.
    */
   private writeTempFile(prefix: string, content: string): string {
-    const dir = join(tmpdir(), 'assistant-cli');
+    const dir = join(tmpdir(), 'octipus-cli');
     mkdirSync(dir, { recursive: true });
     const filePath = join(dir, `${prefix}${randomBytes(6).toString('hex')}.txt`);
     writeFileSync(filePath, content, 'utf-8');

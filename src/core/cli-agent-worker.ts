@@ -228,7 +228,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       if (msg.role === 'user') {
         parts.push(msg.content);
       } else if (msg.role === 'assistant') {
-        parts.push(`[Assistant] ${msg.content}`);
+        parts.push(`[Octipus] ${msg.content}`);
       }
       // System messages are excluded — they go through buildSystemPrompt()
     }
@@ -328,7 +328,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     );
 
     try {
-      const dumpDir = joinPath(homedir(), '.assistant', 'prompts');
+      const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
       mkdirSync(dumpDir, { recursive: true });
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`);

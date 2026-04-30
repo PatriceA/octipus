@@ -57,7 +57,7 @@ Delegation runs through a fixed 3-level tree: **Orchestrator → Agent → Subag
 
 The LLM-facing tool is `spawn_child`. Agents also get `escalate_to_different_expert` (1/Agent lifetime) to retry a task with a different expert of the same role when children hit budget or timeout.
 
-**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.assistant/swarm-design.md`.
+**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.octipus/swarm-design.md`.
 
 ## Execution Paths
 

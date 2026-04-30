@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * E2E Test Suite for the Assistant API
+ * E2E Test Suite for Octipus API
  *
  * Usage: bun run scripts/e2e/index.ts
  *   or:  bun run scripts/test-e2e.ts  (thin wrapper)

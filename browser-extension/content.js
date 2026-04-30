@@ -1,5 +1,5 @@
 /**
- * Assistant Browser Bridge — Content Script
+ * Octi Browser Bridge — Content Script
  *
  * Injected into all pages. Provides DOM access for the background service worker
  * via chrome.runtime messaging. Also highlights elements during agent interactions.

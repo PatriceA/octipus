@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerAuditTools(server: McpServer, client: AssistantClient): void {
+export function registerAuditTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_audit_log',
+    'octipus_list_audit_log',
     'List recent audit log entries.',
     {
       limit: z.number().optional().describe('Maximum number of entries to return (default 50)'),

@@ -108,7 +108,7 @@ export async function initializeDb(): Promise<DrizzleDB> {
   const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
 
   if (mode === 'embedded') {
-    const dataDir = process.env.DATA_DIR || config.database?.dataDir || '~/.assistant/data';
+    const dataDir = process.env.DATA_DIR || config.database?.dataDir || '~/.octipus/data';
     db = await initEmbedded(dataDir);
   } else {
     db = await initExternal(config.database);

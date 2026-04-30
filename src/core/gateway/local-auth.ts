@@ -4,18 +4,18 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { coreLogger } from '@/utils/logger';
 
-const ASSISTANT_DIR = join(homedir(), '.assistant');
-const TOKEN_FILE = join(ASSISTANT_DIR, 'local-token');
+const OCTIPUS_DIR = join(homedir(), '.octipus');
+const TOKEN_FILE = join(OCTIPUS_DIR, 'local-token');
 const TOKEN_BYTES = 32;
 
 /**
  * Ensure the local auth token file exists.
- * Creates ~/.assistant/local-token with a random 32-byte hex token on first call.
+ * Creates ~/.octipus/local-token with a random 32-byte hex token on first call.
  * File is chmod 600 (user-only read/write).
  */
 export function ensureLocalToken(): string {
-  if (!existsSync(ASSISTANT_DIR)) {
-    mkdirSync(ASSISTANT_DIR, { recursive: true });
+  if (!existsSync(OCTIPUS_DIR)) {
+    mkdirSync(OCTIPUS_DIR, { recursive: true });
   }
 
   if (existsSync(TOKEN_FILE)) {
@@ -24,7 +24,7 @@ export function ensureLocalToken(): string {
 
   const token = randomBytes(TOKEN_BYTES).toString('hex');
   writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
-  coreLogger.info('Generated local auth token at ~/.assistant/local-token');
+  coreLogger.info('Generated local auth token at ~/.octipus/local-token');
   return token;
 }
 
@@ -76,8 +76,8 @@ export function validateLocalAuth(token: string, remoteIp: string): { valid: boo
  */
 export function regenerateLocalToken(): string {
   const token = randomBytes(TOKEN_BYTES).toString('hex');
-  if (!existsSync(ASSISTANT_DIR)) {
-    mkdirSync(ASSISTANT_DIR, { recursive: true });
+  if (!existsSync(OCTIPUS_DIR)) {
+    mkdirSync(OCTIPUS_DIR, { recursive: true });
   }
   writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
   coreLogger.info('Regenerated local auth token');

@@ -88,11 +88,11 @@ export function Sidebar() {
       <div className="h-16 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-2.5 overflow-hidden">
           <div className="w-8 h-8 bg-gradient-to-br from-primary to-primary-container rounded-sm flex items-center justify-center shrink-0 shadow-[0_0_18px_-4px_rgba(115,255,227,0.5)]">
-            <img src="/logo.png" alt="Assistant" className="w-full h-full object-contain" />
+            <img src="/logo.png" alt="Octipus" className="w-full h-full object-contain" />
           </div>
           {!collapsed && (
             <span className="text-lg font-black tracking-tighter text-primary whitespace-nowrap font-headline">
-              Assistant
+              Octipus
             </span>
           )}
         </div>

@@ -3,11 +3,11 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerModelTools(server: McpServer, client: AssistantClient): void {
+export function registerModelTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_models',
+    'octipus_list_models',
     'List all available AI models with their provider, capabilities, and status.',
     {},
     async () => {
@@ -31,7 +31,7 @@ export function registerModelTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_model_health',
+    'octipus_model_health',
     'Get health status of all configured models (connectivity, response times).',
     {},
     async () => {

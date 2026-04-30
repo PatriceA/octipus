@@ -39,7 +39,7 @@ _(Empty — both 2026-04 in-flight items shipped this week; see Done.)_
 
 ## Later (open directions)
 
-- **Federation.** Multiple assistant instances coordinating — your home assistant talks to your work assistant talks to a friend's assistant, with explicit consent and audit trails.
+- **Federation.** Multiple octipus instances coordinating — your home octipus talks to your work octipus talks to a friend's octipus, with explicit consent and audit trails.
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
 - **Voice as a first-class channel.** Today STT/TTS works through the gateway; we want full duplex voice with interruption handling and emotion-aware routing.
 - **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker.
@@ -133,7 +133,7 @@ _(Empty — both 2026-04 in-flight items shipped this week; see Done.)_
   `AbortSignal` tree, escalation (1/Agent lifetime), parallel
   `parallelGroup` fan-out, orphan reaper, per-node `swarm_nodes` schema,
   `swarm.*` gateway events with replay, web `SwarmTree` component.
-  See `.assistant/swarm-design.md` for the design; lives under
+  See `.octipus/swarm-design.md` for the design; lives under
   `src/core/swarm/`. New config: `config.swarm.*`.
 - **Anti-thrashing session compaction.** `src/core/orchestrator/session-compaction.ts`
   + `CompactionState` on sessions. Pure `decideCompaction` function;

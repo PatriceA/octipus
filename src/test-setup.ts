@@ -10,7 +10,7 @@ import { randomBytes } from 'crypto';
 const rand = (bytes: number) => randomBytes(bytes).toString('hex');
 
 process.env.NODE_ENV = 'test';
-process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://test:test@localhost:5432/assistant_test';
+process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://test:test@localhost:5432/octipus_test';
 process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
 process.env.LITELLM_URL = process.env.LITELLM_URL ?? 'http://localhost:4000';
 process.env.MASTER_KEY = process.env.MASTER_KEY ?? `test-master-${rand(24)}`;

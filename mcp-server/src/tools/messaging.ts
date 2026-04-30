@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerMessagingTools(server: McpServer, client: AssistantClient): void {
+export function registerMessagingTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_send_channel_message',
+    'octipus_send_channel_message',
     'Send a message to a specific channel (telegram, slack, teams, whatsapp, webchat).',
     {
       channel: z.string().describe('Channel type: telegram, slack, teams, whatsapp, or webchat'),
@@ -41,7 +41,7 @@ export function registerMessagingTools(server: McpServer, client: AssistantClien
   );
 
   server.tool(
-    'assistant_list_channels',
+    'octipus_list_channels',
     'List all registered messaging channels and their connection status.',
     {},
     async () => {

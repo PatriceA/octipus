@@ -90,7 +90,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   cli: {
     // CLI-delegated models (Claude Code, Gemini CLI, Codex CLI).
     // They support multi-turn and tools via the CLI protocol, but do not
-    // expose streaming or embeddings back to the assistant.
+    // expose streaming or embeddings back to Octipus.
     multiturn: true,
     media: false,
     tools: true,

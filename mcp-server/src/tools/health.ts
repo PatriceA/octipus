@@ -3,12 +3,12 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerHealthTools(server: McpServer, client: AssistantClient): void {
+export function registerHealthTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_health',
-    'Get detailed health status of the assistant backend.',
+    'octipus_health',
+    'Get detailed health status of Octipus backend.',
     {},
     async () => {
       try {
@@ -31,7 +31,7 @@ export function registerHealthTools(server: McpServer, client: AssistantClient):
   );
 
   server.tool(
-    'assistant_health_models',
+    'octipus_health_models',
     'Get health status of all configured models.',
     {},
     async () => {
@@ -55,7 +55,7 @@ export function registerHealthTools(server: McpServer, client: AssistantClient):
   );
 
   server.tool(
-    'assistant_health_channels',
+    'octipus_health_channels',
     'Get health status of all messaging channels.',
     {},
     async () => {
@@ -79,7 +79,7 @@ export function registerHealthTools(server: McpServer, client: AssistantClient):
   );
 
   server.tool(
-    'assistant_server_time',
+    'octipus_server_time',
     'Get the current server time.',
     {},
     async () => {

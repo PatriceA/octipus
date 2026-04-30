@@ -143,7 +143,7 @@ function evaluateTest(test: RedTeamTest, output: string, durationMs: number): Ev
 }
 
 /**
- * Send a message to the assistant backend and get a response.
+ * Send a message to Octipus backend and get a response.
  * Requires the backend to be running.
  */
 async function sendMessage(input: string, apiUrl: string, token: string): Promise<string> {

@@ -1,6 +1,6 @@
 # Voice & Phone Calls
 
-The Assistant includes voice capabilities at two levels:
+Octipus includes voice capabilities at two levels:
 
 1. **Local Voice I/O** — speech-to-text, text-to-speech, and wake word detection for hands-free local interaction
 2. **Phone Calls** — make and receive actual phone calls via Twilio, Telnyx, or Plivo with interactive voice conversations
@@ -43,7 +43,7 @@ voice.language = en
 
 ## Phone Calls
 
-Make and receive actual phone calls through telephony providers. The assistant uses the existing STT/TTS pipeline for audio processing and routes conversations through an expert for fast, direct LLM responses.
+Make and receive actual phone calls through telephony providers. Octipus uses the existing STT/TTS pipeline for audio processing and routes conversations through an expert for fast, direct LLM responses.
 
 ### Supported Providers
 
@@ -116,11 +116,11 @@ Step-by-step instructions for getting Twilio working from scratch.
 
 #### Get a Phone Number
 
-If your account has no phone numbers, buy one in **Twilio Console > Phone Numbers > Manage > Buy a number**. The assistant auto-detects available numbers from your account, so no manual phone number configuration is required.
+If your account has no phone numbers, buy one in **Twilio Console > Phone Numbers > Manage > Buy a number**. Octipus auto-detects available numbers from your account, so no manual phone number configuration is required.
 
 #### Configure the Webhook URL
 
-Your assistant must be reachable from the public internet so Twilio can deliver call events. Use ngrok, Cloudflare Tunnel, or any reverse proxy to expose your local instance.
+Your Octipus instance must be reachable from the public internet so Twilio can deliver call events. Use ngrok, Cloudflare Tunnel, or any reverse proxy to expose your local instance.
 
 1. In Twilio Console, go to **Phone Numbers > Manage > Active Numbers**
 2. Click your number
@@ -132,7 +132,7 @@ Your assistant must be reachable from the public internet so Twilio can deliver 
 
 #### Language Configuration
 
-Set the voice language in assistant settings (default: `en-US`):
+Set the voice language in octipus settings (default: `en-US`):
 
 ```bash
 curl -X PUT http://localhost:3005/api/settings/voice.language \
@@ -265,11 +265,11 @@ https://your-public-url/api/voice/webhook/twilio
 These improvements were made after debugging real Twilio integration issues and apply to the overall telephony subsystem:
 
 - **Credential format validation before API calls** — Account SID is checked for `AC` prefix and 34-character length, Auth Token for 32-character length. Invalid formats are rejected early with a clear error message instead of sending a doomed API request.
-- **Auto-detection of phone number** — The assistant queries the Twilio account's `IncomingPhoneNumbers` resource and picks the first available number. No manual phone number configuration is needed.
+- **Auto-detection of phone number** — Octipus queries the Twilio account's `IncomingPhoneNumbers` resource and picks the first available number. No manual phone number configuration is needed.
 - **Detailed error messages per HTTP status code** — Each status (401, 403, 404, etc.) maps to a specific human-readable explanation and suggested fix, rather than a generic "connection failed" message.
 - **Webhook signature verification** — Inbound webhooks are verified using HMAC-SHA1 with timing-safe comparison (`crypto.timingSafeEqual`) to prevent timing attacks. The signature is computed over the full webhook URL plus sorted POST parameters.
 - **XML escaping for TwiML** — All dynamic text inserted into TwiML responses is XML-escaped to prevent injection. Characters `&`, `<`, `>`, `"`, and `'` are replaced with their XML entities.
-- **Gather speech with fallback re-prompt** — If the caller doesn't speak during a `<Gather>` window, the assistant re-prompts instead of hanging up. This uses the `action` attribute to loop back to a re-prompt endpoint.
+- **Gather speech with fallback re-prompt** — If the caller doesn't speak during a `<Gather>` window, Octipus re-prompts instead of hanging up. This uses the `action` attribute to loop back to a re-prompt endpoint.
 - **Enhanced speech gathering** — The `<Gather>` element uses `enhanced="true"` for higher-accuracy speech recognition when available on the Twilio account.
 
 ---

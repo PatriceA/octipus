@@ -305,7 +305,7 @@ export class CLIProvider implements ModelProvider {
       } else if (msg.role === 'user') {
         parts.push(msg.content);
       } else if (msg.role === 'assistant') {
-        parts.push(`[Assistant] ${msg.content}`);
+        parts.push(`[Octipus] ${msg.content}`);
       }
     }
     return parts.join('\n\n');

@@ -21,7 +21,7 @@ Before setting up webhooks, you need:
 
 ### 1. Public URL
 
-The assistant backend must be reachable from the internet. Options:
+The Octipus backend must be reachable from the internet. Options:
 
 - **Cloudflare Tunnel** (recommended) — add an ingress rule in your tunnel config:
   ```yaml
@@ -37,7 +37,7 @@ The assistant backend must be reachable from the internet. Options:
 
 ### 2. Channel Bindings (for notifications)
 
-If you want the assistant to notify you about webhook events:
+If you want Octipus to notify you about webhook events:
 
 1. Link your Telegram account in **Settings → Channels** (or via the `/link` command in Telegram)
 2. Verify the binding — the channel must show as "verified" in your user profile
@@ -51,7 +51,7 @@ Generate a random secret for HMAC signature verification:
 openssl rand -hex 20
 ```
 
-Both sides (the assistant hook and the external service) must share this secret. **Never skip this** — hooks without a `webhookSecret` are rejected with 401.
+Both sides (Octipus hook and the external service) must share this secret. **Never skip this** — hooks without a `webhookSecret` are rejected with 401.
 
 ## Setup Guide: GitHub
 
@@ -60,7 +60,7 @@ Both sides (the assistant hook and the external service) must share this secret.
 Via MCP (Claude Code / Gemini CLI):
 
 ```
-Use assistant_create_recurring_task:
+Use octipus_create_recurring_task:
   name: "GitHub Notifications"
   trigger: "webhook"
   trigger_config: '{"webhookPath": "github", "webhookSecret": "<your-secret>"}'
@@ -130,7 +130,7 @@ GitHub sends a `ping` event immediately after creating the webhook. Check:
 gh api repos/OWNER/REPO/hooks/<hook-id>/deliveries \
   --jq '.[0] | "\(.event) → \(.status_code)"'
 
-# Assistant execution log
+# Octipus execution log
 curl http://localhost:3005/api/hooks/<hook-id>/executions \
   -H "Authorization: Bearer <token>" | jq '.executions[0]'
 ```

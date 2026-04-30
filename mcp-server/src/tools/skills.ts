@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerSkillTools(server: McpServer, client: AssistantClient): void {
+export function registerSkillTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_skills',
+    'octipus_list_skills',
     'List all domain knowledge skills available to experts. Skills contain principles, best practices, and anti-patterns for domains like architecture, testing, security, etc.',
     {},
     async () => {
@@ -28,7 +28,7 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_get_skill',
+    'octipus_get_skill',
     'Get full details of a domain knowledge skill including principles, best practices, anti-patterns, and frameworks.',
     {
       skill_id: z.string().describe('Skill ID (e.g., "software-architecture", "security-practices")'),
@@ -49,7 +49,7 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_create_skill',
+    'octipus_create_skill',
     'Create a new domain knowledge skill. Supports two modes: (1) Markdown content — paste a Claude Code-style .md skill definition into the "content" field, or (2) Structured — provide principles, best practices, anti-patterns, and frameworks as arrays. When content is set, it takes priority over structured fields.',
     {
       name: z.string().describe('Unique skill name (e.g., "cloud-infrastructure")'),
@@ -77,7 +77,7 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_update_skill',
+    'octipus_update_skill',
     'Update an existing domain knowledge skill. Can update markdown content and/or structured fields.',
     {
       skill_id: z.string().describe('Skill ID to update'),
@@ -106,7 +106,7 @@ export function registerSkillTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_delete_skill',
+    'octipus_delete_skill',
     'Delete a custom domain knowledge skill.',
     {
       skill_id: z.string().describe('Skill ID to delete'),

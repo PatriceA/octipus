@@ -21,9 +21,9 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: assistant
-          POSTGRES_PASSWORD: assistant
-          POSTGRES_DB: assistant
+          POSTGRES_USER: octipus
+          POSTGRES_PASSWORD: octipus
+          POSTGRES_DB: octipus
         ports:
           - 5432:5432
         options: >-
@@ -33,7 +33,7 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://assistant:assistant@localhost:5432/assistant
+      DATABASE_URL: postgresql://octipus:octipus@localhost:5432/octipus
       # Cloud provider keys are optional — tests skip if not set
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

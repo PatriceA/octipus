@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerAgentTools(server: McpServer, client: AssistantClient): void {
+export function registerAgentTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_agents',
+    'octipus_list_agents',
     'List all running agents with their status, model, and topic.',
     {},
     async () => {
@@ -34,7 +34,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_spawn_agent',
+    'octipus_spawn_agent',
     'Spawn a new agent to handle a task. The agent runs autonomously with access to tools (web search, filesystem, shell, etc.).',
     {
       message: z.string().describe('The task or question for the agent'),
@@ -54,7 +54,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
                 model: agent.model,
                 topic: agent.topic,
                 status: agent.status,
-                message: `Agent spawned. Use assistant_get_agent_events with agentId "${agent.id}" to monitor progress.`,
+                message: `Agent spawned. Use octipus_get_agent_events with agentId "${agent.id}" to monitor progress.`,
               }, null, 2),
             },
           ],
@@ -69,7 +69,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_stop_agent',
+    'octipus_stop_agent',
     'Stop a running agent by its ID.',
     {
       agent_id: z.string().describe('The agent ID to stop'),
@@ -90,7 +90,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_send_agent_message',
+    'octipus_send_agent_message',
     'Send a message to a running agent and get its response.',
     {
       agent_id: z.string().describe('The agent ID to message'),
@@ -112,7 +112,7 @@ export function registerAgentTools(server: McpServer, client: AssistantClient): 
   );
 
   server.tool(
-    'assistant_get_agent_events',
+    'octipus_get_agent_events',
     'Get events from an agent (tool calls, thoughts, results). Use `after_seq` for incremental polling.',
     {
       agent_id: z.string().describe('The agent ID'),

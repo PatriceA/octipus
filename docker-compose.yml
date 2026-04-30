@@ -1,21 +1,21 @@
 services:
-  assistant:
+  octipus:
     build:
       context: .
       args:
-        NEXT_PUBLIC_API_PORT: ${ASSISTANT_API_PORT:-3015}
-    container_name: assistant-app
+        NEXT_PUBLIC_API_PORT: ${OCTIPUS_API_PORT:-3015}
+    container_name: octipus-app
     restart: unless-stopped
     env_file:
       - .env.docker
     ports:
-      - "${ASSISTANT_API_PORT:-3015}:3005"
-      - "${ASSISTANT_WEB_PORT:-3017}:3007"
+      - "${OCTIPUS_API_PORT:-3015}:3005"
+      - "${OCTIPUS_WEB_PORT:-3017}:3007"
     environment:
       # Database — hardcoded to Docker service names (overrides .env.docker)
-      - DATABASE_URL=postgresql://assistant:${POSTGRES_PASSWORD:-assistant}@assistant-db:5432/assistant
+      - DATABASE_URL=postgresql://octipus:${POSTGRES_PASSWORD:-octipus}@octipus-db:5432/octipus
       # Redis
-      - REDIS_URL=redis://assistant-redis:6379
+      - REDIS_URL=redis://octipus-redis:6379
       # Security
       - MASTER_KEY=${MASTER_KEY}
       - JWT_SECRET=${JWT_SECRET}
@@ -34,44 +34,44 @@ services:
       - WORKSPACE_ROOT=/data/workspace
       - DOCUMENTS_PATH=/data/documents
     volumes:
-      - assistant-workspace:/data/workspace
-      - assistant-documents:/data/documents
-      - assistant-extensions:/data/extensions
-      # Docker socket: allows the assistant to spawn sibling containers
+      - octipus-workspace:/data/workspace
+      - octipus-documents:/data/documents
+      - octipus-extensions:/data/extensions
+      # Docker socket: allows Octipus to spawn sibling containers
       # for running tools not installed in the main container image.
       # On Linux/macOS: /var/run/docker.sock:/var/run/docker.sock
       # On Windows (Docker Desktop): //var/run/docker.sock:/var/run/docker.sock
       - //var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      assistant-db:
+      octipus-db:
         condition: service_healthy
-      assistant-redis:
+      octipus-redis:
         condition: service_healthy
 
-  assistant-db:
+  octipus-db:
     image: pgvector/pgvector:pg16
-    container_name: assistant-db
+    container_name: octipus-db
     restart: unless-stopped
     environment:
-      - POSTGRES_DB=assistant
-      - POSTGRES_USER=assistant
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-assistant}
+      - POSTGRES_DB=octipus
+      - POSTGRES_USER=octipus
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-octipus}
     volumes:
-      - assistant-pgdata:/var/lib/postgresql/data
+      - octipus-pgdata:/var/lib/postgresql/data
     ports:
       - "${POSTGRES_PORT:-5442}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U assistant"]
+      test: ["CMD-SHELL", "pg_isready -U octipus"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-  assistant-redis:
+  octipus-redis:
     image: redis:7-alpine
-    container_name: assistant-redis
+    container_name: octipus-redis
     restart: unless-stopped
     volumes:
-      - assistant-redis:/data
+      - octipus-redis:/data
     ports:
       - "${REDIS_PORT:-6389}:6379"
     healthcheck:
@@ -81,8 +81,8 @@ services:
       retries: 5
 
 volumes:
-  assistant-pgdata:
-  assistant-redis:
-  assistant-workspace:
-  assistant-documents:
-  assistant-extensions:
+  octipus-pgdata:
+  octipus-redis:
+  octipus-workspace:
+  octipus-documents:
+  octipus-extensions:

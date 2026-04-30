@@ -1,5 +1,5 @@
 -- Swarm Phase 1: nodes in the agent delegation tree (Orchestrator → Agent).
--- Schema mirrors `.assistant/swarm-design.md` §Observability.
+-- Schema mirrors `.octipus/swarm-design.md` §Observability.
 
 CREATE TYPE "swarm_node_kind" AS ENUM ('orchestrator', 'agent', 'subagent');
 CREATE TYPE "swarm_node_status" AS ENUM (

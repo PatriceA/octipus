@@ -1096,7 +1096,7 @@ export default function ChatPage() {
           messages: [...prev.messages, {
             id: (Date.now() + 1).toString(),
             role: 'assistant',
-            content: `Error: ${(error as Error).message}. Make sure the assistant backend is running.`,
+            content: `Error: ${(error as Error).message}. Make sure Octipus backend is running.`,
             timestamp: new Date(),
           }],
         }));

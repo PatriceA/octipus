@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Backup script for the Assistant
+ * Backup script for Octipus
  */
 
 import { join } from 'path';
@@ -159,7 +159,7 @@ async function main() {
 
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║                  Assistant Backup Tool                    ║
+║                  Octipus Backup Tool                    ║
 ╚═══════════════════════════════════════════════════════════╝
 `);
 

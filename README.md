@@ -1,24 +1,24 @@
 <p align="center">
-  <img src="docs/images/logo.png" alt="Assistant" width="600">
+  <img src="docs/images/logo.png" alt="Octipus" width="600">
 </p>
 
-# The Assistant
+# Octipus
 
 > **v0.1 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
-**Website:** [https://the-assistant.app](https://the-assistant.app)
+**Website:** [https://octipus.app](https://octipus.app)
 
 ---
 
 ## What it is
 
-An open-source, self-hosted assistant that delegates real work to a swarm of specialist AI agents. Send a message — research, code, audit, write, schedule — and the orchestrator picks the right experts, fans them out in parallel, and ships a result back over the channel you used (Telegram, Slack, web, voice, MCP, …).
+Octipus is an open-source, self-hosted AI platform that delegates real work to a swarm of specialist agents. Send a message — research, code, audit, write, schedule — and the orchestrator picks the right experts, fans them out in parallel, and ships a result back over the channel you used (Telegram, Slack, web, voice, MCP, …).
 
 You bring the models. Your data stays on your infrastructure. Every model provider, every channel, every skill is yours to configure.
 
 ## Project goal
 
-An assistant that automates digital work — the boring, the repetitive, the cross-tool — and assists you with the rest. Not a chatbot wrapper. A platform that *executes*: it reads your repo, edits your files, runs your tests, fills your forms, schedules your meetings, and tells you what it changed.
+A platform that automates digital work — the boring, the repetitive, the cross-tool — and assists you with the rest. Not a chatbot wrapper. Octipus *executes*: it reads your repo, edits your files, runs your tests, fills your forms, schedules your meetings, and tells you what it changed.
 
 ## Community
 
@@ -46,7 +46,7 @@ Channels → Gateway (WebSocket, typed Zod protocol)
 
 **Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
 
-Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.assistant/swarm-design.md](.assistant/swarm-design.md).
+Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus/swarm-design.md](.octipus/swarm-design.md).
 
 ## Key points covered in v0.1
 
@@ -91,8 +91,8 @@ Full feature breakdown: see the [documentation index](#documentation) below.
 **Embedded (zero external deps, single-user):**
 
 ```bash
-git clone https://github.com/PatriceA/the_assistant.git
-cd the_assistant && bun install
+git clone https://github.com/PatriceA/octipus.git
+cd octipus && bun install
 cd web && bun install && cd ..
 bun run setup        # interactive config
 bun run dev
@@ -118,7 +118,7 @@ Highlights from the [roadmap](./ROADMAP.md):
 - **First-class human-in-the-loop primitive** — wait-for-input nodes with form schemas.
 - **Mobile clients** — native iOS/Android via the gateway protocol.
 
-Open directions (later): federation between assistant instances, local-first sync (PGlite + CRDTs), full-duplex voice, sandboxed tool execution (WASI), plugin signing.
+Open directions (later): federation between Octipus instances, local-first sync (PGlite + CRDTs), full-duplex voice, sandboxed tool execution (WASI), plugin signing.
 
 ## Documentation
 
@@ -132,7 +132,7 @@ Open directions (later): federation between assistant instances, local-first syn
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search, tiered content, auto-indexing |
-| **[MCP Server](docs/MCP-SERVER.md)** | Expose assistant as MCP tools |
+| **[MCP Server](docs/MCP-SERVER.md)** | Expose Octipus as MCP tools |
 | **[MCP Integration](docs/MCP-INTEGRATION.md)** | Connect external MCP servers |
 | **[Hooks & Automation](docs/HOOKS.md)** | Event hooks, webhooks, cron, execution control |
 | **[Webhooks](docs/WEBHOOKS.md)** | GitHub/GitLab event ingestion |

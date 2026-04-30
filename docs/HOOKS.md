@@ -45,7 +45,7 @@ webchat:session-uuid      # WebChat session ID
 teams:channel-id          # Microsoft Teams channel
 ```
 
-To find your Telegram chat ID: send any message to the bot and check backend logs (`~/.assistant/backend.log`).
+To find your Telegram chat ID: send any message to the bot and check backend logs (`~/.octipus/backend.log`).
 
 ### Template Variables
 

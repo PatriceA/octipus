@@ -1,4 +1,4 @@
--- Create profiles table for people/entities the assistant should know about
+-- Create profiles table for people/entities Octipus should know about
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,

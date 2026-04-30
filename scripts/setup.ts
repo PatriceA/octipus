@@ -172,8 +172,8 @@ async function registerCliUnix(binDir: string, os: string): Promise<boolean> {
   }
 
   const exportLine = shell.includes('fish')
-    ? `\n# Assistant CLI\nset -gx PATH $PATH "${binDir}"\n`
-    : `\n# Assistant CLI\nexport PATH="$PATH:${binDir}"\n`;
+    ? `\n# Octipus CLI\nset -gx PATH $PATH "${binDir}"\n`
+    : `\n# Octipus CLI\nexport PATH="$PATH:${binDir}"\n`;
 
   try {
     // Check if already present in profile
@@ -294,7 +294,7 @@ async function main(): Promise<void> {
 
   let databaseUrl = '';
   let redisUrl = '';
-  let dataDir = '~/.assistant/data';
+  let dataDir = '~/.octipus/data';
 
   if (storageMode === 'external') {
     // ── Database ──
@@ -316,7 +316,7 @@ async function main(): Promise<void> {
       : `redis://${redisHost}:${redisPort}`;
   } else {
     // Embedded mode
-    dataDir = await input({ message: 'Data directory', default: '~/.assistant/data' });
+    dataDir = await input({ message: 'Data directory', default: '~/.octipus/data' });
   }
 
   // ── API ──
@@ -428,7 +428,7 @@ async function main(): Promise<void> {
         }
         case 'browser-ext': {
           const extSrc = import.meta.dir + '/../browser-extension';
-          const extDest = homedir() + '/.assistant/browser-extension';
+          const extDest = homedir() + '/.octipus/browser-extension';
           console.log('Installing browser extension...');
           try {
             const { mkdirSync, cpSync } = await import('fs');
@@ -477,8 +477,8 @@ async function main(): Promise<void> {
                 command: 'node',
                 args: [mcpDistPath],
                 env: {
-                  ASSISTANT_URL: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
-                  ASSISTANT_API_KEY: masterKey,
+                  OCTIPUS_URL: `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
+                  OCTIPUS_API_KEY: masterKey,
                 },
               },
             },
@@ -503,7 +503,7 @@ async function main(): Promise<void> {
     const proc = Bun.spawn(['bun', 'run', 'scripts/migrate.ts'], {
       stdout: 'inherit',
       stderr: 'inherit',
-      env: { ...process.env, STORAGE_MODE: storageMode, ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}), ...(dataDir !== '~/.assistant/data' ? { DATA_DIR: dataDir } : {}) },
+      env: { ...process.env, STORAGE_MODE: storageMode, ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}), ...(dataDir !== '~/.octipus/data' ? { DATA_DIR: dataDir } : {}) },
     });
     const code = await proc.exited;
     if (code === 0) console.log('\x1b[32m✓ Migrations complete\x1b[0m');
@@ -515,7 +515,7 @@ async function main(): Promise<void> {
   const cliRegistered = await registerCli(binDir);
 
   // ── Summary ──
-  const startCmd = cliRegistered ? 'assistant start --dev' : (platform() === 'win32' ? `"${binDir}\\assistant.cmd" start --dev` : `"${binDir}/assistant" start --dev`);
+  const startCmd = cliRegistered ? 'assistant start --dev' : (platform() === 'win32' ? `"${binDir}\\octi.cmd" start --dev` : `"${binDir}/assistant" start --dev`);
   console.log(`
 \x1b[36m╔═══════════════════════════════════════════════════════════╗
 ║                    SETUP COMPLETE                         ║
@@ -526,7 +526,7 @@ async function main(): Promise<void> {
   ${storageMode === 'embedded' ? `Data dir: ${dataDir}` : `Database: ${databaseUrl.replace(/:[^:@]*@/, ':***@')}`}
 
 Next steps:
-  1. Start the assistant:  ${startCmd}
+  1. Start Octipus:  ${startCmd}
   2. Open http://localhost:3007 and register your admin account
   3. Configure LLM providers, channels, etc. via the web UI
 `);

@@ -259,7 +259,7 @@
 ### Startup & Process Management
 - **Lazy Playwright imports**: `import { chromium } from 'playwright'` moved from top-level to lazy `await import('playwright')` in browser, websearch, and screenshot tools. Startup dropped from ~20s to ~2s
 - **Graceful shutdown**: `stopAll()` kills all running agents and CLI child processes before exit
-- **Orphan process cleanup**: `kill_all_assistant` in `assistant.cmd` now kills orphan `cmd.exe` wrapper processes and stray `bun.exe` instances that held log file locks, preventing backend restart
+- **Orphan process cleanup**: `kill_all_assistant` in `octi.cmd` now kills orphan `cmd.exe` wrapper processes and stray `bun.exe` instances that held log file locks, preventing backend restart
 
 ### Ollama Configuration
 - **Optional Ollama URL**: Removed hardcoded `http://localhost:11434` default. Ollama URL is now truly optional — if not configured, health check returns `not_configured` instead of failing against localhost
@@ -366,7 +366,7 @@
 - **15 system experts**: Coder, Reviewer, Researcher, UI/UX Designer, DevOps Engineer, Security Analyst, Data Engineer, AI Engineer, QA Engineer, Financial Analyst, Automation Engineer, Project Manager, Technical Writer, Communicator, General
 - **20 system skills**: software-architecture, data-structures, test-automation, design-principles, design-frameworks, devops-practices, container-orchestration, security-practices, cloud-platforms, financial-analysis, ai-engineering, automation-patterns, database-design, api-design, project-management, technical-writing, performance-engineering, data-engineering, machine-learning, networking
 - **Skills CRUD API**: Full REST API for creating/managing custom domain knowledge skills
-- **Skills MCP tools**: `assistant_list_skills` and `assistant_get_skill`
+- **Skills MCP tools**: `octipus_list_skills` and `octipus_get_skill`
 
 ### Multi-Session Chat, RAG, Recurring Tasks
 - **Multi-session chat**: Multiple named chat sessions with context summaries

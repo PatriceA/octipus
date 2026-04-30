@@ -36,7 +36,7 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | Client Type | Auth Method | Trust Level |
 |-------------|-------------|-------------|
 | Web UI | `session_token` | `user` |
-| TUI | `local` (file token at `~/.assistant/local-token`) | `local` |
+| TUI | `local` (file token at `~/.octipus/local-token`) | `local` |
 | Channel adapters | `hmac` (per-adapter key) | `system` |
 | Mobile/IDE | `session_token` or `api_key` | `user` |
 | API/System | `api_key` (MASTER_KEY) | `system` |
@@ -182,7 +182,7 @@ src/core/gateway/
 ├── connection-manager.ts # Auth, budgets, connection lifecycle
 ├── event-bus.ts          # Central pub/sub with replay buffer
 ├── rate-limiter.ts       # Sliding window per-connection limiter
-├── local-auth.ts         # ~/.assistant/local-token auth
+├── local-auth.ts         # ~/.octipus/local-token auth
 ├── presence.ts           # Who's connected, idle timeouts
 ├── commands.ts           # Command registry + 9 built-in commands
 ├── feedback.ts           # Emoji reactions + stall detection

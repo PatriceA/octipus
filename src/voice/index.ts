@@ -230,7 +230,7 @@ export class VoiceService {
 
     // Get response
     const output = await getResponse(input);
-    this.log.info({ output }, 'Assistant response');
+    this.log.info({ output }, 'Octipus response');
 
     // Speak response
     if (this.tts) {

@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerPipelineTools(server: McpServer, client: AssistantClient): void {
+export function registerPipelineTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_pipeline_templates',
+    'octipus_list_pipeline_templates',
     'List all available pipeline templates.',
     {},
     async () => {
@@ -32,7 +32,7 @@ export function registerPipelineTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_create_pipeline',
+    'octipus_create_pipeline',
     'Create a new pipeline from a template.',
     {
       templateName: z.string().describe('Name of the pipeline template to use'),
@@ -59,7 +59,7 @@ export function registerPipelineTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_list_pipelines',
+    'octipus_list_pipelines',
     'List all pipelines with their current status.',
     {},
     async () => {
@@ -83,7 +83,7 @@ export function registerPipelineTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_get_pipeline',
+    'octipus_get_pipeline',
     'Get details of a specific pipeline by ID.',
     {
       pipeline_id: z.string().describe('The pipeline ID'),
@@ -109,7 +109,7 @@ export function registerPipelineTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_stop_pipeline',
+    'octipus_stop_pipeline',
     'Stop a running pipeline by ID.',
     {
       pipeline_id: z.string().describe('The pipeline ID to stop'),

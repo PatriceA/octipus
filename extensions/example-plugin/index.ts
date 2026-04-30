@@ -10,7 +10,7 @@ export default {
   tools: {
     async greet(args: Record<string, unknown>): Promise<unknown> {
       const name = args.name as string;
-      return { message: `Hello, ${name}! Welcome to the assistant plugin system.` };
+      return { message: `Hello, ${name}! Welcome to Octipus plugin system.` };
     },
 
     async calculate(args: Record<string, unknown>): Promise<unknown> {

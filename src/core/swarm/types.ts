@@ -1,7 +1,7 @@
 /**
  * Swarm Phase 1 — public types.
  *
- * Mirrors the design in `.assistant/swarm-design.md`. Phase 1 covers
+ * Mirrors the design in `.octipus/swarm-design.md`. Phase 1 covers
  * Orchestrator (depth 0) → Agent (depth 1) only; Subagent (depth 2) is
  * defined for forward compatibility but not spawnable yet.
  */

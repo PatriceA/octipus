@@ -3,8 +3,8 @@
 ## Project Structure
 
 ```
-assistant/
-├── bin/                    # CLI scripts (assistant start/stop)
+octipus/
+├── bin/                    # CLI scripts (octipus start/stop)
 ├── src/
 │   ├── api/                # REST API & WebSocket
 │   │   ├── routes/         # Endpoint handlers

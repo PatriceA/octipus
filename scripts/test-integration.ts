@@ -17,7 +17,7 @@ import { spawn } from 'child_process';
 const TEST_POSTGRES_PORT = process.env.TEST_POSTGRES_PORT || '5443';
 const TEST_REDIS_PORT = process.env.TEST_REDIS_PORT || '6390';
 
-const DATABASE_URL = `postgres://assistant:test@localhost:${TEST_POSTGRES_PORT}/assistant_test`;
+const DATABASE_URL = `postgres://octipus:test@localhost:${TEST_POSTGRES_PORT}/octipus_test`;
 const REDIS_URL = `redis://localhost:${TEST_REDIS_PORT}`;
 
 function run(cmd: string, args: string[], env: Record<string, string> = {}): Promise<number> {

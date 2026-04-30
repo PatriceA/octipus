@@ -80,7 +80,7 @@ class BrowserBridgeService {
     timeout = DEFAULT_TIMEOUT,
   ): Promise<unknown> {
     if (!this._connected || !this.ws) {
-      throw new Error('Browser extension is not connected. Open Chromium with the Assistant extension installed.');
+      throw new Error('Browser extension is not connected. Open Chromium with Octipus extension installed.');
     }
 
     const id = generateId();

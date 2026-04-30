@@ -4,14 +4,14 @@ export const defaultConfig: Partial<Config> = {
   storageMode: 'external',
   database: {
     url: '', // Must be set via DATABASE_URL env var in external mode
-    dataDir: '~/.assistant/data',
+    dataDir: '~/.octipus/data',
     poolSize: 10,
     idleTimeout: 30000,
     connectionTimeout: 10000,
   },
   redis: {
     url: 'redis://localhost:6379',
-    keyPrefix: 'assistant:',
+    keyPrefix: 'octipus:',
     maxRetries: 3,
     retryDelay: 1000,
   },
@@ -28,9 +28,9 @@ export const defaultConfig: Partial<Config> = {
     jwtSecret: '', // Must be provided
     sessionSecret: '', // Must be provided
     sessionMaxAge: 86400000,
-    totpIssuer: 'Assistant',
+    totpIssuer: 'Octipus',
     passkeyRpId: 'localhost',
-    passkeyRpName: 'Assistant',
+    passkeyRpName: 'Octipus',
     passkeyOrigin: 'http://localhost:3000',
   },
   api: {

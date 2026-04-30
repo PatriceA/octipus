@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerPluginTools(server: McpServer, client: AssistantClient): void {
+export function registerPluginTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_plugins',
+    'octipus_list_plugins',
     'List all loaded assistant plugins with their tools and metadata.',
     {},
     async () => {
@@ -36,7 +36,7 @@ export function registerPluginTools(server: McpServer, client: AssistantClient):
   );
 
   server.tool(
-    'assistant_reload_plugin',
+    'octipus_reload_plugin',
     'Reload a specific plugin by name. Useful during plugin development to pick up code changes without restarting the backend.',
     {
       name: z.string().describe('Plugin name to reload'),

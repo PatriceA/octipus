@@ -331,8 +331,8 @@ Report what can be cleaned up and how much space it would free. Don't run docker
     triggerConfig: { cronExpression: '*/15 * * * *' },
     action: 'spawn_agent',
     actionConfig: {
-      agentPrompt: `Check the assistant backend log for recent errors:
-1. Read the last 200 lines of ~/.assistant/backend.log
+      agentPrompt: `Check Octipus backend log for recent errors:
+1. Read the last 200 lines of ~/.octipus/backend.log
 2. Filter for ERROR and WARN entries from the last 15 minutes
 3. Group errors by type/source
 4. If there are repeated errors, identify the pattern

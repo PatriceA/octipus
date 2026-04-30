@@ -4,8 +4,8 @@ test.describe('smoke — page load + nav', () => {
   test('landing / dashboard renders', async ({ authenticatedPage: page, consoleErrors }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await expect(page).toHaveTitle(/Assistant/);
-    await expect(page.getByText('Assistant', { exact: true }).first()).toBeVisible();
+    await expect(page).toHaveTitle(/Octipus/);
+    await expect(page.getByText('Octipus', { exact: true }).first()).toBeVisible();
     expectNoConsoleErrors(consoleErrors);
   });
 

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Octipus
+GenericName=Development Octipus
+Comment=Autonomous Development Octipus with multi-channel support
+Exec=bash -c 'cd "$(dirname "$(readlink -f "%k")")" && bin/octi open'
+Icon=octipus
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+Keywords=octipus;ai;agent;development;
+StartupNotify=true
+StartupWMClass=Octipus

@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerSettingTools(server: McpServer, client: AssistantClient): void {
+export function registerSettingTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_settings',
+    'octipus_list_settings',
     'List all settings and their current values.',
     {},
     async () => {
@@ -32,7 +32,7 @@ export function registerSettingTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_get_setting',
+    'octipus_get_setting',
     'Get the value of a specific setting by key.',
     {
       key: z.string().describe('The setting key'),
@@ -58,7 +58,7 @@ export function registerSettingTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_update_setting',
+    'octipus_update_setting',
     'Update a setting value by key.',
     {
       key: z.string().describe('The setting key to update'),
@@ -91,7 +91,7 @@ export function registerSettingTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_reset_setting',
+    'octipus_reset_setting',
     'Reset a setting to its default value.',
     {
       key: z.string().describe('The setting key to reset'),

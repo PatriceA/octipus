@@ -291,7 +291,7 @@ export class AgentWorker extends BaseAgentWorker {
     this.emit('status_change', { status: 'running' });
 
     try {
-      const dumpDir = joinPath(homedir(), '.assistant', 'prompts');
+      const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
       mkdirSync(dumpDir, { recursive: true });
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${this.context.role}.md`);
@@ -796,13 +796,13 @@ export class AgentWorker extends BaseAgentWorker {
             tools: textToolCalls.map(tc => tc.name),
           }, 'Recovered tool calls from text output');
 
-          const assistantMsg: AgentMessage = {
+          const octiMsg: AgentMessage = {
             role: 'assistant',
             content: '',
             toolCalls: textToolCalls,
             timestamp: new Date(),
           };
-          this.messages.push(assistantMsg);
+          this.messages.push(octiMsg);
 
           this.emit('action', {
             toolCalls: textToolCalls.map(tc => ({
@@ -1058,13 +1058,13 @@ export class AgentWorker extends BaseAgentWorker {
       { sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'chat', metadata: { iteration: this.iteration } },
     );
 
-    const assistantMessage: AgentMessage = {
+    const octiMessage: AgentMessage = {
       role: 'assistant',
       content: result.content,
       toolCalls: result.toolCalls,
       timestamp: new Date(),
     };
-    this.messages.push(assistantMessage);
+    this.messages.push(octiMessage);
 
     return result;
   }

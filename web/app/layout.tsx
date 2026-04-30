@@ -4,8 +4,8 @@ import { AppShell } from '@/components/app-shell';
 import { Providers } from './providers';
 
 export const metadata: Metadata = {
-  title: 'Assistant',
-  description: 'Autonomous Development Assistant',
+  title: 'Octipus',
+  description: 'Autonomous Development Platform',
   manifest: '/manifest.json',
   icons: {
     icon: [
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   themeColor: '#73ffe3',
   appleWebApp: {
     capable: true,
-    title: 'Assistant',
+    title: 'Octipus',
     statusBarStyle: 'black-translucent',
   },
 };

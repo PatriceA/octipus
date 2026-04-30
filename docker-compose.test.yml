@@ -1,10 +1,10 @@
 services:
-  assistant-test-db:
+  octipus-test-db:
     image: pgvector/pgvector:pg16
-    container_name: assistant-test-db
+    container_name: octipus-test-db
     environment:
-      - POSTGRES_DB=assistant_test
-      - POSTGRES_USER=assistant
+      - POSTGRES_DB=octipus_test
+      - POSTGRES_USER=octipus
       - POSTGRES_PASSWORD=test
     # tmpfs-backed: no volume mount => data wiped when container stops
     tmpfs:
@@ -12,15 +12,15 @@ services:
     ports:
       - "${TEST_POSTGRES_PORT:-5443}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U assistant -d assistant_test"]
+      test: ["CMD-SHELL", "pg_isready -U octipus -d octipus_test"]
       interval: 1s
       timeout: 2s
       retries: 30
       start_period: 2s
 
-  assistant-test-redis:
+  octipus-test-redis:
     image: redis:7-alpine
-    container_name: assistant-test-redis
+    container_name: octipus-test-redis
     # No volume mount — ephemeral by default
     command: redis-server --save "" --appendonly no
     ports:

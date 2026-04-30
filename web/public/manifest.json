@@ -1,7 +1,7 @@
 {
-  "name": "Assistant",
-  "short_name": "Assistant",
-  "description": "Autonomous Development Assistant",
+  "name": "Octipus",
+  "short_name": "Octipus",
+  "description": "Autonomous Development Platform",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",

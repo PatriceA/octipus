@@ -36,7 +36,7 @@ export class WhatsAppChannel extends BaseChannel {
 
     this.accessToken = config.whatsapp.accessToken;
     this.phoneNumberId = config.whatsapp.phoneNumberId;
-    this.verifyToken = config.whatsapp.verifyToken || 'assistant-whatsapp-verify';
+    this.verifyToken = config.whatsapp.verifyToken || 'octipus-whatsapp-verify';
     this.appSecret = config.whatsapp.appSecret || null;
 
     this.setConnected(true);

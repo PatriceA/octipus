@@ -55,7 +55,7 @@ sudo dnf install chromium
 1. Open `chromium://extensions`
 2. Enable **Developer mode** (toggle, top right)
 3. Click **Load unpacked**
-4. Select the `browser-extension/` directory (or `~/.assistant/browser-extension/` if installed via setup wizard)
+4. Select the `browser-extension/` directory (or `~/.octipus/browser-extension/` if installed via setup wizard)
 
 ### 3. Configure
 
@@ -68,7 +68,7 @@ The badge shows **ON** when connected, **OFF** when disconnected.
 
 ### Automated Install
 
-Run the setup wizard (`bun run setup`). If Chromium is detected, a "Browser Extension" checkbox appears in optional extras. Selecting it copies the extension to `~/.assistant/browser-extension/` and prints loading instructions.
+Run the setup wizard (`bun run setup`). If Chromium is detected, a "Browser Extension" checkbox appears in optional extras. Selecting it copies the extension to `~/.octipus/browser-extension/` and prints loading instructions.
 
 ## Available Commands
 

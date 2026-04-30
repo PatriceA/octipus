@@ -1,17 +1,17 @@
 {
-  "name": "assistant",
+  "name": "octipus",
   "version": "0.1.0",
   "description": "Autonomous development assistant with multi-channel support",
   "type": "module",
   "bin": {
-    "assistant": "./bin/assistant.mjs"
+    "octi": "./bin/octi.mjs"
   },
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "tui": "bun run src/tui/index.tsx",
-    "start:all": "bin/assistant start",
-    "stop:all": "bin/assistant stop",
+    "start:all": "bin/octi start",
+    "stop:all": "bin/octi stop",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run scripts/migrate.ts",
@@ -27,7 +27,7 @@
     "test:web:install": "playwright install chromium",
     "test:integration:up": "docker compose -f docker-compose.test.yml up -d --wait",
     "test:integration:down": "docker compose -f docker-compose.test.yml down -v",
-    "test:integration:migrate": "DATABASE_URL=postgres://assistant:test@localhost:${TEST_POSTGRES_PORT:-5443}/assistant_test bun run scripts/migrate.ts",
+    "test:integration:migrate": "DATABASE_URL=postgres://octipus:test@localhost:${TEST_POSTGRES_PORT:-5443}/octipus_test bun run scripts/migrate.ts",
     "test:integration": "bun run scripts/test-integration.ts",
     "test:e2e": "bun run scripts/test-e2e.ts",
     "eval": "bun run src/eval/cli.ts",

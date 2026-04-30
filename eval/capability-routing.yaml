@@ -1,6 +1,6 @@
 name: Capability Routing Tests (Quality Standard)
 description: >
-  Tests verifying the assistant routes tasks to correct specialist roles,
+  Tests verifying Octipus routes tasks to correct specialist roles,
   covering all capability categories that standardupports.
   Ensures feature parity with standard routing and delegation model.
 

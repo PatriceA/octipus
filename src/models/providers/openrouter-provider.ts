@@ -290,8 +290,8 @@ export class OpenRouterProvider implements ModelProvider {
       timeout: 120_000,
       maxRetries: 2,
       defaultHeaders: {
-        'HTTP-Referer': 'https://the-assistant.app',
-        'X-Title': 'The Assistant',
+        'HTTP-Referer': 'https://octipus.cc',
+        'X-Title': 'Octipus',
       },
     });
   }

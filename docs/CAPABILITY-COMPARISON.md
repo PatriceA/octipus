@@ -1,4 +1,4 @@
-# Capability Comparison: Assistant vs competitor
+# Capability Comparison: Octipus vs competitor
 
 Feature comparison with [competitor](https://docs.competitor.ai/) as of March 2026.
 
@@ -10,7 +10,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Core Capabilities
 
-| Capability | competitor | Assistant | Notes |
+| Capability | competitor | Octipus | Notes |
 |---|---|---|---|
 | Multi-agent orchestration | Yes | Yes | Orchestrator + specialist roles |
 | Sub-agent spawning | Yes (depth/concurrency limits) | Yes (3-level swarm) | Orchestrator → Agent → Subagent via `spawn_child`; hard depth cap 2 |
@@ -25,7 +25,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Channels
 
-| Channel | competitor | Assistant | Notes |
+| Channel | competitor | Octipus | Notes |
 |---|---|---|---|
 | WebChat | Yes | Yes | WebSocket-based |
 | Telegram | Yes | Yes | Polling via grammy |
@@ -38,7 +38,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Tools
 
-| Tool | competitor | Assistant | Notes |
+| Tool | competitor | Octipus | Notes |
 |---|---|---|---|
 | Web search | Yes | Yes | SearXNG backend |
 | Browser automation (Playwright) | Yes | Yes | Isolated headless browser |
@@ -60,7 +60,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Browser Automation (Detailed)
 
-| Feature | competitor | Assistant (browser-ext) | Assistant (Playwright) |
+| Feature | competitor | Octipus (browser-ext) | Octipus (Playwright) |
 |---|---|---|---|
 | Navigate to URL | Yes | Yes | Yes |
 | Click elements | Yes | Yes (+ double-click) | Yes |
@@ -88,7 +88,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Automation & Scheduling
 
-| Feature | competitor | Assistant | Notes |
+| Feature | competitor | Octipus | Notes |
 |---|---|---|---|
 | Cron-based scheduling | Yes | Yes | Hooks with cronExpression |
 | Event-driven hooks | Yes | Yes | 8 trigger types |
@@ -98,7 +98,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Security
 
-| Feature | competitor | Assistant | Notes |
+| Feature | competitor | Octipus | Notes |
 |---|---|---|---|
 | Tool access profiles | Yes | Yes | Permission system (ALLOW/ASK/DENY) |
 | Per-action permissions | Yes | Yes | Tool-level permission checks |
@@ -110,7 +110,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## Knowledge & RAG
 
-| Feature | competitor | Assistant | Notes |
+| Feature | competitor | Octipus | Notes |
 |---|---|---|---|
 | Vector search (cosine) | Yes | Yes | pgvector with HNSW index |
 | BM25 full-text search | Yes | Yes | PostgreSQL tsvector + GIN |
@@ -122,7 +122,7 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 ## UI & Experience
 
-| Feature | competitor | Assistant | Notes |
+| Feature | competitor | Octipus | Notes |
 |---|---|---|---|
 | Web UI | Yes | Yes | React + Tailwind |
 | Settings management | Yes | Yes | Hot-reload config |

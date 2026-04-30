@@ -58,9 +58,9 @@ export function createServer() {
       swagger({
         documentation: {
           info: {
-            title: 'Assistant API',
+            title: 'Octipus API',
             version: '1.0.0',
-            description: 'Autonomous Development Assistant API',
+            description: 'Autonomous Development Octipus API',
           },
           tags: [
             { name: 'auth', description: 'Authentication endpoints' },

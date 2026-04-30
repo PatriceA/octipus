@@ -162,7 +162,7 @@ export function compactMessages(
  */
 export function createSummaryMessage(removedMessages: AgentMessage[]): AgentMessage {
   const userMessages = removedMessages.filter(m => m.role === 'user').length;
-  const assistantMessages = removedMessages.filter(m => m.role === 'assistant').length;
+  const octiMessages = removedMessages.filter(m => m.role === 'assistant').length;
   const toolMessages = removedMessages.filter(m => m.role === 'tool').length;
 
   // Extract key topics from messages
@@ -182,7 +182,7 @@ export function createSummaryMessage(removedMessages: AgentMessage[]): AgentMess
   return {
     role: 'system',
     content: `[Context Summary: ${removedMessages.length} earlier messages were compacted. ` +
-      `They included ${userMessages} user messages, ${assistantMessages} assistant responses, ` +
+      `They included ${userMessages} user messages, ${octiMessages} assistant responses, ` +
       `and ${toolMessages} tool interactions. Key topics: ${topicList}]`,
     timestamp: new Date(),
   };

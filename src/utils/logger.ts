@@ -18,7 +18,7 @@ export const logger = pino({
   level: logLevel,
   transport,
   base: {
-    service: 'assistant',
+    service: 'octipus',
   },
   timestamp: pino.stdTimeFunctions.isoTime,
 });

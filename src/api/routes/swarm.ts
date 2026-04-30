@@ -136,7 +136,7 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // ── Cancel a node + all descendants ─────────────────────────────────
   //
   // Emulates the `AgentManager.stop(id, { cascade:true })` behaviour
-  // described in `.assistant/swarm-design.md §Cancellation`. Discovers
+  // described in `.octipus/swarm-design.md §Cancellation`. Discovers
   // descendants in DB, then calls `AgentManager.stop(childId)` on each
   // (live agents stop via their abort controller; zombie DB rows are
   // flipped to `cancelled` by the stop path).

@@ -37,7 +37,7 @@ export class BrowserExtTool extends BaseTool {
   readonly id = 'browser-ext';
   readonly name = 'Browser Extension';
   readonly version = '2.0.0';
-  readonly description = 'Interact with the user\'s real browser via the Assistant Chrome extension. Full browser control: navigate, click, type, screenshot, tabs, cookies, storage, network, console, and more. Uses existing cookies and sessions — no bot detection.';
+  readonly description = 'Interact with the user\'s real browser via Octipus Chrome extension. Full browser control: navigate, click, type, screenshot, tabs, cookies, storage, network, console, and more. Uses existing cookies and sessions — no bot detection.';
 
   getManifest(): ToolManifest {
     return {

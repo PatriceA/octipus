@@ -111,9 +111,9 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 rounded-2xl mb-4 inline-flex items-center justify-center bg-gradient-to-br from-primary to-primary-container shadow-[0_0_30px_-5px_rgba(115,255,227,0.5)]">
-            <img src="/logo.png" alt="Assistant" className="w-16 h-16 rounded-2xl object-contain" />
+            <img src="/logo.png" alt="Octipus" className="w-16 h-16 rounded-2xl object-contain" />
           </div>
-          <h1 className="font-headline text-2xl font-extrabold tracking-tighter text-primary">Assistant</h1>
+          <h1 className="font-headline text-2xl font-extrabold tracking-tighter text-primary">Octipus</h1>
           <p className="text-on-surface-variant text-sm mt-1">Autonomous Development Agent</p>
         </div>
 

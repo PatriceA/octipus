@@ -1,6 +1,6 @@
 # Chat Commands
 
-Chat commands are slash commands you can use in any channel (WebChat, Telegram, Slack, Teams, WhatsApp, TUI) to control the assistant.
+Chat commands are slash commands you can use in any channel (WebChat, Telegram, Slack, Teams, WhatsApp, TUI) to control Octipus.
 
 ## Available Commands
 
@@ -25,7 +25,7 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 |---------|-------------|
 | `/cost` | Show cumulative token usage and cost |
 | `/diff` | Show `git diff --stat` for workspace changes |
-| `/version` | Show assistant version and Bun version |
+| `/version` | Show Octipus version and Bun version |
 | `/compact` | Compact session context (summarize old messages) |
 | `/exit` | Exit the TUI |
 
@@ -76,7 +76,7 @@ Type `yes`/`y` to approve or `no`/`n` to deny. If denied, the agent is stopped a
 
 ## Channel Feedback (Emoji Reactions)
 
-On external channels (Telegram, Slack, WhatsApp), the assistant provides real-time emoji reactions on your message:
+On external channels (Telegram, Slack, WhatsApp), Octipus provides real-time emoji reactions on your message:
 
 | Phase | Emoji | Meaning |
 |-------|-------|---------|

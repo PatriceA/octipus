@@ -14,7 +14,7 @@ Create a `.env` file or use `bun run setup` to generate one interactively.
 
 ```env
 # ─── Required ─────────────────────────────────────────────────
-DATABASE_URL=postgres://user:password@localhost:5432/assistant
+DATABASE_URL=postgres://user:password@localhost:5432/octipus
 REDIS_URL=redis://localhost:6379
 
 # Security keys (minimum 32 characters each, use `bun run setup` to generate)

@@ -4,12 +4,12 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerKnowledgeTools(server: McpServer, client: AssistantClient): void {
+export function registerKnowledgeTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_search_knowledge',
-    'Search the assistant knowledge base using hybrid search (semantic + keyword). Returns abstracts — use read_knowledge for full content.',
+    'octipus_search_knowledge',
+    'Search Octipus knowledge base using hybrid search (semantic + keyword). Returns abstracts — use read_knowledge for full content.',
     {
       query: z.string().describe('Search query'),
       limit: z.number().optional().describe('Max results (default: 5)'),
@@ -24,7 +24,7 @@ export function registerKnowledgeTools(server: McpServer, client: AssistantClien
         const formatted = result.results.map((r: any, i: number) =>
           `**${i + 1}.** [${r.similarity}] ${r.sourceType}${r.filePath ? ` — ${r.filePath}` : ''}\nID: ${r.id}\n${r.abstract || r.content?.slice(0, 200)}`
         ).join('\n\n');
-        return { content: [{ type: 'text' as const, text: `${formatted}\n\n_Use assistant_read_knowledge with an ID to get full content._` }] };
+        return { content: [{ type: 'text' as const, text: `${formatted}\n\n_Use octipus_read_knowledge with an ID to get full content._` }] };
       } catch (error) {
         return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
       }
@@ -32,7 +32,7 @@ export function registerKnowledgeTools(server: McpServer, client: AssistantClien
   );
 
   server.tool(
-    'assistant_read_knowledge',
+    'octipus_read_knowledge',
     'Read the full content of a knowledge entry by its ID (from search results).',
     {
       id: z.string().describe('Knowledge entry ID from search results'),
@@ -52,7 +52,7 @@ export function registerKnowledgeTools(server: McpServer, client: AssistantClien
   );
 
   server.tool(
-    'assistant_index_file',
+    'octipus_index_file',
     'Index a file into the knowledge base for future RAG retrieval.',
     {
       path: z.string().describe('Absolute path to the file'),

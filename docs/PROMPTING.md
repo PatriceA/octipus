@@ -1,6 +1,6 @@
 # Prompting Guide
 
-How to configure and prompt the assistant to trigger different features.
+How to configure and prompt Octipus to trigger different features.
 
 ## Prerequisites
 
@@ -392,7 +392,7 @@ The recommended format — just paste a markdown document:
 1. Check the **Execution Log** tab on the Hooks page
 2. Verify the `notifyChannels` format: must be `type:channelId` (e.g., `telegram:123456`)
 3. Ensure the channel is connected (Telegram bot running, Slack app installed)
-4. Check the backend log: `tail -f ~/.assistant/backend.log`
+4. Check the backend log: `tail -f ~/.octipus/backend.log`
 
 ### Pipeline approvals not appearing
 

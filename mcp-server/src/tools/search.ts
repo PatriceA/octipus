@@ -1,15 +1,15 @@
 /**
- * Web search tools — search the web and fetch pages via the assistant's SearXNG integration.
+ * Web search tools — search the web and fetch pages via Octipus's SearXNG integration.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerSearchTools(server: McpServer, client: AssistantClient): void {
+export function registerSearchTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_search',
-    'Search the web using the assistant\'s SearXNG search engine. Returns results with titles, URLs, and snippets.',
+    'octipus_search',
+    'Search the web using Octipus\'s SearXNG search engine. Returns results with titles, URLs, and snippets.',
     {
       query: z.string().describe('Search query'),
       max_results: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
@@ -35,7 +35,7 @@ export function registerSearchTools(server: McpServer, client: AssistantClient):
   );
 
   server.tool(
-    'assistant_fetch_page',
+    'octipus_fetch_page',
     'Fetch a web page and extract its text content. Uses a real browser for JavaScript-rendered pages.',
     {
       url: z.string().url().describe('URL to fetch'),

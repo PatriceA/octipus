@@ -2,8 +2,8 @@
  * Auth helper — reads credentials from environment and provides headers for API calls.
  *
  * Supports two modes:
- *   1. API key via ASSISTANT_API_KEY env var (sent as Bearer token)
- *   2. Username/password via ASSISTANT_USER + ASSISTANT_PASSWORD (auto-login, caches JWT)
+ *   1. API key via OCTIPUS_API_KEY env var (sent as Bearer token)
+ *   2. Username/password via OCTIPUS_USER + OCTIPUS_PASSWORD (auto-login, caches JWT)
  */
 
 export interface AuthConfig {
@@ -17,9 +17,9 @@ let tokenExpiry = 0;
 
 export function getAuthConfig(): AuthConfig {
   return {
-    apiKey: process.env.ASSISTANT_API_KEY,
-    username: process.env.ASSISTANT_USER,
-    password: process.env.ASSISTANT_PASSWORD,
+    apiKey: process.env.OCTIPUS_API_KEY,
+    username: process.env.OCTIPUS_USER,
+    password: process.env.OCTIPUS_PASSWORD,
   };
 }
 

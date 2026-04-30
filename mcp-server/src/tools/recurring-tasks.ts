@@ -6,13 +6,13 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerRecurringTaskTools(server: McpServer, client: AssistantClient): void {
+export function registerRecurringTaskTools(server: McpServer, client: OctiClient): void {
   // ─── List hooks ───
 
   server.tool(
-    'assistant_list_recurring_tasks',
+    'octipus_list_recurring_tasks',
     'List all hooks (scheduled tasks & event automations). Shows name, trigger, action, schedule, status, last/next run time.',
     {},
     async () => {
@@ -35,7 +35,7 @@ export function registerRecurringTaskTools(server: McpServer, client: AssistantC
   // ─── Create hook ───
 
   server.tool(
-    'assistant_create_recurring_task',
+    'octipus_create_recurring_task',
     `Create a new hook (scheduled task or event automation).
 
 Triggers: schedule, webhook, message_received, agent_completed, agent_failed, tool_executed
@@ -79,7 +79,7 @@ For notify actions, set notifyOwner: true in action_config to notify the user on
   // ─── Update hook ───
 
   server.tool(
-    'assistant_update_recurring_task',
+    'octipus_update_recurring_task',
     'Update a hook (rename, change schedule, enable/disable, change action config).',
     {
       hook_id: z.string().describe('Hook ID'),
@@ -114,7 +114,7 @@ For notify actions, set notifyOwner: true in action_config to notify the user on
   // ─── Delete hook ───
 
   server.tool(
-    'assistant_delete_recurring_task',
+    'octipus_delete_recurring_task',
     'Delete a hook by ID.',
     {
       hook_id: z.string().describe('Hook ID to delete'),
@@ -132,7 +132,7 @@ For notify actions, set notifyOwner: true in action_config to notify the user on
   // ─── Toggle hook ───
 
   server.tool(
-    'assistant_toggle_hook',
+    'octipus_toggle_hook',
     'Enable or disable a hook.',
     {
       hook_id: z.string().describe('Hook ID'),

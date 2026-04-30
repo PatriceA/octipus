@@ -468,7 +468,7 @@ export class OrchestratorService {
 
       // Load brief summary for orchestrator (lightweight)
       try {
-        const summaryPath = resolve(projectPath, '.assistant/project-summary.md');
+        const summaryPath = resolve(projectPath, '.octipus/project-summary.md');
         const file = Bun.file(summaryPath);
         if (await file.exists()) {
           const brief = (await file.text()).slice(0, 500);
@@ -496,7 +496,7 @@ export class OrchestratorService {
         if (wsAdditional.length > 0) {
           wsContext += `\nAdditional paths: ${wsAdditional.join(', ')}`;
         }
-        wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (assistant)", your task descriptions must say "audit the project at ${wsRoot}/assistant". Workers do NOT know which project the user means unless you tell them the exact path.`;
+        wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
         systemPrompt += wsContext;
       } catch {
         systemPrompt += `\nWORKSPACE: ${wsRoot}`;

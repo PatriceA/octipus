@@ -1,7 +1,7 @@
 /**
- * Assistant Browser Bridge — Service Worker (background.js)
+ * Octi Browser Bridge — Service Worker (background.js)
  *
- * Maintains a WebSocket connection to the Assistant backend and dispatches
+ * Maintains a WebSocket connection to Octipus backend and dispatches
  * commands to content scripts or Chrome APIs.
  */
 
@@ -65,7 +65,7 @@ async function connect() {
 
       broadcastStatus({ connected: true });
       startHeartbeat();
-      console.log('[Assistant] Connected to backend');
+      console.log('[Octi] Connected to backend');
     };
 
     ws.onmessage = (event) => {
@@ -73,7 +73,7 @@ async function connect() {
         const msg = JSON.parse(event.data);
         handleBackendMessage(msg);
       } catch (err) {
-        console.error('[Assistant] Failed to parse message:', err);
+        console.error('[Octi] Failed to parse message:', err);
       }
     };
 
@@ -83,7 +83,7 @@ async function connect() {
       stopHeartbeat();
       updateBadge('OFF', '#9E9E9E');
       broadcastStatus({ connected: false });
-      console.log('[Assistant] Disconnected:', event.code, event.reason);
+      console.log('[Octi] Disconnected:', event.code, event.reason);
 
       // Auto-reconnect unless explicitly disconnected
       if (event.code !== 4000) {
@@ -92,10 +92,10 @@ async function connect() {
     };
 
     ws.onerror = (err) => {
-      console.error('[Assistant] WebSocket error:', err);
+      console.error('[Octi] WebSocket error:', err);
     };
   } catch (err) {
-    console.error('[Assistant] Connection failed:', err);
+    console.error('[Octi] Connection failed:', err);
     scheduleReconnect();
   }
 }

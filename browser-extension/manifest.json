@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Assistant Browser Bridge",
+  "name": "Octipus Browser Bridge",
   "version": "2.0.0",
-  "description": "Connects your browser to the Assistant platform, enabling AI agents to interact with web pages using your existing sessions and cookies.",
+  "description": "Connects your browser to Octipus platform, enabling AI agents to interact with web pages using your existing sessions and cookies.",
   "permissions": [
     "activeTab",
     "tabs",

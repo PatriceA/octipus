@@ -3,11 +3,11 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerGatewayTools(server: McpServer, client: AssistantClient): void {
+export function registerGatewayTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_gateway_status',
+    'octipus_gateway_status',
     'Get the current gateway status.',
     {},
     async () => {
@@ -31,7 +31,7 @@ export function registerGatewayTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_gateway_connections',
+    'octipus_gateway_connections',
     'List all gateway connections.',
     {},
     async () => {
@@ -55,7 +55,7 @@ export function registerGatewayTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_gateway_adapters',
+    'octipus_gateway_adapters',
     'List all gateway adapters.',
     {},
     async () => {

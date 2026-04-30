@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerSessionTools(server: McpServer, client: AssistantClient): void {
+export function registerSessionTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_sessions',
+    'octipus_list_sessions',
     'List recent chat sessions with their channel, status, and message count.',
     {
       limit: z.number().optional().default(20).describe('Maximum number of sessions to return (default: 20)'),
@@ -36,7 +36,7 @@ export function registerSessionTools(server: McpServer, client: AssistantClient)
   );
 
   server.tool(
-    'assistant_get_messages',
+    'octipus_get_messages',
     'Get messages from a specific session. Useful for reviewing conversation history.',
     {
       session_id: z.string().describe('The session ID'),

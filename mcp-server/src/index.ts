@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Assistant MCP Server — Entry point
+ * Octipus MCP Server — Entry point
  *
- * Exposes the assistant's capabilities (search, agents, sessions, models, chat, tools)
+ * Exposes Octipus's capabilities (search, agents, sessions, models, chat, tools)
  * as MCP tools that CLI models (Claude Code, Gemini CLI) can use.
  *
  * Usage:
@@ -11,10 +11,10 @@
  *   node dist/index.js --transport http --port 3010  # HTTP transport
  *
  * Environment:
- *   ASSISTANT_URL      - Assistant backend URL (default: http://localhost:3005)
- *   ASSISTANT_API_KEY   - API key or JWT for authentication
- *   ASSISTANT_USER      - Username for auto-login (alternative to API key)
- *   ASSISTANT_PASSWORD  - Password for auto-login
+ *   OCTIPUS_URL      - Octipus backend URL (default: http://localhost:3005)
+ *   OCTIPUS_API_KEY   - API key or JWT for authentication
+ *   OCTIPUS_USER      - Username for auto-login (alternative to API key)
+ *   OCTIPUS_PASSWORD  - Password for auto-login
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -29,10 +29,10 @@ function getArg(name: string): string | undefined {
 
 const transport = getArg('transport') || 'stdio';
 const port = parseInt(getArg('port') || '3010', 10);
-const assistantUrl = process.env.ASSISTANT_URL || 'http://localhost:3005';
+const octiUrl = process.env.OCTIPUS_URL || 'http://localhost:3005';
 
 async function main(): Promise<void> {
-  const server = createServer(assistantUrl);
+  const server = createServer(octiUrl);
 
   if (transport === 'stdio') {
     const stdioTransport = new StdioServerTransport();
@@ -102,9 +102,9 @@ async function main(): Promise<void> {
     });
 
     httpServer.listen(port, () => {
-      console.error(`Assistant MCP server (HTTP) listening on port ${port}`);
+      console.error(`Octipus MCP server (HTTP) listening on port ${port}`);
       console.error(`  SSE endpoint: http://localhost:${port}/sse`);
-      console.error(`  Assistant URL: ${assistantUrl}`);
+      console.error(`  Octipus URL: ${octiUrl}`);
     });
   } else {
     console.error(`Unknown transport: ${transport}. Use "stdio" or "http".`);

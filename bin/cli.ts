@@ -3,8 +3,8 @@
  * Cross-platform CLI dispatcher.
  *
  * Detects the OS and spawns the appropriate platform script:
- *   - Windows  → bin/assistant.cmd
- *   - macOS / Linux → bin/assistant (bash)
+ *   - Windows  → bin/octi.cmd
+ *   - macOS / Linux → bin/octi (bash)
  *
  * This file is the "bin" entry point in package.json so that
  * `bun link` produces a working global command on every platform.
@@ -18,7 +18,7 @@ const binDir = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
 
 const script = isWindows
-  ? resolve(binDir, 'assistant.cmd')
+  ? resolve(binDir, 'octi.cmd')
   : resolve(binDir, 'assistant');
 
 const args = process.argv.slice(2);

@@ -1,6 +1,6 @@
 /**
  * Swarm — agent delegation tree (Phase 2: Orchestrator → Agent → Subagent).
- * See `.assistant/swarm-design.md` for the authoritative design.
+ * See `.octipus/swarm-design.md` for the authoritative design.
  */
 
 

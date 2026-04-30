@@ -42,9 +42,9 @@ describe('TuiApp', () => {
     expect(frame).toContain('Welcome');
   });
 
-  it('shows the app title "Assistant"', () => {
+  it('shows the app title "Octipus"', () => {
     const { lastFrame } = render(<TuiApp />);
-    expect(lastFrame() || '').toContain('Assistant');
+    expect(lastFrame() || '').toContain('Octipus');
   });
 
   it('connects a GatewayClient on mount', async () => {

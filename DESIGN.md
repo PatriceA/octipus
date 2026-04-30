@@ -1,4 +1,4 @@
-# Assistant Design Principles
+# Octipus Design Principles
 
 > **Note.** This document was drafted fast to ship the public release. If you have the time and taste to rewrite it more cleanly, a PR that improves the writing is as welcome as one that fixes a bug.
 
@@ -8,7 +8,7 @@ A reference for contributors. These are the opinions that guide every decision. 
 
 ## Coordination, not replacement
 
-Assistant coordinates things, it does not replace them. LLMs, databases, APIs, humans, tools, channels — these are **primitives**, not libraries you bolt on. The orchestrator's job is to wire them together correctly and cheaply.
+Octipus coordinates things, it does not replace them. LLMs, databases, APIs, humans, tools, channels — these are **primitives**, not libraries you bolt on. The orchestrator's job is to wire them together correctly and cheaply.
 
 The surface area of the core is small on purpose. You learn the orchestrator, roles, pipelines, and the permission model once. Everything else is nodes composed of those.
 
@@ -50,7 +50,7 @@ A corollary: **sessions are channel-agnostic at the orchestrator level**. The or
 No silent fallbacks. Nodes either work or fail with a clear error. Every failure surfaces to the user unless explicitly swallowed with a logged reason.
 
 - If a tool returns an error, the worker sees the error — not a fabricated successful-looking reply.
-- If a model provider is down, the failover engages or the request fails with a named reason. Never a silent "generic assistant" stub.
+- If a model provider is down, the failover engages or the request fails with a named reason. Never a silent "generic octipus" stub.
 - If an input is malformed, it is rejected at the boundary with a specific message. Never coerced into something pretend-valid.
 - If a topic has no model bound, the spawner throws. No default-model fallback, no "try LiteLLM and hope". The user configured the topic map; we follow it or surface the gap.
 - If the knowledge base can't embed (missing model, dead vector store), every write path returns 503 with reasons. The KB is never silently unavailable — `/api/knowledge/readiness` is the ground truth.
@@ -72,7 +72,7 @@ Confusing the two is where bugs grow. If a user needs to see an event after a cr
 
 A pipeline, a role configuration, a skill — each has a **code form** (JSON, markdown, TS) and a **visual form** (DAG graph, config form, rendered prompt). Editing one updates the other. Neither is canonical; both are projections.
 
-This mirrors the [Weft](https://github.com/WeaveMindAI/weft) graph↔code duality. Applied to assistant:
+This mirrors the [Weft](https://github.com/WeaveMindAI/weft) graph↔code duality. Applied to octipus:
 
 - Pipelines render as stage DAGs in the web UI, editable in either view.
 - Roles render as config forms *and* as the raw markdown prompt. Power users prefer raw; newcomers prefer forms. Both work.
@@ -88,7 +88,7 @@ A 100-stage system still looks like 5 blocks at the top level because each block
 
 Delegation has one shape: `spawn_child`. The tree is fixed depth 3 (Orchestrator → Agent → Subagent). Budgets cascade on tokens (pool-shared) and stay per-node on wall-clock (parent excludes time spent waiting on children via `pausedMs`). Every node has hard caps enforced pre-LLM-call — breach throws structured errors (`BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`). Cycle protection is per-session fingerprints; cascade cancel is an `AbortSignal` tree.
 
-What this buys: no runaway spend, no silent deep recursion, no one-off "team" or "worker" primitives to memorize. One mechanism for fan-out, one shape for hand-off, one set of budgets to reason about. Pipelines still exist for **explicit staged handover with human gates** — that's a different problem, kept separate on purpose. See [.assistant/swarm-design.md](./.assistant/swarm-design.md).
+What this buys: no runaway spend, no silent deep recursion, no one-off "team" or "worker" primitives to memorize. One mechanism for fan-out, one shape for hand-off, one set of budgets to reason about. Pipelines still exist for **explicit staged handover with human gates** — that's a different problem, kept separate on purpose. See [.octipus/swarm-design.md](./.octipus/swarm-design.md).
 
 ## Config-driven, no hardcoded models
 
@@ -104,7 +104,7 @@ Clever routing that is hard to inspect is worse than obvious routing that is slo
 
 ## Local first, cloud second
 
-Assistant should be fully usable with:
+Octipus should be fully usable with:
 
 - Local models via Ollama
 - Embedded PostgreSQL (PGlite) instead of a real DB

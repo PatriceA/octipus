@@ -2,7 +2,7 @@
   "name": "example-plugin",
   "version": "1.0.0",
   "description": "Example plugin demonstrating the plugin API with basic calculator and greeting tools",
-  "author": "Assistant",
+  "author": "Octipus",
   "main": "index.ts",
   "tools": [
     {

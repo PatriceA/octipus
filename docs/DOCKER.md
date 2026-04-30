@@ -2,13 +2,13 @@
 
 ## Overview
 
-The assistant runs as a multi-container Docker application with three services:
+Octipus runs as a multi-container Docker application with three services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
-| `assistant-app` | Custom (Bun + Next.js) | API backend + web frontend |
-| `assistant-db` | pgvector/pgvector:pg16 | PostgreSQL with vector extensions |
-| `assistant-redis` | redis:7-alpine | Caching and pub/sub |
+| `octipus-app` | Custom (Bun + Next.js) | API backend + web frontend |
+| `octipus-db` | pgvector/pgvector:pg16 | PostgreSQL with vector extensions |
+| `octipus-redis` | redis:7-alpine | Caching and pub/sub |
 
 ## Quick Start
 
@@ -20,15 +20,15 @@ cp .env.example .env.docker
 docker compose up --build -d
 
 # View logs
-docker compose logs -f assistant
+docker compose logs -f octipus
 ```
 
 **Ports** (configurable via env):
 
 | Port | Default | Service |
 |------|---------|---------|
-| API | 3015 | `ASSISTANT_API_PORT` |
-| Web UI | 3017 | `ASSISTANT_WEB_PORT` |
+| API | 3015 | `OCTIPUS_API_PORT` |
+| Web UI | 3017 | `OCTIPUS_WEB_PORT` |
 | PostgreSQL | 5442 | `POSTGRES_PORT` |
 | Redis | 6389 | `REDIS_PORT` |
 
@@ -36,11 +36,11 @@ docker compose logs -f assistant
 
 | Volume | Container Path | Purpose |
 |--------|---------------|---------|
-| `assistant-workspace` | `/data/workspace` | Agent workspace (files created by agents) |
-| `assistant-documents` | `/data/documents` | Uploaded documents |
-| `assistant-extensions` | `/data/extensions` | Plugins and extensions |
-| `assistant-pgdata` | PostgreSQL data | Database persistence |
-| `assistant-redis` | Redis data | Cache persistence |
+| `octipus-workspace` | `/data/workspace` | Agent workspace (files created by agents) |
+| `octipus-documents` | `/data/documents` | Uploaded documents |
+| `octipus-extensions` | `/data/extensions` | Plugins and extensions |
+| `octipus-pgdata` | PostgreSQL data | Database persistence |
+| `octipus-redis` | Redis data | Cache persistence |
 
 ## Installed CLI Tools
 
@@ -58,7 +58,7 @@ The container includes these tools for agent shell access:
 
 ## Capabilities & Limitations
 
-Docker containers are isolated from the host system. This affects what the assistant can and cannot access.
+Docker containers are isolated from the host system. This affects what Octipus can and cannot access.
 
 ### What works
 
@@ -78,15 +78,15 @@ Docker containers are isolated from the host system. This affects what the assis
 
 | Capability | Reason | Workaround |
 |-----------|--------|------------|
-| **Host CLI tools** | Container isolation — the assistant cannot see or execute binaries installed on the host OS. | Install tools in the Dockerfile, or use Docker socket to run sibling containers. |
+| **Host CLI tools** | Container isolation — Octipus cannot see or execute binaries installed on the host OS. | Install tools in the Dockerfile, or use Docker socket to run sibling containers. |
 | **Host filesystem** | Only mounted volumes are accessible. The host's home directory, system files, etc. are not visible. | Add additional bind mounts in `docker-compose.yml` for specific host directories you need. |
 | **Host processes** | Cannot inspect or manage processes running on the host. | Use the Docker socket to manage other containers. |
 | **GUI applications** | No display server in the container. | Use the browser extension (runs on host) for browser-based tasks. |
-| **USB/hardware** | No access to host hardware devices. | Not applicable for most assistant tasks. |
+| **USB/hardware** | No access to host hardware devices. | Not applicable for most Octipus tasks. |
 
 ## Docker Socket (Sibling Containers)
 
-The Docker socket is mounted into the container, allowing the assistant to spawn **sibling containers** on the host's Docker engine. This enables running tools that aren't installed in the main image.
+The Docker socket is mounted into the container, allowing Octipus to spawn **sibling containers** on the host's Docker engine. This enables running tools that aren't installed in the main image.
 
 ```yaml
 # docker-compose.yml (already configured)
@@ -102,18 +102,18 @@ volumes:
 
 ### Security note
 
-Docker socket access is powerful — a container with socket access can manage all containers on the host, including creating privileged containers. The assistant's shell tool requires permission for `docker` commands (elevated command list). Only enable this in trusted environments.
+Docker socket access is powerful — a container with socket access can manage all containers on the host, including creating privileged containers. The Octipus shell tool requires permission for `docker` commands (elevated command list). Only enable this in trusted environments.
 
 To disable Docker socket access, remove or comment out the socket volume mount in `docker-compose.yml`.
 
 ## Adding Host Directory Access
 
-To give the assistant access to specific host directories, add bind mounts:
+To give Octipus access to specific host directories, add bind mounts:
 
 ```yaml
 # docker-compose.yml
 services:
-  assistant:
+  octipus:
     volumes:
       # ... existing volumes ...
       - /path/on/host:/data/workspace/host-files:ro  # read-only
@@ -136,13 +136,13 @@ docker compose down -v && docker compose up --build -d
 
 ### Container won't start
 ```bash
-docker compose logs assistant    # Check for startup errors
+docker compose logs octipus    # Check for startup errors
 docker compose ps                # Check container status
 ```
 
 ### Browser extension can't connect
 - Ensure the API port is exposed and accessible from the host
-- The WebSocket URL should be `ws://localhost:{ASSISTANT_API_PORT}/ws/browser-bridge`
+- The WebSocket URL should be `ws://localhost:{OCTIPUS_API_PORT}/ws/browser-bridge`
 - Check that `MASTER_KEY` is set in both `.env.docker` and the browser extension
 
 ### SSH from container

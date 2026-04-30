@@ -6,10 +6,10 @@ commit `c29453c` or later.
 
 ## Prerequisites
 
-- A running assistant instance (`bun run dev` or the docker compose stack).
+- A running octipus instance (`bun run dev` or the docker compose stack).
 - Web UI reachable (default `http://localhost:3017`) with at least one
   user account and one configured model in **Settings → Models**.
-- `psql` (or any Postgres client) with access to the assistant
+- `psql` (or any Postgres client) with access to Octipus
   database. **External mode only** — embedded PGlite is fine for most
   checks but the Postgres-specific item (#6) needs Postgres.
 - Optional: at least one persistent channel (Telegram / Slack /
@@ -46,7 +46,7 @@ convention, without editing a registry.
    }
    ```
 
-2. Restart the assistant (`bun run dev` or `docker compose restart assistant`).
+2. Restart Octipus (`bun run dev` or `docker compose restart octipus`).
 3. Hit `GET /api/tools` (use the web UI **Tools** page or
    `curl -H "Authorization: Bearer <token>" http://localhost:3015/tools`).
 4. **Expect:** the response includes `qa-demo` in the tool list. The
@@ -167,7 +167,7 @@ catches cycles + missing fields.
 
 ## 4. Source attribution — `_Sources: …_` footer everywhere
 
-**Goal.** Every assistant reply ends with a `_Sources: …_` block
+**Goal.** Every octipus reply ends with a `_Sources: …_` block
 listing what context was pulled in.
 
 Run each path and check the footer renders.
@@ -260,14 +260,14 @@ wipe).
 
 ## 6. Cross-session aggregation — channel transcripts
 
-**Goal.** Restarting the assistant doesn't fragment a Telegram/Slack/
+**Goal.** Restarting Octipus doesn't fragment a Telegram/Slack/
 WhatsApp/Teams/Discord conversation into separate sessions in the UI;
 and concurrent duplicate active rows are now schema-prevented.
 
 ### 6a. Aggregation across restarts
 
 1. From Telegram (or Slack/WhatsApp/Teams/Discord), send 3 messages.
-2. Restart the assistant (`docker compose restart assistant` or
+2. Restart Octipus (`docker compose restart octipus` or
    Ctrl+C and `bun run dev` again).
 3. From the same Telegram chat, send 3 more messages.
 4. Open the web UI **Sessions** page (or hit
@@ -318,8 +318,8 @@ This one needs Postgres in external mode.
 
 If any step here doesn't behave as described:
 
-1. Check the assistant log for an obvious error (`docker compose logs
-   -f assistant` or stdout).
+1. Check Octipus log for an obvious error (`docker compose logs
+   -f octipus` or stdout).
 2. File a GitHub issue with:
    - Which QA section failed (e.g. "QA §3 step 8 — cycle check").
    - Build SHA (`git rev-parse HEAD`).

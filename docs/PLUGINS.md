@@ -1,6 +1,6 @@
 # Plugin System
 
-Extend the assistant's capabilities by dropping plugins into the `extensions/` directory. Each plugin provides tools that are automatically registered and available to agents — no core code changes needed.
+Extend Octipus's capabilities by dropping plugins into the `extensions/` directory. Each plugin provides tools that are automatically registered and available to agents — no core code changes needed.
 
 ## Plugin Structure
 

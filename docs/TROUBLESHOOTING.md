@@ -6,7 +6,7 @@
 
 **Solution**: Install using the database superuser:
 ```bash
-docker exec <db-container> psql -U <superuser> -d assistant \
+docker exec <db-container> psql -U <superuser> -d octipus \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 The migration handles this gracefully — if the extension can't be created, it logs a warning and continues without vector search.
@@ -44,7 +44,7 @@ Create `src/db/migrations/meta/_journal.json`:
 
 **Solution** (optional):
 ```sql
-ALTER DATABASE assistant REFRESH COLLATION VERSION;
+ALTER DATABASE octipus REFRESH COLLATION VERSION;
 ```
 
 ## Model Registry Duplicate Key on Restart
@@ -63,7 +63,7 @@ cd ~/docker-services && docker compose ps db
 docker compose up -d db
 
 # Verify connection
-docker exec <db-container> psql -U <user> -d assistant -c "SELECT 1;"
+docker exec <db-container> psql -U <user> -d octipus -c "SELECT 1;"
 ```
 
 ## Redis Connection Failed

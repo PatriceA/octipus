@@ -55,8 +55,8 @@ export function TuiApp({ gatewayUrl, projectPath: initialProjectPath }: TuiAppPr
   const [projectPath, setProjectPath] = useState<string | undefined>(initialProjectPath);
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'system', content: initialProjectPath
-        ? `Welcome to the Assistant TUI. Project: ${initialProjectPath.split(/[/\\]/).pop()}\nType a message or /help for commands.`
-        : 'Welcome to the Assistant TUI. Type a message or /help for commands.', timestamp: new Date() },
+        ? `Welcome to Octipus TUI. Project: ${initialProjectPath.split(/[/\\]/).pop()}\nType a message or /help for commands.`
+        : 'Welcome to Octipus TUI. Type a message or /help for commands.', timestamp: new Date() },
   ]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
@@ -332,7 +332,7 @@ export function TuiApp({ gatewayUrl, projectPath: initialProjectPath }: TuiAppPr
     <Box flexDirection="column" height="100%">
       {/* Minimal header — just title + connection */}
       <Box paddingX={1}>
-        <Text bold color="#A0B8CF">Assistant</Text>
+        <Text bold color="#A0B8CF">Octipus</Text>
         <Text> </Text>
         <Text color={status === 'connected' ? 'green' : status === 'error' ? 'red' : 'yellow'}>{'\u25CF'}</Text>
         {cumulativeStats.tokens > 0 && (

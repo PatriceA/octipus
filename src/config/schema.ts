@@ -6,7 +6,7 @@ export const storageModeSchema = z.enum(['embedded', 'external']).default('exter
 // Database configuration schema
 export const databaseConfigSchema = z.object({
   url: z.string().describe('PostgreSQL connection URL (external mode — set DATABASE_URL)'),
-  dataDir: z.string().default('~/.assistant/data').describe('PGlite data directory (embedded mode)'),
+  dataDir: z.string().default('~/.octipus/data').describe('PGlite data directory (embedded mode)'),
   poolSize: z.number().min(1).max(100).default(10),
   idleTimeout: z.number().min(0).default(30000),
   connectionTimeout: z.number().min(0).default(10000),
@@ -15,7 +15,7 @@ export const databaseConfigSchema = z.object({
 // Redis configuration schema
 export const redisConfigSchema = z.object({
   url: z.string().default('redis://localhost:6379'),
-  keyPrefix: z.string().default('assistant:'),
+  keyPrefix: z.string().default('octipus:'),
   maxRetries: z.number().min(0).default(3),
   retryDelay: z.number().min(0).default(1000),
 });
@@ -40,9 +40,9 @@ export const securityConfigSchema = z.object({
   jwtSecret: z.string().min(32),
   sessionSecret: z.string().min(32),
   sessionMaxAge: z.number().min(0).default(86400000), // 24 hours
-  totpIssuer: z.string().default('Assistant'),
+  totpIssuer: z.string().default('Octipus'),
   passkeyRpId: z.string().default('localhost'),
-  passkeyRpName: z.string().default('Assistant'),
+  passkeyRpName: z.string().default('Octipus'),
   passkeyOrigin: z.string().url().default('http://localhost:3000'),
 });
 
@@ -81,7 +81,7 @@ export const slackConfigSchema = z.object({
 export const whatsappConfigSchema = z.object({
   accessToken: z.string().optional(),
   phoneNumberId: z.string().optional(),
-  verifyToken: z.string().default('assistant-whatsapp-verify'),
+  verifyToken: z.string().default('octipus-whatsapp-verify'),
   appSecret: z.string().optional(),
   businessAccountId: z.string().optional(),
 });
@@ -206,7 +206,7 @@ export const compactionConfigSchema = z.object({
 });
 
 // Swarm (agent delegation tree) configuration schema.
-// See `.assistant/swarm-design.md`. Phase 3 adds per-user fan-out caps +
+// See `.octipus/swarm-design.md`. Phase 3 adds per-user fan-out caps +
 // orphan reaper cadence; both have safe defaults so existing deployments
 // don't need to set anything.
 const swarmLevelSchema = z.object({

@@ -1,6 +1,6 @@
 # Building a Channel Adapter
 
-Channel adapters bridge external messaging platforms to the assistant via the Gateway protocol.
+Channel adapters bridge external messaging platforms to Octipus via the Gateway protocol.
 
 ## Architecture
 

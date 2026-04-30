@@ -1,7 +1,7 @@
 /**
  * Swarm Phase 2 — error taxonomy.
  *
- * First-class error classes staked by `.assistant/swarm-design.md` §Failure Modes.
+ * First-class error classes staked by `.octipus/swarm-design.md` §Failure Modes.
  * Each maps to a `FailoverReason` via `classifyError()` — see `mapSwarmError()`.
  *
  * These errors flow from `AgentWorker.run()` (budget/timeout pre-check) and

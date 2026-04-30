@@ -1,6 +1,6 @@
 # MCP Integration (Client)
 
-Connect external MCP servers to the assistant so agents can use their tools. Unlike simple MCP integrations that expose all tools upfront (flooding the model context), the assistant uses **lazy tool discovery** — agents only see two meta-tools (`mcp_list_tools` and `mcp_call_tool`) and fetch tool details on demand.
+Connect external MCP servers to Octipus so agents can use their tools. Unlike simple MCP integrations that expose all tools upfront (flooding the model context), Octipus uses **lazy tool discovery** — agents only see two meta-tools (`mcp_list_tools` and `mcp_call_tool`) and fetch tool details on demand.
 
 ## How It Works
 
@@ -149,7 +149,7 @@ In the MCP Server Trigger node settings:
 1. Click **Authentication**
 2. Choose **Bearer Authentication** or **Header Authentication**
 3. Create credentials in n8n (Settings → Credentials) with a token value
-4. Note the token — you'll use it in the assistant config
+4. Note the token — you'll use it in Octipus config
 
 ### Step 4: Get the MCP URLs
 
@@ -165,7 +165,7 @@ For SSE transport, append `/sse`: `http://localhost:5678/mcp/<path>/sse`
 
 Toggle the workflow to **Active** so the production URL works.
 
-### Step 6: Configure the assistant
+### Step 6: Configure Octipus
 
 Add the n8n server to `mcp-servers.json`:
 
@@ -189,13 +189,13 @@ Add the n8n server to `mcp-servers.json`:
 
 Replace `<your-path>` with the path from the MCP Server Trigger node, and `<your-n8n-mcp-token>` with the Bearer token from step 3.
 
-### Step 7: Restart the assistant
+### Step 7: Restart Octipus
 
 ```bash
-assistant restart
+octipus restart
 ```
 
-The assistant will auto-connect to n8n on startup. Verify with:
+Octipus will auto-connect to n8n on startup. Verify with:
 
 ```bash
 curl http://localhost:3005/api/mcp/servers | jq

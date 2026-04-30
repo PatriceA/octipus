@@ -1,11 +1,11 @@
 # TUI (Terminal User Interface)
 
-The TUI provides a terminal-based chat interface that connects to the assistant via the Gateway WebSocket protocol.
+The TUI provides a terminal-based chat interface that connects to Octipus via the Gateway WebSocket protocol.
 
 ## Quick Start
 
 ```bash
-# Start the assistant server first
+# Start Octipus server first
 bun run dev
 
 # In another terminal, launch the TUI
@@ -16,20 +16,20 @@ bun run src/tui/index.tsx
 
 The TUI uses **local-token authentication** — no password or browser login needed.
 
-On first launch, a token file is created at `~/.assistant/local-token` (chmod 600). The gateway accepts this token only from `127.0.0.1` connections, so it cannot be used remotely.
+On first launch, a token file is created at `~/.octipus/local-token` (chmod 600). The gateway accepts this token only from `127.0.0.1` connections, so it cannot be used remotely.
 
 To regenerate the token (if compromised):
 ```bash
-rm ~/.assistant/local-token
+rm ~/.octipus/local-token
 # Next TUI launch generates a new token automatically
 ```
 
 ## Interface
 
 ```
-┌─ Assistant TUI ─────────────── connected ─┐
+┌─ Octipus TUI ─────────────── connected ─┐
 │                                            │
-│  Welcome to the Assistant TUI.             │
+│  Welcome to Octipus TUI.             │
 │  Type a message or use /help for commands. │
 │                                            │
 │  > What is the weather in Berlin?          │

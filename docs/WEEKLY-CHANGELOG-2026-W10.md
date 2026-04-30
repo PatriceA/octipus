@@ -1,6 +1,6 @@
 # Weekly Changelog — 2026-W10 (Mar 4–10)
 
-> **Repository:** assistant
+> **Repository:** octipus
 > **Period:** 2026-03-04 → 2026-03-10
 > **Total commits:** 43 | **Lines changed:** ~52,000+
 

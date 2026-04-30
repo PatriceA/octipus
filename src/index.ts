@@ -21,7 +21,7 @@ import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
 
 async function main() {
-  logger.info('Starting Assistant...');
+  logger.info('Starting Octipus...');
 
   try {
     // Initialize gateway (database, redis, etc.) — uses bootstrap config from .env
@@ -124,7 +124,7 @@ async function main() {
     startCronLoop();
     logger.info('Cron scheduler started');
 
-    logger.info('Assistant started successfully');
+    logger.info('Octipus started successfully');
 
     // Handle graceful shutdown
     const shutdown = async () => {
@@ -153,7 +153,7 @@ async function main() {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
   } catch (error) {
-    logger.error({ error }, 'Failed to start Assistant');
+    logger.error({ error }, 'Failed to start Octipus');
     process.exit(1);
   }
 }

@@ -3,7 +3,7 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { AssistantClient } from './client.js';
+import { OctiClient } from './client.js';
 import { registerSearchTools } from './tools/search.js';
 import { registerAgentTools } from './tools/agents.js';
 import { registerSessionTools } from './tools/sessions.js';
@@ -24,13 +24,13 @@ import { registerGatewayTools } from './tools/gateway.js';
 import { registerHealthTools } from './tools/health.js';
 import { registerAuditTools } from './tools/audit.js';
 
-export function createServer(assistantUrl: string): McpServer {
+export function createServer(octiUrl: string): McpServer {
   const server = new McpServer({
     name: 'assistant',
     version: '1.0.0',
   });
 
-  const client = new AssistantClient(assistantUrl);
+  const client = new OctiClient(octiUrl);
 
   // Register all tool groups
   registerSearchTools(server, client);

@@ -1,5 +1,5 @@
 /**
- * Lightweight HTTP client for the assistant backend REST API.
+ * Lightweight HTTP client for Octipus backend REST API.
  * All methods correspond to existing API endpoints or the new tool execution endpoint.
  */
 
@@ -95,7 +95,7 @@ export interface ToolInfo {
   }>;
 }
 
-export class AssistantClient {
+export class OctiClient {
   constructor(
     private baseUrl: string,
   ) {}

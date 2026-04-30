@@ -114,7 +114,7 @@ export default function SetupPage() {
               <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
                 <Sparkles className="w-8 h-8 text-primary-700 dark:text-primary-400" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome to Assistant</h2>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome to Octipus</h2>
               <p className="text-gray-500 dark:text-gray-400 max-w-sm mx-auto">
                 Let&apos;s configure your assistant. This will only take a minute.
                 You can change all settings later in Settings &gt; Configuration.

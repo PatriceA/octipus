@@ -44,9 +44,9 @@ describe('chat message flow', () => {
   it('simulated assistant response renders in the chat area', async () => {
     const { lastFrame } = render(<TuiApp />);
     await new Promise((r) => setTimeout(r, 30));
-    currentMock?.simulateResponse('Assistant reply here.');
+    currentMock?.simulateResponse('Octipus reply here.');
     await new Promise((r) => setTimeout(r, 30));
-    expect(lastFrame() || '').toContain('Assistant reply here.');
+    expect(lastFrame() || '').toContain('Octipus reply here.');
   });
 
   it('agent.spawned event shows a role banner', async () => {

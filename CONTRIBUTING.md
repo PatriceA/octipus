@@ -1,8 +1,8 @@
-# Contributing to Assistant
+# Contributing to Octipus
 
 > **Note.** Parts of this doc were drafted fast to get the public release out the door. If you have the time and taste to rewrite any of it more cleanly, a PR that improves the writing is as welcome as one that fixes a bug.
 
-Thanks for even considering it. Assistant is opinionated, moves fast, and every external eye makes it better. This document covers setup, repo layout, and rules of engagement for pull requests.
+Thanks for even considering it. Octipus is opinionated, moves fast, and every external eye makes it better. This document covers setup, repo layout, and rules of engagement for pull requests.
 
 If anything in here is wrong, unclear, or out of date, that is itself a bug — open an issue.
 
@@ -27,14 +27,14 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 ### Clone and run
 
 ```bash
-git clone https://github.com/YOUR_ORG/assistant.git
-cd assistant
+git clone https://github.com/YOUR_ORG/octipus.git
+cd octipus
 
 bun install
 cd web && bun install && cd ..
 
 bun run setup          # Interactive wizard — "Embedded" mode for zero-deps
-bin/assistant start
+bin/octi start
 ```
 
 Open http://localhost:3017. If anything crashes or refuses to start, that is a bug — file it.
@@ -55,7 +55,7 @@ bun run lint           # ESLint
 ## Repo layout
 
 ```
-assistant/
+octipus/
 ├── src/
 │   ├── api/                  # Elysia REST routes
 │   ├── channels/             # telegram, slack, whatsapp, teams, webchat
@@ -74,7 +74,7 @@ assistant/
 ├── eval/                     # YAML test scenarios
 ├── DESIGN.md                 # Design principles
 ├── ROADMAP.md                # Directions
-└── bin/assistant             # CLI entry point
+└── bin/octi             # CLI entry point
 ```
 
 Never duplicate config between backend and web. Shared types live in `src/types` or a dedicated package; import, don't copy-paste.
@@ -83,7 +83,7 @@ Never duplicate config between backend and web. Shared types live in `src/types`
 
 ## How to add a role
 
-Assistant roles follow a **node-folder pattern** inspired by [Weft](https://github.com/WeaveMindAI/weft). One folder per role under `src/core/orchestrator/roles/<name>/` with three files:
+Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github.com/WeaveMindAI/weft). One folder per role under `src/core/orchestrator/roles/<name>/` with three files:
 
 - `config.ts` — role metadata (model preferences, tool allowlist, complexity profile)
 - `prompt.md` — system prompt (markdown, hot-reloadable)

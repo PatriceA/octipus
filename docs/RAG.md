@@ -2,7 +2,7 @@
 
 ## Overview
 
-The assistant uses Retrieval-Augmented Generation (RAG) to store and retrieve knowledge. Text is chunked, embedded, and stored in PostgreSQL with pgvector. At query time the system supports hybrid search combining BM25 full-text search with vector cosine similarity, or either mode independently.
+Octipus uses Retrieval-Augmented Generation (RAG) to store and retrieve knowledge. Text is chunked, embedded, and stored in PostgreSQL with pgvector. At query time the system supports hybrid search combining BM25 full-text search with vector cosine similarity, or either mode independently.
 
 - **Embedding model:** `nomic-embed-text` via Ollama, proxied through LiteLLM
 - **Vector storage:** PostgreSQL with pgvector extension (`vector(768)` column, HNSW cosine index)
@@ -21,7 +21,7 @@ Agent outputs are automatically indexed after completion when the output exceeds
 
 1. **Research agents** -- system prompt instructs them to call `index_file` after research and check `search_knowledge` before starting new work.
 2. **Knowledge tool** -- any agent with the `knowledge` tool can call `search_knowledge`, `index_file`, and `index_directory`.
-3. **MCP tools** -- `assistant_index_file` and `assistant_search_knowledge` for external models (Claude Code, Gemini CLI).
+3. **MCP tools** -- `octipus_index_file` and `octipus_search_knowledge` for external models (Claude Code, Gemini CLI).
 4. **API** -- `POST /api/tools/knowledge/tools/{toolName}/execute` with Bearer token.
 
 ## How Data Gets Retrieved

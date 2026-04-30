@@ -240,7 +240,7 @@ const SYSTEM_EXPERTS: Array<{
   },
   {
     name: 'Automation Engineer',
-    description: 'Designs workflow automations using the assistant\'s built-in scheduling and tools.',
+    description: 'Designs workflow automations using Octipus\'s built-in scheduling and tools.',
     icon: 'workflow',
     role: 'automation',
     skillIds: ['automation-patterns', 'devops-practices'],

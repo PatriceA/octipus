@@ -78,7 +78,7 @@ function updateUI(isConnected, error) {
     statusText.textContent = error;
     statusText.className = 'status-text error';
   } else if (isConnected) {
-    statusText.textContent = 'Connected to Assistant backend';
+    statusText.textContent = 'Connected to Octi backend';
     statusText.className = 'status-text connected';
   } else {
     statusText.textContent = 'Not connected';

@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Assistant is under active development. Security fixes target the `main` branch only. Tagged releases older than the latest two are **not** patched. Run `main` or the most recent tag.
+Octipus is under active development. Security fixes target the `main` branch only. Tagged releases older than the latest two are **not** patched. Run `main` or the most recent tag.
 
 ## Reporting a Vulnerability
 
@@ -46,7 +46,7 @@ Use one of:
 - Self-XSS in the web UI with no privilege escalation
 - Missing security headers on non-production endpoints
 - Denial-of-service via unlimited LLM token spend (this is a configuration concern — use rate limits and cost caps)
-- Vulnerabilities in third-party dependencies with no exploitable path through assistant
+- Vulnerabilities in third-party dependencies with no exploitable path through Octipus
 - Social engineering of maintainers
 
 ## Safe Harbor
@@ -73,4 +73,4 @@ Stay in touch via GitHub Watch → Releases to get notified.
 
 ## Non-goals
 
-Assistant is distributed under the MIT license. It comes with **no warranty**. Running it in production is your call; running it against untrusted input without sandboxing is not recommended. See [LICENSE](./LICENSE).
+Octipus is distributed under the MIT license. It comes with **no warranty**. Running it in production is your call; running it against untrusted input without sandboxing is not recommended. See [LICENSE](./LICENSE).

@@ -363,7 +363,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'version',
     aliases: ['v'],
-    description: 'Show assistant version and build info',
+    description: 'Show Octipus version and build info',
     minTrustLevel: 'user',
     handler: async () => {
       try {
@@ -371,9 +371,9 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         const { resolve } = await import('path');
         const pkgPath = resolve(process.cwd(), 'package.json');
         const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        return { text: `Assistant v${pkg.version || '0.0.0'} (Bun ${Bun.version})` };
+        return { text: `Octipus v${pkg.version || '0.0.0'} (Bun ${Bun.version})` };
       } catch {
-        return { text: `Assistant (Bun ${Bun.version})` };
+        return { text: `Octipus (Bun ${Bun.version})` };
       }
     },
   });

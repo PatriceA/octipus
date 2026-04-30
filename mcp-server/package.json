@@ -1,7 +1,7 @@
 {
-  "name": "assistant-mcp-server",
+  "name": "octipus-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server bridge for the assistant — exposes skills, agents, search, and chat as MCP tools",
+  "description": "MCP server bridge for Octipus — exposes skills, agents, search, and chat as MCP tools",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

@@ -9,7 +9,7 @@ test.describe('error handling', () => {
     await page.goto('/models');
     await page.waitForLoadState('networkidle');
     // Shell chrome still renders — the sidebar is present.
-    await expect(page.getByText('Assistant', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Octipus', { exact: true }).first()).toBeVisible();
   });
 
   test('503 on KB shows readiness banner', async ({ authenticatedPage: page }) => {

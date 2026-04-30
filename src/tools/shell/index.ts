@@ -27,7 +27,7 @@ const BLOCKED_COMMANDS = [
   'ncat -',
   'netcat ',
   'netcat -',
-  // Process management — prevent agents from killing the assistant or other processes
+  // Process management — prevent agents from killing Octipus or other processes
   'shutdown',
   'reboot',
   'halt',

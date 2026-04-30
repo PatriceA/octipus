@@ -1,19 +1,19 @@
 /**
- * Chat tool — send a message to the assistant orchestrator and get a response.
+ * Chat tool — send a message to Octipus orchestrator and get a response.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerChatTools(server: McpServer, client: AssistantClient): void {
+export function registerChatTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_chat',
-    'Send a message to the assistant and get a response. The assistant will classify the message, route it to the appropriate model, and may use tools (web search, file operations, etc.) to fulfill the request. Use expert_id to route to a specific expert. Use project_path to create a dev-mode session pinned to a project.',
+    'octipus_chat',
+    'Send a message to Octipus and get a response. The assistant will classify the message, route it to the appropriate model, and may use tools (web search, file operations, etc.) to fulfill the request. Use expert_id to route to a specific expert. Use project_path to create a dev-mode session pinned to a project.',
     {
-      message: z.string().describe('The message to send to the assistant'),
+      message: z.string().describe('The message to send to Octipus'),
       session_id: z.string().optional().describe('Session ID for conversation continuity. Omit to create a new session.'),
-      expert_id: z.string().optional().describe('Expert ID to route to a specific expert (e.g., coding, research). Use assistant_list_experts to see available experts.'),
+      expert_id: z.string().optional().describe('Expert ID to route to a specific expert (e.g., coding, research). Use octipus_list_experts to see available experts.'),
       project_path: z.string().optional().describe('Absolute path to a project/repo to create a dev-mode session pinned to that project. Only used when session_id is not provided.'),
     },
     async ({ message, session_id, expert_id, project_path }) => {

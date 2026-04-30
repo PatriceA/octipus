@@ -308,14 +308,14 @@ export async function spawnWorker(
 
   // Inject project summary and maintenance instruction
   const PROJECT_SUMMARY_INSTRUCTION = `\n\nCRITICAL — PROJECT DOCUMENTATION:
-Before starting work, check if .assistant/project-summary.md exists in the project root. If it does, read it to understand the project context.
-After completing your task, you MUST update .assistant/project-summary.md with:
+Before starting work, check if .octipus/project-summary.md exists in the project root. If it does, read it to understand the project context.
+After completing your task, you MUST update .octipus/project-summary.md with:
 - Project structure overview (key directories, entry points)
 - Main technologies and frameworks used (e.g., Flutter, Bun, React)
 - Key files and their purposes
 - Available commands (test, build, lint, run)
 - Summary of what you changed
-If .assistant/ doesn't exist, create the directory first: mkdir -p .assistant
+If .octipus/ doesn't exist, create the directory first: mkdir -p .octipus
 Keep the summary under 4000 chars. This file is critical — it's injected into all future agents working on this project.
 If you cannot write files (e.g., read-only environment), include the summary content in your final response and the system will save it automatically.`;
 
@@ -403,12 +403,12 @@ If you cannot write files (e.g., read-only environment), include the summary con
     // Dev mode: workspace is the specific project
     let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${devProjectPath}.`;
     workspaceHint += ` Focus your work within this directory. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
-    const assistantRoot = resolve(process.cwd());
-    if (devProjectPath !== assistantRoot) {
-      workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
+    const octiRoot = resolve(process.cwd());
+    if (devProjectPath !== octiRoot) {
+      workspaceHint += `\nOCTIPUS PROJECT: ${octiRoot}`;
     }
-    workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
-    if (/\s/.test(assistantRoot) || /\s/.test(devProjectPath)) {
+    workspaceHint += `\nPLUGIN DIRECTORY: ${octiRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    if (/\s/.test(octiRoot) || /\s/.test(devProjectPath)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${devProjectPath}/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
     systemPrompt += workspaceHint;
@@ -422,12 +422,12 @@ If you cannot write files (e.g., read-only environment), include the summary con
       workspaceHint += ` Additional allowed paths: ${additionalPaths.join(', ')}.`;
     }
     workspaceHint += ` Focus your work within these directories. Do not browse parent directories or unrelated projects unless the task explicitly requires it.`;
-    const assistantRoot = resolve(process.cwd());
-    if (workspaceRoot !== assistantRoot) {
-      workspaceHint += `\nASSISTANT PROJECT: ${assistantRoot}`;
+    const octiRoot = resolve(process.cwd());
+    if (workspaceRoot !== octiRoot) {
+      workspaceHint += `\nOCTIPUS PROJECT: ${octiRoot}`;
     }
-    workspaceHint += `\nPLUGIN DIRECTORY: ${assistantRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
-    if (/\s/.test(workspaceRoot) || /\s/.test(assistantRoot)) {
+    workspaceHint += `\nPLUGIN DIRECTORY: ${octiRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    if (/\s/.test(workspaceRoot) || /\s/.test(octiRoot)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${workspaceRoot}/project/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
     systemPrompt += workspaceHint;
@@ -436,23 +436,23 @@ If you cannot write files (e.g., read-only environment), include the summary con
   // Workers must return results to the orchestrator, not message the user directly
   systemPrompt += `\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`;
 
-  // Inform agents about the assistant MCP server tools.
-  // CLI agents (Claude Code, Gemini, Codex) use tool names directly (assistant_*).
-  // LLM agents use meta-tools: mcp_call_tool(server_id: "assistant", tool_name: "...", arguments: {...})
+  // Inform agents about Octipus MCP server tools.
+  // CLI agents (Claude Code, Gemini, Codex) use tool names directly (octipus_*).
+  // LLM agents use meta-tools: mcp_call_tool(server_id: "octipus", tool_name: "...", arguments: {...})
   const isCLIModel = finalModel?.startsWith('cli/');
   if (isCLIModel) {
-    systemPrompt += `\n\nASSISTANT MCP TOOLS: You have access to the "assistant" MCP server which provides tools for:
-- **People & profiles**: Search/retrieve stored information about people the user knows (assistant_search_profiles, assistant_get_profile)
-- **Knowledge base**: Search the user's knowledge base (assistant_search_knowledge)
-- **Web search**: Search the web (assistant_search) and fetch pages (assistant_fetch_page)
-- **Messaging**: Send messages to the user's channels — Telegram, Slack, etc. (assistant_send_channel_message)
-- **Scheduling**: Create/manage scheduled tasks and automations (assistant_create_recurring_task)
-- **Documents**: Upload and index documents (assistant_upload_document)
+    systemPrompt += `\n\nOCTIPUS MCP TOOLS: You have access to the "octipus" MCP server which provides tools for:
+- **People & profiles**: Search/retrieve stored information about people the user knows (octipus_search_profiles, octipus_get_profile)
+- **Knowledge base**: Search the user's knowledge base (octipus_search_knowledge)
+- **Web search**: Search the web (octipus_search) and fetch pages (octipus_fetch_page)
+- **Messaging**: Send messages to the user's channels — Telegram, Slack, etc. (octipus_send_channel_message)
+- **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
+- **Documents**: Upload and index documents (octipus_upload_document)
 Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
   } else {
-    systemPrompt += `\n\nEXTERNAL TOOLS VIA MCP: You can access external tools from the "assistant" MCP server.
+    systemPrompt += `\n\nEXTERNAL TOOLS VIA MCP: You can access external tools from the "octipus" MCP server.
 To use them, first call mcp_list_tools() to discover available tools and their parameters.
-Then call mcp_call_tool(server_id: "assistant", tool_name: "<tool>", arguments: {...}) to invoke one.
+Then call mcp_call_tool(server_id: "octipus", tool_name: "<tool>", arguments: {...}) to invoke one.
 Available capabilities: people/profiles, knowledge base, web search, messaging (Telegram/Slack), scheduling, documents.
 Use these when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
   }
@@ -704,7 +704,7 @@ async function handleWorkerFailure(
 async function loadProjectSummary(rootOverride?: string): Promise<string | null> {
   try {
     const root = rootOverride || getConfig().workspace?.rootPath || '.';
-    const summaryPath = resolve(root, '.assistant/project-summary.md');
+    const summaryPath = resolve(root, '.octipus/project-summary.md');
     const file = Bun.file(summaryPath);
     if (await file.exists()) {
       const content = await file.text();

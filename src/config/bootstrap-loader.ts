@@ -27,7 +27,7 @@ export function loadBootstrapConfig(): BootstrapConfig {
     storageMode,
     database: {
       url: process.env.DATABASE_URL || defaultConfig.database!.url!,
-      dataDir: process.env.DATA_DIR || defaultConfig.database?.dataDir || '~/.assistant/data',
+      dataDir: process.env.DATA_DIR || defaultConfig.database?.dataDir || '~/.octipus/data',
       poolSize: parseInt(process.env.DB_POOL_SIZE || '10', 10),
       idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT || '30000', 10),
       connectionTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000', 10),

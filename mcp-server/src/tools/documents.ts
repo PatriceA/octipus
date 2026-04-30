@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerDocumentTools(server: McpServer, client: AssistantClient): void {
+export function registerDocumentTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_documents',
+    'octipus_list_documents',
     'List all indexed documents.',
     {},
     async () => {
@@ -32,7 +32,7 @@ export function registerDocumentTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_upload_document',
+    'octipus_upload_document',
     'Upload and index a document by file path.',
     {
       path: z.string().describe('File path to the document to index'),
@@ -58,7 +58,7 @@ export function registerDocumentTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_get_document',
+    'octipus_get_document',
     'Get details of a specific document by ID.',
     {
       document_id: z.string().describe('The document ID'),
@@ -84,7 +84,7 @@ export function registerDocumentTools(server: McpServer, client: AssistantClient
   );
 
   server.tool(
-    'assistant_delete_document',
+    'octipus_delete_document',
     'Delete a document by ID.',
     {
       document_id: z.string().describe('The document ID to delete'),

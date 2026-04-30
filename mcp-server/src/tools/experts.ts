@@ -4,11 +4,11 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { AssistantClient } from '../client.js';
+import type { OctiClient } from '../client.js';
 
-export function registerExpertTools(server: McpServer, client: AssistantClient): void {
+export function registerExpertTools(server: McpServer, client: OctiClient): void {
   server.tool(
-    'assistant_list_experts',
+    'octipus_list_experts',
     'List available expert agents. Experts are pre-configured agent roles (Researcher, Coder, Reviewer, etc.) with domain knowledge that bypass the orchestrator for direct, focused task execution.',
     {},
     async () => {
@@ -35,11 +35,11 @@ export function registerExpertTools(server: McpServer, client: AssistantClient):
   );
 
   server.tool(
-    'assistant_chat_with_expert',
-    'Send a message using a specific expert agent. This bypasses the orchestrator and routes directly to a specialized worker (e.g., Researcher, Coder, Reviewer). Use assistant_list_experts to get available expert IDs.',
+    'octipus_chat_with_expert',
+    'Send a message using a specific expert agent. This bypasses the orchestrator and routes directly to a specialized worker (e.g., Researcher, Coder, Reviewer). Use octipus_list_experts to get available expert IDs.',
     {
       message: z.string().describe('The message or task to send'),
-      expert_id: z.string().describe('The expert ID to use (from assistant_list_experts)'),
+      expert_id: z.string().describe('The expert ID to use (from octipus_list_experts)'),
       session_id: z.string().optional().describe('Session ID for conversation continuity'),
     },
     async ({ message, expert_id, session_id }) => {
