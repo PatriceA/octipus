@@ -6,7 +6,7 @@
 
 > **v0.1 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
-**Website:** [https://octipus.app](https://octipus.app)
+**Website:** [https://octipus.cc](https://octipus.cc)
 
 ---
 
