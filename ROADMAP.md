@@ -77,20 +77,33 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     from legacy `users.channelBindings` JSONB column on first read.
 
   **Done so far (continued).**
-  - Phase 2e (this PR): channel adapters swap to
+  - Phase 2e: channel adapters swap to
     `channelBindingManager.findUserRecordByExternalId`. O(1) on the
     new `(channel_type, external_id)` unique index, with the
     manager's JSONB fallback + lazy backfill so legacy bindings keep
     resolving. `channels/linking.ts` is now a thin bridge over the
     manager; codes live in `channel_link_codes` (Postgres, 15-min
     TTL) instead of Redis. Phase 2 is closed.
+  - Phase 3a (this PR): master-key rotation tooling.
+    `rotateVaultRowMasterKey(rowId, oldMaster, newMaster)` helper +
+    `scripts/rotate-master-key.ts` walker (`--dry-run`, `--batch=N`).
+    Idempotent re-runs return `'skipped'` for rows already rotated.
+    Cross-user isolation preserved across the rewrite — alice's DEK
+    still can't decrypt bob's row.
 
   **Next.**
-  - Phase 3 — Postgres RLS as defense-in-depth, master-key rotation
-    tooling, bubblewrap/firejail shell sandbox, Docker-in-Docker
-    per-user labels + network, optional org/workspace grouping layer
-    (schema is already prepared), impersonation flow + quotas
-    dashboard for the admin console.
+  - Phase 3b — Postgres RLS as defense-in-depth (opt-in via
+    `RLS_ENABLED` flag, external-Postgres only).
+  - Phase 3c — per-user quotas (concurrent agents, daily token
+    cap, API calls/min) + admin dashboard.
+  - Phase 3d — impersonation flow with strong audit (admin enters
+    "act as" mode; every action tagged with both actor + target).
+  - Phase 3e — shell sandbox via bubblewrap/firejail (opt-in,
+    Linux-only).
+  - Phase 3f — Docker-in-Docker per-user labels + network for
+    deployments using the Docker tool.
+  - Phase 3g — optional org/workspace grouping layer (schema is
+    already prepared).
 
 ## Next (months)
 
