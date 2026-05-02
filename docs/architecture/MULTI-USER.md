@@ -1,10 +1,15 @@
 # Multi-User Architecture Plan
 
-> Status: **Phase 0 + Phase 1a landed.** Phase 0 added the feature flag,
-> Principal type, schema additions, and shadow-mode audit middleware.
-> Phase 1a added scoped repositories with cross-tenant isolation
-> enforced in SQL, plus cross-tenant tests, and converted the
-> `/api/sessions` route as a proof point. Phases 1b/1c, 2, 3 pending.
+> Status: **Phases 0, 1a, 1b, 1c landed.** Phase 0 added the feature
+> flag, Principal type, schema additions, and shadow-mode audit
+> middleware. Phase 1a added scoped repositories with cross-tenant
+> isolation enforced in SQL plus the API-route sweep. Phase 1b added
+> vault scoping, per-user DEKs (HKDF), the WorkspaceFS sandbox, the
+> vault rotation script, and the filesystem tool wiring. Phase 1c
+> closed the cross-tenant gap on `permissionManager.approve/deny` and
+> gated the legacy `isSystemUser` bypass on `multiuser.enforcePermissions`.
+> Phase 2 (admin console, channel binding, API tokens UI) and Phase 3
+> (Postgres RLS, shell sandbox, master-key rotation) still pending.
 > Scope: extend Octipus from a single-tenant self-hosted instance into a
 > central backend serving multiple authenticated users (and, optionally,
 > organizations) with strict data, secret, and execution isolation.
@@ -164,6 +169,35 @@ the pre-existing StdioTransport tests). Net +40 isolation tests across
 Phase 1b totals: **1107 pass / 9 fail / 62 skip** (the 9 are still the
 pre-existing StdioTransport tests). Net +46 isolation tests across
 1b-1, 1b-2, 1b-3, plus the rotation + filesystem cleanup.
+
+## Phase 1c — orchestrator permission gate
+
+The chokepoint was already in place — `BaseTool.executeWithMiddleware`
+calls `permissionManager.check(userId, toolId, action, args)` and on
+ASK calls `requestApproval` then `waitForApproval`. Phase 1c closes
+the gaps that made the chokepoint untrustworthy:
+
+- **`approve` / `deny` cross-tenant gap.** Pre-Phase-1c the WHERE clause
+  matched `(id = requestId AND status = 'pending')` only — no user
+  filter. The gateway handler called `approve(requestId, ctx.userId)`
+  but `ctx.userId` was used as the `resolvedBy` audit field, NOT the
+  ownership filter. Any authenticated caller with a leaked requestId
+  could approve or deny another user's pending request. Now the WHERE
+  also requires `user_id = resolvedBy`; cross-tenant attempts return
+  `false` (silent no-op, indistinguishable from "already resolved" or
+  "doesn't exist"). New `{ admin: true }` opt-in lets the future admin
+  console resolve any user's request.
+- **`isSystemUser` bypass.** The legacy bypass that lets MCP / API
+  bridges skip the permission prompt is now gated on
+  `multiuser.enforcePermissions`. With the flag off, behavior is
+  unchanged. With it on, every tool dispatch goes through
+  `permissionManager.check` — system pseudo-users can no longer skip.
+- **`getPendingRequests(userId)`** is already user-scoped (filters by
+  `permission_requests.user_id`); verified and covered by tests.
+
+Phase 1c totals: **1114 pass / 9 fail / 62 skip**, net +7 isolation
+tests, zero regressions. With this commit, **every cross-tenant gap
+identified in the original Phase 1 audit is closed.** Phase 1 is done.
 
 ---
 
