@@ -69,17 +69,23 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     cross-tenant safety. Lets CI / MCP / scripted clients
     authenticate as a real user once `MULTIUSER=true` is flipped.
 
+  **Done so far (continued).**
+  - Phase 2b/2c/2d (this PR): API tokens web UI, admin console
+    (`/admin/users` + `/admin/audit`), and channel binding —
+    `channel_identities` table (migration `0033`), 6-char one-time
+    code redemption flow, web `/link-account` page. Lazy backfill
+    from legacy `users.channelBindings` JSONB column on first read.
+
   **Next.**
-  - Phase 2b — web UI for API tokens (settings page, one-time copy
-    modal, revoke button).
-  - Phase 2c — admin console (`/admin/users`, audit viewer, quotas
-    dashboard, impersonation with audit).
-  - Phase 2d — channel-binding signup flow (Telegram/Slack deep-link
-    to web "Link account"; new `channel_identities` table).
-  - Phase 3 — Postgres RLS as defense-in-depth, per-user DEK rotation
-    tooling for the master key, bubblewrap/firejail shell sandbox,
-    Docker-in-Docker per-user labels + network, optional org/workspace
-    grouping layer (schema is already prepared).
+  - Phase 2e — channel adapters (telegram / slack / whatsapp / teams)
+    swap `userRepository.findByChannelBinding` for
+    `channelBindingManager.findUserByExternalId`; on miss, mint a
+    pending link code and reply to the channel with a deep-link.
+  - Phase 3 — Postgres RLS as defense-in-depth, master-key rotation
+    tooling, bubblewrap/firejail shell sandbox, Docker-in-Docker
+    per-user labels + network, optional org/workspace grouping layer
+    (schema is already prepared), impersonation flow + quotas
+    dashboard for the admin console.
 
 ## Next (months)
 

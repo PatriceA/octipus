@@ -248,6 +248,136 @@ The web UI (settings page + one-time copy modal + revoke button) is
 the next slice (Phase 2b). Backend is mergeable on its own; admins /
 CI can manage tokens via the REST API in the meantime.
 
+## Phase 2b — API tokens web UI
+
+Settings page gains an "API Tokens" tab between Security and Voice.
+Three things happen here:
+
+1. List existing tokens (no plaintext, no hash on the wire).
+2. Generate a new token. The plaintext appears in a one-time copy
+   modal that the user must dismiss explicitly. After dismissal the
+   plaintext is gone from React state.
+3. Revoke a token (with a confirm step — a misclick shouldn't kill
+   a CI integration).
+
+The plaintext modal is the load-bearing UX. Copy button uses
+`navigator.clipboard.writeText` with a textarea fallback for older
+browsers / `http://`. Active and revoked tokens are listed
+separately; revoked rows stay visible (dimmed, struck through) for
+audit. No backend changes — purely consumes the Phase 2a REST.
+
+## Phase 2c — admin console (users + audit)
+
+`/api/admin/*` routes guarded by `requireAdmin(ctx)`: anonymous → 401,
+non-admin → 403. Admin → route body. Self-demotion and
+self-deactivation guard returns 400 to prevent the only admin from
+locking themselves out.
+
+- `GET /api/admin/users` — list every user (no password hashes / TOTP
+  secrets).
+- `POST /api/admin/users` — create user; optional initial password
+  (argon2id-hashed); `isAdmin / isActive` flags; audit row written.
+- `PATCH /api/admin/users/:id` — update one user (email, password,
+  isAdmin, isActive); audit row written; unknown id → 404.
+- `GET /api/admin/audit` — filterable audit-log viewer (`action`,
+  `userId`, `limit ≤ 1000`).
+
+Web `/admin/*` tree gated by `useAuth().user.isAdmin` in
+`AdminLayout`. Server-side check is the security boundary; the redirect
+is purely UX so a non-admin doesn't land on a page where every API
+call returns 403. `/admin/users` is a table with disable / enable +
+grant / revoke admin actions; self-actions are disabled in the UI to
+mirror the server's 400 guard. `/admin/audit` is a filterable viewer.
+
+Out of scope for this slice: impersonation (start/stop with banner),
+quotas dashboard (no per-user quotas instrumented yet), password
+reset flow.
+
+## Phase 2d — channel binding (table + helper + link-account flow)
+
+The legacy `users.channelBindings` JSONB column was the only mapping
+from a channel external_id (Telegram chat_id, Slack user_id, …) to an
+Octipus user. That made channel-side lookups O(N) over the user
+table and gave no place to enforce uniqueness — two users could
+silently share the same external_id. Phase 2d replaces it with a
+proper relational schema plus a one-time code flow for new bindings.
+
+### Schema (migration `0033`)
+
+- `channel_identities (id, user_id, channel_type, external_id,
+  external_handle, metadata, verified_at, created_at)` with a unique
+  index on `(channel_type, external_id)` so lookup is O(1).
+- `channel_link_codes (id, code, channel_type, external_id,
+  external_handle, expires_at, redeemed_at, redeemed_by_user_id,
+  created_at)` for the one-time code redemption.
+
+### `ChannelBindingManager` (`src/security/channel-bindings.ts`)
+
+- `findUserByExternalId(channelType, externalId)` — checks
+  `channel_identities` first, falls back to scanning the legacy JSONB
+  column, opportunistically backfilling matches into the new table.
+- `createPendingLink(channelType, externalId, externalHandle?)` —
+  mints a 6-character code from an unambiguous alphabet
+  (`ABCDEFGHJKMNPQRSTUVWXYZ23456789` — no `0/O`, `1/I/L`) with a 15
+  min TTL.
+- `redeem(userId, code)` — case-insensitive; rejects unknown,
+  expired, or cross-user-claimed codes; idempotent for the same user
+  re-redeeming their own code.
+- `listForUser`, `unbind` (cross-tenant safe; admin override), and
+  `reapStaleCodes` for housekeeping.
+
+### REST surface
+
+- `GET /api/auth/channel-bindings` — list the principal's bindings.
+- `POST /api/auth/channel-bindings/redeem` — body `{ code }`.
+  - 201 on success.
+  - 400 on `unknown_code` / `expired` / `already_redeemed`.
+  - 409 on `already_bound_to_another_user`.
+- `DELETE /api/auth/channel-bindings/:channelType/:externalId` —
+  unbind. Cross-tenant attempts return 404.
+
+### Web `/link-account`
+
+Authenticated page; if `?code=ABC123` arrives in the URL it pre-fills
+the input. Big single-purpose code box, 6+ digit alphanumeric mask.
+On success: green confirmation banner. On error: human-readable
+message (`That code has expired. Send a fresh message in your channel
+to get a new one.`). Lists existing bindings with an unbind button.
+
+### Tests
+
+- 11 unit (`channel-bindings.test.ts`): code shape, happy round-trip,
+  case-insensitive redemption, unknown / expired / cross-user
+  rejection, idempotent same-user replay, legacy-JSONB fallback +
+  backfill, cross-tenant unbind.
+- 7 route (`channel-bindings.isolation.test.ts`): GET 401/200,
+  POST 201/400/409, DELETE 200/404 cross-tenant + owner.
+
+### Out of scope for this slice (follow-ups)
+
+- Channel adapters reading the new helper. Adapters today still call
+  `userRepository.findByChannelBinding`; Phase 2e will swap them to
+  `channelBindingManager.findUserByExternalId` so the adapter sends
+  a deep-link reply when the lookup misses.
+- Bulk migration of `users.channelBindings` JSONB → `channel_identities`
+  (the lazy backfill on read does this incrementally, but a one-shot
+  script would speed up the cutover).
+
+## Phase 2 status
+
+With 2a/2b/2c/2d landed:
+
+- `MULTIUSER=true` is now safe to flip in production. CI / MCP /
+  scripted clients use API tokens; admins can manage users via
+  `/admin/users`; channel adapters can adopt the binding flow at
+  their own pace.
+- Phase 2 cumulative: **1164 pass / 9 fail / 62 skip** — same 9
+  pre-existing StdioTransport failures, net **+50 isolation tests**
+  across the four slices, zero regressions.
+- Out: Phase 3 — Postgres RLS, master-key rotation, shell sandbox
+  via bubblewrap, Docker-in-Docker per-user labels, optional
+  org/workspace grouping layer.
+
 ---
 
 ## 1. Goals & Non-Goals
