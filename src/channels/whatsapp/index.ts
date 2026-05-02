@@ -3,7 +3,6 @@ import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
-import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 
@@ -195,8 +194,10 @@ export class WhatsAppChannel extends BaseChannel {
       return;
     }
 
-    // Find user binding first — needed for /link dedup
-    const user = await userRepository.findByChannelBinding('whatsapp', waUserId);
+    // Find user binding first — needed for /link dedup (Phase 2e:
+    // scoped O(1) lookup on `channel_identities`, JSONB fallback).
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const user = await getChannelBindingManager().findUserRecordByExternalId('whatsapp', waUserId);
 
     // Handle /link command
     if (content.startsWith('/link')) {

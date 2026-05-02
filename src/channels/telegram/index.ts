@@ -3,7 +3,6 @@ import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
-import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 
@@ -174,8 +173,10 @@ export class TelegramChannel extends BaseChannel {
       return;
     }
 
-    // Try to find user binding
-    const user = await userRepository.findByChannelBinding('telegram', userId);
+    // Try to find user binding (Phase 2e: scope-aware, O(1) lookup
+    // on `channel_identities` with a JSONB fallback for legacy rows).
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const user = await getChannelBindingManager().findUserRecordByExternalId('telegram', userId);
 
     if (!user) {
       // Prompt for linking
