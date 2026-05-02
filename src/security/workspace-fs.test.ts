@@ -172,4 +172,32 @@ describe('WorkspaceFS.extraAllowedPrefixes', () => {
     });
     expect(() => fs.resolve('/etc/passwd')).toThrow(WorkspaceFsError);
   });
+
+  test('legacy "/tmp/assistant-" string-prefix is accepted (filesystem-tool back-compat)', () => {
+    // The pre-Phase-1b validatePath did `realPath.startsWith('/tmp/assistant-')`
+    // — a literal string prefix, not a directory match. Operators rely on
+    // this for transient session artifacts whose path encodes the session
+    // id directly (`/tmp/assistant-abc123/...`). WorkspaceFS preserves that
+    // semantics via the dual match in `isInExtraAllowed`.
+    const fs = WorkspaceFS.withRoot(dataRoot, {
+      extraAllowedPrefixes: ['/tmp/assistant-'],
+    });
+    expect(fs.resolveOptional('/tmp/assistant-foo/transient')).not.toBeNull();
+    // …but a plain `/tmp/foo` is still rejected.
+    expect(fs.resolveOptional('/tmp/foo')).toBeNull();
+  });
+});
+
+describe('WorkspaceFS.withRoot — flat single-user mode', () => {
+  test('flat root accepts relative + absolute paths under it', () => {
+    const fs = WorkspaceFS.withRoot(dataRoot);
+    expect(fs.resolve('a/b.txt')).toBe(join(dataRoot, 'a/b.txt'));
+    expect(fs.resolve(join(dataRoot, 'inside.txt'))).toBe(join(dataRoot, 'inside.txt'));
+  });
+
+  test('flat root rejects escapes', () => {
+    const fs = WorkspaceFS.withRoot(dataRoot);
+    expect(() => fs.resolve('../../etc/passwd')).toThrow(WorkspaceFsError);
+    expect(() => fs.resolve('/etc/passwd')).toThrow(WorkspaceFsError);
+  });
 });

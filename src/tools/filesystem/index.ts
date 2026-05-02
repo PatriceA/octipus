@@ -1,8 +1,9 @@
-import { existsSync, realpathSync } from 'fs';
+import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, extname, join, relative, resolve } from 'path';
 import { getConfig } from '@/config';
 import type { AgentContext, ToolManifest } from '@/core/types';
+import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { withFileMutationQueue } from '@/utils/file-mutation-queue';
 import { coreLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
@@ -151,7 +152,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const filePath = this.resolvePath(this.requireString(args, 'path'), context);
-        this.validatePath(filePath);
+        this.validatePath(filePath, context);
 
         const content = await readFile(filePath, { encoding: (args.encoding as BufferEncoding) || 'utf-8' });
         return { content, path: filePath, size: content.length };
@@ -200,7 +201,7 @@ export class FilesystemTool extends BaseTool {
         } else {
           filePath = this.resolvePath(rawPath, context);
         }
-        this.validatePath(filePath);
+        this.validatePath(filePath, context);
 
         return withFileMutationQueue(filePath, async () => {
           if (args.createDirs !== false) {
@@ -231,7 +232,7 @@ export class FilesystemTool extends BaseTool {
       async (args, context) => {
         const filePath = this.resolvePath(this.requireString(args, 'path'), context);
         this.requireString(args, 'content');
-        this.validatePath(filePath);
+        this.validatePath(filePath, context);
 
         return withFileMutationQueue(filePath, async () => {
           const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
@@ -256,7 +257,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const dirPath = this.resolvePath((args.path as string) || '.', context);
-        this.validatePath(dirPath);
+        this.validatePath(dirPath, context);
 
         const entries = await this.listDir(dirPath, args.recursive as boolean, args.includeHidden as boolean);
         return { path: dirPath, entries };
@@ -272,7 +273,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const filePath = this.resolvePath(args.path as string, context);
-        this.validatePath(filePath);
+        this.validatePath(filePath, context);
 
         const stats = await stat(filePath);
         return {
@@ -298,7 +299,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const dirPath = this.resolvePath(args.path as string, context);
-        this.validatePath(dirPath);
+        this.validatePath(dirPath, context);
 
         await mkdir(dirPath, { recursive: args.recursive !== false });
         return { success: true, path: dirPath };
@@ -315,7 +316,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const filePath = this.resolvePath(args.path as string, context);
-        this.validatePath(filePath);
+        this.validatePath(filePath, context);
 
         return withFileMutationQueue(filePath, async () => {
           await rm(filePath, { recursive: args.recursive as boolean, force: false });
@@ -335,8 +336,8 @@ export class FilesystemTool extends BaseTool {
       async (args, context) => {
         const srcPath = this.resolvePath(args.source as string, context);
         const destPath = this.resolvePath(args.destination as string, context);
-        this.validatePath(srcPath);
-        this.validatePath(destPath);
+        this.validatePath(srcPath, context);
+        this.validatePath(destPath, context);
 
         return withFileMutationQueue(destPath, async () => {
           await copyFile(srcPath, destPath);
@@ -356,8 +357,8 @@ export class FilesystemTool extends BaseTool {
       async (args, context) => {
         const srcPath = this.resolvePath(args.source as string, context);
         const destPath = this.resolvePath(args.destination as string, context);
-        this.validatePath(srcPath);
-        this.validatePath(destPath);
+        this.validatePath(srcPath, context);
+        this.validatePath(destPath, context);
 
         return withFileMutationQueue(destPath, async () => {
           await rename(srcPath, destPath);
@@ -377,7 +378,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const dirPath = this.resolvePath((args.path as string) || '.', context);
-        this.validatePath(dirPath);
+        this.validatePath(dirPath, context);
 
         const pattern = safeRegExp(args.pattern as string);
         if (!pattern) {
@@ -430,28 +431,32 @@ export class FilesystemTool extends BaseTool {
     return resolve(root, path);
   }
 
-  private validatePath(path: string): void {
-    const resolved = resolve(path);
-    const { root, additional } = getWorkspacePaths();
-    const allPaths = [root, ...additional];
-
-    // Resolve symlinks to prevent symlink bypass attacks
-    let realPath: string;
+  /**
+   * Path sandbox — Phase 1b-3.
+   *
+   * Delegates to `WorkspaceFS.forAgent(context)` so the same call site
+   * picks the right layout based on `config.multiuser.enabled`:
+   *   - off → flat root at `config.workspace.rootPath` (legacy single-user
+   *     behavior, identical to the previous in-place implementation).
+   *   - on  → per-user nested root under
+   *     `<workspace.rootPath>/users/{userId}/workspaces/default/files`.
+   *
+   * Both modes share `additionalPaths` and the legacy `/tmp/assistant-`
+   * tmp prefix as extra-allowed locations; both block traversal,
+   * absolute-path escape, and symlink escape.
+   *
+   * Without an `AgentContext` we fall back to the flat root — that's
+   * the path the unit test harness and direct callers take.
+   */
+  private validatePath(path: string, context?: AgentContext): void {
+    const fs = WorkspaceFS.forAgent(context);
     try {
-      realPath = realpathSync(resolved);
-    } catch {
-      // File may not exist yet (e.g. write operations) — check parent directory
-      const parent = dirname(resolved);
-      try {
-        realPath = join(realpathSync(parent), basename(resolved));
-      } catch {
-        realPath = resolved;
+      fs.resolve(path);
+    } catch (err) {
+      if (err instanceof WorkspaceFsError) {
+        throw new Error(`Path '${path}' is outside allowed workspace directories`);
       }
-    }
-
-    const allowed = allPaths.some(p => realPath.startsWith(p)) || realPath.startsWith('/tmp/assistant-');
-    if (!allowed) {
-      throw new Error(`Path '${path}' is outside allowed workspace directories`);
+      throw err;
     }
   }
 
