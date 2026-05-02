@@ -278,6 +278,24 @@ export class ScopedAgentRepo {
       .limit(limit);
   }
 
+  /**
+   * Aggregate across multiple session ids (used for sibling-channel
+   * transcripts: telegram restart, slack /clear, etc.). Owner filter
+   * still applies — even if a foreign session id sneaks into the list,
+   * its rows are silently dropped.
+   */
+  async findBySessions(sessionIds: string[], limit = 200): Promise<AgentRecord[]> {
+    if (sessionIds.length === 0) return [];
+    const filters = [inArray(agents.sessionId, sessionIds)];
+    if (!isAdmin(this.principal)) filters.push(eq(agents.userId, this.principal.userId));
+    return this.db
+      .select()
+      .from(agents)
+      .where(and(...filters))
+      .orderBy(desc(agents.createdAt))
+      .limit(limit);
+  }
+
   /** Create an agent pinned to the principal. */
   async create(data: Omit<NewAgentRecord, 'userId'>): Promise<AgentRecord> {
     const result = await this.db
@@ -316,6 +334,16 @@ export class ScopedDocumentRepo {
       .limit(limit);
   }
 
+  /** Filter the principal's own documents by category. */
+  async listOwnByCategory(category: string, limit = 50): Promise<DocumentRecord[]> {
+    return this.db
+      .select()
+      .from(documents)
+      .where(and(eq(documents.userId, this.principal.userId), eq(documents.category, category)))
+      .orderBy(desc(documents.createdAt))
+      .limit(limit);
+  }
+
   async create(data: Omit<NewDocumentRecord, 'userId'>): Promise<DocumentRecord> {
     const result = await this.db
       .insert(documents)
@@ -329,6 +357,22 @@ export class ScopedDocumentRepo {
       ? eq(documents.id, id)
       : and(eq(documents.id, id), eq(documents.userId, this.principal.userId));
     const result = await this.db.delete(documents).where(where).returning();
+    return result.length > 0;
+  }
+
+  /** Update status — restricted to documents owned by the principal. */
+  async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
+    const where = isAdmin(this.principal)
+      ? eq(documents.id, id)
+      : and(eq(documents.id, id), eq(documents.userId, this.principal.userId));
+    const result = await this.db
+      .update(documents)
+      .set({
+        status,
+        ...(error ? { metadata: { error } } : {}),
+      })
+      .where(where)
+      .returning();
     return result.length > 0;
   }
 }

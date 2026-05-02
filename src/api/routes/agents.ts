@@ -2,77 +2,93 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
-import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
+/**
+ * Agents — Phase 1a multi-user conversion.
+ *
+ * DB lookups go through `scopedRepos(principal).agents`. The in-memory
+ * agent manager continues to enforce ownership on `agent.getContext().userId`
+ * (the live source of truth for running agents). The two layers compose:
+ * a non-admin can only see live agents whose `context.userId` matches and
+ * historical rows whose `agents.user_id` matches.
+ *
+ * Sibling-channel aggregation (telegram/slack/etc) resolves the original
+ * session via the scoped session repo so we can't aggregate across a
+ * foreign session id.
+ */
 export const agentRoutes = new Elysia({ prefix: '/agents' })
   .use(apiContext)
   // List all agents (in-memory live + DB history)
   .get(
     '/',
-    async ({ user, query }) => {
-      if (!user) {
+    async ({ user, principal, query }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
       const agentManager = getAgentManager();
       let liveAgents = agentManager.list();
 
-      // Non-admin users can only see their own agents
+      // Non-admin users can only see their own live agents
       if (!user.isAdmin) {
         liveAgents = liveAgents.filter((a) => a.userId === user.id);
       }
 
+      const repos = scopedRepos(principal);
+
       // Session scope: when a sessionId is provided, ALL results (live and
-      // historical) must be scoped to that session. Without this, every
-      // chat surface (web, mobile, TUI) sees every other session's running
-      // agents — breaks the "agent belongs to its session" contract.
+      // historical) must be scoped to that session. We resolve through the
+      // scoped session repo so foreign session ids return null and the
+      // route shows an empty list.
       const sessionId = query?.sessionId as string | undefined;
+      let allowedSessionIds: Set<string> | undefined;
       if (sessionId) {
-        // Resolve sibling-channel aggregation once so live + DB paths agree.
-        const session = await sessionRepository.findById(sessionId);
+        const session = await repos.sessions.findById(sessionId);
+        if (!session) {
+          // Foreign or missing — present as empty rather than 404 so the
+          // UI can keep rendering an empty agent list.
+          return { agents: [] };
+        }
         const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
-        let allowedSessionIds: Set<string> = new Set([sessionId]);
-        if (session && AGGREGATED_CHANNELS.has(session.channelType)) {
+        if (AGGREGATED_CHANNELS.has(session.channelType)) {
+          // Siblings share session.userId by definition (the index is on
+          // (user_id, channel_type, channel_id)), so they're all in tenant.
           const siblings = await sessionRepository.findAllByUserAndChannel(
             session.userId,
             session.channelType,
             session.channelId,
           );
-          allowedSessionIds = new Set(siblings.map(s => s.id));
+          allowedSessionIds = new Set(siblings.map((s) => s.id));
+        } else {
+          allowedSessionIds = new Set([sessionId]);
         }
-        liveAgents = liveAgents.filter((a) => allowedSessionIds.has(a.sessionId));
+        liveAgents = liveAgents.filter((a) => allowedSessionIds!.has(a.sessionId));
       }
 
       // Collect IDs of agents still in memory
-      const liveIds = new Set(liveAgents.map(a => a.id));
+      const liveIds = new Set(liveAgents.map((a) => a.id));
 
-      // Fetch historical agents from DB (exclude ones still in memory)
+      // Fetch historical agents from DB (exclude ones still in memory).
+      // Scoped agent repo enforces user ownership in SQL.
       try {
         let dbAgents;
-        if (sessionId) {
-          // Aggregate across sibling channel sessions (telegram/slack/etc)
-          // so the agent list mirrors the unified transcript.
-          const sess = await sessionRepository.findById(sessionId);
-          const AGGREGATED = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
-          if (sess && AGGREGATED.has(sess.channelType)) {
-            const siblings = await sessionRepository.findAllByUserAndChannel(
-              sess.userId, sess.channelType, sess.channelId,
-            );
-            dbAgents = await agentRepository.findBySessions(siblings.map(s => s.id));
-          } else {
-            dbAgents = await agentRepository.findBySession(sessionId);
-          }
+        if (allowedSessionIds) {
+          dbAgents = await repos.agents.findBySessions([...allowedSessionIds]);
+        } else if (user.isAdmin) {
+          // Admin sees everything
+          const { agentRepository } = await import('@/db/repositories/agent-repository');
+          dbAgents = await agentRepository.listRecent();
         } else {
-          dbAgents = user.isAdmin
-            ? await agentRepository.listRecent()
-            : await agentRepository.findByUser(user.id);
+          dbAgents = await repos.agents.listOwn();
         }
 
         const historical = dbAgents
-          .filter(a => !liveIds.has(a.id))
-          .map(a => ({
+          .filter((a) => !liveIds.has(a.id))
+          .map((a) => ({
             id: a.id,
             sessionId: a.sessionId,
             userId: a.userId,
@@ -106,8 +122,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Get agent details (live or from DB history)
   .get(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
@@ -117,7 +133,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       if (agent) {
         const context = agent.getContext();
         if (!user.isAdmin && context.userId !== user.id) {
-          return { error: 'Not authorized' };
+          return { error: 'Agent not found' };
         }
         return {
           id: context.id,
@@ -132,13 +148,10 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         };
       }
 
-      // Fall back to DB history
-      const dbAgent = await agentRepository.findById(params.id);
+      // Fall back to DB history — scoped repo collapses cross-tenant to null.
+      const dbAgent = await scopedRepos(principal).agents.findById(params.id);
       if (!dbAgent) {
         return { error: 'Agent not found' };
-      }
-      if (!user.isAdmin && dbAgent.userId !== user.id) {
-        return { error: 'Not authorized' };
       }
       return {
         id: dbAgent.id,
@@ -167,21 +180,18 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Spawn a new agent
   .post(
     '/',
-    async ({ user, body }) => {
-      if (!user) {
+    async ({ user, principal, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
       const { sessionId, topic, model, systemPrompt, message } = body;
 
-      // Verify session ownership
-      const session = await sessionRepository.findById(sessionId);
+      // Verify session ownership through the scoped repo — cross-tenant
+      // requests come back null and surface as "Session not found".
+      const session = await scopedRepos(principal).sessions.findById(sessionId);
       if (!session) {
         return { error: 'Session not found' };
-      }
-
-      if (!user.isAdmin && session.userId !== user.id) {
-        return { error: 'Not authorized' };
       }
 
       const agentManager = getAgentManager();
@@ -230,8 +240,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Send message to agent
   .post(
     '/:id/message',
-    async ({ user, params, body }) => {
-      if (!user) {
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
@@ -243,9 +253,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-
       if (!user.isAdmin && context.userId !== user.id) {
-        return { error: 'Not authorized' };
+        return { error: 'Agent not found' };
       }
 
       if (agent.getStatus() !== 'idle' && agent.getStatus() !== 'completed') {
@@ -273,8 +282,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Stop an agent
   .post(
     '/:id/stop',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
@@ -286,9 +295,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-
       if (!user.isAdmin && context.userId !== user.id) {
-        return { error: 'Not authorized' };
+        return { error: 'Agent not found' };
       }
 
       // Stop the target agent and all other agents in the same session
@@ -308,8 +316,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Remove an agent
   .delete(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
@@ -321,9 +329,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const context = agent.getContext();
-
       if (!user.isAdmin && context.userId !== user.id) {
-        return { error: 'Not authorized' };
+        return { error: 'Agent not found' };
       }
 
       const removed = agentManager.remove(params.id);
@@ -341,8 +348,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Get agent events (polling endpoint)
   .get(
     '/:id/events',
-    async ({ user, params, query }) => {
-      if (!user) {
+    async ({ user, principal, params, query }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
@@ -353,14 +360,14 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       if (agent) {
         const context = agent.getContext();
         if (!user.isAdmin && context.userId !== user.id) {
-          return { error: 'Not authorized' };
+          return { error: 'Agent not found' };
         }
 
         const afterSeq = query.after ? parseInt(query.after, 10) : 0;
         const buffered = agentManager.getEvents(params.id, afterSeq);
 
         return {
-          events: buffered.map(b => ({
+          events: buffered.map((b) => ({
             seq: b.seq,
             type: b.event.type,
             agentId: b.event.agentId,
@@ -370,13 +377,19 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         };
       }
 
-      // Fall back to DB events (after restart or for completed agents)
+      // Fall back to DB history — but first verify the principal owns
+      // this agent so we don't leak event streams cross-tenant.
+      const dbAgent = await scopedRepos(principal).agents.findById(params.id);
+      if (!dbAgent) {
+        return { error: 'Agent not found' };
+      }
+
       const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
       const afterId = query.after ? parseInt(query.after, 10) : undefined;
       const dbEvents = await agentEventRepository.findByAgent(params.id, afterId);
 
       return {
-        events: dbEvents.map(e => ({
+        events: dbEvents.map((e) => ({
           seq: e.id,
           type: e.type,
           agentId: e.agentId,
