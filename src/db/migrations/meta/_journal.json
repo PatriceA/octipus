@@ -232,6 +232,13 @@
       "when": 1718200000000,
       "tag": "0032_api_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1718800000000,
+      "tag": "0033_channel_identities",
+      "breakpoints": true
     }
   ]
 }
