@@ -5,6 +5,7 @@ import { Elysia, } from 'elysia';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
+import { getApiTokenManager, looksLikeApiToken } from '@/security/api-tokens';
 import { getSessionManager } from '@/security/auth/session';
 import {
   ANONYMOUS_PRINCIPAL,
@@ -19,6 +20,7 @@ import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { agentRoutes } from './routes/agents';
+import { apiTokenRoutes } from './routes/api-tokens';
 // Import routes
 import { authRoutes } from './routes/auth';
 import { chatRoutes } from './routes/chat';
@@ -148,6 +150,32 @@ export function createServer() {
       }
       const session = await sessionManager.validate(token);
 
+      // Phase 2a — personal access token Bearer.
+      // Tried after session validation so cookie-based browser auth
+      // takes precedence (and so a session cookie that happens to
+      // start with `octi_` for some reason isn't shadowed). The shape
+      // check (`looksLikeApiToken`) avoids a DB roundtrip on
+      // non-token Bearer values like the legacy MASTER_KEY.
+      if (!session && looksLikeApiToken(token)) {
+        const validated = await getApiTokenManager().validate(token);
+        if (validated) {
+          const db = getDb();
+          const [u] = await db
+            .select({ id: users.id, username: users.username, isAdmin: users.isAdmin })
+            .from(users)
+            .where(eq(users.id, validated.userId))
+            .limit(1);
+          if (u) {
+            const userObj = { id: u.id, username: u.username, isAdmin: u.isAdmin };
+            return {
+              user: userObj,
+              session: null,
+              principal: principalFromUser(userObj, token),
+            };
+          }
+        }
+      }
+
       if (!session) {
         // MASTER_KEY Bearer fallback — single-user / MCP convenience.
         // Disabled when multi-user mode is on (Phase 1+ removes it).
@@ -205,6 +233,7 @@ export function createServer() {
       app
         .use(healthRoutes)
         .use(authRoutes)
+        .use(apiTokenRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
         .use(modelRoutes)

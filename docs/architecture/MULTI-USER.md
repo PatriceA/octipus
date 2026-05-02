@@ -199,6 +199,55 @@ Phase 1c totals: **1114 pass / 9 fail / 62 skip**, net +7 isolation
 tests, zero regressions. With this commit, **every cross-tenant gap
 identified in the original Phase 1 audit is closed.** Phase 1 is done.
 
+## Phase 2a — personal access tokens (backend)
+
+The `MASTER_KEY` Bearer fallback was the only non-browser auth path.
+With `multiuser.enabled = true` it gets suppressed (Phase 0), which
+means CI / MCP / scripted clients couldn't authenticate at all once
+the flag flipped. Phase 2a fills that gap with proper per-user
+personal access tokens.
+
+- New `api_tokens` table (migration `0032`): `(id, user_id, name,
+  token_hash, prefix, scopes, expires_at, last_used_at, revoked_at,
+  metadata, created_at)`. `token_hash` is SHA-256 hex of the
+  plaintext, unique-indexed for O(1) validation lookup.
+- Token format: `octi_<43-char-base64url>` (32 bytes of randomness +
+  a recognizable prefix). Plaintext is shown ONCE at creation; only
+  the hash is persisted. The first 12 chars (`octi_abc1...`) are
+  stored as `prefix` for display in the list view so users can
+  identify tokens without revealing the secret.
+- `src/security/api-tokens.ts` — `ApiTokenManager` with
+  `issue / validate / listForUser / revoke / countActive`. Validation
+  enforces revocation + expiry, updates `last_used_at` in the
+  background, and uses `looksLikeApiToken()` as a cheap pre-check so
+  non-token Bearer values skip the DB roundtrip.
+- `.derive()` in `src/api/server.ts` now tries: (1) session token,
+  (2) **api token** (new), (3) `MASTER_KEY` fallback if multiuser is
+  off. The api-token path loads the user record and returns a normal
+  `principalFromUser` — every downstream `scopedRepos(principal)`
+  call works identically to a browser session login.
+- `/api/auth/api-tokens` REST surface: `GET /` (list, no plaintext or
+  hash), `POST /` (issue, plaintext returned exactly once,
+  `201 Created`), `DELETE /:id` (revoke; cross-tenant attempts return
+  `404` to prevent ID enumeration).
+- 22 PGlite-backed tests: 15 unit (format, hash determinism, validate
+  happy/revoked/expired/unknown/malformed, list scoping, cross-tenant
+  revoke + admin override, double-revoke, countActive) and 7 route
+  (POST 201 + plaintext, 401 on anonymous, 400 on bad date, GET shape
+  doesn't leak hash, cross-tenant DELETE returns 404, owner can
+  revoke). Verified resilient to the `commands.test.ts` `mock.module`
+  ordering issue.
+
+Phase 2a totals: **1136 pass / 9 fail / 62 skip**, net +22, zero
+regressions. With this commit, deployments can flip
+`MULTIUSER=true` without breaking CI / MCP / scripted clients —
+operators just rotate from `MASTER_KEY` to per-user tokens before
+the cutover.
+
+The web UI (settings page + one-time copy modal + revoke button) is
+the next slice (Phase 2b). Backend is mergeable on its own; admins /
+CI can manage tokens via the REST API in the meantime.
+
 ---
 
 ## 1. Goals & Non-Goals

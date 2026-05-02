@@ -55,17 +55,27 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     (single-user) and per-user nested layouts share one call site.
     Migrations `0030` + `0031`.
 
+  **Done so far (continued).**
+  - Phase 1c (PR #4): `permissionManager.approve/deny` cross-tenant
+    guard — pre-PR any caller with a leaked `requestId` could resolve
+    another user's pending permission request. The legacy
+    `isSystemUser` bypass in `BaseTool.executeWithMiddleware` now
+    gates on `multiuser.enforcePermissions`. Closes Phase 1.
+  - Phase 2a backend (this PR): personal access tokens. New
+    `api_tokens` table (migration `0032`); `octi_<43-char-base64url>`
+    bearer format with SHA-256 hash storage; `.derive()` accepts
+    api-token Bearer between session validation and the legacy
+    `MASTER_KEY` fallback; `/api/auth/api-tokens` CRUD with
+    cross-tenant safety. Lets CI / MCP / scripted clients
+    authenticate as a real user once `MULTIUSER=true` is flipped.
+
   **Next.**
-  - Phase 1c — orchestrator permission gate. Wire the existing
-    `skill_permissions` ALLOW/ASK/DENY schema (already populated, never
-    enforced) into a single `checkToolCall(principal, toolId, action,
-    args)` chokepoint and route every tool dispatch through it. ASK
-    pauses the agent and emits a `permission.request` gateway event;
-    deny-on-timeout. Closes Phase 1.
-  - Phase 2 — admin console (`/admin/users`, audit viewer, quotas
-    dashboard, impersonation with audit), API tokens UI under user
-    settings, channel-binding signup flow (Telegram/Slack deep-link to
-    web "Link account").
+  - Phase 2b — web UI for API tokens (settings page, one-time copy
+    modal, revoke button).
+  - Phase 2c — admin console (`/admin/users`, audit viewer, quotas
+    dashboard, impersonation with audit).
+  - Phase 2d — channel-binding signup flow (Telegram/Slack deep-link
+    to web "Link account"; new `channel_identities` table).
   - Phase 3 — Postgres RLS as defense-in-depth, per-user DEK rotation
     tooling for the master key, bubblewrap/firejail shell sandbox,
     Docker-in-Docker per-user labels + network, optional org/workspace
