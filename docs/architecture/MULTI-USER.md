@@ -54,9 +54,43 @@
   for unauthenticated requests).
 - Net +27 passing tests, zero regressions.
 
-Other routes (`/api/agents`, `/api/documents`, `/api/chat`,
-`/api/trajectories`, etc.) still use unscoped repos — that's the
-follow-up sweep before Phase 1b.
+## Phase 1a — sweep complete
+
+The follow-up sweep converted every per-user-data route to
+`scopedRepos(principal)`:
+
+- **agents + documents** — DB-history reads scoped; documents 403→404
+  to prevent ID enumeration.
+- **notifications** — fixed cross-tenant `markRead` (any user could
+  flip any notification's read flag); list/count already user-scoped.
+- **trajectories** — fixed cross-tenant list (every user's runs were
+  visible); admins still see all.
+- **chat** — `getPendingApprovals` was global (leaked pending
+  approvals between users); `resolveApproval` had no ownership check.
+  ApprovalRequest gained `userId` + `sessionId`; `peek(requestId)`
+  added so callers verify ownership before resolving.
+- **hooks + recurring-tasks** — all per-id endpoints (GET, PATCH,
+  DELETE, toggle, test, executions) use scoped lookups.
+- **pipelines** — `findById` for pipelines; **closed two complete-bypass
+  gaps** on `PUT /pipelines/templates/:id` and `DELETE
+  /pipelines/templates/:id` (pre-Phase-1a these had NO auth check —
+  any authenticated user could mutate any template, including system
+  presets).
+
+ScopedRepos bundle now exposes: `sessions, messages, agents, documents,
+notifications, trajectories, hooks, pipelines`. Every member is
+Principal-bound; cross-tenant reads return null/[] (collapsing 403/404
+to 404 across the board).
+
+Cumulative test count: **1061 pass / 9 fail / 62 skip** (the 9 are the
+same pre-existing StdioTransport failures from before Phase 0). Net
++24 cross-tenant isolation tests across hooks, pipelines, chat,
+notifications, trajectories — all backed by ephemeral PGlite, no
+Docker required.
+
+Routes that intentionally stay unscoped: `/api/auth/*`, `/api/health/*`,
+`/api/webhooks/*`, `/api/oauth/*` (different threat models). Vault
+gets full scoping in Phase 1b along with WorkspaceFS.
 
 ---
 
