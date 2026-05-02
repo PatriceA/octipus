@@ -1,26 +1,44 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { isAuthenticated } from '@/security/principal';
 
+/**
+ * Session routes — Phase 1a multi-user conversion.
+ *
+ * Each handler now routes reads and writes through `scopedRepos(principal)`,
+ * which makes "user A reads user B's session" structurally impossible at
+ * the repository layer. The hand-rolled `if (!user.isAdmin && session.userId
+ * !== user.id)` checks that lived in every handler before are gone — the
+ * scope itself is the check.
+ *
+ * Cross-tenant lookups return `null` from the scoped repo, which the route
+ * surfaces as the existing "Session not found" response so we don't change
+ * the public contract. Admins continue to see other users' rows because
+ * `isAdmin(principal)` widens the WHERE clause inside the scope.
+ *
+ * Aggregation across sibling channel sessions still uses the unscoped
+ * `sessionRepository.findAllByUserAndChannel` — that's safe because we
+ * pass `session.userId` which we just verified the principal is allowed
+ * to see (the scoped session exists in the principal's tenant).
+ */
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
   // List sessions
   .get(
     '/',
-    async ({ user, query }) => {
-      if (!user) {
+    async ({ user, principal, query }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
       const limit = query.limit ? parseInt(query.limit, 10) : 50;
+      const repos = scopedRepos(principal);
 
-      let sessions;
-      if (user.isAdmin && query.all === 'true') {
-        sessions = await sessionRepository.listRecent(limit);
-      } else {
-        sessions = await sessionRepository.listByUser(user.id, limit);
-      }
+      const sessions = user.isAdmin && query.all === 'true'
+        ? await repos.sessions.listAllAdmin(limit)
+        : await repos.sessions.listOwn(limit);
 
       const { getConfig } = await import('@/config');
       const config = getConfig();
@@ -38,21 +56,15 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Get session by ID
   .get(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const session = await sessionRepository.findById(params.id);
-
+      const session = await scopedRepos(principal).sessions.findById(params.id);
       if (!session) {
         return { error: 'Session not found' };
       }
-
-      if (!user.isAdmin && session.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
       return session;
     },
     {
@@ -66,13 +78,12 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Create new session
   .post(
     '/',
-    async ({ user, body }) => {
-      if (!user) {
+    async ({ user, principal, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const session = await sessionRepository.create({
-        userId: user.id,
+      const session = await scopedRepos(principal).sessions.create({
         channelType: body.channelType || 'api',
         channelId: body.channelId || 'api',
         title: body.title,
@@ -97,23 +108,18 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Update session
   .patch(
     '/:id',
-    async ({ user, params, body }) => {
-      if (!user) {
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const session = await sessionRepository.findById(params.id);
-
-      if (!session) {
+      const updated = await scopedRepos(principal).sessions.update(
+        params.id,
+        body as Partial<import('@/db/schema/sessions').NewSession>,
+      );
+      if (!updated) {
         return { error: 'Session not found' };
       }
-
-      if (!user.isAdmin && session.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
-      const updated = await sessionRepository.update(params.id, body as Partial<import('@/db/schema/sessions').NewSession>);
-
       return updated;
     },
     {
@@ -133,23 +139,20 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Delete session
   .delete(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const session = await sessionRepository.findById(params.id);
-
-      if (!session) {
+      // Scoped delete returns false on miss / cross-tenant. We still need
+      // the unscoped sessionRepository.delete to fan out the cascade
+      // cleanup of messages/pipelines/agents — but only after confirming
+      // the principal owns the row.
+      const owned = await scopedRepos(principal).sessions.findById(params.id);
+      if (!owned) {
         return { error: 'Session not found' };
       }
-
-      if (!user.isAdmin && session.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
       const deleted = await sessionRepository.delete(params.id);
-
       return { deleted };
     },
     {
@@ -163,19 +166,15 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Get session messages
   .get(
     '/:id/messages',
-    async ({ user, params, query }) => {
-      if (!user) {
+    async ({ user, principal, params, query }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const session = await sessionRepository.findById(params.id);
-
+      const repos = scopedRepos(principal);
+      const session = await repos.sessions.findById(params.id);
       if (!session) {
         return { error: 'Session not found' };
-      }
-
-      if (!user.isAdmin && session.userId !== user.id) {
-        return { error: 'Not authorized' };
       }
 
       const limit = query.limit ? parseInt(query.limit, 10) : 100;
@@ -191,16 +190,19 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       let messages;
       let total;
       if (aggregate) {
+        // Sibling sessions are filtered by (userId, channelType, channelId);
+        // since `session` is already scoped to the principal, session.userId
+        // is the principal's id (or any user's id if admin).
         const siblings = await sessionRepository.findAllByUserAndChannel(
           session.userId,
           session.channelType,
           session.channelId,
         );
-        const siblingIds = siblings.map(s => s.id);
-        messages = await messageRepository.findBySessions(siblingIds, limit, offset, roles);
-        total = await messageRepository.countBySessions(siblingIds);
+        const siblingIds = siblings.map((s) => s.id);
+        messages = await repos.messages.findBySessions(siblingIds, limit, offset, roles);
+        total = await repos.messages.countBySessions(siblingIds);
       } else {
-        messages = await messageRepository.findBySession(params.id, limit, offset, roles);
+        messages = await repos.messages.findBySession(params.id, limit, offset, roles);
         total = session.messageCount;
       }
 
@@ -223,23 +225,18 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Complete session
   .post(
     '/:id/complete',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const session = await sessionRepository.findById(params.id);
-
-      if (!session) {
+      const updated = await scopedRepos(principal).sessions.update(params.id, {
+        status: 'completed',
+        completedAt: new Date(),
+      });
+      if (!updated) {
         return { error: 'Session not found' };
       }
-
-      if (!user.isAdmin && session.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
-      const updated = await sessionRepository.complete(params.id);
-
       return updated;
     },
     {
