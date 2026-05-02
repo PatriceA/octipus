@@ -9,7 +9,6 @@ import {
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
-import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 
@@ -110,8 +109,10 @@ export class TeamsChannel extends BaseChannel {
     const conversationId = activity.conversation.id;
     const userName = activity.from.name;
 
-    // Find user binding
-    const user = await userRepository.findByChannelBinding('teams', teamsUserId);
+    // Find user binding (Phase 2e: scoped O(1) lookup on
+    // `channel_identities`, JSONB fallback for legacy bindings).
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const user = await getChannelBindingManager().findUserRecordByExternalId('teams', teamsUserId);
 
     if (!user) {
       channelLogger.info({ teamsUserId, userName }, 'New Teams user - needs linking');

@@ -4,7 +4,6 @@ import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
-import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 
@@ -77,8 +76,10 @@ export class SlackChannel extends BaseChannel {
       const msg = message as SlackMessage;
       const slackUserId = msg.user;
 
-      // Check if already linked
-      const existing = await userRepository.findByChannelBinding('slack', slackUserId);
+      // Check if already linked (Phase 2e: scoped O(1) lookup on
+      // `channel_identities`, with JSONB fallback for legacy bindings).
+      const { getChannelBindingManager } = await import('@/security/channel-bindings');
+      const existing = await getChannelBindingManager().findUserRecordByExternalId('slack', slackUserId);
       if (existing) {
         await (say as SayFn)({ text: 'Your account is already linked!', thread_ts: msg.thread_ts });
         return;
@@ -222,8 +223,9 @@ export class SlackChannel extends BaseChannel {
       // Ignore errors getting user info
     }
 
-    // Find user binding
-    const user = await userRepository.findByChannelBinding('slack', slackUserId);
+    // Find user binding (Phase 2e: scoped O(1) lookup).
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const user = await getChannelBindingManager().findUserRecordByExternalId('slack', slackUserId);
 
     if (!user) {
       channelLogger.info({ slackUserId, userName }, 'New Slack user - needs linking');

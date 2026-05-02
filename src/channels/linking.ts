@@ -1,11 +1,30 @@
-import crypto from 'crypto';
+/**
+ * Channel linking — Phase 2e bridge.
+ *
+ * Pre-Phase-2d this module owned the link-code lifecycle directly:
+ * codes were stored in Redis with a 5-min TTL and the redeem path
+ * mutated `users.channelBindings` JSONB. Phase 2d landed a proper
+ * `ChannelBindingManager` backed by Postgres tables (`channel_link_codes`
+ * + `channel_identities`); this commit rewires the legacy callers
+ * (channel adapters, `/api/auth/redeem-link-code`) onto it without
+ * changing their public API.
+ *
+ * Why preserve the API: telegram / slack / whatsapp / teams adapters
+ * each call `generateLinkCode(...)` from inside their `/link` command
+ * handler, and `auth.ts` calls `redeemLinkCode(code, userId)`. Those
+ * call sites stay identical — the only change is where the code +
+ * binding land at rest. From Phase 2e on, the new Postgres tables are
+ * the single source of truth.
+ *
+ * The legacy JSONB column is left in place as belt-and-suspenders;
+ * `ChannelBindingManager.findUserByExternalId` already reads from it
+ * and backfills into `channel_identities` on a miss-then-hit, so any
+ * binding created before Phase 2d keeps resolving.
+ */
 import type { ChannelType } from '@/core/types';
-import { getRedis } from '@/db/redis';
+import { getChannelBindingManager } from '@/security/channel-bindings';
 import { userRepository } from '@/db/repositories/user-repository';
 import { channelLogger } from '@/utils/logger';
-
-const LINK_CODE_PREFIX = 'link:';
-const LINK_CODE_TTL = 300; // 5 minutes
 
 export interface LinkCodeData {
   channelType: ChannelType;
@@ -14,71 +33,72 @@ export interface LinkCodeData {
 }
 
 /**
- * Generate a 6-character alphanumeric linking code and store in Redis.
+ * Generate a link code for a channel external_id. The code lives in
+ * `channel_link_codes` and is single-use; expiry is governed by the
+ * manager (15 minutes today, vs the legacy 5-minute Redis TTL — the
+ * longer window matches what users typically need to switch from
+ * their phone to a desktop browser).
  */
 export async function generateLinkCode(data: LinkCodeData): Promise<string> {
-  const redis = getRedis();
-  const code = randomCode(6);
-  const key = LINK_CODE_PREFIX + code;
-
-  await redis.setex(key, LINK_CODE_TTL, JSON.stringify(data));
-
-  channelLogger.info(
-    { code, channelType: data.channelType, channelUserId: data.channelUserId },
-    'Link code generated'
+  const link = await getChannelBindingManager().createPendingLink(
+    data.channelType,
+    data.channelUserId,
+    data.channelUserName,
   );
-
-  return code;
+  channelLogger.info(
+    { code: link.code, channelType: data.channelType, channelUserId: data.channelUserId },
+    'Link code generated',
+  );
+  return link.code;
 }
 
 /**
- * Redeem a linking code: bind the channel identity to the given user.
+ * Redeem a link code on behalf of `userId`. Returns the same
+ * `{ success, error }` shape callers expect; the new `error` strings
+ * are the same human-readable values the manager surfaces (mapped
+ * here so the existing UI strings keep working).
+ *
+ * Also writes a legacy JSONB entry on the user so any code path that
+ * still reads `users.channelBindings` directly (older parts of the
+ * orchestrator we haven't migrated yet) sees the new binding.
  */
 export async function redeemLinkCode(
   code: string,
-  userId: string
+  userId: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const redis = getRedis();
-  const key = LINK_CODE_PREFIX + code.toUpperCase();
-
-  const raw = await redis.get(key);
-  if (!raw) {
-    return { success: false, error: 'Invalid or expired link code' };
+  const result = await getChannelBindingManager().redeem(userId, code);
+  if (!result.ok) {
+    switch (result.reason) {
+      case 'unknown_code':
+      case 'expired':
+        return { success: false, error: 'Invalid or expired link code' };
+      case 'already_redeemed':
+        return { success: false, error: 'This code has already been used' };
+      case 'already_bound_to_another_user':
+        return { success: false, error: 'This channel account is already linked to another user' };
+      default:
+        return { success: false, error: 'Could not link the channel' };
+    }
   }
 
-  const data: LinkCodeData = JSON.parse(raw);
-
-  // Verify user exists
-  const user = await userRepository.findById(userId);
-  if (!user) {
-    return { success: false, error: 'User not found' };
+  // Mirror into legacy JSONB so any unmigrated reader sees the new
+  // binding. Best-effort — failure here doesn't reverse the canonical
+  // write into `channel_identities`.
+  try {
+    await userRepository.addChannelBinding(userId, {
+      channelType: result.binding.channelType as 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat',
+      channelUserId: result.binding.externalId,
+      channelUserName: result.binding.externalHandle ?? undefined,
+      isVerified: true,
+      createdAt: result.binding.createdAt.toISOString(),
+    });
+  } catch (err) {
+    channelLogger.warn({ err, userId }, 'Legacy JSONB mirror after redeem failed (canonical row already written)');
   }
-
-  // Add channel binding
-  await userRepository.addChannelBinding(userId, {
-    channelType: data.channelType as 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat',
-    channelUserId: data.channelUserId,
-    channelUserName: data.channelUserName,
-    isVerified: true,
-    createdAt: new Date().toISOString(),
-  });
-
-  // Delete the used code
-  await redis.del(key);
 
   channelLogger.info(
-    { userId, channelType: data.channelType, channelUserId: data.channelUserId },
-    'Account linked via code'
+    { userId, channelType: result.binding.channelType, channelUserId: result.binding.externalId },
+    'Account linked via code',
   );
-
   return { success: true };
-}
-
-function randomCode(length: number): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars (0/O, 1/I)
-  let code = '';
-  for (let i = 0; i < length; i++) {
-    code += chars[crypto.randomInt(0, chars.length)];
-  }
-  return code;
 }

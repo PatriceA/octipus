@@ -76,11 +76,16 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     code redemption flow, web `/link-account` page. Lazy backfill
     from legacy `users.channelBindings` JSONB column on first read.
 
+  **Done so far (continued).**
+  - Phase 2e (this PR): channel adapters swap to
+    `channelBindingManager.findUserRecordByExternalId`. O(1) on the
+    new `(channel_type, external_id)` unique index, with the
+    manager's JSONB fallback + lazy backfill so legacy bindings keep
+    resolving. `channels/linking.ts` is now a thin bridge over the
+    manager; codes live in `channel_link_codes` (Postgres, 15-min
+    TTL) instead of Redis. Phase 2 is closed.
+
   **Next.**
-  - Phase 2e — channel adapters (telegram / slack / whatsapp / teams)
-    swap `userRepository.findByChannelBinding` for
-    `channelBindingManager.findUserByExternalId`; on miss, mint a
-    pending link code and reply to the channel with a deep-link.
   - Phase 3 — Postgres RLS as defense-in-depth, master-key rotation
     tooling, bubblewrap/firejail shell sandbox, Docker-in-Docker
     per-user labels + network, optional org/workspace grouping layer
