@@ -1,8 +1,10 @@
 # Multi-User Architecture Plan
 
-> Status: **Phase 0 landed** — feature flag, Principal type, schema
-> additions, and shadow-mode audit middleware are in. All flags default
-> off so behavior matches v0 single-user. Phases 1–3 still pending.
+> Status: **Phase 0 + Phase 1a landed.** Phase 0 added the feature flag,
+> Principal type, schema additions, and shadow-mode audit middleware.
+> Phase 1a added scoped repositories with cross-tenant isolation
+> enforced in SQL, plus cross-tenant tests, and converted the
+> `/api/sessions` route as a proof point. Phases 1b/1c, 2, 3 pending.
 > Scope: extend Octipus from a single-tenant self-hosted instance into a
 > central backend serving multiple authenticated users (and, optionally,
 > organizations) with strict data, secret, and execution isolation.
@@ -28,6 +30,33 @@
 - Tests: principal helpers (8), `resourceTypeFromPath` (3), end-to-end
   audit middleware against ephemeral PGlite (7). Net +19 passing,
   zero regressions.
+
+## Phase 1a — what landed
+
+- `src/db/repositories/scoped.ts` — `scopedRepos(principal)` factory
+  returning `ScopedSessionRepo`, `ScopedMessageRepo`, `ScopedAgentRepo`,
+  `ScopedDocumentRepo`. Every default read filters by
+  `principal.userId`; cross-tenant reads return `null` / `[]` so the
+  caller can't distinguish from "row does not exist", blocking UUID
+  enumeration. Mutations check ownership in the WHERE clause and strip
+  `user_id` from caller-supplied patches. Admins get widened reads via
+  `isAdmin(principal)`; admin-only methods (`listAllAdmin`) throw for
+  non-admins.
+- Cross-tenant isolation tests (`scoped.isolation.test.ts`, 21 tests
+  against PGlite) cover every method on every scoped repo.
+- `/api/sessions` route fully converted: every handler now goes through
+  `scopedRepos(principal)`; the hand-rolled per-handler "is admin or
+  owner?" checks are gone — the scope IS the check.
+- Route-level isolation test (`sessions.isolation.test.ts`, 6 tests)
+  proves user A cannot read/list/mutate/delete user B's sessions or
+  messages through the actual Elysia handler.
+- `apiContext` now exposes `principal` to all routes (anonymous default
+  for unauthenticated requests).
+- Net +27 passing tests, zero regressions.
+
+Other routes (`/api/agents`, `/api/documents`, `/api/chat`,
+`/api/trajectories`, etc.) still use unscoped repos — that's the
+follow-up sweep before Phase 1b.
 
 ---
 
