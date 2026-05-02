@@ -100,11 +100,15 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     Postgres needs a non-superuser app role for enforcement to
     actually fire.
 
+  - Phase 3b-2 (this PR): extend RLS to the remaining user-owned
+    tables. Migration `0035` covers documents, agents, agent_events,
+    embeddings, hooks, hook_executions, pipelines, pipeline_stages,
+    notifications, trajectory_runs, swarm_nodes, recurring_tasks,
+    skill_permissions, permission_requests, plus messages and
+    pipeline_stages via FK subqueries. Every user-owned table in the
+    schema now has a policy — 19 in total.
+
   **Next.**
-  - Phase 3b-2 — extend RLS to remaining user-owned tables
-    (documents, agents, agent_events, embeddings, hooks,
-    hook_executions, pipelines, notifications, trajectory_runs,
-    swarm_nodes, recurring_tasks).
   - Phase 3c — per-user quotas (concurrent agents, daily token
     cap, API calls/min) + admin dashboard.
   - Phase 3d — impersonation flow with strong audit (admin enters
