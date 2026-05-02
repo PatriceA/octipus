@@ -18,6 +18,12 @@ export const hookExecutions = pgTable('hook_executions', {
   id: uuid('id').primaryKey().defaultRandom(),
   hookId: uuid('hook_id').references(() => hooks.id, { onDelete: 'cascade' }),
   recurringTaskId: uuid('recurring_task_id').references(() => recurringTasks.id, { onDelete: 'cascade' }),
+  /**
+   * Denormalized owner of the originating hook / recurring task. Lets the
+   * hook-execution feed be filtered per user without a join. Nullable in
+   * Phase 0; Phase 1 backfills from the parent hook/task.
+   */
+  userId: uuid('user_id'),
   source: executionSourceEnum('source').notNull(),
   status: executionStatusEnum('status').notNull(),
   triggerType: text('trigger_type'),
@@ -34,6 +40,7 @@ export const hookExecutions = pgTable('hook_executions', {
   recurringTaskIdIdx: index('hook_executions_recurring_task_id_idx').on(table.recurringTaskId),
   createdAtIdx: index('hook_executions_created_at_idx').on(table.createdAt),
   statusIdx: index('hook_executions_status_idx').on(table.status),
+  userIdIdx: index('hook_executions_user_id_idx').on(table.userId),
 }));
 
 export type HookExecution = typeof hookExecutions.$inferSelect;

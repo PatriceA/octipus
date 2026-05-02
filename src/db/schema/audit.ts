@@ -32,6 +32,9 @@ export const auditActionEnum = pgEnum('audit_action', [
   'gateway_auth_failure',
   'gateway_rate_limit',
   'gateway_connection_rejected',
+  // Multi-user phase 0 — generic HTTP request audit, written by the
+  // shadow-mode audit middleware on every state-changing API call.
+  'api_request',
 ]);
 
 export const auditLog = pgTable('audit_log', {

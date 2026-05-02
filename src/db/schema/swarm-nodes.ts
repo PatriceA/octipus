@@ -56,6 +56,12 @@ export interface SwarmChildResult {
 export const swarmNodes = pgTable('swarm_nodes', {
   id: text('id').primaryKey(), // = agents.id (1:1)
   rootSessionId: uuid('root_session_id').notNull(),
+  /**
+   * Owner of the swarm tree. Same value across every node sharing a root.
+   * Nullable in Phase 0 (back-compatible); Phase 1 enforces and uses it
+   * for the orphan reaper and per-user concurrency caps.
+   */
+  userId: text('user_id'),
   parentNodeId: text('parent_node_id'), // null for Orchestrator
   depth: integer('depth').notNull(),
   kind: swarmNodeKindEnum('kind').notNull(),
@@ -98,6 +104,7 @@ export const swarmNodes = pgTable('swarm_nodes', {
   parentIdx: index('swarm_nodes_parent_idx').on(t.parentNodeId),
   statusIdx: index('swarm_nodes_status_idx').on(t.status),
   briefHashIdx: index('swarm_nodes_brief_hash_idx').on(t.briefHash),
+  userIdx: index('swarm_nodes_user_id_idx').on(t.userId),
 }));
 
 export type SwarmNodeRecord = typeof swarmNodes.$inferSelect;
