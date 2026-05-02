@@ -116,6 +116,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       enabled: process.env.MULTIUSER === 'true',
       auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS === 'true',
+      rlsEnabled: process.env.MULTIUSER_RLS === 'true',
     },
     workspace: {
       rootPath: process.env.WORKSPACE_PATH || './workspace',
