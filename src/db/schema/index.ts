@@ -4,6 +4,7 @@ export * from './agent-events';
 export * from './agents';
 export * from './api-tokens';
 export * from './audit';
+export * from './channel-identities';
 export * from './cleanup-log';
 export * from './documents';
 export * from './embeddings';

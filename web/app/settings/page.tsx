@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  Key,
   MessageSquare,
   Phone,
   Plug,
@@ -11,6 +12,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { useState } from 'react';
+import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
 import { GeneralTab } from '@/components/settings/general-tab';
@@ -29,6 +31,7 @@ export default function SettingsPage() {
     { id: 'integrations', label: 'Integrations', icon: Plug },
     { id: 'channels', label: 'Channels', icon: MessageSquare },
     { id: 'security', label: 'Security', icon: Shield },
+    { id: 'api-tokens', label: 'API Tokens', icon: Key },
     { id: 'voice', label: 'Voice & Calls', icon: Phone },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'mobile', label: 'Mobile App', icon: Smartphone },
@@ -70,6 +73,7 @@ export default function SettingsPage() {
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'channels' && <ChannelsTab />}
           {activeTab === 'security' && <SecurityTab />}
+          {activeTab === 'api-tokens' && <ApiTokensTab />}
           {activeTab === 'voice' && <VoiceTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'mobile' && <MobileTab />}
