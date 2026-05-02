@@ -19,6 +19,7 @@ import { setupGatewayWebSocket } from './gateway-ws';
 import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
+import { adminRoutes } from './routes/admin';
 import { agentRoutes } from './routes/agents';
 import { apiTokenRoutes } from './routes/api-tokens';
 // Import routes
@@ -234,6 +235,7 @@ export function createServer() {
         .use(healthRoutes)
         .use(authRoutes)
         .use(apiTokenRoutes)
+        .use(adminRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
         .use(modelRoutes)
