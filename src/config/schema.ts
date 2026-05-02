@@ -226,6 +226,23 @@ export const swarmConfigSchema = z.object({
   }).default({}),
 });
 
+// Multi-user configuration schema
+//
+// Phase 0: feature flag is default-off. When `enabled` is false the server
+// behaves identically to the single-user past — including the MASTER_KEY
+// Bearer fallback in `src/api/server.ts`. When `enabled` is true (Phase 1+):
+// the fallback is suppressed, every request must carry a valid session
+// token, and every state-changing route must produce an audit row.
+//
+// The `auditShadow` sub-flag is independent: even with multiuser disabled
+// we want to start collecting audit data so operators can inspect it
+// before flipping the main flag.
+export const multiuserConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  auditShadow: z.boolean().default(true),
+  enforcePermissions: z.boolean().default(false),
+});
+
 // Workspace configuration schema
 export const workspaceConfigSchema = z.object({
   rootPath: z.string().default('./workspace'),
@@ -259,6 +276,7 @@ export const configSchema = z.object({
   orchestrator: orchestratorConfigSchema.default({}),
   cliModels: cliModelsConfigSchema.default({}),
   workspace: workspaceConfigSchema.default({}),
+  multiuser: multiuserConfigSchema.default({}),
   compaction: compactionConfigSchema.default({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
@@ -284,6 +302,7 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+export type MultiuserConfig = z.infer<typeof multiuserConfigSchema>;
 export type CompactionConfig = z.infer<typeof compactionConfigSchema>;
 export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;

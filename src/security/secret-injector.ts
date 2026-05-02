@@ -41,19 +41,27 @@ export async function injectSecrets(
     }
 
     try {
-      // Check access permission
-      const canAccess = await vault.canAccessByName(context.userId, secretName, {
-        toolId: context.toolId,
-        agentId: context.agentId,
-      });
+      // Phase 1b-1: scope-aware lookup. `getForAgent` tries user scope
+      // first, then system scope, applying the per-row tool/agent
+      // allowlist at each step. A null return means either no row
+      // exists or the allowlist denies this caller — either way the
+      // secret is not surfaced to the agent.
+      const value = await vault.getForAgent(
+        { userId: context.userId, toolId: context.toolId, agentId: context.agentId },
+        secretName,
+      );
 
-      if (!canAccess) {
+      if (value === null) {
+        // We can't tell from here whether the row was missing or the
+        // allowlist denied us — the vault treats both the same to avoid
+        // leaking the existence of secrets the caller can't access.
+        // Existence-vs-denial is logged inside the vault layer.
         securityLogger.warn(
           { userId: context.userId, secretName, toolId: context.toolId, agentId: context.agentId },
-          'Secret access denied'
+          'Secret unavailable (missing or access denied)'
         );
-        errors.push(`Access denied to secret: ${secretName}`);
-        replacements.set(fullMatch, '[ACCESS_DENIED]');
+        errors.push(`Secret not found or access denied: ${secretName}`);
+        replacements.set(fullMatch, '[SECRET_NOT_FOUND]');
 
         await auditRepository.log({
           userId: context.userId,
@@ -62,15 +70,6 @@ export async function injectSecrets(
           resourceId: secretName,
           details: { secretName, toolId: context.toolId, agentId: context.agentId, denied: true },
         });
-        continue;
-      }
-
-      // Get the secret value
-      const value = await vault.getByName(context.userId, secretName);
-
-      if (value === null) {
-        errors.push(`Secret not found: ${secretName}`);
-        replacements.set(fullMatch, '[SECRET_NOT_FOUND]');
         continue;
       }
 

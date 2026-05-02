@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
@@ -129,6 +129,32 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
  */
 export function generateTotpSecret(): string {
   return randomBytes(20).toString('base64');
+}
+
+/**
+ * Derive a 256-bit data-encryption key (DEK) via HKDF-SHA256.
+ *
+ * Used by the vault's per-user / per-scope key derivation (Phase 1b-2):
+ * the master key is the IKM, the principal's userId is the salt, and a
+ * versioned `info` string tags the use case so DEKs across different
+ * subsystems never collide.
+ *
+ * Deterministic — same `(masterKey, scope, userId)` triple always
+ * yields the same key, so existing ciphertexts remain decryptable
+ * across restarts without storing the DEK anywhere.
+ */
+export function deriveDek(
+  masterKey: Buffer,
+  scope: string,
+  userId: string,
+): Buffer {
+  const info = `octipus-vault-dek-v2:${scope}:${userId}`;
+  // Salt: per-user identifier (stable across the user's lifetime).
+  // Use a fixed salt prefix + userId so even brute-force key recovery
+  // requires the master key.
+  const salt = Buffer.from(`octipus-dek-salt-v2:${userId}`);
+  const buf = hkdfSync('sha256', masterKey, salt, info, 32);
+  return Buffer.from(buf);
 }
 
 /**

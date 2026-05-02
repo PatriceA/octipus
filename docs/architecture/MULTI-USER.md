@@ -1,9 +1,169 @@
 # Multi-User Architecture Plan
 
-> Status: **Design proposal** — branch `claude/multi-user-architecture-plan-baDCd`.
+> Status: **Phase 0 + Phase 1a landed.** Phase 0 added the feature flag,
+> Principal type, schema additions, and shadow-mode audit middleware.
+> Phase 1a added scoped repositories with cross-tenant isolation
+> enforced in SQL, plus cross-tenant tests, and converted the
+> `/api/sessions` route as a proof point. Phases 1b/1c, 2, 3 pending.
 > Scope: extend Octipus from a single-tenant self-hosted instance into a
 > central backend serving multiple authenticated users (and, optionally,
 > organizations) with strict data, secret, and execution isolation.
+
+## Phase 0 — what landed
+
+- `multiuser.{enabled,auditShadow,enforcePermissions}` config flags
+  (env: `MULTIUSER`, `MULTIUSER_AUDIT_SHADOW`,
+  `MULTIUSER_ENFORCE_PERMISSIONS`). Defaults: `false`, `true`, `false`.
+- `src/security/principal.ts` — `Principal` type + helpers
+  (`principalFromUser`, `principalFromMasterKey`, `ANONYMOUS_PRINCIPAL`,
+  `SYSTEM_PRINCIPAL`, `canActOnUser`).
+- `src/api/server.ts` — auth `.derive()` now returns `principal`
+  alongside the legacy `user` field; `MASTER_KEY` Bearer fallback is
+  suppressed when `multiuser.enabled === true`.
+- Migration `0029_multiuser_phase0.sql` — adds nullable owner columns
+  (`embeddings.user_id`, `agent_events.user_id`, `swarm_nodes.user_id`,
+  `hook_executions.user_id`, `users.org_id`) plus indexes, and the
+  `audit_action='api_request'` enum value.
+- `src/api/middleware/audit-shadow.ts` — Elysia plugin that writes one
+  `audit_log` row per state-changing API request, gated on
+  `multiuser.auditShadow`. Never blocks: any error is swallowed.
+- Tests: principal helpers (8), `resourceTypeFromPath` (3), end-to-end
+  audit middleware against ephemeral PGlite (7). Net +19 passing,
+  zero regressions.
+
+## Phase 1a — what landed
+
+- `src/db/repositories/scoped.ts` — `scopedRepos(principal)` factory
+  returning `ScopedSessionRepo`, `ScopedMessageRepo`, `ScopedAgentRepo`,
+  `ScopedDocumentRepo`. Every default read filters by
+  `principal.userId`; cross-tenant reads return `null` / `[]` so the
+  caller can't distinguish from "row does not exist", blocking UUID
+  enumeration. Mutations check ownership in the WHERE clause and strip
+  `user_id` from caller-supplied patches. Admins get widened reads via
+  `isAdmin(principal)`; admin-only methods (`listAllAdmin`) throw for
+  non-admins.
+- Cross-tenant isolation tests (`scoped.isolation.test.ts`, 21 tests
+  against PGlite) cover every method on every scoped repo.
+- `/api/sessions` route fully converted: every handler now goes through
+  `scopedRepos(principal)`; the hand-rolled per-handler "is admin or
+  owner?" checks are gone — the scope IS the check.
+- Route-level isolation test (`sessions.isolation.test.ts`, 6 tests)
+  proves user A cannot read/list/mutate/delete user B's sessions or
+  messages through the actual Elysia handler.
+- `apiContext` now exposes `principal` to all routes (anonymous default
+  for unauthenticated requests).
+- Net +27 passing tests, zero regressions.
+
+## Phase 1a — sweep complete
+
+The follow-up sweep converted every per-user-data route to
+`scopedRepos(principal)`:
+
+- **agents + documents** — DB-history reads scoped; documents 403→404
+  to prevent ID enumeration.
+- **notifications** — fixed cross-tenant `markRead` (any user could
+  flip any notification's read flag); list/count already user-scoped.
+- **trajectories** — fixed cross-tenant list (every user's runs were
+  visible); admins still see all.
+- **chat** — `getPendingApprovals` was global (leaked pending
+  approvals between users); `resolveApproval` had no ownership check.
+  ApprovalRequest gained `userId` + `sessionId`; `peek(requestId)`
+  added so callers verify ownership before resolving.
+- **hooks + recurring-tasks** — all per-id endpoints (GET, PATCH,
+  DELETE, toggle, test, executions) use scoped lookups.
+- **pipelines** — `findById` for pipelines; **closed two complete-bypass
+  gaps** on `PUT /pipelines/templates/:id` and `DELETE
+  /pipelines/templates/:id` (pre-Phase-1a these had NO auth check —
+  any authenticated user could mutate any template, including system
+  presets).
+
+ScopedRepos bundle now exposes: `sessions, messages, agents, documents,
+notifications, trajectories, hooks, pipelines`. Every member is
+Principal-bound; cross-tenant reads return null/[] (collapsing 403/404
+to 404 across the board).
+
+Cumulative test count: **1061 pass / 9 fail / 62 skip** (the 9 are the
+same pre-existing StdioTransport failures from before Phase 0). Net
++24 cross-tenant isolation tests across hooks, pipelines, chat,
+notifications, trajectories — all backed by ephemeral PGlite, no
+Docker required.
+
+Routes that intentionally stay unscoped: `/api/auth/*`, `/api/health/*`,
+`/api/webhooks/*`, `/api/oauth/*` (different threat models).
+
+## Phase 1b — vault scoping, per-user DEKs, WorkspaceFS
+
+Three commits, each independently shippable:
+
+### Phase 1b-1 — vault scope enum + strict reads
+- New `vault.scope` enum (`system | user | workspace`) with backfill:
+  legacy `user_id='system'` → `scope='system'`; everything else →
+  `scope='user'`. NOT NULL after backfill.
+- `getSystemSecret(name)` is now strict — pre-Phase-1b it had a
+  fallback that scanned ALL users' secrets, leaking another user's
+  private key under the right conditions. The fallback is gone.
+- New `vault.getForAgent({ userId, toolId, agentId }, name)` is the
+  scope-aware lookup the secret-injector uses: user → system, with
+  the per-row `allowed_tools` / `allowed_agents` allowlist applied.
+- 12 PGlite-backed isolation tests covering scope reads,
+  cross-tenant denial, allowlist enforcement.
+
+### Phase 1b-2 — per-user data-encryption keys (DEK)
+- New `vault.key_version` column. v1 = legacy PBKDF2 (single key for
+  every row). v2 = HKDF(masterKey, salt=userId, info=`scope:userId`).
+- `deriveDek(masterKey, scope, userId)` in `src/utils/crypto.ts` —
+  deterministic per (master, scope, user) triple. Same call always
+  yields the same key, so DEKs are never persisted.
+- New writes default to v2. Reads dispatch on `key_version`, fall
+  through legacy schemes if needed, and opportunistically re-encrypt
+  to v2 on success (no batch-rotation tool yet — separate commit).
+- Cross-user isolation: alice's ciphertext can't be decrypted with
+  bob's DEK even if the master key is constant.
+- 9 unit + integration tests against PGlite.
+
+### Phase 1b-3 — WorkspaceFS path sandbox
+- New `WorkspaceFS.forPrincipal(p)` in `src/security/workspace-fs.ts`.
+  Per-user filesystem root at
+  `$DATA_ROOT/users/{user_id}/workspaces/{workspace_id}/files/`.
+- `resolve(userPath)` enforces:
+  - relative paths land under root
+  - absolute paths must be under root (or an extra-allowed prefix)
+  - `..` traversal that escapes the root → throws
+  - symlinks pointing outside the root → throws (via `realpath`)
+  - null bytes / non-string inputs → throws
+- Cross-tenant property: `aliceFs.resolve('foo')` and
+  `bobFs.resolve('foo')` produce paths in disjoint trees; alice
+  cannot reach bob's root via `../` traversal.
+- 19 unit tests covering construction, relative paths, traversal,
+  absolute paths, symlinks, cross-tenant disjoint roots, and the
+  `extraAllowedPrefixes` escape hatch.
+
+Phase 1b cumulative: **1101 pass / 9 fail / 62 skip** (the 9 are still
+the pre-existing StdioTransport tests). Net +40 isolation tests across
+1b-1, 1b-2, 1b-3.
+
+### Phase 1b — cleanup landed
+
+- **Vault key rotation script** (`scripts/rotate-vault-keys.ts`).
+  Walks every `key_version=1` row and forces the lazy v1 → v2
+  re-encrypt that `vault.get` does on read. `--dry-run` reports
+  candidates without writing; `--batch=N` tunes batch size; rows that
+  fail to decrypt stay at v1 and are logged so an operator can
+  investigate without aborting the run. 3 PGlite tests.
+- **Filesystem tool wiring**: `src/tools/filesystem/index.ts`'s
+  `validatePath` now delegates to `WorkspaceFS.forAgent(context)`.
+  Same call site, same exceptions; behavior diverges by config:
+    - `multiuser.enabled=false` → flat root at `config.workspace.rootPath`
+      (legacy single-user behavior, byte-for-byte identical).
+    - `multiuser.enabled=true` → per-user root at
+      `<workspace.rootPath>/users/{userId}/workspaces/default/files`.
+  Both modes preserve `additionalPaths` and the legacy `/tmp/assistant-`
+  prefix. `WorkspaceFS.withRoot` and `forAgent` factories added; new
+  tests cover the flat root path and the legacy prefix back-compat.
+
+Phase 1b totals: **1107 pass / 9 fail / 62 skip** (the 9 are still the
+pre-existing StdioTransport tests). Net +46 isolation tests across
+1b-1, 1b-2, 1b-3, plus the rotation + filesystem cleanup.
 
 ---
 

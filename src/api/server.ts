@@ -6,9 +6,16 @@ import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
 import { getSessionManager } from '@/security/auth/session';
+import {
+  ANONYMOUS_PRINCIPAL,
+  type Principal,
+  principalFromMasterKey,
+  principalFromUser,
+} from '@/security/principal';
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { setupGatewayWebSocket } from './gateway-ws';
+import { auditShadowMiddleware } from './middleware/audit-shadow';
 import { authGuard } from './middleware/auth-guard';
 import { rateLimitMiddleware } from './middleware/rate-limit';
 import { agentRoutes } from './routes/agents';
@@ -108,9 +115,20 @@ export function createServer() {
       return { error: 'Internal server error' };
     })
     // Auth middleware helper
-    .derive(async ({ request, set }) => {
+    //
+    // Produces three context fields:
+    //   - `user`      : legacy plain-object form, kept for backwards compat
+    //                   with every existing route that reads `ctx.user`.
+    //   - `session`   : the validated auth-session record (or null).
+    //   - `principal` : the Principal type used by the multi-user code path.
+    //                   Phase 0: populated alongside `user` for every
+    //                   request; downstream code may opt in.
+    //                   Phase 1: becomes the only auth signal and `user`
+    //                   gets removed.
+    .derive(async ({ request }) => {
       const authHeader = request.headers.get('authorization');
       const sessionManager = getSessionManager();
+      const multiuserEnabled = !!getConfig().multiuser?.enabled;
 
       let token: string | undefined;
 
@@ -126,50 +144,62 @@ export function createServer() {
       }
 
       if (!token) {
-        return { user: null, session: null };
+        return { user: null, session: null, principal: ANONYMOUS_PRINCIPAL as Principal };
       }
       const session = await sessionManager.validate(token);
 
       if (!session) {
-        // Fallback: validate against MASTER_KEY for API/MCP access
-        const masterKey = process.env.MASTER_KEY;
-        if (masterKey && secureCompare(token, masterKey)) {
-          apiLogger.warn(
-            { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
-            'MASTER_KEY authentication used — admin user access'
-          );
-          // Resolve to the first admin user so UUID-typed queries work
-          const db = getDb();
-          const [adminUser] = await db.select({ id: users.id, username: users.username })
-            .from(users).where(eq(users.isAdmin, true)).orderBy(users.createdAt).limit(1);
-          if (adminUser) {
+        // MASTER_KEY Bearer fallback — single-user / MCP convenience.
+        // Disabled when multi-user mode is on (Phase 1+ removes it).
+        if (!multiuserEnabled) {
+          const masterKey = process.env.MASTER_KEY;
+          if (masterKey && secureCompare(token, masterKey)) {
+            apiLogger.warn(
+              { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
+              'MASTER_KEY authentication used — admin user access'
+            );
+            // Resolve to the first admin user so UUID-typed queries work
+            const db = getDb();
+            const [adminUser] = await db.select({ id: users.id, username: users.username })
+              .from(users).where(eq(users.isAdmin, true)).orderBy(users.createdAt).limit(1);
+            if (adminUser) {
+              const userObj = { id: adminUser.id, username: adminUser.username, isAdmin: true };
+              return {
+                user: userObj,
+                session: null,
+                principal: principalFromMasterKey(userObj),
+              };
+            }
+            // Fallback if no admin user exists yet — keep legacy 'system' shape.
+            const fallback = { id: 'system', username: 'system', isAdmin: true };
             return {
-              user: { id: adminUser.id, username: adminUser.username, isAdmin: true },
+              user: fallback,
               session: null,
+              principal: principalFromMasterKey(fallback),
             };
           }
-          // Fallback if no admin user exists yet
-          return {
-            user: { id: 'system', username: 'system', isAdmin: true },
-            session: null,
-          };
         }
-        return { user: null, session: null };
+        return { user: null, session: null, principal: ANONYMOUS_PRINCIPAL as Principal };
       }
 
+      const userObj = {
+        id: session.userId,
+        username: session.username,
+        isAdmin: session.isAdmin,
+      };
       return {
-        user: {
-          id: session.userId,
-          username: session.username,
-          isAdmin: session.isAdmin,
-        },
+        user: userObj,
         session,
+        principal: principalFromUser(userObj, token),
       };
     })
     // Rate limiting on auth endpoints (must be before routes)
     .use(rateLimitMiddleware)
     // Auth guard — reject unauthenticated requests to protected routes
     .use(authGuard)
+    // Multi-user phase 0 — shadow-mode audit middleware. Logs one row per
+    // state-changing request. Never blocks; gated by config.multiuser.auditShadow.
+    .use(auditShadowMiddleware)
     // Routes
     .group('/api', (app) =>
       app

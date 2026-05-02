@@ -4,28 +4,42 @@ import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
 import { listAvailableTemplates } from '@/core/orchestrator/templates';
 import { getDb } from '@/db/postgres';
+import { scopedRepos } from '@/db/repositories/scoped';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
+import { isAuthenticated } from '@/security/principal';
 
+/**
+ * Pipelines — Phase 1a multi-user conversion.
+ *
+ * Pipeline rows are user-owned: scoped findById guards GET, /stop, and
+ * /approve. Templates are dual-mode: presets are visible to everyone but
+ * read-only; private templates belong to one user. The previous
+ * PUT/DELETE on templates had NO auth check at all — any authenticated
+ * caller could mutate any template. Phase 1a routes the writes through
+ * `scopedRepos(principal).pipelines.findOwnedTemplateById` first; presets
+ * (read-only) and other users' templates are rejected as "not found".
+ */
 export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   .use(apiContext)
 
   // List user's pipelines
   .get(
     '/',
-    async ({ user }) => {
-      if (!user) {
+    async ({ user, principal }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      // System user (MASTER_KEY) is not in DB — return all pipelines for admins
-      if (user.id === 'system') {
-        const pipelineManager = getPipelineManager();
+      const pipelineManager = getPipelineManager();
+
+      // Admins see everything (operational triage); regular users see
+      // only their own. The legacy 'system' pseudo-id (MASTER_KEY) only
+      // appears when MULTIUSER=false.
+      if (user.isAdmin || user.id === 'system') {
         return { pipelines: await pipelineManager.listAll() };
       }
 
-      const pipelineManager = getPipelineManager();
       const list = await pipelineManager.listByUser(user.id);
-
       return { pipelines: list };
     },
     { detail: { tags: ['pipelines'] } },
@@ -34,24 +48,18 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   // Get pipeline detail with stages
   .get(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const pipelineManager = getPipelineManager();
-      const pipeline = await pipelineManager.getPipeline(params.id);
-
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
 
-      if (!user.isAdmin && pipeline.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+      const pipelineManager = getPipelineManager();
       const stages = await pipelineManager.getStages(params.id);
-
       return { pipeline, stages };
     },
     {
@@ -63,18 +71,24 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   // Approve a pipeline stage
   .post(
     '/:id/approve/:stageId',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      // Approval is handled via the orchestrator's approval system
-      // This endpoint exists for REST fallback (WebSocket is primary)
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) {
+        return { error: 'Pipeline not found' };
+      }
+
+      // Approval is handled via the orchestrator's approval system;
+      // this endpoint exists as a REST fallback. Filter pending
+      // approvals to the principal so we can't peek at someone else's.
       const { getOrchestratorService } = await import('@/core/orchestrator');
       const orchestrator = getOrchestratorService();
-      const approvals = orchestrator.getPendingApprovals();
-
-      // Find matching approval for this pipeline
+      const approvals = user.isAdmin
+        ? orchestrator.getPendingApprovals()
+        : orchestrator.getPendingApprovals(user.id);
       const found = approvals.length > 0;
 
       if (!found) {
@@ -92,24 +106,18 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   // Stop a pipeline
   .post(
     '/:id/stop',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const pipelineManager = getPipelineManager();
-      const pipeline = await pipelineManager.getPipeline(params.id);
-
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
       if (!pipeline) {
         return { error: 'Pipeline not found' };
       }
 
-      if (!user.isAdmin && pipeline.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+      const pipelineManager = getPipelineManager();
       const stopped = await pipelineManager.stop(params.id);
-
       return { stopped };
     },
     {
@@ -202,8 +210,16 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   // Update pipeline template
   .put(
     '/templates/:id',
-    async ({ user, params, body }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+
+      // Pre-Phase-1a this endpoint had NO auth check — any authenticated
+      // user could mutate any template, including system presets. Now the
+      // scoped lookup rejects presets (they don't carry a userId match)
+      // and other users' templates as "not found".
+      const owned = await scopedRepos(principal).pipelines.findOwnedTemplateById(params.id);
+      if (!owned) return { error: 'Template not found' };
+
       const db = getDb();
       const steps = (body.steps || []).map(s => ({
         name: s.name,
@@ -248,8 +264,13 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   // Delete pipeline template
   .delete(
     '/templates/:id',
-    async ({ user, params }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+
+      // Same gap as PUT — pre-Phase-1a had no auth check.
+      const owned = await scopedRepos(principal).pipelines.findOwnedTemplateById(params.id);
+      if (!owned) return { error: 'Template not found' };
+
       const db = getDb();
       const result = await db.delete(pipelineTemplates).where(eq(pipelineTemplates.id, params.id)).returning();
       return { deleted: result.length > 0 };

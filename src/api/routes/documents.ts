@@ -6,17 +6,26 @@ import { extname, join, resolve } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { getDocumentQueue } from '@/core/documents/queue';
-import { documentRepository } from '@/db/repositories/document-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
 const logger = apiLogger.child({ component: 'documents-route' });
 
+/**
+ * Documents — Phase 1a multi-user conversion.
+ *
+ * Reads/writes go through `scopedRepos(principal).documents`. Cross-tenant
+ * access is silently surfaced as 404 instead of the previous 403, which
+ * stops UUID enumeration: an attacker can no longer tell whether a
+ * document exists by probing IDs they don't own.
+ */
 export const documentRoutes = new Elysia({ prefix: '/documents' })
   .use(apiContext)
 
   // Upload documents
-  .post('/upload', async ({ user, body, set }) => {
-    if (!user) {
+  .post('/upload', async ({ user, principal, body, set }) => {
+    if (!user || !isAuthenticated(principal)) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
@@ -33,6 +42,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
 
     const files = Array.isArray(body.files) ? body.files : [body.files];
     const results: Array<{ id: string; filename: string; status: string }> = [];
+    const docs = scopedRepos(principal).documents;
 
     for (const file of files) {
       if (!file || !(file instanceof Blob)) {
@@ -54,9 +64,8 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       const buffer = Buffer.from(await file.arrayBuffer());
       await Bun.write(storagePath, buffer);
 
-      // Create DB record
-      const doc = await documentRepository.create({
-        userId: user.id,
+      // Create DB record — scoped repo pins the doc to the principal.
+      const doc = await docs.create({
         filename: uniqueFilename,
         originalName,
         mimeType: file.type || 'application/octet-stream',
@@ -81,8 +90,8 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
   })
 
   // List documents for authenticated user
-  .get('/', async ({ user, query, set }) => {
-    if (!user) {
+  .get('/', async ({ user, principal, query, set }) => {
+    if (!user || !isAuthenticated(principal)) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
@@ -90,21 +99,19 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     const limit = query.limit ? parseInt(query.limit, 10) : 50;
     const category = query.category;
     const status = query.status;
+    const docs = scopedRepos(principal).documents;
 
-    let docs;
-    if (category) {
-      docs = await documentRepository.findByUserAndCategory(user.id, category, limit);
-    } else {
-      docs = await documentRepository.findByUser(user.id, limit);
-    }
+    let rows = category
+      ? await docs.listOwnByCategory(category, limit)
+      : await docs.listOwn(limit);
 
     // Filter by status if provided
     if (status) {
-      docs = docs.filter(d => d.status === status);
+      rows = rows.filter(d => d.status === status);
     }
 
     return {
-      documents: docs.map(d => ({
+      documents: rows.map(d => ({
         id: d.id,
         originalName: d.originalName,
         mimeType: d.mimeType,
@@ -127,22 +134,16 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
   })
 
   // Get document details
-  .get('/:id', async ({ user, params, set }) => {
-    if (!user) {
+  .get('/:id', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
-    const doc = await documentRepository.findById(params.id);
+    const doc = await scopedRepos(principal).documents.findById(params.id);
     if (!doc) {
       set.status = 404;
       return { error: 'Document not found' };
-    }
-
-    // Ensure user owns the document (or is admin)
-    if (doc.userId !== user.id && !user.isAdmin) {
-      set.status = 403;
-      return { error: 'Access denied' };
     }
 
     return {
@@ -166,21 +167,17 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
   })
 
   // Delete a document
-  .delete('/:id', async ({ user, params, set }) => {
-    if (!user) {
+  .delete('/:id', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
-    const doc = await documentRepository.findById(params.id);
+    const repo = scopedRepos(principal).documents;
+    const doc = await repo.findById(params.id);
     if (!doc) {
       set.status = 404;
       return { error: 'Document not found' };
-    }
-
-    if (doc.userId !== user.id && !user.isAdmin) {
-      set.status = 403;
-      return { error: 'Access denied' };
     }
 
     // Remove from queue if still queued
@@ -196,8 +193,8 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       }
     }
 
-    // Delete from DB
-    await documentRepository.delete(params.id);
+    // Delete from DB — repo enforces ownership a second time.
+    await repo.delete(params.id);
     logger.info({ documentId: params.id, filename: doc.originalName }, 'Document deleted');
 
     return { success: true };
@@ -207,21 +204,17 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
   })
 
   // Cancel processing of a document
-  .post('/:id/cancel', async ({ user, params, set }) => {
-    if (!user) {
+  .post('/:id/cancel', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
 
-    const doc = await documentRepository.findById(params.id);
+    const repo = scopedRepos(principal).documents;
+    const doc = await repo.findById(params.id);
     if (!doc) {
       set.status = 404;
       return { error: 'Document not found' };
-    }
-
-    if (doc.userId !== user.id && !user.isAdmin) {
-      set.status = 403;
-      return { error: 'Access denied' };
     }
 
     const queue = getDocumentQueue();
@@ -229,14 +222,14 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     if (doc.status === 'queued') {
       // Remove from queue and mark as failed/cancelled
       queue.removeFromQueue(params.id);
-      await documentRepository.updateStatus(params.id, 'failed', 'Cancelled by user');
+      await repo.updateStatus(params.id, 'failed', 'Cancelled by user');
       logger.info({ documentId: params.id }, 'Queued document cancelled');
       return { success: true, action: 'removed_from_queue' };
     }
 
     if (doc.status === 'processing') {
       // Can't abort mid-processing, but mark it so the user knows
-      await documentRepository.updateStatus(params.id, 'failed', 'Cancelled by user');
+      await repo.updateStatus(params.id, 'failed', 'Cancelled by user');
       logger.info({ documentId: params.id }, 'Processing document marked as cancelled');
       return { success: true, action: 'marked_cancelled' };
     }

@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const credentialTypeEnum = pgEnum('credential_type', [
   'api_key',
@@ -9,15 +9,56 @@ export const credentialTypeEnum = pgEnum('credential_type', [
   'other',
 ]);
 
+/**
+ * Vault scope — determines who can read a secret and how it's resolved
+ * during secret injection.
+ *
+ *   - `system`    : app-level credentials (LLM provider keys, OAuth client
+ *                   secrets, …). Visible to system-scoped tooling and to
+ *                   any user-scoped agent that doesn't override the same
+ *                   secret name.
+ *   - `user`      : owned by exactly one user (`user_id`). The default.
+ *   - `workspace` : owned by a specific workspace within a user. Reserved
+ *                   for Phase 2 multi-workspace support; written here so
+ *                   the migration doesn't have to touch the enum twice.
+ *
+ * Phase 1b-1 introduces the column with a backfill: rows with the legacy
+ * `user_id = 'system'` sentinel become `scope = 'system'`; everything
+ * else becomes `scope = 'user'`. Reads are now strict — `system`-scope
+ * lookups only return system rows, no more fallback into user-owned
+ * secrets (that fallback was a cross-tenant leak).
+ */
+export const vaultScopeEnum = pgEnum('vault_scope', ['system', 'user', 'workspace']);
+
 export const vault = pgTable('vault', {
   id: uuid('id').primaryKey().defaultRandom(),
-  userId: text('user_id').notNull(), // UUID for user credentials, 'system' for app-level credentials
+  /**
+   * Owner. UUID for user/workspace scopes; the literal sentinel string
+   * `'system'` for system-scoped rows (kept for backwards compat with
+   * pre-Phase-1b inserts that don't yet pass `scope`). New code should
+   * set `scope` explicitly and use UUIDs only for user/workspace rows.
+   */
+  userId: text('user_id').notNull(),
+  /**
+   * Scope discriminator. Defaults to 'user' for new inserts that don't
+   * set it; the migration backfills existing rows.
+   */
+  scope: vaultScopeEnum('scope').default('user').notNull(),
   name: text('name').notNull(),
   credentialType: credentialTypeEnum('credential_type').notNull(),
   // Encrypted with AES-256-GCM
   encryptedValue: text('encrypted_value').notNull(),
   encryptionIv: text('encryption_iv').notNull(),
   encryptionAuthTag: text('encryption_auth_tag').notNull(),
+  /**
+   * Key derivation version.
+   *   1 = legacy PBKDF2(masterKey, fixed salt) — same key for every row.
+   *   2 = HKDF(masterKey, salt=userId, info=scope+userId) — per-(scope,user)
+   *       DEK. New writes use this; reads of v1 rows still work and are
+   *       opportunistically re-encrypted to v2 on the next access (in a
+   *       follow-up commit).
+   */
+  keyVersion: integer('key_version').default(1).notNull(),
   // Optional metadata (not encrypted)
   description: text('description'),
   tags: text('tags').array().default([]),
@@ -36,7 +77,10 @@ export const vault = pgTable('vault', {
   userIdIdx: index('vault_user_id_idx').on(table.userId),
   nameIdx: index('vault_name_idx').on(table.name),
   typeIdx: index('vault_type_idx').on(table.credentialType),
+  scopeIdx: index('vault_scope_idx').on(table.scope),
 }));
+
+export type VaultScope = typeof vaultScopeEnum.enumValues[number];
 
 export interface VaultMetadata {
   service?: string;

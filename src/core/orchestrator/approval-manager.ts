@@ -6,6 +6,14 @@ import type { OrchestratorEvent } from './service';
 
 export interface ApprovalRequest {
   id: string;
+  /**
+   * Principal that owns this approval. Phase 1a: required so the chat
+   * route can filter pending approvals per-user and reject cross-tenant
+   * resolveApproval calls. Older callers reading `pendingApprovals.values()`
+   * will see this field; the field is always populated by `requestApproval`.
+   */
+  userId: string;
+  sessionId: string;
   summary: string;
   question: string;
   options?: string[];
@@ -48,6 +56,8 @@ export class ApprovalManager {
     return new Promise<unknown>((resolve) => {
       const approval: ApprovalRequest = {
         id: requestId,
+        userId: context.userId,
+        sessionId: context.sessionId,
         summary,
         question,
         options,
@@ -129,9 +139,23 @@ export class ApprovalManager {
   }
 
   /**
-   * Get all pending approvals.
+   * Get pending approvals. Without arguments returns the global list
+   * (used by admin tooling and the existing service signature). Pass
+   * `forUserId` to scope to a single user — the chat route uses this
+   * to prevent leaking pending approval prompts across tenants.
    */
-  getPendingApprovals(): ApprovalRequest[] {
-    return [...this.pendingApprovals.values()];
+  getPendingApprovals(forUserId?: string): ApprovalRequest[] {
+    const all = [...this.pendingApprovals.values()];
+    if (!forUserId) return all;
+    return all.filter((a) => a.userId === forUserId);
+  }
+
+  /**
+   * Look up a single pending approval by id without resolving it.
+   * Used by the chat route to verify the principal owns the request
+   * before forwarding the approve/deny decision to `resolveApproval`.
+   */
+  peek(requestId: string): ApprovalRequest | null {
+    return this.pendingApprovals.get(requestId) ?? null;
   }
 }
