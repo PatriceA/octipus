@@ -88,6 +88,79 @@ function inferScope(userId: string): VaultScope {
   return userId === 'system' ? 'system' : 'user';
 }
 
+/**
+ * Re-encrypt a single vault row from the OLD master key to a NEW one.
+ *
+ * Used by `scripts/rotate-master-key.ts` and exposed here so the
+ * crypto plumbing has a single home. Both master keys are passed
+ * explicitly — this function deliberately does NOT touch the
+ * cached module-level keys, so it can run safely while a normal
+ * server is not yet aware of the new key.
+ *
+ * The re-encryption path is identical to the lazy v1→v2 upgrade in
+ * `vault.get` but with a different DEK derivation: the old DEK is
+ * derived from `oldMasterKey`, the new DEK from `newMasterKey`. The
+ * scope+userId pair stays the same so existing per-(scope,user)
+ * isolation is preserved across the rotation.
+ *
+ * Returns:
+ *   - 'rotated'   on a successful rewrite (default; row was at v2
+ *                 and old master decrypted it).
+ *   - 'skipped'   if the row was already encrypted under the new
+ *                 master (happens on a re-run; the function is
+ *                 idempotent).
+ *   - 'failed'    on decrypt failure with both masters.
+ *
+ * Errors raised by Postgres on the UPDATE are not caught — the
+ * caller (rotation script) reports per-row failures and moves on.
+ */
+export async function rotateVaultRowMasterKey(
+  rowId: string,
+  oldMasterKey: Buffer,
+  newMasterKey: Buffer,
+): Promise<'rotated' | 'skipped' | 'failed'> {
+  const db = getDb();
+  const [row] = await db.select().from(vault).where(eq(vault.id, rowId)).limit(1);
+  if (!row) return 'failed';
+
+  const oldDek = deriveDek(oldMasterKey, row.scope, row.userId);
+  const newDek = deriveDek(newMasterKey, row.scope, row.userId);
+
+  const encData = {
+    ciphertext: row.encryptedValue,
+    iv: row.encryptionIv,
+    authTag: row.encryptionAuthTag,
+  };
+
+  // Try the OLD master first. If it decrypts → re-encrypt with new.
+  let plaintext: string | null = null;
+  try {
+    plaintext = decrypt(encData, oldDek);
+  } catch {
+    // Idempotency: maybe this row was already rotated by an earlier
+    // run that crashed mid-batch. Try decrypting with the NEW key —
+    // success means there's nothing to do.
+    try {
+      decrypt(encData, newDek);
+      return 'skipped';
+    } catch {
+      return 'failed';
+    }
+  }
+
+  const reEncrypted = encrypt(plaintext, newDek);
+  await db.update(vault).set({
+    encryptedValue: reEncrypted.ciphertext,
+    encryptionIv: reEncrypted.iv,
+    encryptionAuthTag: reEncrypted.authTag,
+    keyVersion: CURRENT_KEY_VERSION,
+    updatedAt: new Date(),
+  }).where(eq(vault.id, rowId));
+
+  return 'rotated';
+}
+
+
 export class Vault {
   private get db() { return getDb(); }
 
