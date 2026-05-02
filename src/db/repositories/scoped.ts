@@ -40,7 +40,9 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { agents, type AgentRecord, type NewAgentRecord } from '../schema/agents';
 import { documents, type DocumentRecord, type NewDocumentRecord } from '../schema/documents';
 import { messages, type Message, type NewMessage } from '../schema/messages';
+import { notifications, type Notification } from '../schema/notifications';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
+import { trajectoryRuns, type TrajectoryRunRecord } from '../schema/trajectory-runs';
 import { type Principal, isAdmin, isAuthenticated } from '@/security/principal';
 import { getDb } from '../postgres';
 
@@ -378,6 +380,113 @@ export class ScopedDocumentRepo {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Notifications
+// ─────────────────────────────────────────────────────────────────────
+
+export class ScopedNotificationRepo {
+  constructor(private readonly principal: Principal) {
+    requireAuth(principal);
+  }
+
+  private get db() { return getDb(); }
+
+  async list(limit = 50, offset = 0): Promise<Notification[]> {
+    return this.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, this.principal.userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async unreadCount(): Promise<number> {
+    const rows = await this.db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(and(eq(notifications.userId, this.principal.userId), eq(notifications.read, false)));
+    return rows.length;
+  }
+
+  /**
+   * Mark a single notification read — only when the principal owns it.
+   * Returns true on success; false if the row is missing or owned by
+   * another user (cross-tenant attempts are silent no-ops).
+   */
+  async markRead(id: string): Promise<boolean> {
+    const where = isAdmin(this.principal)
+      ? eq(notifications.id, id)
+      : and(eq(notifications.id, id), eq(notifications.userId, this.principal.userId));
+    const result = await this.db
+      .update(notifications)
+      .set({ read: true })
+      .where(where)
+      .returning();
+    return result.length > 0;
+  }
+
+  /** Mark every unread notification for the principal as read. */
+  async markAllRead(): Promise<void> {
+    await this.db
+      .update(notifications)
+      .set({ read: true })
+      .where(and(
+        eq(notifications.userId, this.principal.userId),
+        eq(notifications.read, false),
+      ));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Trajectories
+// ─────────────────────────────────────────────────────────────────────
+
+export interface TrajectoryFilter {
+  outcome?: 'success' | 'failure' | 'partial' | 'cancelled';
+  from?: Date;
+  to?: Date;
+  limit?: number;
+}
+
+export class ScopedTrajectoryRepo {
+  constructor(private readonly principal: Principal) {
+    requireAuth(principal);
+  }
+
+  private get db() { return getDb(); }
+
+  /**
+   * List trajectory runs. Non-admins see only their own runs. Admins
+   * see everyone's — these audit logs are operationally useful, and an
+   * admin browsing them is intentional.
+   */
+  async list(filter: TrajectoryFilter = {}): Promise<TrajectoryRunRecord[]> {
+    const conds = [];
+    if (!isAdmin(this.principal)) {
+      conds.push(eq(trajectoryRuns.userId, this.principal.userId));
+    }
+    if (filter.outcome) conds.push(eq(trajectoryRuns.outcome, filter.outcome));
+    if (filter.from) conds.push(sql`${trajectoryRuns.startedAt} >= ${filter.from}`);
+    if (filter.to)   conds.push(sql`${trajectoryRuns.startedAt} <= ${filter.to}`);
+
+    return this.db
+      .select()
+      .from(trajectoryRuns)
+      .where(conds.length ? and(...conds) : undefined)
+      .orderBy(desc(trajectoryRuns.startedAt))
+      .limit(filter.limit ?? 100);
+  }
+
+  async findById(id: string): Promise<TrajectoryRunRecord | null> {
+    const where = isAdmin(this.principal)
+      ? eq(trajectoryRuns.id, id)
+      : and(eq(trajectoryRuns.id, id), eq(trajectoryRuns.userId, this.principal.userId));
+    const row = await this.db.select().from(trajectoryRuns).where(where).limit(1);
+    return row[0] ?? null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Bundle factory
 // ─────────────────────────────────────────────────────────────────────
 
@@ -386,6 +495,8 @@ export interface ScopedRepos {
   messages: ScopedMessageRepo;
   agents: ScopedAgentRepo;
   documents: ScopedDocumentRepo;
+  notifications: ScopedNotificationRepo;
+  trajectories: ScopedTrajectoryRepo;
 }
 
 /**
@@ -402,5 +513,7 @@ export function scopedRepos(principal: Principal): ScopedRepos {
     messages: new ScopedMessageRepo(principal),
     agents: new ScopedAgentRepo(principal),
     documents: new ScopedDocumentRepo(principal),
+    notifications: new ScopedNotificationRepo(principal),
+    trajectories: new ScopedTrajectoryRepo(principal),
   };
 }
