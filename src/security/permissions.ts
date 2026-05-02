@@ -293,9 +293,33 @@ export class PermissionManager {
   }
 
   /**
-   * Approve a permission request
+   * Approve a permission request.
+   *
+   * Phase 1c: cross-tenant resolution is now blocked. The WHERE clause
+   * requires the request's `user_id` to match the principal calling
+   * approve. Pre-Phase-1c the gateway handler called this with
+   * `context.userId` as `resolvedBy`, but the row update accepted any
+   * `requestId` with status='pending' — so any authenticated caller
+   * with a leaked requestId could approve another user's request.
+   * Now: alice approving bob's requestId is a silent no-op (returns
+   * false, same shape as "request id doesn't exist or already
+   * resolved"), so attackers can't enumerate live requests by probing.
+   *
+   * Admins (`{ admin: true }`) bypass the user filter — they may
+   * intervene from the admin console once Phase 2 ships.
    */
-  async approve(requestId: string, resolvedBy: string, resolution?: string): Promise<boolean> {
+  async approve(
+    requestId: string,
+    resolvedBy: string,
+    resolution?: string,
+    opts?: { admin?: boolean },
+  ): Promise<boolean> {
+    const filters = [
+      eq(permissionRequests.id, requestId),
+      eq(permissionRequests.status, 'pending'),
+    ];
+    if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
+
     const result = await this.db
       .update(permissionRequests)
       .set({
@@ -304,7 +328,7 @@ export class PermissionManager {
         resolvedAt: new Date(),
         resolution,
       })
-      .where(and(eq(permissionRequests.id, requestId), eq(permissionRequests.status, 'pending')))
+      .where(and(...filters))
       .returning();
 
     if (result.length > 0) {
@@ -334,9 +358,20 @@ export class PermissionManager {
   }
 
   /**
-   * Deny a permission request
+   * Deny a permission request. Same cross-tenant guard as `approve`.
    */
-  async deny(requestId: string, resolvedBy: string, resolution?: string): Promise<boolean> {
+  async deny(
+    requestId: string,
+    resolvedBy: string,
+    resolution?: string,
+    opts?: { admin?: boolean },
+  ): Promise<boolean> {
+    const filters = [
+      eq(permissionRequests.id, requestId),
+      eq(permissionRequests.status, 'pending'),
+    ];
+    if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
+
     const result = await this.db
       .update(permissionRequests)
       .set({
@@ -345,7 +380,7 @@ export class PermissionManager {
         resolvedAt: new Date(),
         resolution,
       })
-      .where(and(eq(permissionRequests.id, requestId), eq(permissionRequests.status, 'pending')))
+      .where(and(...filters))
       .returning();
 
     if (result.length > 0) {

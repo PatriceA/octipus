@@ -96,9 +96,22 @@ export abstract class BaseTool {
   ): Promise<unknown> {
     const toolContext: ToolContext = { ...context, toolId: this.id };
 
-    // Check permissions if required (skip for API/MCP-bridge system users)
+    // Permission check.
+    //
+    // Phase 1c: the legacy `isSystemUser` bypass is honored only when
+    // `multiuser.enforcePermissions` is false. With enforcement on,
+    // every tool dispatch is gated — system pseudo-users (MCP, API
+    // bridges) that need to skip the prompt must instead carry a real
+    // user identity and rely on policy/allowlist.
     const isSystemUser = (context.metadata as Record<string, unknown>)?.isSystemUser === true;
-    if (options?.requiresPermission !== false && !isSystemUser) {
+    let enforce = false;
+    try {
+      const { getConfig } = await import('@/config');
+      enforce = !!getConfig().multiuser?.enforcePermissions;
+    } catch { /* config not loaded — fall through to legacy behavior */ }
+
+    const skipForSystem = isSystemUser && !enforce;
+    if (options?.requiresPermission !== false && !skipForSystem) {
       const permissionManager = getPermissionManager();
       const action = options?.permissionAction || toolName;
 
