@@ -378,6 +378,55 @@ With 2a/2b/2c/2d landed:
   via bubblewrap, Docker-in-Docker per-user labels, optional
   org/workspace grouping layer.
 
+## Phase 2e — channel adapters on the new manager
+
+The four channel adapters (`telegram`, `slack`, `whatsapp`, `teams`)
+each called `userRepository.findByChannelBinding('<channel>',
+externalId)` to resolve an incoming message to an Octipus user. That
+path was O(N) over the user table, scanned the legacy
+`users.channelBindings` JSONB column, and missed the `UNIQUE` index
+the new `channel_identities` table provides — two users could be
+silently bound to the same external_id without anyone noticing.
+
+Phase 2e swaps the lookup without changing adapter shape:
+
+- **`channels/linking.ts`** is now a thin bridge over
+  `ChannelBindingManager`. `generateLinkCode()` / `redeemLinkCode()`
+  preserve their public `{ success, error }` shape so the auth route
+  (`/api/auth/redeem-link-code`) and the `/link` channel commands
+  keep working unchanged. Codes now live in `channel_link_codes`
+  (Postgres, 15-min TTL) instead of Redis (5-min TTL); successful
+  redemption writes to both `channel_identities` (canonical) and
+  `users.channelBindings` JSONB (legacy mirror) so unmigrated
+  readers stay correct.
+- **Adapter lookups** swap to
+  `channelBindingManager.findUserRecordByExternalId('<channel>',
+  externalId)`. The new helper is O(1) on the
+  `(channel_type, external_id)` unique index, with the manager's
+  built-in JSONB fallback + lazy backfill so legacy bindings still
+  resolve through the same call.
+- The dropped `userRepository` imports in each adapter are
+  intentional — `findByChannelBinding` stays on the repo for any
+  remaining callers, but the channel surface no longer depends on it.
+
+### Tests
+
+- 4 new (`linking.test.ts`): bridge writes through the new tables,
+  legacy `error` strings still surface (`Invalid or expired link
+  code`, `already been used`, etc.), legacy JSONB column is mirrored
+  on success.
+- Existing channel-adapter tests pass unchanged — the lookup
+  interface is the same shape (`User | null`).
+
+Cumulative: **1168 pass / 9 fail / 62 skip** — same 9 pre-existing
+StdioTransport tests, net **+4** in this commit, zero regressions.
+
+With this commit Phase 2 is **closed**. From a fresh deploy on, every
+new channel binding lands in `channel_identities` with proper
+uniqueness; the legacy JSONB column is read-only fallback for
+already-deployed installs and gets backfilled into the new table on
+first read.
+
 ---
 
 ## 1. Goals & Non-Goals

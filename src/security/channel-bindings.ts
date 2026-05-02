@@ -225,6 +225,23 @@ export class ChannelBindingManager {
     return { ok: true, binding };
   }
 
+  /**
+   * Convenience: resolve a channel external_id all the way to a full
+   * user record. Channel adapters read several fields off the user
+   * (id, username, isAdmin) — fetching them in one helper means each
+   * adapter doesn't have to chain `findUserByExternalId` +
+   * `findById`. Returns null on miss.
+   */
+  async findUserRecordByExternalId(
+    channelType: ChannelType,
+    externalId: string,
+  ): Promise<import('@/db/schema/users').User | null> {
+    const userId = await this.findUserByExternalId(channelType, externalId);
+    if (!userId) return null;
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    return userRepository.findById(userId);
+  }
+
   /** List all bindings owned by a user. */
   async listForUser(userId: string): Promise<ChannelIdentity[]> {
     return this.db
