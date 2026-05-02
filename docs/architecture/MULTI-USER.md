@@ -89,8 +89,63 @@ notifications, trajectories — all backed by ephemeral PGlite, no
 Docker required.
 
 Routes that intentionally stay unscoped: `/api/auth/*`, `/api/health/*`,
-`/api/webhooks/*`, `/api/oauth/*` (different threat models). Vault
-gets full scoping in Phase 1b along with WorkspaceFS.
+`/api/webhooks/*`, `/api/oauth/*` (different threat models).
+
+## Phase 1b — vault scoping, per-user DEKs, WorkspaceFS
+
+Three commits, each independently shippable:
+
+### Phase 1b-1 — vault scope enum + strict reads
+- New `vault.scope` enum (`system | user | workspace`) with backfill:
+  legacy `user_id='system'` → `scope='system'`; everything else →
+  `scope='user'`. NOT NULL after backfill.
+- `getSystemSecret(name)` is now strict — pre-Phase-1b it had a
+  fallback that scanned ALL users' secrets, leaking another user's
+  private key under the right conditions. The fallback is gone.
+- New `vault.getForAgent({ userId, toolId, agentId }, name)` is the
+  scope-aware lookup the secret-injector uses: user → system, with
+  the per-row `allowed_tools` / `allowed_agents` allowlist applied.
+- 12 PGlite-backed isolation tests covering scope reads,
+  cross-tenant denial, allowlist enforcement.
+
+### Phase 1b-2 — per-user data-encryption keys (DEK)
+- New `vault.key_version` column. v1 = legacy PBKDF2 (single key for
+  every row). v2 = HKDF(masterKey, salt=userId, info=`scope:userId`).
+- `deriveDek(masterKey, scope, userId)` in `src/utils/crypto.ts` —
+  deterministic per (master, scope, user) triple. Same call always
+  yields the same key, so DEKs are never persisted.
+- New writes default to v2. Reads dispatch on `key_version`, fall
+  through legacy schemes if needed, and opportunistically re-encrypt
+  to v2 on success (no batch-rotation tool yet — separate commit).
+- Cross-user isolation: alice's ciphertext can't be decrypted with
+  bob's DEK even if the master key is constant.
+- 9 unit + integration tests against PGlite.
+
+### Phase 1b-3 — WorkspaceFS path sandbox
+- New `WorkspaceFS.forPrincipal(p)` in `src/security/workspace-fs.ts`.
+  Per-user filesystem root at
+  `$DATA_ROOT/users/{user_id}/workspaces/{workspace_id}/files/`.
+- `resolve(userPath)` enforces:
+  - relative paths land under root
+  - absolute paths must be under root (or an extra-allowed prefix)
+  - `..` traversal that escapes the root → throws
+  - symlinks pointing outside the root → throws (via `realpath`)
+  - null bytes / non-string inputs → throws
+- Cross-tenant property: `aliceFs.resolve('foo')` and
+  `bobFs.resolve('foo')` produce paths in disjoint trees; alice
+  cannot reach bob's root via `../` traversal.
+- 19 unit tests covering construction, relative paths, traversal,
+  absolute paths, symlinks, cross-tenant disjoint roots, and the
+  `extraAllowedPrefixes` escape hatch.
+
+Phase 1b cumulative: **1101 pass / 9 fail / 62 skip** (the 9 are still
+the pre-existing StdioTransport tests). Net +40 isolation tests across
+1b-1, 1b-2, 1b-3.
+
+Filesystem tool integration (replacing the existing `validatePath`
+in `src/tools/filesystem/index.ts` with `WorkspaceFS`) is a follow-up
+commit — needs each tool's AgentContext to carry the WorkspaceFS
+instance, which dovetails with the orchestrator gate work in Phase 1c.
 
 ---
 
