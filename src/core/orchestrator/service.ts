@@ -784,8 +784,13 @@ export class OrchestratorService {
     return this.approvalManager.resolveApproval(requestId, approved, response);
   }
 
-  getPendingApprovals(sessionId?: string): ApprovalRequest[] {
-    return this.approvalManager.getPendingApprovals();
+  /** Pre-flight lookup so callers (chat route) can verify principal owns the request. */
+  peekApproval(requestId: string): ApprovalRequest | null {
+    return this.approvalManager.peek(requestId);
+  }
+
+  getPendingApprovals(forUserId?: string): ApprovalRequest[] {
+    return this.approvalManager.getPendingApprovals(forUserId);
   }
 
   // ── Steering ────────────────────────────────────────────────────

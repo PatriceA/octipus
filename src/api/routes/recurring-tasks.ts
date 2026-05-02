@@ -1,32 +1,33 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { scopedRepos } from '@/db/repositories/scoped';
 import { getHookManager } from '@/hooks/manager';
+import { isAuthenticated } from '@/security/principal';
 
 /**
- * Recurring tasks API — compatibility layer.
- * Tasks are now stored as schedule-triggered hooks.
- * This API maps the old recurring-tasks interface to hooks.
+ * Recurring tasks API — compatibility layer over schedule-triggered hooks.
+ *
+ * Phase 1a: scope every per-id lookup through `scopedRepos(principal).hooks`.
+ * The previous handlers each did a manual `if (!user.isAdmin && hook.userId
+ * !== user.id) return 'Not authorized'`; cross-tenant ids now surface as
+ * "Task not found" so they're indistinguishable from real misses.
  */
 export const recurringTaskRoutes = new Elysia({ prefix: '/recurring-tasks' })
   .use(apiContext)
 
-  .get('/', async ({ user }) => {
-    if (!user) return { error: 'Not authenticated' };
-    const hookManager = getHookManager();
-    const allHooks = await hookManager.getUserHooks(user.id);
-    // Filter to schedule-triggered hooks only
+  .get('/', async ({ user, principal }) => {
+    if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+    const allHooks = await scopedRepos(principal).hooks.listOwn();
     const tasks = allHooks
       .filter(h => h.trigger === 'schedule')
       .map(hookToTask);
     return { tasks };
   }, { detail: { tags: ['recurring-tasks'] } })
 
-  .get('/:id', async ({ user, params }) => {
-    if (!user) return { error: 'Not authenticated' };
-    const hookManager = getHookManager();
-    const hook = await hookManager.getHook(params.id);
+  .get('/:id', async ({ user, principal, params }) => {
+    if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+    const hook = await scopedRepos(principal).hooks.findById(params.id);
     if (!hook || hook.trigger !== 'schedule') return { error: 'Task not found' };
-    if (!user.isAdmin && hook.userId !== user.id) return { error: 'Not authorized' };
     return { task: hookToTask(hook) };
   }, { params: t.Object({ id: t.String() }), detail: { tags: ['recurring-tasks'] } })
 
@@ -63,12 +64,10 @@ export const recurringTaskRoutes = new Elysia({ prefix: '/recurring-tasks' })
     detail: { tags: ['recurring-tasks'] },
   })
 
-  .patch('/:id', async ({ user, params, body }) => {
-    if (!user) return { error: 'Not authenticated' };
-    const hookManager = getHookManager();
-    const existing = await hookManager.getHook(params.id);
+  .patch('/:id', async ({ user, principal, params, body }) => {
+    if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+    const existing = await scopedRepos(principal).hooks.findById(params.id);
     if (!existing || existing.trigger !== 'schedule') return { error: 'Task not found' };
-    if (!user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
 
     const updateData: Record<string, unknown> = {};
     if (body.name !== undefined) updateData.name = body.name;
@@ -85,6 +84,7 @@ export const recurringTaskRoutes = new Elysia({ prefix: '/recurring-tasks' })
       };
     }
 
+    const hookManager = getHookManager();
     const hook = await hookManager.updateHook(params.id, updateData as any);
     if (!hook) return { error: 'Task not found' };
     return { task: hookToTask(hook) };
@@ -100,16 +100,15 @@ export const recurringTaskRoutes = new Elysia({ prefix: '/recurring-tasks' })
     detail: { tags: ['recurring-tasks'] },
   })
 
-  .get('/:id/executions', async ({ user, params, query }) => {
-    if (!user) return { error: 'Not authenticated' };
-    const hookManager = getHookManager();
-    const hook = await hookManager.getHook(params.id);
+  .get('/:id/executions', async ({ user, principal, params, query }) => {
+    if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+    const hook = await scopedRepos(principal).hooks.findById(params.id);
     if (!hook || hook.trigger !== 'schedule') return { error: 'Task not found' };
-    if (!user.isAdmin && hook.userId !== user.id) return { error: 'Not authorized' };
 
     const limit = query.limit ? parseInt(query.limit as string, 10) : 20;
     const offset = query.offset ? parseInt(query.offset as string, 10) : 0;
 
+    const hookManager = getHookManager();
     const { executions, total } = await hookManager.getExecutions({
       hookId: params.id,
       limit,
@@ -126,13 +125,12 @@ export const recurringTaskRoutes = new Elysia({ prefix: '/recurring-tasks' })
     detail: { tags: ['recurring-tasks'] },
   })
 
-  .delete('/:id', async ({ user, params }) => {
-    if (!user) return { error: 'Not authenticated' };
-    const hookManager = getHookManager();
-    const existing = await hookManager.getHook(params.id);
+  .delete('/:id', async ({ user, principal, params }) => {
+    if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+    const existing = await scopedRepos(principal).hooks.findById(params.id);
     if (!existing || existing.trigger !== 'schedule') return { error: 'Task not found' };
-    if (!user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
 
+    const hookManager = getHookManager();
     const deleted = await hookManager.deleteHook(params.id);
     return { deleted };
   }, { params: t.Object({ id: t.String() }), detail: { tags: ['recurring-tasks'] } });

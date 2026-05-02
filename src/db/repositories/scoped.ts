@@ -39,8 +39,11 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { agents, type AgentRecord, type NewAgentRecord } from '../schema/agents';
 import { documents, type DocumentRecord, type NewDocumentRecord } from '../schema/documents';
+import { type Hook, hooks } from '../schema/hooks';
 import { messages, type Message, type NewMessage } from '../schema/messages';
 import { notifications, type Notification } from '../schema/notifications';
+import { type Pipeline, pipelines } from '../schema/pipelines';
+import { type PipelineTemplate, pipelineTemplates } from '../schema/pipeline-templates';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
 import { trajectoryRuns, type TrajectoryRunRecord } from '../schema/trajectory-runs';
 import { type Principal, isAdmin, isAuthenticated } from '@/security/principal';
@@ -487,6 +490,97 @@ export class ScopedTrajectoryRepo {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Hooks
+// ─────────────────────────────────────────────────────────────────────
+
+export class ScopedHookRepo {
+  constructor(private readonly principal: Principal) {
+    requireAuth(principal);
+  }
+
+  private get db() { return getDb(); }
+
+  /**
+   * Returns the hook only if the principal owns it (or is an admin).
+   * Mutating endpoints in the hooks route call this before delegating
+   * to the hookManager so the manager's existing methods stay simple.
+   */
+  async findById(id: string): Promise<Hook | null> {
+    const where = isAdmin(this.principal)
+      ? eq(hooks.id, id)
+      : and(eq(hooks.id, id), eq(hooks.userId, this.principal.userId));
+    const row = await this.db.select().from(hooks).where(where).limit(1);
+    return row[0] ?? null;
+  }
+
+  async listOwn(): Promise<Hook[]> {
+    return this.db
+      .select()
+      .from(hooks)
+      .where(eq(hooks.userId, this.principal.userId))
+      .orderBy(desc(hooks.createdAt));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Pipelines & templates
+// ─────────────────────────────────────────────────────────────────────
+
+export class ScopedPipelineRepo {
+  constructor(private readonly principal: Principal) {
+    requireAuth(principal);
+  }
+
+  private get db() { return getDb(); }
+
+  async findById(id: string): Promise<Pipeline | null> {
+    const where = isAdmin(this.principal)
+      ? eq(pipelines.id, id)
+      : and(eq(pipelines.id, id), eq(pipelines.userId, this.principal.userId));
+    const row = await this.db.select().from(pipelines).where(where).limit(1);
+    return row[0] ?? null;
+  }
+
+  /**
+   * Pipeline templates have a different ownership model: rows with
+   * `is_preset=true` are visible to every user (system-shipped templates),
+   * but private templates belong to one user. `findTemplateById` returns
+   * null when the principal is neither the owner nor looking at a preset.
+   */
+  async findTemplateById(id: string): Promise<PipelineTemplate | null> {
+    if (isAdmin(this.principal)) {
+      const row = await this.db.select().from(pipelineTemplates).where(eq(pipelineTemplates.id, id)).limit(1);
+      return row[0] ?? null;
+    }
+    const row = await this.db
+      .select()
+      .from(pipelineTemplates)
+      .where(and(
+        eq(pipelineTemplates.id, id),
+        sql`(${pipelineTemplates.userId} = ${this.principal.userId} OR ${pipelineTemplates.isPreset} = TRUE)`,
+      ))
+      .limit(1);
+    return row[0] ?? null;
+  }
+
+  /**
+   * Look up a template the principal is allowed to *modify*. Presets are
+   * read-only — this returns null even if the row exists, so the route's
+   * write paths short-circuit to "not found".
+   */
+  async findOwnedTemplateById(id: string): Promise<PipelineTemplate | null> {
+    const where = isAdmin(this.principal)
+      ? eq(pipelineTemplates.id, id)
+      : and(
+          eq(pipelineTemplates.id, id),
+          eq(pipelineTemplates.userId, this.principal.userId),
+        );
+    const row = await this.db.select().from(pipelineTemplates).where(where).limit(1);
+    return row[0] ?? null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Bundle factory
 // ─────────────────────────────────────────────────────────────────────
 
@@ -497,6 +591,8 @@ export interface ScopedRepos {
   documents: ScopedDocumentRepo;
   notifications: ScopedNotificationRepo;
   trajectories: ScopedTrajectoryRepo;
+  hooks: ScopedHookRepo;
+  pipelines: ScopedPipelineRepo;
 }
 
 /**
@@ -515,5 +611,7 @@ export function scopedRepos(principal: Principal): ScopedRepos {
     documents: new ScopedDocumentRepo(principal),
     notifications: new ScopedNotificationRepo(principal),
     trajectories: new ScopedTrajectoryRepo(principal),
+    hooks: new ScopedHookRepo(principal),
+    pipelines: new ScopedPipelineRepo(principal),
   };
 }

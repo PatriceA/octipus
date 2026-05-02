@@ -2,28 +2,39 @@ import { desc, eq, or, sql } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
+import { scopedRepos } from '@/db/repositories/scoped';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { hooks as hooksTable } from '@/db/schema/hooks';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
 import { getHookManager } from '@/hooks/manager';
 import { getHookSuggestions } from '@/hooks/suggestions';
+import { isAuthenticated } from '@/security/principal';
 
 const VALID_TRIGGERS = ['message_received', 'agent_started', 'agent_completed', 'agent_failed', 'tool_executed', 'permission_requested', 'schedule', 'webhook'] as const;
 const VALID_ACTIONS = ['notify', 'spawn_agent', 'webhook', 'n8n_workflow', 'execute_tool'] as const;
 
+/**
+ * Hooks — Phase 1a multi-user conversion.
+ *
+ * The hookManager itself stays the source of truth for cron scheduling
+ * and triggered execution. Each route handler now resolves the hook
+ * through `scopedRepos(principal).hooks.findById`, which returns null
+ * for cross-tenant lookups. Mutations go through hookManager only after
+ * the scope check confirms ownership; cross-tenant attempts surface as
+ * "Hook not found" instead of "Not authorized" so attackers can't
+ * enumerate hook ids.
+ */
 export const hookRoutes = new Elysia({ prefix: '/hooks' })
   .use(apiContext)
   // List user's hooks
   .get(
     '/',
-    async ({ user }) => {
-      if (!user) {
+    async ({ user, principal }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const hookManager = getHookManager();
-      const hooks = await hookManager.getUserHooks(user.id);
-
+      const hooks = await scopedRepos(principal).hooks.listOwn();
       return { hooks };
     },
     { detail: { tags: ['hooks'] } }
@@ -32,22 +43,15 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Get hook by ID
   .get(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const hookManager = getHookManager();
-      const hook = await hookManager.getHook(params.id);
-
+      const hook = await scopedRepos(principal).hooks.findById(params.id);
       if (!hook) {
         return { error: 'Hook not found' };
       }
-
-      if (!user.isAdmin && hook.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
       return hook;
     },
     {
@@ -109,24 +113,18 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Update hook
   .patch(
     '/:id',
-    async ({ user, params, body }) => {
-      if (!user) {
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const hookManager = getHookManager();
-      const existing = await hookManager.getHook(params.id);
-
+      const existing = await scopedRepos(principal).hooks.findById(params.id);
       if (!existing) {
         return { error: 'Hook not found' };
       }
 
-      if (!user.isAdmin && existing.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+      const hookManager = getHookManager();
       const hook = await hookManager.updateHook(params.id, body as any);
-
       return hook;
     },
     {
@@ -151,24 +149,18 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Delete hook
   .delete(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) {
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const hookManager = getHookManager();
-      const existing = await hookManager.getHook(params.id);
-
+      const existing = await scopedRepos(principal).hooks.findById(params.id);
       if (!existing) {
         return { error: 'Hook not found' };
       }
 
-      if (!user.isAdmin && existing.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+      const hookManager = getHookManager();
       const deleted = await hookManager.deleteHook(params.id);
-
       return { deleted };
     },
     {
@@ -182,24 +174,18 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Enable/disable hook
   .post(
     '/:id/toggle',
-    async ({ user, params, body }) => {
-      if (!user) {
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const hookManager = getHookManager();
-      const existing = await hookManager.getHook(params.id);
-
+      const existing = await scopedRepos(principal).hooks.findById(params.id);
       if (!existing) {
         return { error: 'Hook not found' };
       }
 
-      if (!user.isAdmin && existing.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+      const hookManager = getHookManager();
       const success = await hookManager.setEnabled(params.id, body.enabled);
-
       return { success, enabled: body.enabled };
     },
     {
@@ -268,18 +254,16 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Get execution history for a hook
   .get(
     '/:id/executions',
-    async ({ user, params, query }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params, query }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
-      const hookManager = getHookManager();
-      const hook = await hookManager.getHook(params.id);
-
+      const hook = await scopedRepos(principal).hooks.findById(params.id);
       if (!hook) return { error: 'Hook not found' };
-      if (!user.isAdmin && hook.userId !== user.id) return { error: 'Not authorized' };
 
       const limit = query.limit ? parseInt(query.limit, 10) : 50;
       const offset = query.offset ? parseInt(query.offset, 10) : 0;
 
+      const hookManager = getHookManager();
       const { executions, total } = await hookManager.getExecutions({
         hookId: params.id,
         limit,
@@ -301,22 +285,17 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Test hook (trigger manually)
   .post(
     '/:id/test',
-    async ({ user, params, body }) => {
-      if (!user) {
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
 
-      const hookManager = getHookManager();
-      const hook = await hookManager.getHook(params.id);
-
+      const hook = await scopedRepos(principal).hooks.findById(params.id);
       if (!hook) {
         return { error: 'Hook not found' };
       }
 
-      if (!user.isAdmin && hook.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+      const hookManager = getHookManager();
       // Trigger the hook with test context
       const results = await hookManager.trigger(
         { type: hook.trigger, data: body.data || {}, timestamp: new Date() },
