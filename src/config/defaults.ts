@@ -71,6 +71,11 @@ export const defaultConfig: Partial<Config> = {
     /** Orchestrator agent timeout for unattended hook-triggered runs (45 min). */
     orchestratorHookTimeoutMs: 2700000,
   },
+  multiuser: {
+    enabled: false,
+    auditShadow: true,
+    enforcePermissions: false,
+  },
   workspace: {
     rootPath: './workspace',
     additionalPaths: [],

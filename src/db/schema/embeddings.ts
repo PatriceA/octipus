@@ -29,6 +29,13 @@ export const embeddings = pgTable('embeddings', {
   id: uuid('id').primaryKey().defaultRandom(),
   sourceType: text('source_type').notNull(), // message, document, code, agent_output
   sourceId: text('source_id').notNull(),
+  /**
+   * Owner of the indexed content. Nullable in Phase 0 — RAG queries still
+   * span all rows for backwards compatibility. Phase 1 backfills, then
+   * filters every retrieval by `userId` so one tenant's docs never surface
+   * in another tenant's agent context.
+   */
+  userId: uuid('user_id'),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
   // Auto-generated tsvector for full-text search (GENERATED ALWAYS AS — read-only)
@@ -42,6 +49,7 @@ export const embeddings = pgTable('embeddings', {
 }, (table) => ({
   sourceTypeIdx: index('embeddings_source_type_idx').on(table.sourceType),
   sourceIdIdx: index('embeddings_source_id_idx').on(table.sourceId),
+  userIdIdx: index('embeddings_user_id_idx').on(table.userId),
 }));
 
 export interface EmbeddingMetadata {
