@@ -1,9 +1,33 @@
 # Multi-User Architecture Plan
 
-> Status: **Design proposal** — branch `claude/multi-user-architecture-plan-baDCd`.
+> Status: **Phase 0 landed** — feature flag, Principal type, schema
+> additions, and shadow-mode audit middleware are in. All flags default
+> off so behavior matches v0 single-user. Phases 1–3 still pending.
 > Scope: extend Octipus from a single-tenant self-hosted instance into a
 > central backend serving multiple authenticated users (and, optionally,
 > organizations) with strict data, secret, and execution isolation.
+
+## Phase 0 — what landed
+
+- `multiuser.{enabled,auditShadow,enforcePermissions}` config flags
+  (env: `MULTIUSER`, `MULTIUSER_AUDIT_SHADOW`,
+  `MULTIUSER_ENFORCE_PERMISSIONS`). Defaults: `false`, `true`, `false`.
+- `src/security/principal.ts` — `Principal` type + helpers
+  (`principalFromUser`, `principalFromMasterKey`, `ANONYMOUS_PRINCIPAL`,
+  `SYSTEM_PRINCIPAL`, `canActOnUser`).
+- `src/api/server.ts` — auth `.derive()` now returns `principal`
+  alongside the legacy `user` field; `MASTER_KEY` Bearer fallback is
+  suppressed when `multiuser.enabled === true`.
+- Migration `0029_multiuser_phase0.sql` — adds nullable owner columns
+  (`embeddings.user_id`, `agent_events.user_id`, `swarm_nodes.user_id`,
+  `hook_executions.user_id`, `users.org_id`) plus indexes, and the
+  `audit_action='api_request'` enum value.
+- `src/api/middleware/audit-shadow.ts` — Elysia plugin that writes one
+  `audit_log` row per state-changing API request, gated on
+  `multiuser.auditShadow`. Never blocks: any error is swallowed.
+- Tests: principal helpers (8), `resourceTypeFromPath` (3), end-to-end
+  audit middleware against ephemeral PGlite (7). Net +19 passing,
+  zero regressions.
 
 ---
 

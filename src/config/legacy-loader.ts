@@ -112,6 +112,11 @@ export function loadFromEnvLegacy(): Partial<Config> {
       orchestratorTimeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '1800000', 10),
       orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),
     },
+    multiuser: {
+      enabled: process.env.MULTIUSER === 'true',
+      auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
+      enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS === 'true',
+    },
     workspace: {
       rootPath: process.env.WORKSPACE_PATH || './workspace',
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
