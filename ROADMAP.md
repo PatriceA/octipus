@@ -8,7 +8,68 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-_(Empty — both 2026-04 in-flight items shipped this week; see Done.)_
+- **Multi-user architecture — Phases 0, 1a, 1b landed (2026-05).**
+  Octipus is moving from single-tenant self-hosted to a central backend
+  serving multiple authenticated users with strict isolation of
+  sessions, secrets, settings, filesystem, embeddings, and agents. Full
+  plan: [`docs/architecture/MULTI-USER.md`](docs/architecture/MULTI-USER.md).
+
+  **Integration state.** All work is gated behind feature flags
+  (`MULTIUSER`, `MULTIUSER_AUDIT_SHADOW`, `MULTIUSER_ENFORCE_PERMISSIONS`)
+  that default off. Existing single-user installs see byte-for-byte
+  unchanged behavior; the new code paths only activate when an operator
+  flips the flag. **1107 pass / 9 fail / 62 skip** on the merge branch
+  (the 9 are the same pre-existing `StdioTransport` MCP tests from
+  before the work started); net **+92 isolation tests** added across
+  the phases. Branch:
+  `claude/multi-user-architecture-plan-baDCd`.
+
+  **Done so far.**
+  - Phase 0 (commit `90347f7`): `Principal` type +
+    `principalFromUser`/`principalFromMasterKey`/`ANONYMOUS_PRINCIPAL`/
+    `SYSTEM_PRINCIPAL`, server-side derivation alongside legacy `user`,
+    shadow-mode audit middleware (`audit_log` row per state-changing
+    request, never blocks), schema additions for nullable owner columns
+    on `embeddings`, `agent_events`, `swarm_nodes`, `hook_executions`,
+    plus `users.org_id` (migration `0029`).
+  - Phase 1a (commits `9d1f859`, `c3330b8`, `15a773d`, `f5251a7`):
+    `scopedRepos(principal)` factory binding 8 entities (sessions,
+    messages, agents, documents, notifications, trajectories, hooks,
+    pipelines). Cross-tenant reads return `null`/`[]` to prevent UUID
+    enumeration; mutations check ownership in WHERE and strip
+    caller-smuggled `user_id`. **Two complete-bypass auth gaps closed**:
+    `PUT/DELETE /api/pipelines/templates/:id` had no auth check at all
+    (any user could mutate any template, including system presets);
+    `GET /api/chat/approvals/pending` was global; `markRead` on
+    notifications accepted any id; trajectories listed every user's
+    runs. 11 routes converted across 4 commits.
+  - Phase 1b (commits `3e60b77`, `07ee462`): vault `scope` enum
+    (`system`/`user`/`workspace`) with backfill + strict reads (kills
+    the `getSystemSecret` fallback that scanned every user's secrets);
+    per-user data-encryption keys via `HKDF(masterKey, salt=userId,
+    info=scope:userId)` with opportunistic v1 → v2 re-encryption on
+    read; `scripts/rotate-vault-keys.ts` for batch rotation;
+    `WorkspaceFS` per-user filesystem sandbox with traversal /
+    absolute-path / symlink-escape blocks; `src/tools/filesystem`
+    rewired through `WorkspaceFS.forAgent(context)` so flat
+    (single-user) and per-user nested layouts share one call site.
+    Migrations `0030` + `0031`.
+
+  **Next.**
+  - Phase 1c — orchestrator permission gate. Wire the existing
+    `skill_permissions` ALLOW/ASK/DENY schema (already populated, never
+    enforced) into a single `checkToolCall(principal, toolId, action,
+    args)` chokepoint and route every tool dispatch through it. ASK
+    pauses the agent and emits a `permission.request` gateway event;
+    deny-on-timeout. Closes Phase 1.
+  - Phase 2 — admin console (`/admin/users`, audit viewer, quotas
+    dashboard, impersonation with audit), API tokens UI under user
+    settings, channel-binding signup flow (Telegram/Slack deep-link to
+    web "Link account").
+  - Phase 3 — Postgres RLS as defense-in-depth, per-user DEK rotation
+    tooling for the master key, bubblewrap/firejail shell sandbox,
+    Docker-in-Docker per-user labels + network, optional org/workspace
+    grouping layer (schema is already prepared).
 
 ## Next (months)
 
