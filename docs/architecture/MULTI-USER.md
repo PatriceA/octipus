@@ -142,10 +142,28 @@ Phase 1b cumulative: **1101 pass / 9 fail / 62 skip** (the 9 are still
 the pre-existing StdioTransport tests). Net +40 isolation tests across
 1b-1, 1b-2, 1b-3.
 
-Filesystem tool integration (replacing the existing `validatePath`
-in `src/tools/filesystem/index.ts` with `WorkspaceFS`) is a follow-up
-commit — needs each tool's AgentContext to carry the WorkspaceFS
-instance, which dovetails with the orchestrator gate work in Phase 1c.
+### Phase 1b — cleanup landed
+
+- **Vault key rotation script** (`scripts/rotate-vault-keys.ts`).
+  Walks every `key_version=1` row and forces the lazy v1 → v2
+  re-encrypt that `vault.get` does on read. `--dry-run` reports
+  candidates without writing; `--batch=N` tunes batch size; rows that
+  fail to decrypt stay at v1 and are logged so an operator can
+  investigate without aborting the run. 3 PGlite tests.
+- **Filesystem tool wiring**: `src/tools/filesystem/index.ts`'s
+  `validatePath` now delegates to `WorkspaceFS.forAgent(context)`.
+  Same call site, same exceptions; behavior diverges by config:
+    - `multiuser.enabled=false` → flat root at `config.workspace.rootPath`
+      (legacy single-user behavior, byte-for-byte identical).
+    - `multiuser.enabled=true` → per-user root at
+      `<workspace.rootPath>/users/{userId}/workspaces/default/files`.
+  Both modes preserve `additionalPaths` and the legacy `/tmp/assistant-`
+  prefix. `WorkspaceFS.withRoot` and `forAgent` factories added; new
+  tests cover the flat root path and the legacy prefix back-compat.
+
+Phase 1b totals: **1107 pass / 9 fail / 62 skip** (the 9 are still the
+pre-existing StdioTransport tests). Net +46 isolation tests across
+1b-1, 1b-2, 1b-3, plus the rotation + filesystem cleanup.
 
 ---
 

@@ -47,7 +47,7 @@ import { mkdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve as pathResolve, sep } from 'node:path';
 import { getConfig } from '@/config';
 import type { Principal } from './principal';
-import { isAuthenticated } from './principal';
+import { ANONYMOUS_PRINCIPAL, isAuthenticated, principalFromUser } from './principal';
 
 export class WorkspaceFsError extends Error {
   readonly code: 'TRAVERSAL' | 'OUTSIDE_ROOT' | 'UNAUTHENTICATED' | 'INVALID_INPUT';
@@ -95,33 +95,105 @@ export class WorkspaceFS {
   readonly workspaceId: string;
   private readonly extraAllowedPrefixes: readonly string[];
 
-  private constructor(principal: Principal, options: WorkspaceFsOptions) {
+  private constructor(principal: Principal, root: string, options: WorkspaceFsOptions) {
     this.principal = principal;
     this.workspaceId = options.workspaceId ?? 'default';
-    const dataRoot = options.dataRoot ?? configuredDataRoot();
-    this.root = pathResolve(
-      dataRoot,
-      'users',
-      principal.userId,
-      'workspaces',
-      this.workspaceId,
-      'files',
-    );
+    this.root = root;
     this.extraAllowedPrefixes = (options.extraAllowedPrefixes ?? [])
       .map((p) => pathResolve(p));
   }
 
   /**
-   * Build a `WorkspaceFS` for the given principal. Throws synchronously
-   * for anonymous principals — callers should already have rejected
-   * those via the auth guard.
+   * Build a `WorkspaceFS` for the given principal under the per-user
+   * nested layout. Throws synchronously for anonymous principals —
+   * callers should already have rejected those via the auth guard.
    */
   static forPrincipal(principal: Principal, options: WorkspaceFsOptions = {}): WorkspaceFS {
     if (!isAuthenticated(principal)) {
       throw new WorkspaceFsError('UNAUTHENTICATED',
         'WorkspaceFS requires an authenticated principal');
     }
-    return new WorkspaceFS(principal, options);
+    const dataRoot = options.dataRoot ?? configuredDataRoot();
+    const workspaceId = options.workspaceId ?? 'default';
+    const root = pathResolve(
+      dataRoot,
+      'users',
+      principal.userId,
+      'workspaces',
+      workspaceId,
+      'files',
+    );
+    return new WorkspaceFS(principal, root, options);
+  }
+
+  /**
+   * Build a `WorkspaceFS` rooted at an explicit absolute path, with no
+   * per-user nesting. Used by single-user installs to keep the existing
+   * `<config.workspace.rootPath>` layout — Phase 1b only nests when
+   * `multiuser.enabled` is true.
+   */
+  static withRoot(root: string, options: WorkspaceFsOptions = {}): WorkspaceFS {
+    return new WorkspaceFS(
+      ANONYMOUS_PRINCIPAL,
+      pathResolve(root),
+      options,
+    );
+  }
+
+  /**
+   * Build a `WorkspaceFS` for an in-flight agent.
+   *
+   *   - When `multiuser.enabled` is true AND the agent has a real userId
+   *     (not the legacy `'system'` sentinel), returns the per-user
+   *     nested layout.
+   *   - Otherwise returns a flat `withRoot` instance pinned to
+   *     `config.workspace.rootPath` so single-user installs and
+   *     system-job tools keep their current layout.
+   *
+   * In both modes:
+   *   - `config.workspace.additionalPaths` are added as extra allowed
+   *     prefixes (lets a single-user deployment expose multiple repos).
+   *   - The legacy `/tmp/assistant-` prefix is allowed for transient
+   *     files. Pre-Phase-1b filesystem tools relied on this; we keep
+   *     it so behavior is unchanged.
+   */
+  static forAgent(
+    context?: { userId?: string },
+    options: WorkspaceFsOptions = {},
+  ): WorkspaceFS {
+    let cfg: ReturnType<typeof getConfig> | undefined;
+    try { cfg = getConfig(); } catch { /* config may not be loaded */ }
+
+    const multiuser = !!cfg?.multiuser?.enabled;
+    const dataRoot = options.dataRoot
+      ?? pathResolve(cfg?.workspace.rootPath || './workspace');
+    const additional = (cfg?.workspace.additionalPaths ?? []).map((p) => pathResolve(p));
+    // Keep legacy tmp prefix so transient artifacts created by the
+    // existing tool stack stay readable.
+    const extra = [
+      ...additional,
+      '/tmp/assistant-',
+      ...(options.extraAllowedPrefixes ?? []),
+    ];
+
+    if (multiuser && context?.userId && context.userId !== 'system') {
+      const principal = principalFromUser({
+        id: context.userId,
+        username: context.userId,
+        isAdmin: false,
+      });
+      return WorkspaceFS.forPrincipal(principal, {
+        ...options,
+        dataRoot,
+        extraAllowedPrefixes: extra,
+      });
+    }
+
+    return WorkspaceFS.withRoot(dataRoot, {
+      ...options,
+      dataRoot,
+      extraAllowedPrefixes: extra,
+    });
   }
 
   /**
@@ -236,7 +308,21 @@ export class WorkspaceFS {
     return lexical;
   }
 
+  /**
+   * Extra-allowed prefixes accept either:
+   *   - a proper directory match via `isUnder` (e.g. `/data/extras` allows
+   *     `/data/extras/foo` but NOT `/data/extras-evil`), or
+   *   - a literal string-prefix match (e.g. `/tmp/assistant-` allows
+   *     `/tmp/assistant-foo` — preserves the legacy tmp-file convention
+   *     where the suffix encodes the session id).
+   *
+   * Operators who add custom directory prefixes don't need to think
+   * about this — `isUnder` is the safe path. The string-prefix path is
+   * here for backwards compat with the legacy validatePath behavior.
+   */
   private isInExtraAllowed(absolute: string): boolean {
-    return this.extraAllowedPrefixes.some((p) => this.isUnder(absolute, p));
+    return this.extraAllowedPrefixes.some(
+      (p) => this.isUnder(absolute, p) || absolute.startsWith(p),
+    );
   }
 }
