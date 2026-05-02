@@ -798,6 +798,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'MULTIUSER_ENFORCE_PERMISSIONS',
   },
+  {
+    key: 'multiuser.rlsEnabled',
+    category: 'multiuser',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Postgres Row-Level Security (Phase 3b). When true, authenticated queries open a transaction with SET LOCAL app.current_user_id = <principal>; the policies installed by migration 0034 enforce per-row ownership in addition to the application-layer scoped repos. Requires external Postgres + a non-superuser app role for the policies to actually fire — PGlite ignores RLS, so embedded installs are unaffected.',
+    isSecret: false,
+    envVar: 'MULTIUSER_RLS',
+  },
 ];
 
 /** Get a setting definition by key */

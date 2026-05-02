@@ -491,6 +491,109 @@ env var — that swap is a separate operator step. Documented runbook:
 Cumulative: **1173 pass / 9 fail / 62 skip** — net +5, zero
 regressions, same 9 pre-existing StdioTransport failures.
 
+## Phase 3b — Postgres Row-Level Security (defense-in-depth)
+
+The application-layer `scopedRepos(principal)` from Phase 1a is the
+primary enforcement; RLS is the belt-and-suspenders second layer that
+catches anything the scope might miss in the future (a forgotten
+`WHERE`, raw SQL, or new untrusted code path).
+
+### Design — "bypass on missing GUC"
+
+Every policy uses the same shape:
+
+```sql
+USING (
+  COALESCE(current_setting('app.bypass_rls', true), 'true') = 'true'
+  OR user_id::text = current_setting('app.current_user_id', true)
+)
+```
+
+The `COALESCE(..., 'true')` makes RLS a no-op when the GUCs aren't
+set. Means: every existing code path (cron jobs, system-scoped
+queries, anything not yet wired through the new wrapper) continues
+to work without changes when the migration runs. RLS only blocks
+when the connection wrapper explicitly sets `bypass_rls='false'` AND
+`current_user_id=<uuid>`.
+
+### `withRlsPrincipal(principal, fn)` (`src/security/rls.ts`)
+
+Opens a Drizzle transaction, sets the GUCs scoped to the transaction,
+and runs the callback. The callback receives the transaction handle
+so its repository calls execute under RLS. On commit/rollback the
+GUC vanishes — pooled connections cannot leak the user id to the
+next request.
+
+```ts
+await withRlsPrincipal(principal, async (tx) => {
+  return tx.select().from(sessions);
+});
+```
+
+`withRlsBypass(fn)` is the escape hatch for system jobs that
+legitimately read across users (orphan reaper, compaction, cron).
+
+When `multiuser.rlsEnabled = false` (default), both wrappers no-op
+and run against the global db handle without a transaction — zero
+overhead, zero behavior change.
+
+### Migration `0034_rls_policies.sql`
+
+First slice covers the highest-value tables: `sessions`, `vault`,
+`api_tokens`, `channel_identities`. Each gets `ENABLE ROW LEVEL
+SECURITY` + `FORCE ROW LEVEL SECURITY` (so the policy applies even
+to the table owner) + `CREATE POLICY ... USING ... WITH CHECK ...`.
+
+`vault` has an extra clause: rows with `scope = 'system'` are
+visible to any authenticated principal, since application-layer
+allowlists (`canAccessByName`, `allowed_tools`, `allowed_agents`)
+already gate which secrets a tool can actually read.
+
+The remaining user-owned tables (`documents`, `agents`,
+`agent_events`, `embeddings`, `hooks`, `hook_executions`,
+`pipelines`, `notifications`, `trajectory_runs`, `swarm_nodes`,
+`recurring_tasks`) follow in 3b-2 once the first slice has run in
+staging.
+
+### PGlite caveat
+
+PGlite ignores RLS — its single-superuser engine bypasses policies
+structurally. So:
+
+- The migration applies cleanly on PGlite (syntax accepted) but the
+  policies don't fire — embedded installs are unaffected.
+- PGlite tests verify the migration applies + the wrapper sets the
+  GUCs correctly inside its transaction. **Behavioral RLS
+  enforcement** is gated on `INTEGRATION=1` (Docker) tests against
+  real Postgres + a non-superuser app role.
+
+### Operator runbook (external Postgres)
+
+To actually get RLS enforcement after merging this:
+
+1. Apply migration `0034`.
+2. Create a non-superuser app role (separate from the migration role
+   that has `BYPASSRLS`):
+   ```sql
+   CREATE ROLE octipus_app NOLOGIN;
+   GRANT octipus_app TO <login_role>;
+   ```
+3. Point `DATABASE_URL` at the app role.
+4. Set `MULTIUSER_RLS=true`.
+5. Verify: cross-tenant integration test or manual `psql` probe.
+
+### Tests
+
+- 4 PGlite (`rls.test.ts`): wrapper no-ops when flag off; sets GUCs
+  inside the transaction when flag on; rejects anonymous principals;
+  migration installs policies on the four target tables.
+- 4 Postgres-only (skipped without `INTEGRATION=1`): cross-tenant
+  enforcement, `withRlsBypass` returns rows from every user.
+
+Cumulative: **1177 pass / 9 fail / 66 skip** — same 9 pre-existing
+StdioTransport tests, net +4 PGlite + 4 added integration-skipped,
+zero regressions.
+
 ---
 
 ## 1. Goals & Non-Goals
