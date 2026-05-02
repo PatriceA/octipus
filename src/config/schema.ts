@@ -241,6 +241,21 @@ export const multiuserConfigSchema = z.object({
   enabled: z.boolean().default(false),
   auditShadow: z.boolean().default(true),
   enforcePermissions: z.boolean().default(false),
+  /**
+   * Postgres Row-Level Security — Phase 3b. When true, the connection
+   * wrapper opens authenticated queries in a transaction and sets
+   *   SET LOCAL app.current_user_id = <principal.userId>
+   *   SET LOCAL app.bypass_rls = 'false'
+   * so the policies installed by migration 0034 enforce per-row
+   * ownership in addition to the application-layer scoped repositories.
+   *
+   * Off by default. PGlite ignores RLS (single-superuser bypass) so
+   * embedded installs are unaffected. External-Postgres deployments
+   * need a non-superuser app role for the policies to actually fire.
+   * The "bypass on missing GUC" default in the policy lets unscoped
+   * code paths continue to work non-disruptively when this is on.
+   */
+  rlsEnabled: z.boolean().default(false),
 });
 
 // Workspace configuration schema

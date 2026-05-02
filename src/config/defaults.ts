@@ -75,6 +75,7 @@ export const defaultConfig: Partial<Config> = {
     enabled: false,
     auditShadow: true,
     enforcePermissions: false,
+    rlsEnabled: false,
   },
   workspace: {
     rootPath: './workspace',

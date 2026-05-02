@@ -239,6 +239,13 @@
       "when": 1718800000000,
       "tag": "0033_channel_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1719400000000,
+      "tag": "0034_rls_policies",
+      "breakpoints": true
     }
   ]
 }
