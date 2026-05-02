@@ -84,16 +84,27 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     resolving. `channels/linking.ts` is now a thin bridge over the
     manager; codes live in `channel_link_codes` (Postgres, 15-min
     TTL) instead of Redis. Phase 2 is closed.
-  - Phase 3a (this PR): master-key rotation tooling.
+  - Phase 3a: master-key rotation tooling.
     `rotateVaultRowMasterKey(rowId, oldMaster, newMaster)` helper +
     `scripts/rotate-master-key.ts` walker (`--dry-run`, `--batch=N`).
     Idempotent re-runs return `'skipped'` for rows already rotated.
     Cross-user isolation preserved across the rewrite — alice's DEK
     still can't decrypt bob's row.
+  - Phase 3b (this PR): Postgres Row-Level Security on the
+    highest-value tables (sessions, vault, api_tokens,
+    channel_identities). New `withRlsPrincipal(principal, fn)` /
+    `withRlsBypass(fn)` wrappers; `multiuser.rlsEnabled` flag
+    (default off). Policies use the "bypass on missing GUC" pattern
+    so existing code paths keep working when the flag flips on.
+    PGlite ignores RLS — embedded installs unaffected; external
+    Postgres needs a non-superuser app role for enforcement to
+    actually fire.
 
   **Next.**
-  - Phase 3b — Postgres RLS as defense-in-depth (opt-in via
-    `RLS_ENABLED` flag, external-Postgres only).
+  - Phase 3b-2 — extend RLS to remaining user-owned tables
+    (documents, agents, agent_events, embeddings, hooks,
+    hook_executions, pipelines, notifications, trajectory_runs,
+    swarm_nodes, recurring_tasks).
   - Phase 3c — per-user quotas (concurrent agents, daily token
     cap, API calls/min) + admin dashboard.
   - Phase 3d — impersonation flow with strong audit (admin enters
