@@ -225,6 +225,13 @@
       "when": 1717600000000,
       "tag": "0031_vault_per_user_dek",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1718200000000,
+      "tag": "0032_api_tokens",
+      "breakpoints": true
     }
   ]
 }

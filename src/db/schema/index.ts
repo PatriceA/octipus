@@ -2,6 +2,7 @@
 
 export * from './agent-events';
 export * from './agents';
+export * from './api-tokens';
 export * from './audit';
 export * from './cleanup-log';
 export * from './documents';
