@@ -427,6 +427,70 @@ uniqueness; the legacy JSONB column is read-only fallback for
 already-deployed installs and gets backfilled into the new table on
 first read.
 
+## Phase 3a — master-key rotation tooling
+
+Phase 1b-2 introduced per-user DEKs derived via HKDF from the master
+key. The DEKs themselves never live on disk, but the master key sits
+in env (`MASTER_KEY`); when that key gets compromised — committed to
+a public repo, exposed in a leaked `.env`, or just rotated on a
+hygiene cadence — every vault row needs to be re-encrypted with a
+freshly-derived DEK. Phase 3a ships the tooling.
+
+### `rotateVaultRowMasterKey(rowId, oldMaster, newMaster)`
+
+New helper exported from `src/security/vault.ts`. Takes both master
+keys explicitly so it can run safely while the live server is still
+on the OLD key. For one row:
+
+1. Derive `oldDek = HKDF(oldMaster, scope, userId)`.
+2. Derive `newDek = HKDF(newMaster, scope, userId)`.
+3. Decrypt with `oldDek`. On success, re-encrypt with `newDek` and
+   persist (`UPDATE vault SET ...`).
+4. On `oldDek` decrypt failure, try `newDek` — if it succeeds the
+   row was already rotated by an earlier run, return `'skipped'`.
+5. Otherwise return `'failed'` (the row stays untouched, the script
+   logs and continues).
+
+Per-row outcome is `'rotated' | 'skipped' | 'failed'`. The scope +
+userId pair is preserved across the rewrite, so cross-tenant
+isolation between alice's and bob's rows survives the rotation.
+
+### `scripts/rotate-master-key.ts`
+
+Walks every active row in batches and calls the helper. CLI:
+
+```
+OLD_MASTER_KEY=<old hex> NEW_MASTER_KEY=<new hex> \
+  bun run scripts/rotate-master-key.ts [--dry-run] [--batch=N]
+```
+
+The script deliberately does NOT touch the deployment's `MASTER_KEY`
+env var — that swap is a separate operator step. Documented runbook:
+
+1. `openssl rand -hex 32` to generate the new key.
+2. Stop the Octipus server (or maintenance window).
+3. Run the script with both keys in env.
+4. Update `MASTER_KEY=<new>` in the deployment.
+5. Restart, verify with a vault read.
+
+### Tests
+
+5 PGlite-backed tests (`scripts/rotate-master-key.test.ts`):
+
+- Round-trip: old-master ciphertext decrypts after rotation when
+  derived with new-master DEK.
+- Cross-user isolation preserved (alice's DEK still can't decrypt
+  bob's row after rotation).
+- Idempotent: re-running the script on an already-rotated row
+  returns `'skipped'` and leaves the row untouched.
+- Untouched rows: a row encrypted under neither key returns
+  `'failed'` and is not modified.
+- Scope-correct: a `scope='system'` row uses the system DEK, not a
+  user DEK.
+
+Cumulative: **1173 pass / 9 fail / 62 skip** — net +5, zero
+regressions, same 9 pre-existing StdioTransport failures.
+
 ---
 
 ## 1. Goals & Non-Goals
