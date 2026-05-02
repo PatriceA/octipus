@@ -37,25 +37,13 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  const { executeRaw } = await import('@/db/postgres');
-  await executeRaw(
-    `INSERT INTO users (id, username, is_admin) VALUES
-       ('${aliceId}', 'alice', false),
-       ('${bobId}', 'bob', false)
-     ON CONFLICT DO NOTHING`,
-  );
-
-  const { documentRepository } = await import('@/db/repositories/document-repository');
-  aliceDocId = (await documentRepository.create({
-    userId: aliceId, filename: 'a.pdf', originalName: 'alice.pdf',
-    mimeType: 'application/pdf', size: 1, storagePath: '/tmp/no-such',
-    status: 'queued',
-  })).id;
-  bobDocId = (await documentRepository.create({
-    userId: bobId, filename: 'b.pdf', originalName: 'bob.pdf',
-    mimeType: 'application/pdf', size: 1, storagePath: '/tmp/no-such',
-    status: 'queued',
-  })).id;
+  const { seedDocument, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+  await seedUsers([
+    { id: aliceId, username: 'alice' },
+    { id: bobId, username: 'bob' },
+  ]);
+  aliceDocId = (await seedDocument({ userId: aliceId, originalName: 'alice.pdf' })).id;
+  bobDocId = (await seedDocument({ userId: bobId, originalName: 'bob.pdf' })).id;
 
   const { documentRoutes } = await import('./documents');
   const { principalFromUser } = await import('@/security/principal');

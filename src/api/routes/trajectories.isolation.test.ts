@@ -37,21 +37,16 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  await executeRaw(
-    `INSERT INTO users (id, username, is_admin) VALUES
-       ('${aliceId}', 'alice', false),
-       ('${bobId}', 'bob', false),
-       ('${adminId}', 'root', true)
-     ON CONFLICT DO NOTHING`,
-  );
-
-  const { sessionRepository } = await import('@/db/repositories/session-repository');
-  const aliceSession = await sessionRepository.create({
-    userId: aliceId, channelType: 'webchat', channelId: 'a-1',
-  });
-  const bobSession = await sessionRepository.create({
-    userId: bobId, channelType: 'webchat', channelId: 'b-1',
-  });
+  // Seed via raw SQL — see multiuser-fixtures.ts for why we don't go
+  // through repository singletons here.
+  const { seedSession, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+  await seedUsers([
+    { id: aliceId, username: 'alice' },
+    { id: bobId, username: 'bob' },
+    { id: adminId, username: 'root', isAdmin: true },
+  ]);
+  const aliceSession = await seedSession({ userId: aliceId, channelId: 'a-1' });
+  const bobSession = await seedSession({ userId: bobId, channelId: 'b-1' });
 
   await executeRaw(
     `INSERT INTO trajectory_runs (user_id, root_session_id, outcome, started_at, ended_at, total_tokens, jsonl_path, jsonl_line)

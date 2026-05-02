@@ -21,6 +21,13 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  seedAgent,
+  seedDocument,
+  seedMessage,
+  seedSession,
+  seedUsers,
+} from '@/test-helpers/multiuser-fixtures';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -46,54 +53,32 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  const { executeRaw } = await import('@/db/postgres');
   aliceId = '11111111-1111-1111-1111-111111111111';
   bobId = '22222222-2222-2222-2222-222222222222';
 
-  await executeRaw(
-    `INSERT INTO users (id, username, is_admin) VALUES
-       ('${aliceId}', 'alice', false),
-       ('${bobId}', 'bob', false)
-     ON CONFLICT DO NOTHING`,
-  );
+  await seedUsers([
+    { id: aliceId, username: 'alice' },
+    { id: bobId, username: 'bob' },
+  ]);
 
-  // Build sessions, agents, docs through the unscoped repos so we know
-  // the *raw* state of the tables before exercising the scope.
-  const { sessionRepository } = await import('./session-repository');
-  aliceSession = await sessionRepository.create({
-    userId: aliceId, channelType: 'webchat', channelId: 'a-1',
-  });
-  bobSession = await sessionRepository.create({
-    userId: bobId, channelType: 'webchat', channelId: 'b-1',
-  });
+  // Seed via raw SQL helpers (see multiuser-fixtures.ts) — the repo
+  // singletons can be mocked by other test files in the same process,
+  // so going through them here is brittle.
+  aliceSession = await seedSession({ userId: aliceId, channelId: 'a-1' });
+  bobSession = await seedSession({ userId: bobId, channelId: 'b-1' });
 
-  const { messageRepository } = await import('./message-repository');
-  await messageRepository.create({
-    sessionId: aliceSession.id, role: 'user', content: 'alice secret',
+  await seedMessage({ sessionId: aliceSession.id, role: 'user', content: 'alice secret' });
+  await seedMessage({ sessionId: bobSession.id, role: 'user', content: 'bob secret' });
+
+  aliceAgent = await seedAgent({
+    id: 'agent-alice', sessionId: aliceSession.id, userId: aliceId, status: 'running',
   });
-  await messageRepository.create({
-    sessionId: bobSession.id, role: 'user', content: 'bob secret',
+  bobAgent = await seedAgent({
+    id: 'agent-bob', sessionId: bobSession.id, userId: bobId, status: 'running',
   });
 
-  const { agentRepository } = await import('./agent-repository');
-  aliceAgent = await agentRepository.create({
-    id: 'agent-alice', sessionId: aliceSession.id, userId: aliceId,
-    role: 'general', model: 'test', topic: 'test',
-  });
-  bobAgent = await agentRepository.create({
-    id: 'agent-bob', sessionId: bobSession.id, userId: bobId,
-    role: 'general', model: 'test', topic: 'test',
-  });
-
-  const { documentRepository } = await import('./document-repository');
-  aliceDoc = await documentRepository.create({
-    userId: aliceId, filename: 'a.pdf', originalName: 'a.pdf',
-    mimeType: 'application/pdf', size: 1, storagePath: '/tmp/a.pdf',
-  });
-  bobDoc = await documentRepository.create({
-    userId: bobId, filename: 'b.pdf', originalName: 'b.pdf',
-    mimeType: 'application/pdf', size: 1, storagePath: '/tmp/b.pdf',
-  });
+  aliceDoc = await seedDocument({ userId: aliceId, originalName: 'a.pdf', storagePath: '/tmp/a.pdf' });
+  bobDoc = await seedDocument({ userId: bobId, originalName: 'b.pdf', storagePath: '/tmp/b.pdf' });
 });
 
 afterAll(async () => {
@@ -135,11 +120,12 @@ describe('ScopedSessionRepo cross-tenant isolation', () => {
 
   test('update on another user’s session is a no-op (returns null)', async () => {
     const alice = await asAlice();
-    const before = await (await import('./session-repository')).sessionRepository.findById(bobSession.id);
+    const { queryRaw } = await import('@/db/postgres');
+    const beforeQ = await queryRaw(`SELECT title FROM sessions WHERE id='${bobSession.id}'`);
     const result = await alice.sessions.update(bobSession.id, { title: 'pwned' });
     expect(result).toBeNull();
-    const after = await (await import('./session-repository')).sessionRepository.findById(bobSession.id);
-    expect(after?.title).toBe(before?.title ?? null);
+    const afterQ = await queryRaw(`SELECT title FROM sessions WHERE id='${bobSession.id}'`);
+    expect(afterQ.rows[0]?.title).toBe(beforeQ.rows[0]?.title ?? null);
   });
 
   test('update strips an attempted user_id reassignment', async () => {
@@ -158,9 +144,9 @@ describe('ScopedSessionRepo cross-tenant isolation', () => {
   test('delete on another user’s session returns false, row stays', async () => {
     const alice = await asAlice();
     expect(await alice.sessions.delete(bobSession.id)).toBe(false);
-    const stillThere = await (await import('./session-repository'))
-      .sessionRepository.findById(bobSession.id);
-    expect(stillThere).not.toBeNull();
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT id FROM sessions WHERE id='${bobSession.id}'`);
+    expect(rows).toHaveLength(1);
   });
 
   test('admin.findById crosses tenants', async () => {
@@ -211,9 +197,11 @@ describe('ScopedMessageRepo cross-tenant isolation', () => {
     });
     expect(result).toBeNull();
     // Verify Bob's session message count didn't grow
-    const bobMsgs = await (await import('./message-repository')).messageRepository
-      .findBySession(bobSession.id);
-    expect(bobMsgs.find((m) => m.content === 'cross-tenant-injection')).toBeUndefined();
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(
+      `SELECT id FROM messages WHERE session_id='${bobSession.id}' AND content='cross-tenant-injection'`,
+    );
+    expect(rows).toHaveLength(0);
   });
 
   test('create on own session succeeds', async () => {
@@ -262,9 +250,9 @@ describe('ScopedDocumentRepo cross-tenant isolation', () => {
   test('delete on another user’s document is a no-op', async () => {
     const alice = await asAlice();
     expect(await alice.documents.delete(bobDoc.id)).toBe(false);
-    const stillThere = await (await import('./document-repository'))
-      .documentRepository.findById(bobDoc.id);
-    expect(stillThere).not.toBeNull();
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT id FROM documents WHERE id='${bobDoc.id}'`);
+    expect(rows).toHaveLength(1);
   });
 });
 

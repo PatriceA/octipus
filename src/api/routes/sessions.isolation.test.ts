@@ -43,24 +43,17 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  const { executeRaw } = await import('@/db/postgres');
-  await executeRaw(
-    `INSERT INTO users (id, username, is_admin) VALUES
-       ('${aliceId}', 'alice', false),
-       ('${bobId}', 'bob', false)
-     ON CONFLICT DO NOTHING`,
-  );
-
-  // Seed sessions + a message in bob's session so we can confirm leak protection.
-  const { sessionRepository } = await import('@/db/repositories/session-repository');
-  const { messageRepository } = await import('@/db/repositories/message-repository');
-  aliceSessionId = (await sessionRepository.create({
-    userId: aliceId, channelType: 'webchat', channelId: 'a-1', title: 'alice',
-  })).id;
-  bobSessionId = (await sessionRepository.create({
-    userId: bobId, channelType: 'webchat', channelId: 'b-1', title: 'bob',
-  })).id;
-  await messageRepository.create({ sessionId: bobSessionId, role: 'user', content: 'bob secret' });
+  // Seed via raw SQL helpers — go around the repo singletons because
+  // bun's mock.module from other test files (notably commands.test.ts)
+  // may have replaced them with partial stubs.
+  const { seedMessage, seedSession, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+  await seedUsers([
+    { id: aliceId, username: 'alice' },
+    { id: bobId, username: 'bob' },
+  ]);
+  aliceSessionId = (await seedSession({ userId: aliceId, channelId: 'a-1', title: 'alice' })).id;
+  bobSessionId = (await seedSession({ userId: bobId, channelId: 'b-1', title: 'bob' })).id;
+  await seedMessage({ sessionId: bobSessionId, role: 'user', content: 'bob secret' });
 
   const { sessionRoutes } = await import('./sessions');
   const { principalFromUser } = await import('@/security/principal');

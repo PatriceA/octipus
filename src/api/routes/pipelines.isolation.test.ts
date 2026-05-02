@@ -45,17 +45,13 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  await executeRaw(
-    `INSERT INTO users (id, username, is_admin) VALUES
-       ('${aliceId}', 'alice', false),
-       ('${bobId}', 'bob', false)
-     ON CONFLICT DO NOTHING`,
-  );
-
-  const { sessionRepository } = await import('@/db/repositories/session-repository');
-  const bobSession = await sessionRepository.create({
-    userId: bobId, channelType: 'webchat', channelId: 'b-1',
-  });
+  // Seed via raw SQL — see multiuser-fixtures.ts for the rationale.
+  const { seedSession, seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+  await seedUsers([
+    { id: aliceId, username: 'alice' },
+    { id: bobId, username: 'bob' },
+  ]);
+  const bobSession = await seedSession({ userId: bobId, channelId: 'b-1' });
 
   await executeRaw(
     `INSERT INTO pipelines (orchestrator_agent_id, session_id, user_id, title, type, status)

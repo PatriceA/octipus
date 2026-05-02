@@ -43,36 +43,26 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
 
-  const { executeRaw } = await import('@/db/postgres');
-  await executeRaw(
-    `INSERT INTO users (id, username, is_admin) VALUES
-       ('${aliceId}', 'alice', false),
-       ('${bobId}', 'bob', false)
-     ON CONFLICT DO NOTHING`,
-  );
-
-  const { sessionRepository } = await import('@/db/repositories/session-repository');
-  aliceSessionId = (await sessionRepository.create({
-    userId: aliceId, channelType: 'webchat', channelId: 'a-1',
-  })).id;
-  bobSessionId = (await sessionRepository.create({
-    userId: bobId, channelType: 'webchat', channelId: 'b-1',
-  })).id;
-
-  const { agentRepository } = await import('@/db/repositories/agent-repository');
-  await agentRepository.create({
+  // Seed via raw SQL — bypasses any module-mock state from earlier
+  // test files in the same `bun test` invocation.
+  const {
+    seedAgent, seedAgentEvent, seedSession, seedUsers,
+  } = await import('@/test-helpers/multiuser-fixtures');
+  await seedUsers([
+    { id: aliceId, username: 'alice' },
+    { id: bobId, username: 'bob' },
+  ]);
+  aliceSessionId = (await seedSession({ userId: aliceId, channelId: 'a-1' })).id;
+  bobSessionId = (await seedSession({ userId: bobId, channelId: 'b-1' })).id;
+  await seedAgent({
     id: aliceAgentId, sessionId: aliceSessionId, userId: aliceId,
-    role: 'general', model: 'test', topic: 'alice-topic', status: 'completed',
+    topic: 'alice-topic', status: 'completed',
   });
-  await agentRepository.create({
+  await seedAgent({
     id: bobAgentId, sessionId: bobSessionId, userId: bobId,
-    role: 'general', model: 'test', topic: 'bob-topic', status: 'completed',
+    topic: 'bob-topic', status: 'completed',
   });
-
-  // Seed an event row for bob's agent so we can verify cross-tenant
-  // event reads return "not found" rather than the event payload.
-  const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
-  await agentEventRepository.create({
+  await seedAgentEvent({
     agentId: bobAgentId, sessionId: bobSessionId, type: 'thought', data: { secret: 'bob' },
   });
 
