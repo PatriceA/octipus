@@ -24,6 +24,7 @@ import { agentRoutes } from './routes/agents';
 import { apiTokenRoutes } from './routes/api-tokens';
 // Import routes
 import { authRoutes } from './routes/auth';
+import { channelBindingRoutes } from './routes/channel-bindings';
 import { chatRoutes } from './routes/chat';
 import { deviceRoutes } from './routes/devices';
 import { documentRoutes } from './routes/documents';
@@ -235,6 +236,7 @@ export function createServer() {
         .use(healthRoutes)
         .use(authRoutes)
         .use(apiTokenRoutes)
+        .use(channelBindingRoutes)
         .use(adminRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
