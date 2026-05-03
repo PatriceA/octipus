@@ -2,6 +2,7 @@ import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
+import { humanizeProviderError } from '@/core/errors/humanize';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import { type AgentNode, LEVEL_DEFAULT } from '@/core/swarm/types';
@@ -723,7 +724,7 @@ export class OrchestratorService {
 
       const response = wasStopped
         ? 'Task was stopped. Would you like to adjust the request or start something new?'
-        : `I encountered an error while processing your request: ${errMsg}`;
+        : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;
       return { response, agentId, sources };
     }
   }

@@ -3,16 +3,23 @@ services:
     image: pgvector/pgvector:pg16
     container_name: octipus-test-db
     environment:
+      # Use the default `postgres` superuser for bootstrap so the init
+      # script can create a non-superuser `octipus` app role (needed so
+      # RLS actually fires under tests).
       - POSTGRES_DB=octipus_test
-      - POSTGRES_USER=octipus
+      - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=test
     # tmpfs-backed: no volume mount => data wiped when container stops
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      # Demote `octipus` from SUPERUSER so RLS policies are enforced — see
+      # the comment in postgres-init.sql.
+      - ./tests/integration/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
       - "${TEST_POSTGRES_PORT:-5443}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U octipus -d octipus_test"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d octipus_test"]
       interval: 1s
       timeout: 2s
       retries: 30

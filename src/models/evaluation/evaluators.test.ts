@@ -1,5 +1,19 @@
 import { mock } from 'bun:test';
 
+// Set the env vars `loadConfig()` needs BEFORE importing anything that may
+// touch `@/config`. We can't safely mock `@/config` itself: bun's
+// `mock.module` is process-wide for the whole test run, so any partial mock
+// here would leak into integration tests later in the same `bun test` run
+// and break them (e.g. config.database.url ends up empty → postgres-js
+// connects as the local OS user). Setting env vars is local: integration
+// tests set their own DATABASE_URL/REDIS_URL via the test:integration
+// runner before any test code runs.
+process.env.MASTER_KEY ??= 'a'.repeat(32);
+process.env.JWT_SECRET ??= 'b'.repeat(32);
+process.env.SESSION_SECRET ??= 'c'.repeat(32);
+process.env.LITELLM_PROXY_URL ??= 'http://localhost:4000';
+process.env.LITELLM_API_KEY ??= 'test-key';
+
 // Mock the provider router BEFORE importing evaluators (which import it transitively).
 // This prevents any real network calls or config reads.
 const mockComplete = async () => ({
@@ -32,33 +46,6 @@ mock.module('@/models/model-registry', () => ({
       metadata: { extraBody: {} },
     }),
   }),
-}));
-
-// Mock config to avoid validation failures.
-// IMPORTANT: bun's `mock.module` is process-wide for the whole test run, so
-// any field omitted here becomes undefined for every subsequent test that
-// imports `@/config`. Build the mock from the real schema defaults + the
-// project's `defaultConfig` so downstream tests (audit-shadow, multiuser
-// fixtures, etc.) don't break.
-import { configSchema } from '@/config/schema';
-import { defaultConfig } from '@/config/defaults';
-const _mockBase = configSchema.parse({
-  ...defaultConfig,
-  litellm: {
-    proxyUrl: 'http://localhost:4000',
-    apiKey: 'test-key',
-    timeout: 10000,
-    maxRetries: 1,
-  },
-  security: {
-    ...defaultConfig.security,
-    masterKey: 'a'.repeat(32),
-    jwtSecret: 'b'.repeat(32),
-    sessionSecret: 'c'.repeat(32),
-  },
-});
-mock.module('@/config', () => ({
-  getConfig: () => _mockBase,
 }));
 
 import { describe, test, expect } from 'bun:test';

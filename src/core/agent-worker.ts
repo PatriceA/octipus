@@ -13,6 +13,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
+import { ClassifiedError } from './errors/classification';
 import {
   BudgetExceededError,
   CascadedCancellationError,
@@ -660,11 +661,17 @@ export class AgentWorker extends BaseAgentWorker {
           continue;
         }
 
-        // Retry transient LLM failures (JSON parse, rate limit, server errors)
-        const isTransient = errMsg.includes('JSON') || errMsg.includes('parse')
+        // Retry transient LLM failures (JSON parse, rate limit, server errors).
+        // ClassifiedError already encodes recoverability — trust it first so
+        // wrapped malformed-tool-call errors (e.g. Ollama's "Value looks like
+        // object, but can't find closing '}' symbol") are retried instead of
+        // surfacing as raw JSON to the user.
+        const isTransient = (err instanceof ClassifiedError && err.isRetryable)
+          || errMsg.includes('JSON') || errMsg.includes('parse')
           || errMsg.includes('Unterminated') || errMsg.includes('500')
           || errMsg.includes('502') || errMsg.includes('503')
-          || errMsg.includes('rate_limit') || errMsg.includes('overloaded');
+          || errMsg.includes('rate_limit') || errMsg.includes('overloaded')
+          || /Value looks like object|find closing '\}' symbol/.test(errMsg);
 
         this.llmRetries = (this.llmRetries || 0) + 1;
         if (isTransient && this.llmRetries <= 3) {

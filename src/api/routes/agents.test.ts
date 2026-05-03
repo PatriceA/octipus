@@ -97,10 +97,13 @@ describe.skipIf(!isIntegration)('Agents API (Integration)', () => {
     ]);
 
     const { agentRoutes } = await import('./agents');
+    const { principalFromUser } = await import('@/security/principal');
+    const callerUser = { id: testUserId, username: 'tester', isAdmin: false };
     app = new Elysia()
       .derive({ as: 'global' }, () => ({
-        user: { id: testUserId, username: 'tester', isAdmin: false },
+        user: callerUser,
         session: null,
+        principal: principalFromUser(callerUser),
       }))
       .use(agentRoutes);
   });
@@ -173,7 +176,9 @@ describe.skipIf(!isIntegration)('Agents API (Integration)', () => {
       new Request(`http://localhost/agents/${otherAgent.id}`),
     );
     const data = (await res.json()) as { error?: string };
-    expect(data.error).toBe('Not authorized');
+    // The route collapses 403 into 404 to avoid leaking existence — a
+    // foreign agent id looks indistinguishable from a non-existent one.
+    expect(data.error).toBe('Agent not found');
   });
 });
 

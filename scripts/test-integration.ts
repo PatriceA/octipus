@@ -58,7 +58,11 @@ async function main() {
     }
 
     console.log('\n[integration] Running tests (INTEGRATION=1)...');
-    testExit = await run('bun', ['test', ...extraArgs], {
+    // Default to `src scripts` so Playwright specs in tests/web/ aren't
+    // auto-discovered by bun test (they use Playwright's `test.describe`,
+    // which throws under bun's runner). Caller can override via extraArgs.
+    const testArgs = extraArgs.length > 0 ? extraArgs : ['src', 'scripts'];
+    testExit = await run('bun', ['test', ...testArgs], {
       INTEGRATION: '1',
       DATABASE_URL,
       REDIS_URL,
