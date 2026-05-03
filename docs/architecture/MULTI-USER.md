@@ -594,6 +594,49 @@ Cumulative: **1177 pass / 9 fail / 66 skip** — same 9 pre-existing
 StdioTransport tests, net +4 PGlite + 4 added integration-skipped,
 zero regressions.
 
+## Phase 3b-2 — RLS sweep complete (remaining tables)
+
+Migration `0035_rls_policies_remaining.sql` extends the same
+"bypass on missing GUC" pattern to the rest of the user-owned
+tables. Three policy shapes:
+
+1. **Direct `user_id`** (`text` or `uuid`, NOT NULL or nullable):
+   `documents`, `agents`, `hooks`, `pipelines`, `notifications`,
+   `trajectory_runs`, `recurring_tasks`, `skill_permissions`,
+   `permission_requests`, plus the Phase-0 nullable columns
+   `agent_events`, `embeddings`, `hook_executions`, `swarm_nodes`.
+   For nullable columns, rows with `user_id IS NULL` never match
+   the per-user comparison and become invisible without
+   `withRlsBypass` — that's intentional: orphan rows from pre-Phase-0
+   data aren't accessible to per-user reads, but system jobs
+   (cron, reapers, compaction) reach them through the bypass path.
+
+2. **`messages`** (no `user_id` column; ownership lives on the
+   `sessions` FK):
+   ```sql
+   USING (bypass='true' OR EXISTS (
+     SELECT 1 FROM sessions
+     WHERE sessions.id = messages.session_id
+       AND sessions.user_id::text = current_setting(...)))
+   ```
+   Subqueries cost more than direct comparisons but the natural
+   shape for strict child-by-FK relationships; `messages.session_id`
+   is already indexed.
+
+3. **`pipeline_stages`** — same shape as `messages`, joined through
+   `pipelines.user_id`.
+
+After this commit, **every user-owned table in the schema** carries
+a policy. The RLS test suite asserts coverage on all 19 tables; the
+PGlite smoke test confirms the migration applies cleanly. Behavioral
+enforcement still only fires under external Postgres + a
+non-superuser app role (see Phase 3b operator runbook).
+
+Cumulative: **1177 pass / 9 fail / 66 skip** — same totals as Phase
+3b (this commit only adds new assertions to the existing migration
+test, not new test cases). 19 policies installed; zero regressions;
+typecheck + lint clean.
+
 ---
 
 ## 1. Goals & Non-Goals
