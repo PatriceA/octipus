@@ -771,6 +771,99 @@ StdioTransport tests, net +6, zero regressions. Lint + typecheck clean.
 With this commit Phase 3c is complete: operators can see + set caps
 (3c-1) and the runtime enforces them (3c-2). Phase 3d is next.
 
+## Phase 3d — admin impersonation with strong audit
+
+Admins can open a short-lived "act as <user>" window to investigate
+a bug report, validate a permission change, or reproduce something
+a user is seeing. While the window is open the request is routed
+**as the target user** (so `scopedRepos`, permission checks, RLS
+all see the target's data) but every action is **dual-tagged in the
+audit log** under both the actor (admin) and the target.
+
+### Schema (migration `0037`)
+
+`impersonation_sessions (id, actor_user_id, target_user_id,
+actor_session_hash, started_at, expires_at, ended_at, ended_reason,
+reason, ip_address)`. Keyed by `actor_session_hash` (SHA-256 of the
+admin's auth-session token) so the auth-derive middleware does a
+single indexed lookup per request without exposing tokens. RLS
+policy lets either party read their own row.
+
+### `ImpersonationManager` (`src/security/impersonation.ts`)
+
+- `start(actor, targetUserId, sessionToken, opts)` — validates
+  admin status, rejects self / missing / disabled targets, closes
+  any prior active session for the same admin
+  (`ended_reason='replaced'`), inserts the row, writes paired
+  `audit_log` rows under both actor and target.
+- `findActive(sessionToken)` — single indexed lookup. Returns null
+  on no row, ended row, or expired row.
+- `stop(sessionToken, reason='explicit')` — closes the row, writes
+  paired logout audit entries.
+- `listRecent(limit)` for the admin console.
+- `reapExpired()` for the cleanup job (out of scope here).
+
+Default TTL: **1 hour**. Short on purpose — admins finish their
+investigation in one sitting, not leave a backdoor open across
+days. One active session per admin (replace semantics).
+
+### Server `.derive()` integration
+
+When the auth-derive middleware sees an admin's session token, it
+calls `findActive(token)`. If a row matches, the request's identity
+is swapped to the target user; `principal.actorUserId` /
+`actorUsername` are set so downstream audit / banner code knows who
+is really behind the request. Failure to look up the row is
+non-fatal — the request proceeds as the admin.
+
+### Audit dual-tagging
+
+`audit-shadow` middleware (Phase 0) gained an impersonation branch.
+When `principal.actorUserId` is set:
+
+- The primary `api_request` row is filed under the target
+  (`details.impersonate = { actorUserId, actorUsername, targetUserId,
+  targetUsername }`).
+- A mirror row is filed under the actor with the same details plus
+  `mirroredFromTarget: true`.
+
+A search by either user-id finds the action.
+
+### REST surface
+
+- `POST /api/admin/impersonate/:userId` — start a session. Body
+  `{ reason?: string }`. Self-target → 400; missing → 404; admin
+  using `MASTER_KEY` (no rotatable session token) → 400.
+- `POST /api/admin/impersonate/stop` — end the active session for
+  the calling token. Idempotent: 404 on second call.
+- `GET /api/admin/impersonate` — recent sessions for the admin
+  console list view.
+
+### Web
+
+- `ImpersonationBanner` mounted in the root layout reads
+  `actorUserId` / `actorUsername` from `/auth/me`. Yellow bar across
+  the top: "<admin> is acting as <user>. Every action is audited."
+  Stop button posts to `/impersonate/stop` and reloads.
+- `/admin/users` rows gain an "Act as" button that prompts for a
+  reason and posts to `/impersonate/:userId`. Disabled for self
+  and for inactive users.
+
+### Tests
+
+- 9 unit (`impersonation.test.ts`): rejects non-admin / self /
+  missing target; happy path writes paired audit rows; findActive
+  hits + stops + idempotent; replace semantics
+  (`ended_reason='replaced'`); reapExpired sweeps unfinished rows.
+- 9 admin route (`admin-impersonation.isolation.test.ts`):
+  anonymous 401; non-admin 403; admin without session token 400;
+  self 400; missing 404; happy path returns sessionId + manager
+  resolves it; stop closes + 404 on second; GET /impersonate lists.
+
+Cumulative: **1215 pass / 9 fail / 66 skip** — same 9 pre-existing
+StdioTransport tests, net **+18** (9 manager + 9 route), zero
+regressions. Lint + typecheck + web typecheck clean.
+
 ---
 
 ## 1. Goals & Non-Goals

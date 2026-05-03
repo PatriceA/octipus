@@ -91,20 +91,50 @@ export async function writeApiAudit(args: {
   // accepts both UUIDs and 'system' / null.
   const userId = principal && principal.kind !== 'anonymous' ? principal.userId : null;
 
+  // Phase 3d — when an admin is impersonating, record the entry under
+  // BOTH the actor (admin) and the target (the user being acted as)
+  // so an investigator searching by either user id finds the action.
+  // The shared `details.impersonate` block carries the other party's
+  // identity so the entries are joinable.
+  const impersonating = !!principal?.actorUserId;
+  const baseDetails: Record<string, unknown> = {
+    method,
+    path: pathname,
+    status,
+    duration: durationMs,
+    principalKind: principal?.kind ?? 'anonymous',
+  };
+  if (impersonating) {
+    baseDetails.impersonate = {
+      actorUserId: principal!.actorUserId,
+      actorUsername: principal!.actorUsername,
+      targetUserId: principal!.userId,
+      targetUsername: principal!.username,
+    };
+  }
+
   await auditRepository.log({
     userId,
     action: 'api_request',
     resourceType: resourceTypeFromPath(pathname),
     ipAddress,
     userAgent,
-    details: {
-      method,
-      path: pathname,
-      status,
-      duration: durationMs,
-      principalKind: principal?.kind ?? 'anonymous',
-    },
+    details: baseDetails,
   });
+
+  // Mirror the entry under the actor when impersonating — the
+  // primary entry is filed under the target (so target-side audit
+  // searches find it); the mirror lets actor-side searches find it.
+  if (impersonating && principal?.actorUserId && principal.actorUserId !== userId) {
+    await auditRepository.log({
+      userId: principal.actorUserId,
+      action: 'api_request',
+      resourceType: resourceTypeFromPath(pathname),
+      ipAddress,
+      userAgent,
+      details: { ...baseDetails, mirroredFromTarget: true },
+    });
+  }
 }
 
 export const auditShadowMiddleware = new Elysia({ name: 'audit-shadow' })

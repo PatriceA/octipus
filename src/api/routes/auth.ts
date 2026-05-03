@@ -130,11 +130,19 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   // Get current user
   .get(
     '/me',
-    async ({ user, session, set }) => {
+    async (ctx: any) => {
+      const { user, set } = ctx;
       if (!user) {
         set.status = 401;
         return { error: 'Not authenticated' };
       }
+
+      // Phase 3d — when an admin is impersonating, the principal
+      // carries actorUserId/actorUsername. Surface them so the
+      // banner can show "<admin> is acting as <user>".
+      const principal = ctx.principal as { actorUserId?: string | null; actorUsername?: string | null } | undefined;
+      const actorUserId = principal?.actorUserId ?? null;
+      const actorUsername = principal?.actorUsername ?? null;
 
       // MASTER_KEY system user — not in DB
       if (user.id === 'system') {
@@ -147,6 +155,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
           preferences: {},
           channelBindings: [],
           createdAt: new Date().toISOString(),
+          actorUserId,
+          actorUsername,
         };
       }
 
@@ -164,6 +174,8 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         preferences: fullUser.preferences,
         channelBindings: fullUser.channelBindings || [],
         createdAt: fullUser.createdAt,
+        actorUserId,
+        actorUsername,
       };
     },
     { detail: { tags: ['auth'] } }

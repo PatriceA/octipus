@@ -323,6 +323,114 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     },
   )
 
+  // ── Impersonation (Phase 3d) ───────────────────────────────────
+  // POST   /impersonate/:userId  — start an "act as <user>" session
+  //                                bound to the admin's session token.
+  //                                Idempotent on re-issue: the prior
+  //                                session is closed (ended_reason='replaced').
+  // POST   /impersonate/stop     — end the active session for the
+  //                                calling admin's token.
+  // GET    /impersonate          — list recent sessions (audit view).
+  //
+  // Strong audit: start writes paired audit_log rows under both
+  // actor + target. Every state-changing request during the window
+  // is dual-tagged by the audit-shadow middleware.
+  //
+  // Important: the admin's session token (`session.token`) IS the
+  // lookup key — when the auth-derive middleware sees a request
+  // whose token matches an active impersonation row, it swaps the
+  // request's identity to the target user. The token itself isn't
+  // re-issued; the existing one just routes differently while the
+  // window is open.
+  .post(
+    '/impersonate/:userId',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, body, session, request, set } = ctx as any;
+
+      if (!session?.token) {
+        set.status = 400;
+        return { error: 'Impersonation requires a real session token (no MASTER_KEY fallback)' };
+      }
+
+      const { getImpersonationManager } = await import('@/security/impersonation');
+      const ipAddress =
+        request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+        request.headers.get('x-real-ip') ||
+        undefined;
+
+      const result = await getImpersonationManager().start(
+        { id: ctx.principal.userId, username: ctx.principal.username, isAdmin: true },
+        params.userId,
+        session.token,
+        { reason: body?.reason, ipAddress },
+      );
+      if (!result.ok) {
+        switch (result.reason) {
+          case 'self':            set.status = 400; return { error: 'Cannot impersonate yourself' };
+          case 'target_not_found': set.status = 404; return { error: 'Target user not found' };
+          case 'target_inactive':  set.status = 400; return { error: 'Target user is disabled' };
+          default:                  set.status = 400; return { error: result.reason };
+        }
+      }
+      return {
+        sessionId: result.session.id,
+        targetUserId: result.target.id,
+        targetUsername: result.target.username,
+        expiresAt: result.session.expiresAt,
+      };
+    },
+    {
+      params: t.Object({ userId: t.String() }),
+      body: t.Optional(t.Object({ reason: t.Optional(t.String({ maxLength: 500 })) })),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .post(
+    '/impersonate/stop',
+    async (ctx) => {
+      // The caller here is the admin acting as themselves OR the
+      // target while still inside the impersonation window — both
+      // share the same session token, so either can stop. Audit
+      // records the actor regardless.
+      if (!ctx.user || !isAuthenticated(ctx.principal)) {
+        ctx.set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      const session = (ctx as any).session;
+      if (!session?.token) {
+        ctx.set.status = 400;
+        return { error: 'No active session token' };
+      }
+      const { getImpersonationManager } = await import('@/security/impersonation');
+      const stopped = await getImpersonationManager().stop(session.token, 'explicit');
+      if (!stopped) {
+        ctx.set.status = 404;
+        return { error: 'No active impersonation session' };
+      }
+      return { stopped: true, sessionId: stopped.id };
+    },
+    { detail: { tags: ['admin'] } },
+  )
+
+  .get(
+    '/impersonate',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const limit = Math.min(parseInt((ctx as any).query?.limit ?? '50', 10) || 50, 200);
+      const { getImpersonationManager } = await import('@/security/impersonation');
+      const sessions = await getImpersonationManager().listRecent(limit);
+      return { sessions };
+    },
+    {
+      query: t.Object({ limit: t.Optional(t.String()) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
   // ── Audit log ──────────────────────────────────────────────────
   .get(
     '/audit',
