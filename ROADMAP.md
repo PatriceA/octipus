@@ -192,6 +192,18 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   - SCIM provisioning + SAML SSO (Phase 4 in the design doc).
   - Per-user billing hooks (token cost accounting already exists).
 
+- **TUI editor (in flight, 2026-05).** A full-screen terminal
+  editor that doubles as the agent's collaborator —
+  editor-first instead of the current chat-first surface.
+  Inspired by [pi-mono](https://github.com/badlogic/pi-mono).
+  Multi-pane layout (file tree / editor / chat), real
+  multi-line editing with cursor + selection + undo, command
+  palette, in-buffer diff overlays for agent edits, inline
+  permission prompts, multi-user workspace awareness. Shipping
+  alongside the existing chat TUI (`src/tui/`) under a new
+  `src/tui-editor/` so neither surface blocks the other. Full
+  plan: [`docs/architecture/TUI-EDITOR.md`](docs/architecture/TUI-EDITOR.md).
+
 ## Next (months)
 
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
