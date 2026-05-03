@@ -637,6 +637,79 @@ Cumulative: **1177 pass / 9 fail / 66 skip** — same totals as Phase
 test, not new test cases). 19 policies installed; zero regressions;
 typecheck + lint clean.
 
+## Phase 3c-1 — per-user quotas (data + admin UI; no enforcement yet)
+
+Operator visibility + management for three quota dimensions:
+
+- **Concurrent agents** — `agents WHERE user_id = … AND status='running'`.
+- **Daily token budget** — sum of `totalTokens` across the user's
+  agents created in the current UTC day.
+- **API requests per minute** — count of `audit_log` rows with
+  `action='api_request'` for the user in the last 60 seconds.
+
+### Schema (migration `0036`)
+
+`user_quotas (user_id PK, max_concurrent_agents, max_tokens_per_day,
+max_api_calls_per_minute, created_at, updated_at)`. Each cap is
+nullable: missing column = inherit the global default
+(`config.agent.maxConcurrentAgents`, `config.agent.maxTokenBudget`,
+`config.api.rateLimitMax`). Missing row = inherit every default.
+
+The migration also adds an RLS policy in the same shape as 0034/0035
+so the table participates in the framework from day one.
+
+### `QuotaManager` (`src/security/quotas.ts`)
+
+- `getEffectiveQuota(userId)` — resolves overrides + defaults; tells
+  the caller which fields are overridden so the UI can mark them.
+- `getUsage(userId)` — reads the canonical tables (no cached
+  counters). Cheap enough at the scale this targets.
+- `willExceed(userId, kind, delta)` — pre-flight gate the future
+  enforcement points (Phase 3c-2) call before letting the operation
+  through. Returns a structured `{ kind, current, max }` reason on
+  denial.
+- `setOverride(userId, patch)` / `clearOverride(userId)` for the
+  admin route.
+
+### Admin REST (`/api/admin/quotas`)
+
+- `GET /` — list every user with effective quota + current usage.
+- `GET /:userId` — single-user detail.
+- `PATCH /:userId` — set/clear per-field overrides. Negative or zero
+  values rejected with 400 (clearer to require explicit `null` or
+  `DELETE` for "no override"). Unknown user → 404. Audit row written
+  via `settings_changed`.
+- `DELETE /:userId` — drop the override row entirely.
+
+### Admin web (`/admin/quotas`)
+
+New tab in the existing `/admin/*` layout next to Users + Audit log.
+Table view with three meter columns (current/max + colored bar at
+70%/90% thresholds), edit modal that surfaces per-field "no change /
+set / clear" semantics. Auto-refreshes every 10s so usage figures
+stay current. `*` next to a value marks a per-user override; the
+`RotateCcw` icon clears every override at once.
+
+### Tests
+
+- 7 unit (`quotas.test.ts`): inherits global defaults; insert+update
+  override; null clears; usage counts running agents + daily tokens
+  + per-minute API rows; `willExceed` allowed/denied with structured
+  reason; `clearOverride` drops the row.
+- 7 admin route (`admin.isolation.test.ts` extension): non-admin
+  403; GET lists; PATCH sets + audit row; PATCH negative/zero → 400;
+  PATCH null clears; PATCH unknown user → 404; DELETE drops then
+  404 on second call.
+
+Cumulative: **1191 pass / 9 fail / 66 skip** — same 9 pre-existing
+StdioTransport tests, net **+14** (7 manager + 7 route), zero
+regressions. Web `bunx tsc --noEmit` clean.
+
+**No enforcement in this commit.** Phase 3c-2 wires the gates at the
+agent-spawn / LLM-call / API-request boundaries. Operators can use
+the data + UI here to investigate and pre-set caps; nothing changes
+in user-visible runtime behavior until 3c-2 lands.
+
 ---
 
 ## 1. Goals & Non-Goals

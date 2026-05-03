@@ -87,6 +87,10 @@ async function patchJson(app: ElysiaLike, path: string, body: unknown) {
   }));
   return { status: res.status, body: await res.json() };
 }
+async function del(app: ElysiaLike, path: string) {
+  const res = await app.handle(new Request(`http://localhost${path}`, { method: 'DELETE' }));
+  return { status: res.status, body: await res.json() };
+}
 
 describe('admin routes — guard behavior', () => {
   test('anonymous → 401 on every /admin endpoint', async () => {
@@ -164,5 +168,75 @@ describe('admin: audit log viewer', () => {
     const r = await get(adminApp, '/api/admin/audit?action=user_created');
     expect(r.status).toBe(200);
     expect(r.body.entries.every((e: any) => e.action === 'user_created')).toBe(true);
+  });
+});
+
+describe('admin: quotas', () => {
+  test('non-admin → 403 on every quota endpoint', async () => {
+    expect((await get(userApp, '/api/admin/quotas')).status).toBe(403);
+    expect((await get(userApp, `/api/admin/quotas/${userId}`)).status).toBe(403);
+    expect((await patchJson(userApp, `/api/admin/quotas/${userId}`, { maxConcurrentAgents: 1 })).status).toBe(403);
+  });
+
+  test('GET /quotas lists every user with effective quota + usage', async () => {
+    const r = await get(adminApp, '/api/admin/quotas');
+    expect(r.status).toBe(200);
+    const usernames = r.body.quotas.map((q: any) => q.username);
+    expect(usernames).toContain('root');
+    expect(usernames).toContain('alice');
+    for (const q of r.body.quotas) {
+      expect(typeof q.quota.maxConcurrentAgents).toBe('number');
+      expect(typeof q.usage.concurrentAgents).toBe('number');
+    }
+  });
+
+  test('PATCH sets per-field overrides + audit row written', async () => {
+    const r = await patchJson(adminApp, `/api/admin/quotas/${userId}`, {
+      maxConcurrentAgents: 3, maxTokensPerDay: 50_000,
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.maxConcurrentAgents).toBe(3);
+    expect(r.body.maxTokensPerDay).toBe(50_000);
+
+    // GET reflects the override.
+    const detail = await get(adminApp, `/api/admin/quotas/${userId}`);
+    expect(detail.body.quota.maxConcurrentAgents).toBe(3);
+    expect(detail.body.quota.overrides.maxConcurrentAgents).toBe(true);
+
+    // Audit row written.
+    const { queryRaw } = await import('@/db/postgres');
+    const audit = await queryRaw(
+      `SELECT details FROM audit_log WHERE action='settings_changed' AND resource_type='user_quota' AND resource_id='${userId}'`,
+    );
+    expect(audit.rows.length).toBeGreaterThan(0);
+  });
+
+  test('PATCH with negative or zero value → 400', async () => {
+    const neg = await patchJson(adminApp, `/api/admin/quotas/${userId}`, { maxConcurrentAgents: -5 });
+    expect(neg.status).toBe(400);
+    const zero = await patchJson(adminApp, `/api/admin/quotas/${userId}`, { maxTokensPerDay: 0 });
+    expect(zero.status).toBe(400);
+  });
+
+  test('PATCH with null clears that field', async () => {
+    await patchJson(adminApp, `/api/admin/quotas/${userId}`, { maxConcurrentAgents: 7 });
+    const cleared = await patchJson(adminApp, `/api/admin/quotas/${userId}`, { maxConcurrentAgents: null });
+    expect(cleared.body.maxConcurrentAgents).toBeNull();
+  });
+
+  test('PATCH for unknown user → 404', async () => {
+    const r = await patchJson(adminApp, '/api/admin/quotas/00000000-0000-0000-0000-000000000000', {
+      maxConcurrentAgents: 1,
+    });
+    expect(r.status).toBe(404);
+  });
+
+  test('DELETE drops the override row; second call → 404', async () => {
+    await patchJson(adminApp, `/api/admin/quotas/${userId}`, { maxConcurrentAgents: 9 });
+    const first = await del(adminApp, `/api/admin/quotas/${userId}`);
+    expect(first.status).toBe(200);
+    expect(first.body.cleared).toBe(true);
+    const second = await del(adminApp, `/api/admin/quotas/${userId}`);
+    expect(second.status).toBe(404);
   });
 });
