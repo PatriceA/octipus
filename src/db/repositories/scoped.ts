@@ -36,18 +36,18 @@
  * deployments.
  */
 
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
-import { agents, type AgentRecord, type NewAgentRecord } from '../schema/agents';
-import { documents, type DocumentRecord, type NewDocumentRecord } from '../schema/documents';
-import { type Hook, hooks } from '../schema/hooks';
-import { messages, type Message, type NewMessage } from '../schema/messages';
-import { notifications, type Notification } from '../schema/notifications';
-import { type Pipeline, pipelines } from '../schema/pipelines';
-import { type PipelineTemplate, pipelineTemplates } from '../schema/pipeline-templates';
-import { type NewSession, type Session, sessions } from '../schema/sessions';
-import { trajectoryRuns, type TrajectoryRunRecord } from '../schema/trajectory-runs';
-import { type Principal, isAdmin, isAuthenticated } from '@/security/principal';
+import { and, asc, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { getDb } from '../postgres';
+import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
+import { type DocumentRecord, documents, type NewDocumentRecord } from '../schema/documents';
+import { type Hook, hooks } from '../schema/hooks';
+import { type Message, messages, type NewMessage } from '../schema/messages';
+import { type Notification, notifications } from '../schema/notifications';
+import { type PipelineTemplate, pipelineTemplates } from '../schema/pipeline-templates';
+import { type Pipeline, pipelines } from '../schema/pipelines';
+import { type NewSession, type Session, sessions } from '../schema/sessions';
+import { type TrajectoryRunRecord, trajectoryRuns } from '../schema/trajectory-runs';
 
 /**
  * Anonymous principals and unauthenticated calls fail fast with this
@@ -66,6 +66,31 @@ function requireAuth(p: Principal): void {
   if (!isAuthenticated(p)) throw new UnauthenticatedAccessError();
 }
 
+/**
+ * Phase 4 — workspace scoping helper.
+ *
+ * Returns a Drizzle filter narrowing rows to the principal's
+ * workspace, OR a no-op when the principal has no workspace context
+ * (feature flag off, or the row is "user-level"). Rows with a NULL
+ * `workspace_id` are included alongside the matching workspace —
+ * NULL means "visible to every workspace owned by this user", so
+ * un-backfilled rows stay visible after the runtime starts
+ * filtering.
+ *
+ * Admins are NOT exempted from this filter. An admin browsing their
+ * own UI under a specific workspace should see only that
+ * workspace's rows; the global view is reached via the explicit
+ * `*Admin` methods that don't go through scoping.
+ */
+function workspaceFilter(
+  principal: Principal,
+  column: { name: string } | typeof sessions.workspaceId,
+): SQL | undefined {
+  const wsId = principal.workspaceId;
+  if (!wsId) return undefined;
+  return sql`(${column} = ${wsId} OR ${column} IS NULL)`;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Sessions
 // ─────────────────────────────────────────────────────────────────────
@@ -80,22 +105,29 @@ export class ScopedSessionRepo {
   /**
    * Returns the row only if the principal owns it (or is an admin).
    * Returns null on miss or on cross-tenant access — callers cannot
-   * distinguish the two.
+   * distinguish the two. Phase 4: also narrows to the principal's
+   * workspace when set; rows with NULL workspace_id stay visible.
    */
   async findById(id: string): Promise<Session | null> {
-    const where = isAdmin(this.principal)
-      ? eq(sessions.id, id)
-      : and(eq(sessions.id, id), eq(sessions.userId, this.principal.userId));
-    const row = await this.db.select().from(sessions).where(where).limit(1);
+    const filters: (SQL | undefined)[] = [eq(sessions.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(sessions.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, sessions.workspaceId));
+    const row = await this.db
+      .select()
+      .from(sessions)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
     return row[0] ?? null;
   }
 
   /** List the principal's own sessions. Admins still get only their own here. */
   async listOwn(limit = 50): Promise<Session[]> {
+    const filters: (SQL | undefined)[] = [eq(sessions.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, sessions.workspaceId));
     return this.db
       .select()
       .from(sessions)
-      .where(eq(sessions.userId, this.principal.userId))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(sessions.updatedAt))
       .limit(limit);
   }
@@ -106,11 +138,21 @@ export class ScopedSessionRepo {
     return this.db.select().from(sessions).orderBy(desc(sessions.updatedAt)).limit(limit);
   }
 
-  /** Create a session pinned to the principal. Ignores any user_id in `data`. */
+  /**
+   * Create a session pinned to the principal. Ignores any user_id in
+   * `data`. Phase 4: when the principal carries a workspace context,
+   * the new row is stamped with it (unless `data` explicitly sets a
+   * workspaceId — useful for admin tools that need to seed rows in a
+   * specific workspace).
+   */
   async create(data: Omit<NewSession, 'userId'>): Promise<Session> {
     const result = await this.db
       .insert(sessions)
-      .values({ ...data, userId: this.principal.userId })
+      .values({
+        ...data,
+        userId: this.principal.userId,
+        workspaceId: data.workspaceId ?? this.principal.workspaceId ?? null,
+      })
       .returning();
     return result[0];
   }
@@ -120,23 +162,26 @@ export class ScopedSessionRepo {
     // Strip user_id from caller-supplied patch — re-owning a row is never legitimate.
     const { userId: _drop, ...safe } = patch;
     void _drop;
-    const where = isAdmin(this.principal)
-      ? eq(sessions.id, id)
-      : and(eq(sessions.id, id), eq(sessions.userId, this.principal.userId));
+    const filters: (SQL | undefined)[] = [eq(sessions.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(sessions.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, sessions.workspaceId));
     const result = await this.db
       .update(sessions)
       .set({ ...safe, updatedAt: new Date() })
-      .where(where)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .returning();
     return result[0] ?? null;
   }
 
   /** Delete only if owned. Returns false on miss / cross-tenant. */
   async delete(id: string): Promise<boolean> {
-    const where = isAdmin(this.principal)
-      ? eq(sessions.id, id)
-      : and(eq(sessions.id, id), eq(sessions.userId, this.principal.userId));
-    const result = await this.db.delete(sessions).where(where).returning();
+    const filters: (SQL | undefined)[] = [eq(sessions.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(sessions.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, sessions.workspaceId));
+    const result = await this.db
+      .delete(sessions)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .returning();
     return result.length > 0;
   }
 }
@@ -323,28 +368,39 @@ export class ScopedDocumentRepo {
   private get db() { return getDb(); }
 
   async findById(id: string): Promise<DocumentRecord | null> {
-    const where = isAdmin(this.principal)
-      ? eq(documents.id, id)
-      : and(eq(documents.id, id), eq(documents.userId, this.principal.userId));
-    const row = await this.db.select().from(documents).where(where).limit(1);
+    const filters: (SQL | undefined)[] = [eq(documents.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(documents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, documents.workspaceId));
+    const row = await this.db
+      .select()
+      .from(documents)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
     return row[0] ?? null;
   }
 
   async listOwn(limit = 50): Promise<DocumentRecord[]> {
+    const filters: (SQL | undefined)[] = [eq(documents.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, documents.workspaceId));
     return this.db
       .select()
       .from(documents)
-      .where(eq(documents.userId, this.principal.userId))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(documents.createdAt))
       .limit(limit);
   }
 
   /** Filter the principal's own documents by category. */
   async listOwnByCategory(category: string, limit = 50): Promise<DocumentRecord[]> {
+    const filters: (SQL | undefined)[] = [
+      eq(documents.userId, this.principal.userId),
+      eq(documents.category, category),
+    ];
+    filters.push(workspaceFilter(this.principal, documents.workspaceId));
     return this.db
       .select()
       .from(documents)
-      .where(and(eq(documents.userId, this.principal.userId), eq(documents.category, category)))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(documents.createdAt))
       .limit(limit);
   }
@@ -352,31 +408,38 @@ export class ScopedDocumentRepo {
   async create(data: Omit<NewDocumentRecord, 'userId'>): Promise<DocumentRecord> {
     const result = await this.db
       .insert(documents)
-      .values({ ...data, userId: this.principal.userId })
+      .values({
+        ...data,
+        userId: this.principal.userId,
+        workspaceId: data.workspaceId ?? this.principal.workspaceId ?? null,
+      })
       .returning();
     return result[0];
   }
 
   async delete(id: string): Promise<boolean> {
-    const where = isAdmin(this.principal)
-      ? eq(documents.id, id)
-      : and(eq(documents.id, id), eq(documents.userId, this.principal.userId));
-    const result = await this.db.delete(documents).where(where).returning();
+    const filters: (SQL | undefined)[] = [eq(documents.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(documents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, documents.workspaceId));
+    const result = await this.db
+      .delete(documents)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .returning();
     return result.length > 0;
   }
 
   /** Update status — restricted to documents owned by the principal. */
   async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
-    const where = isAdmin(this.principal)
-      ? eq(documents.id, id)
-      : and(eq(documents.id, id), eq(documents.userId, this.principal.userId));
+    const filters: (SQL | undefined)[] = [eq(documents.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(documents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, documents.workspaceId));
     const result = await this.db
       .update(documents)
       .set({
         status,
         ...(error ? { metadata: { error } } : {}),
       })
-      .where(where)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .returning();
     return result.length > 0;
   }
@@ -506,18 +569,24 @@ export class ScopedHookRepo {
    * to the hookManager so the manager's existing methods stay simple.
    */
   async findById(id: string): Promise<Hook | null> {
-    const where = isAdmin(this.principal)
-      ? eq(hooks.id, id)
-      : and(eq(hooks.id, id), eq(hooks.userId, this.principal.userId));
-    const row = await this.db.select().from(hooks).where(where).limit(1);
+    const filters: (SQL | undefined)[] = [eq(hooks.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(hooks.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, hooks.workspaceId));
+    const row = await this.db
+      .select()
+      .from(hooks)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
     return row[0] ?? null;
   }
 
   async listOwn(): Promise<Hook[]> {
+    const filters: (SQL | undefined)[] = [eq(hooks.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, hooks.workspaceId));
     return this.db
       .select()
       .from(hooks)
-      .where(eq(hooks.userId, this.principal.userId))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(hooks.createdAt));
   }
 }

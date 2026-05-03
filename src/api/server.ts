@@ -253,6 +253,27 @@ export function createServer() {
         principal: principalFromUser(userObj, token),
       };
     })
+    // Phase 4 — workspace resolution. Layered as a second `.derive()`
+    // so the auth branch above stays a flat early-return list. When
+    // `multiuser.orgWorkspaces` is off the resolver returns `{
+    // workspaceId: null }` immediately and the principal passes
+    // through untouched. When on, the resolver maps the
+    // `X-Octipus-Workspace` header (slug, uuid, or "all") to a
+    // workspace id owned by the principal; cross-tenant or unknown
+    // headers collapse to the user's default workspace.
+    .derive(async ({ request, principal }) => {
+      if (!principal || principal.kind === 'anonymous') return {};
+      const header = request.headers.get('x-octipus-workspace');
+      try {
+        const { resolveWorkspace } = await import('@/security/workspace-resolver');
+        const { workspaceId } = await resolveWorkspace(principal, header);
+        if (workspaceId === null) return {};
+        return { principal: { ...principal, workspaceId } };
+      } catch (err) {
+        apiLogger.warn({ err }, 'Workspace resolution failed; proceeding without workspace scope');
+        return {};
+      }
+    })
     // Rate limiting on auth endpoints (must be before routes)
     .use(rateLimitMiddleware)
     // Auth guard — reject unauthenticated requests to protected routes

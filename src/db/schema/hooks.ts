@@ -23,6 +23,12 @@ export const actionTypeEnum = pgEnum('action_type', [
 export const hooks = pgTable('hooks', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id).notNull(),
+  /**
+   * Phase 4 — optional workspace scope. NULL = user-level (visible
+   * to every workspace the user owns). FK in the migration uses ON
+   * DELETE SET NULL.
+   */
+  workspaceId: uuid('workspace_id'),
   name: text('name').notNull(),
   description: text('description'),
   trigger: triggerTypeEnum('trigger').notNull(),
