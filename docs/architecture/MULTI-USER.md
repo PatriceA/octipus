@@ -1052,6 +1052,160 @@ them through the tool with isolation on.
 
 ---
 
+## Phase 3g — org / workspace grouping (schema scaffolding)
+
+Section 2 of this doc describes a three-tier tenancy model:
+
+```
+Organization (optional, default = "personal")
+  └── User (required principal)
+        └── Workspace (1..N per user; default = "default")
+              └── Sessions, Documents, Embeddings, Hooks, …
+```
+
+Phase 0 added `users.org_id` (nullable) so the migration would be
+cheap when the time came. Phase 3g lays the rest of the scaffolding
+— the tables, manager, REST surface, and feature flag — without
+adding a single foreign key to existing tables. That keeps single-
+user installs and every prior multi-user deployment byte-for-byte
+unchanged until the next phase wires the per-workspace data
+boundary.
+
+### Schema (migration `0038`)
+
+```sql
+organizations(id, slug UNIQUE, name, created_by, metadata, …)
+org_members(org_id, user_id, role, joined_at, PK(org_id, user_id))
+workspaces(id, user_id, slug, name, is_default, metadata, …,
+           UNIQUE(user_id, slug),
+           UNIQUE(user_id) WHERE is_default = true)
+```
+
+- Slugs are URL-safe handles. Org slugs are globally unique;
+  workspace slugs are unique per-user (so two users can both have a
+  `default` workspace).
+- `is_default` is enforced 0-or-1 per user via a partial unique
+  index — atomic promotion happens inside a transaction in the
+  manager.
+- RLS policies use the same "bypass on missing GUC" pattern as
+  0034 / 0035 / 0037: workspaces and org_members are visible to the
+  owning user; organizations are visible to any member via subquery
+  against `org_members`.
+
+No existing table grows a new column. Phase 4 adopts `workspace_id`
+on sessions / documents / hooks / vault and gates the change on the
+same flag.
+
+### Config flag (`multiuser.orgWorkspaces`)
+
+- `false` (default) — `/api/me/workspaces` and `/api/admin/orgs`
+  routes return `404 Not Found`. Same shape as a missing route, so
+  fingerprinting can't distinguish "feature exists but disabled"
+  from "feature absent".
+- `true` — the routes light up; the manager honors all CRUD calls.
+
+Env: `MULTIUSER_ORG_WORKSPACES=true`. Independent of the master
+`MULTIUSER` flag; operators can stage org/workspace data ahead of
+flipping the rest of the multi-user stack on, or vice versa.
+
+### Manager (`src/security/orgs.ts`)
+
+`OrgWorkspaceManager` is the single owner of the three new tables.
+The route layer never queries them directly. Public methods:
+
+```ts
+class OrgWorkspaceManager {
+  // Organizations (admin-only)
+  createOrg(actor, { slug, name }): Organization
+  findBySlugForCaller(actor, slug): Organization | null  // collapses to null for non-members
+  listAllAdmin(actor): Organization[]                    // admin only
+  listForUser(userId): Organization[]
+  addMember(actor, orgId, userId, role?): OrgMember      // idempotent
+  removeMember(actor, orgId, userId): boolean
+  listMembers(actor, orgId): OrgMember[]
+
+  // Workspaces (per-user, no admin shortcut)
+  createWorkspace(userId, { slug, name, isDefault? }): Workspace
+  ensureDefaultWorkspace(userId): Workspace              // lazy on first read
+  findOwnedById(userId, id): Workspace | null            // cross-tenant collapses to null
+  findOwnedBySlug(userId, slug): Workspace | null
+  listOwn(userId): Workspace[]
+  rename(userId, id, name): Workspace | null
+  setDefault(userId, id): Workspace | null               // atomic via tx
+  delete(userId, id): boolean                            // refuses default
+}
+```
+
+All errors raise `OrgWorkspaceError` with a stable `code` field
+(`invalid_slug | invalid_name | not_admin | slug_conflict |
+workspace_not_found | cannot_delete_default | …`). The route layer
+maps each code to its HTTP status (400 / 403 / 404 / 409).
+
+Cross-tenant safety follows the same enumeration-collapse pattern
+as scopedRepos and the impersonation manager: a leaked workspace
+UUID looks identical to "doesn't exist" when used by a different
+user. Manager + route tests both verify this — bob can't rename or
+delete alice's workspace via her UUID.
+
+### REST surface
+
+Mounted under `/api`:
+
+| Method | Path                                       | Auth     | Notes |
+|--------|--------------------------------------------|----------|-------|
+| GET    | `/me/workspaces`                           | user     | Lazy-creates the default workspace on first read. |
+| POST   | `/me/workspaces`                           | user     | `{slug, name, isDefault?}` |
+| PATCH  | `/me/workspaces/:id`                       | user     | Rename only — slug is immutable. |
+| POST   | `/me/workspaces/:id/default`               | user     | Promote to default; clears prior default in same tx. |
+| DELETE | `/me/workspaces/:id`                       | user     | 400 on default; 404 cross-tenant. |
+| GET    | `/admin/orgs`                              | admin    | All orgs. |
+| POST   | `/admin/orgs`                              | admin    | `{slug, name}` |
+| GET    | `/admin/orgs/:id/members`                  | admin    | |
+| POST   | `/admin/orgs/:id/members`                  | admin    | `{userId, role?}` |
+| DELETE | `/admin/orgs/:id/members/:userId`          | admin    | |
+
+Every endpoint returns `404 Not Found` with body `{error: 'Not
+found'}` when `multiuser.orgWorkspaces` is off — fingerprint-safe.
+
+### Tests (38 new)
+
+- 20 manager unit tests (`src/security/orgs.test.ts`): slug + name
+  validation, admin gating on `createOrg`/`addMember`, slug
+  conflicts, member visibility, cross-tenant collapse on
+  `findOwnedById`/`rename`/`delete`, atomic default promotion, and
+  the "cannot delete default" guard.
+- 18 route guard tests (`src/api/routes/orgs.isolation.test.ts`):
+  flag-off ⇒ 404 across all endpoints; flag-on ⇒ 401 for anon, 403
+  for non-admin on `/admin/*`, 200 happy paths, 409 on slug
+  conflict, 400 on `cannot_delete_default`, 404 on cross-tenant
+  PATCH/DELETE.
+
+Cumulative: **1269 pass / 9 fail / 71 skip** — same 9 pre-existing
+StdioTransport tests, net **+38** new tests, zero regressions. Lint
++ typecheck clean.
+
+### Operator runbook
+
+```bash
+# Stage the schema (migration 0038 runs automatically on boot).
+# Light up the routes when ready:
+MULTIUSER=true
+MULTIUSER_ORG_WORKSPACES=true
+```
+
+Phase 4 will:
+
+1. Add `workspace_id` (nullable) to `sessions`, `documents`,
+   `hooks`, and `vault_entries`.
+2. Backfill rows to each user's default workspace.
+3. Make `principal.workspaceId` an explicit field (resolved from a
+   `X-Octipus-Workspace` header or query) and have scopedRepos
+   filter on it when set.
+4. Wire org-shared resources (system models, shared skills) through
+   `org_members` membership.
+
+---
+
 ## 1. Goals & Non-Goals
 
 ### Goals

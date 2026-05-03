@@ -8,7 +8,7 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-- **Multi-user architecture — Phases 0, 1a, 1b landed (2026-05).**
+- **Multi-user architecture — Phases 0–3 landed (2026-05).**
   Octipus is moving from single-tenant self-hosted to a central backend
   serving multiple authenticated users with strict isolation of
   sessions, secrets, settings, filesystem, embeddings, and agents. Full
@@ -136,17 +136,30 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     runner is on PATH; the shell tool's local-operations.exec
     pipes through it. Pairs with WorkspaceFS (Phase 1b-3) for
     full filesystem-level + process-level isolation.
-  - Phase 3f (this PR): Docker per-user isolation. Opt-in
+  - Phase 3f: Docker per-user isolation. Opt-in
     `security.dockerIsolation = 'off' | 'enforce'`. Convention:
     every container carries `octipus.user_id=<uuid>` label; every
     user gets an `octipus_user_<id>` bridge network. The Docker
     tool's list filters by the label; targeted ops verify ownership
     via `docker inspect` and surface mismatches as "container not
     found" so attackers can't enumerate other users' containers.
+  - Phase 3g (this PR): org / workspace grouping scaffolding.
+    Migration `0038` adds `organizations`, `org_members`, and
+    `workspaces` tables with RLS policies. New
+    `OrgWorkspaceManager` handles CRUD with admin gating on orgs,
+    per-user CRUD on workspaces, and the same cross-tenant
+    enumeration-collapse pattern as scopedRepos. Feature flag
+    `multiuser.orgWorkspaces` (default off); when on, REST surface
+    `/api/me/workspaces` + `/api/admin/orgs` lights up. No existing
+    table grows a new column — Phase 4 adopts `workspace_id` on
+    sessions / documents / hooks / vault. **Phase 3 is now
+    complete.**
 
   **Next.**
-  - Phase 3g — optional org/workspace grouping layer (schema is
-    already prepared).
+  - Phase 4 — wire `workspace_id` onto sessions/documents/hooks/vault
+    and scope reads through it. Org-shared resources (system models,
+    shared skills) routed through `org_members`. Optional add-on
+    after Phase 3 lands in production.
 
 ## Next (months)
 
