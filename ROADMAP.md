@@ -107,10 +107,16 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     skill_permissions, permission_requests, plus messages and
     pipeline_stages via FK subqueries. Every user-owned table in the
     schema now has a policy — 19 in total.
+  - Phase 3c-1 (this PR): per-user quotas — schema + read-side
+    QuotaManager + admin REST + `/admin/quotas` web tab. Three
+    dimensions (concurrent agents, daily tokens, API calls/min);
+    each has a per-user override that falls back to the global
+    config default. **No enforcement yet** — operators can see +
+    set caps, and 3c-2 wires the runtime gates.
 
   **Next.**
-  - Phase 3c — per-user quotas (concurrent agents, daily token
-    cap, API calls/min) + admin dashboard.
+  - Phase 3c-2 — wire `quotaManager.willExceed` into the agent
+    spawn / LLM-call / API-request boundaries.
   - Phase 3d — impersonation flow with strong audit (admin enters
     "act as" mode; every action tagged with both actor + target).
   - Phase 3e — shell sandbox via bubblewrap/firejail (opt-in,

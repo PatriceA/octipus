@@ -167,6 +167,162 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     },
   )
 
+  // ── Quotas (Phase 3c-1) ────────────────────────────────────────
+  // GET    /quotas         — list users with their effective quota +
+  //                          current usage. Cheap O(N) over users
+  //                          since the admin console is the only
+  //                          caller and N is small.
+  // GET    /quotas/:userId — single-user detail.
+  // PATCH  /quotas/:userId — set/clear per-field overrides; pass
+  //                          null to clear, omit to leave unchanged.
+  // DELETE /quotas/:userId — drop the override row entirely (every
+  //                          field reverts to the global default).
+  //
+  // These routes don't enforce anything — Phase 3c-2 wires the gates
+  // into the agent worker and rate-limiter. This commit ships the
+  // visibility + management surface so operators can act before
+  // enforcement lands.
+  .get(
+    '/quotas',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+
+      const { userRepository } = await import('@/db/repositories/user-repository');
+      const { getQuotaManager } = await import('@/security/quotas');
+      const mgr = getQuotaManager();
+      const users = await userRepository.listAll();
+
+      const rows = await Promise.all(users.map(async (u) => {
+        const [quota, usage] = await Promise.all([
+          mgr.getEffectiveQuota(u.id),
+          mgr.getUsage(u.id),
+        ]);
+        return {
+          userId: u.id,
+          username: u.username,
+          isAdmin: u.isAdmin,
+          isActive: u.isActive,
+          quota,
+          usage,
+        };
+      }));
+      return { quotas: rows };
+    },
+    { detail: { tags: ['admin'] } },
+  )
+
+  .get(
+    '/quotas/:userId',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, set } = ctx;
+
+      const { userRepository } = await import('@/db/repositories/user-repository');
+      const user = await userRepository.findById(params.userId);
+      if (!user) {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+      const { getQuotaManager } = await import('@/security/quotas');
+      const mgr = getQuotaManager();
+      const [quota, usage] = await Promise.all([
+        mgr.getEffectiveQuota(user.id),
+        mgr.getUsage(user.id),
+      ]);
+      return {
+        userId: user.id,
+        username: user.username,
+        isAdmin: user.isAdmin,
+        isActive: user.isActive,
+        quota,
+        usage,
+      };
+    },
+    {
+      params: t.Object({ userId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .patch(
+    '/quotas/:userId',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, body, principal, set } = ctx;
+
+      const { userRepository } = await import('@/db/repositories/user-repository');
+      const user = await userRepository.findById(params.userId);
+      if (!user) {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+
+      // Reject negative or zero values: a "quota" of 0 would lock
+      // the user out entirely; clearer to require an explicit null
+      // or DELETE for "no override" semantics.
+      for (const k of ['maxConcurrentAgents', 'maxTokensPerDay', 'maxApiCallsPerMinute'] as const) {
+        const v = (body as Record<string, unknown>)[k];
+        if (v !== undefined && v !== null && (typeof v !== 'number' || v < 1 || !Number.isInteger(v))) {
+          set.status = 400;
+          return { error: `${k} must be a positive integer or null` };
+        }
+      }
+
+      const { getQuotaManager } = await import('@/security/quotas');
+      const updated = await getQuotaManager().setOverride(user.id, body);
+
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'user_quota',
+        resourceId: user.id,
+        details: { changes: Object.keys(body), targetUser: user.username, byAdmin: principal.userId },
+      });
+
+      return updated;
+    },
+    {
+      params: t.Object({ userId: t.String() }),
+      body: t.Object({
+        maxConcurrentAgents: t.Optional(t.Union([t.Number(), t.Null()])),
+        maxTokensPerDay: t.Optional(t.Union([t.Number(), t.Null()])),
+        maxApiCallsPerMinute: t.Optional(t.Union([t.Number(), t.Null()])),
+      }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .delete(
+    '/quotas/:userId',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, set } = ctx;
+
+      const { getQuotaManager } = await import('@/security/quotas');
+      const cleared = await getQuotaManager().clearOverride(params.userId);
+      if (!cleared) {
+        set.status = 404;
+        return { error: 'No quota override for this user' };
+      }
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'user_quota',
+        resourceId: params.userId,
+        details: { cleared: true, byAdmin: principal.userId },
+      });
+      return { cleared: true };
+    },
+    {
+      params: t.Object({ userId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
   // ── Audit log ──────────────────────────────────────────────────
   .get(
     '/audit',
