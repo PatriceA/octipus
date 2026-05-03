@@ -6,6 +6,8 @@ export const trajectoryOutcomeEnum = pgEnum('trajectory_outcome',
 export const trajectoryRuns = pgTable('trajectory_runs', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull(),
+  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  workspaceId: uuid('workspace_id'),
   rootSessionId: uuid('root_session_id').notNull(),
   outcome: trajectoryOutcomeEnum('outcome').notNull(),
   startedAt: timestamp('started_at').notNull(),

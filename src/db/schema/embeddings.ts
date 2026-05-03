@@ -36,6 +36,8 @@ export const embeddings = pgTable('embeddings', {
    * in another tenant's agent context.
    */
   userId: uuid('user_id'),
+  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  workspaceId: uuid('workspace_id'),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
   // Auto-generated tsvector for full-text search (GENERATED ALWAYS AS — read-only)

@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, serial, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const agentEvents = pgTable('agent_events', {
   id: serial('id').primaryKey(),
@@ -11,6 +11,8 @@ export const agentEvents = pgTable('agent_events', {
    * filter on it.
    */
   userId: text('user_id'),
+  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  workspaceId: uuid('workspace_id'),
   type: text('type').notNull(), // thought, action, observation, error, complete, status_change, permission_request
   data: jsonb('data').$type<unknown>().default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),

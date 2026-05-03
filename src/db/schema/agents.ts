@@ -11,6 +11,8 @@ export const agents = pgTable('agents', {
   id: text('id').primaryKey(), // same ID as in-memory agent
   sessionId: uuid('session_id').notNull(),
   userId: text('user_id').notNull(),
+  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  workspaceId: uuid('workspace_id'),
   role: text('role').notNull().default('general'),
   model: text('model').notNull().default(''),
   topic: text('topic').notNull().default(''),

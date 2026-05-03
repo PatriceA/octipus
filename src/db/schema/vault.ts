@@ -44,6 +44,16 @@ export const vault = pgTable('vault', {
    * set it; the migration backfills existing rows.
    */
   scope: vaultScopeEnum('scope').default('user').notNull(),
+  /**
+   * Phase 4 follow-up — workspace_id binding for `scope='workspace'`
+   * rows. Vault.set/get accept this id when the caller wants to
+   * narrow a secret to one workspace; reads filter on the column
+   * when the request principal carries a workspace context. NULL
+   * for system + user scopes (and for legacy workspace-scoped rows
+   * written before this migration — they remain visible to every
+   * workspace owned by the user).
+   */
+  workspaceId: uuid('workspace_id'),
   name: text('name').notNull(),
   credentialType: credentialTypeEnum('credential_type').notNull(),
   // Encrypted with AES-256-GCM

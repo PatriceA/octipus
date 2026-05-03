@@ -15,6 +15,8 @@ export const pipelines = pgTable('pipelines', {
   orchestratorAgentId: text('orchestrator_agent_id').notNull(),
   sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }).notNull(),
   userId: uuid('user_id').references(() => users.id).notNull(),
+  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  workspaceId: uuid('workspace_id'),
   title: text('title').notNull(),
   type: text('type').notNull(), // 'development' | 'research' | 'general'
   description: text('description'),
