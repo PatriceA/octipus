@@ -62,6 +62,8 @@ export const swarmNodes = pgTable('swarm_nodes', {
    * for the orphan reaper and per-user concurrency caps.
    */
   userId: text('user_id'),
+  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  workspaceId: uuid('workspace_id'),
   parentNodeId: text('parent_node_id'), // null for Orchestrator
   depth: integer('depth').notNull(),
   kind: swarmNodeKindEnum('kind').notNull(),

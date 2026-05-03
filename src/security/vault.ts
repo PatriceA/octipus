@@ -1,5 +1,5 @@
 import { createHash, pbkdf2Sync } from 'crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -182,6 +182,13 @@ export class Vault {
       expiresAt?: Date;
       metadata?: Record<string, unknown>;
       scope?: VaultScope;
+      /**
+       * Phase 4 follow-up — bind the secret to a workspace owned by
+       * `userId`. Only meaningful when `scope === 'workspace'`; ignored
+       * otherwise. Reads filter on this column when the request
+       * principal carries a workspace context.
+       */
+      workspaceId?: string | null;
     }
   ): Promise<VaultEntry> {
     const scope = options.scope ?? inferScope(userId);
@@ -191,6 +198,7 @@ export class Vault {
     const entry: NewVaultEntry = {
       userId,
       scope,
+      workspaceId: scope === 'workspace' ? (options.workspaceId ?? null) : null,
       name,
       credentialType: options.credentialType,
       encryptedValue: encrypted.ciphertext,
@@ -330,17 +338,36 @@ export class Vault {
    * Strict: looking up `userId='system'` only returns scope='system'
    * rows. Looking up a user UUID only returns that user's rows.
    */
-  async getByName(userId: string, name: string): Promise<string | null> {
+  /**
+   * Look up a credential by name. When `opts.workspaceId` is set,
+   * also matches `scope='workspace'` rows whose `workspace_id`
+   * equals it (or is NULL — un-backfilled rows stay visible). Phase
+   * 4 follow-up — workspace-scoped vault entries.
+   */
+  async getByName(
+    userId: string,
+    name: string,
+    opts?: { workspaceId?: string | null },
+  ): Promise<string | null> {
     const scope = inferScope(userId);
+    const workspaceId = opts?.workspaceId ?? null;
+    // Broadened scope filter when caller supplies a workspace
+    // context: user-scoped rows always visible, workspace-scoped
+    // rows narrow on the column.
+    const scopeFilter = workspaceId
+      ? sql`(${vault.scope} = ${scope} OR (${vault.scope} = 'workspace' AND (${vault.workspaceId} = ${workspaceId} OR ${vault.workspaceId} IS NULL)))`
+      : eq(vault.scope, scope);
+
     const entry = await this.db
       .select()
       .from(vault)
       .where(and(
         eq(vault.name, name),
         eq(vault.userId, userId),
-        eq(vault.scope, scope),
+        scopeFilter,
         eq(vault.isActive, true),
       ))
+      .orderBy(desc(vault.scope)) // 'workspace' > 'user' > 'system' lexicographically; workspace overrides win
       .limit(1);
 
     if (!entry[0]) {
@@ -356,13 +383,22 @@ export class Vault {
    * `userId='system'` gets system-scoped rows; a UUID gets that user's
    * own rows.
    */
-  async list(userId: string): Promise<Omit<VaultEntry, 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag'>[]> {
+  async list(
+    userId: string,
+    opts?: { workspaceId?: string | null },
+  ): Promise<Omit<VaultEntry, 'encryptedValue' | 'encryptionIv' | 'encryptionAuthTag'>[]> {
     const scope = inferScope(userId);
+    const workspaceId = opts?.workspaceId ?? null;
+    const scopeFilter = workspaceId
+      ? sql`(${vault.scope} = ${scope} OR (${vault.scope} = 'workspace' AND (${vault.workspaceId} = ${workspaceId} OR ${vault.workspaceId} IS NULL)))`
+      : eq(vault.scope, scope);
+
     const entries = await this.db
       .select({
         id: vault.id,
         userId: vault.userId,
         scope: vault.scope,
+        workspaceId: vault.workspaceId,
         name: vault.name,
         credentialType: vault.credentialType,
         keyVersion: vault.keyVersion,
@@ -381,7 +417,7 @@ export class Vault {
       .from(vault)
       .where(and(
         eq(vault.userId, userId),
-        eq(vault.scope, scope),
+        scopeFilter,
         eq(vault.isActive, true),
       ));
 

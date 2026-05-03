@@ -8,7 +8,7 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-- **Multi-user architecture — Phases 0–3 landed (2026-05).**
+- **Multi-user architecture — feature complete (Phases 0–4 landed, 2026-05).**
   Octipus is moving from single-tenant self-hosted to a central backend
   serving multiple authenticated users with strict isolation of
   sessions, secrets, settings, filesystem, embeddings, and agents. Full
@@ -152,31 +152,45 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     `multiuser.orgWorkspaces` (default off); when on, REST surface
     `/api/me/workspaces` + `/api/admin/orgs` lights up. **Phase 3
     complete.**
-  - Phase 4 (this PR): workspace_id adoption. Migration `0039`
-    adds nullable `workspace_id` to sessions / documents / hooks
-    with composite `(user_id, workspace_id)` indexes; FK uses ON
-    DELETE SET NULL so workspace deletion falls back to user-level
-    scope rather than cascading. New `resolveWorkspace(principal,
-    header)` maps `X-Octipus-Workspace` (slug or uuid) to a
-    workspace owned by the principal — cross-tenant headers
-    collapse to the user's default. ScopedSessionRepo /
-    ScopedDocumentRepo / ScopedHookRepo filter on workspace_id
-    when set (NULL rows stay visible — un-backfilled data keeps
-    working) and stamp the principal's workspaceId onto new rows.
+  - Phase 4: workspace_id adoption. Migration `0039` adds nullable
+    `workspace_id` to sessions / documents / hooks with composite
+    `(user_id, workspace_id)` indexes; FK uses ON DELETE SET NULL
+    so workspace deletion falls back to user-level scope rather
+    than cascading. New `resolveWorkspace(principal, header)` maps
+    `X-Octipus-Workspace` (slug or uuid) to a workspace owned by
+    the principal — cross-tenant headers collapse to the user's
+    default. ScopedSessionRepo / ScopedDocumentRepo /
+    ScopedHookRepo filter on workspace_id when set (NULL rows
+    stay visible — un-backfilled data keeps working) and stamp
+    the principal's workspaceId onto new rows.
     `scripts/backfill-workspace-id.ts` walks every user, ensures
     a default workspace, and updates rows with NULL
     `workspace_id`. All gated on `multiuser.orgWorkspaces`; off
     keeps every existing call site untouched.
+  - Phase 4 follow-up (this PR): workspace coverage extended to
+    the rest of the user-owned schema. Migration `0040` adds
+    nullable `workspace_id` to `agents`, `notifications`,
+    `trajectory_runs`, `pipelines`, `embeddings`, `agent_events`,
+    `swarm_nodes`, and `vault`. ScopedAgentRepo /
+    ScopedNotificationRepo / ScopedTrajectoryRepo gain the same
+    workspace filter + stamping as the Phase 4 trio. Vault gains
+    workspace-scoped reads (`getByName(userId, name, { workspaceId
+    })` / `list(userId, { workspaceId })`) — when a workspace
+    context is supplied, user-scoped rows stay visible AND
+    workspace-scoped rows narrow on the column (with
+    `workspace_id IS NULL` fallback). New `/api/me/orgs` returns
+    the caller's org memberships. Backfill script walks every
+    user-owned table. **Multi-user feature is now feature-
+    complete.** [`CHANGELOG.md`](CHANGELOG.md) +
+    [`docs/QA.md`](docs/QA.md) ship in this PR.
 
-  **Next (optional follow-ups).**
-  - Vault `scope=workspace` wiring (vault has its own per-row DEK
-    + scope enum that warrants a focused PR).
-  - Workspace pickers in the web UI.
+  **Open follow-ups (defer / nice-to-have).**
+  - Web UI workspace + org pickers (REST surface is in place).
   - Org-shared resources (system models, shared skills) routed
-    through `org_members`.
-  - Workspace adoption on the rest of the user-owned tables
-    (`agents`, `notifications`, `trajectory_runs`, `pipelines`,
-    `embeddings`, `agent_events`, `swarm_nodes`).
+    through `org_members` — needs `org_id` on `models` and
+    `skills` first.
+  - SCIM provisioning + SAML SSO (Phase 4 in the design doc).
+  - Per-user billing hooks (token cost accounting already exists).
 
 ## Next (months)
 

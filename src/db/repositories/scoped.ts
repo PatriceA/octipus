@@ -298,32 +298,36 @@ export class ScopedAgentRepo {
 
   /** Find one agent owned by the principal (or any agent if admin). */
   async findById(id: string): Promise<AgentRecord | null> {
-    const where = isAdmin(this.principal)
-      ? eq(agents.id, id)
-      : and(eq(agents.id, id), eq(agents.userId, this.principal.userId));
-    const row = await this.db.select().from(agents).where(where).limit(1);
+    const filters: (SQL | undefined)[] = [eq(agents.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(agents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
+    const row = await this.db
+      .select()
+      .from(agents)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
     return row[0] ?? null;
   }
 
   async listOwn(limit = 200): Promise<AgentRecord[]> {
+    const filters: (SQL | undefined)[] = [eq(agents.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
     return this.db
       .select()
       .from(agents)
-      .where(eq(agents.userId, this.principal.userId))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(agents.createdAt))
       .limit(limit);
   }
 
   async findBySession(sessionId: string, limit = 50): Promise<AgentRecord[]> {
-    // Two filters: sessionId AND principal ownership of the agent.
-    // We rely on agents.user_id (already populated for new agents) rather
-    // than joining through sessions — agents may outlive their session row.
-    const filters = [eq(agents.sessionId, sessionId)];
+    const filters: (SQL | undefined)[] = [eq(agents.sessionId, sessionId)];
     if (!isAdmin(this.principal)) filters.push(eq(agents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
     return this.db
       .select()
       .from(agents)
-      .where(and(...filters))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(agents.createdAt))
       .limit(limit);
   }
@@ -336,21 +340,26 @@ export class ScopedAgentRepo {
    */
   async findBySessions(sessionIds: string[], limit = 200): Promise<AgentRecord[]> {
     if (sessionIds.length === 0) return [];
-    const filters = [inArray(agents.sessionId, sessionIds)];
+    const filters: (SQL | undefined)[] = [inArray(agents.sessionId, sessionIds)];
     if (!isAdmin(this.principal)) filters.push(eq(agents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
     return this.db
       .select()
       .from(agents)
-      .where(and(...filters))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(agents.createdAt))
       .limit(limit);
   }
 
-  /** Create an agent pinned to the principal. */
+  /** Create an agent pinned to the principal. Phase 4 — stamps workspace_id when set. */
   async create(data: Omit<NewAgentRecord, 'userId'>): Promise<AgentRecord> {
     const result = await this.db
       .insert(agents)
-      .values({ ...data, userId: this.principal.userId })
+      .values({
+        ...data,
+        userId: this.principal.userId,
+        workspaceId: data.workspaceId ?? this.principal.workspaceId ?? null,
+      })
       .returning();
     return result[0];
   }
@@ -457,20 +466,27 @@ export class ScopedNotificationRepo {
   private get db() { return getDb(); }
 
   async list(limit = 50, offset = 0): Promise<Notification[]> {
+    const filters: (SQL | undefined)[] = [eq(notifications.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, notifications.workspaceId));
     return this.db
       .select()
       .from(notifications)
-      .where(eq(notifications.userId, this.principal.userId))
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(notifications.createdAt))
       .limit(limit)
       .offset(offset);
   }
 
   async unreadCount(): Promise<number> {
+    const filters: (SQL | undefined)[] = [
+      eq(notifications.userId, this.principal.userId),
+      eq(notifications.read, false),
+    ];
+    filters.push(workspaceFilter(this.principal, notifications.workspaceId));
     const rows = await this.db
       .select({ id: notifications.id })
       .from(notifications)
-      .where(and(eq(notifications.userId, this.principal.userId), eq(notifications.read, false)));
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
     return rows.length;
   }
 
@@ -480,26 +496,28 @@ export class ScopedNotificationRepo {
    * another user (cross-tenant attempts are silent no-ops).
    */
   async markRead(id: string): Promise<boolean> {
-    const where = isAdmin(this.principal)
-      ? eq(notifications.id, id)
-      : and(eq(notifications.id, id), eq(notifications.userId, this.principal.userId));
+    const filters: (SQL | undefined)[] = [eq(notifications.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(notifications.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, notifications.workspaceId));
     const result = await this.db
       .update(notifications)
       .set({ read: true })
-      .where(where)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .returning();
     return result.length > 0;
   }
 
   /** Mark every unread notification for the principal as read. */
   async markAllRead(): Promise<void> {
+    const filters: (SQL | undefined)[] = [
+      eq(notifications.userId, this.principal.userId),
+      eq(notifications.read, false),
+    ];
+    filters.push(workspaceFilter(this.principal, notifications.workspaceId));
     await this.db
       .update(notifications)
       .set({ read: true })
-      .where(and(
-        eq(notifications.userId, this.principal.userId),
-        eq(notifications.read, false),
-      ));
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
   }
 }
 
@@ -527,27 +545,33 @@ export class ScopedTrajectoryRepo {
    * admin browsing them is intentional.
    */
   async list(filter: TrajectoryFilter = {}): Promise<TrajectoryRunRecord[]> {
-    const conds = [];
+    const conds: (SQL | undefined)[] = [];
     if (!isAdmin(this.principal)) {
       conds.push(eq(trajectoryRuns.userId, this.principal.userId));
     }
+    conds.push(workspaceFilter(this.principal, trajectoryRuns.workspaceId));
     if (filter.outcome) conds.push(eq(trajectoryRuns.outcome, filter.outcome));
     if (filter.from) conds.push(sql`${trajectoryRuns.startedAt} >= ${filter.from}`);
     if (filter.to)   conds.push(sql`${trajectoryRuns.startedAt} <= ${filter.to}`);
 
+    const where = conds.filter((c): c is SQL => c !== undefined);
     return this.db
       .select()
       .from(trajectoryRuns)
-      .where(conds.length ? and(...conds) : undefined)
+      .where(where.length ? and(...where) : undefined)
       .orderBy(desc(trajectoryRuns.startedAt))
       .limit(filter.limit ?? 100);
   }
 
   async findById(id: string): Promise<TrajectoryRunRecord | null> {
-    const where = isAdmin(this.principal)
-      ? eq(trajectoryRuns.id, id)
-      : and(eq(trajectoryRuns.id, id), eq(trajectoryRuns.userId, this.principal.userId));
-    const row = await this.db.select().from(trajectoryRuns).where(where).limit(1);
+    const filters: (SQL | undefined)[] = [eq(trajectoryRuns.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(trajectoryRuns.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, trajectoryRuns.workspaceId));
+    const row = await this.db
+      .select()
+      .from(trajectoryRuns)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
     return row[0] ?? null;
   }
 }
