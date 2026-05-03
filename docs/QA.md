@@ -314,6 +314,307 @@ This one needs Postgres in external mode.
 
 ---
 
+## 7. Multi-user — full feature exercise
+
+**Goal.** Exercise every shipped slice of the multi-user stack
+(Phases 0–4 + Phase 4 follow-ups) end-to-end on a fresh deployment.
+Most of these are gated behind feature flags that default off; the
+checklist toggles them on in order, then verifies cross-tenant
+isolation actually fires.
+
+**Setup once for the whole section.** Use a Postgres deployment
+(not embedded PGlite — RLS, the per-user app role, and the
+backfill all need real Postgres). Set in `.env`:
+
+```bash
+MULTIUSER=true
+MULTIUSER_AUDIT_SHADOW=true
+MULTIUSER_ENFORCE_PERMISSIONS=true
+MULTIUSER_RLS=true
+MULTIUSER_ORG_WORKSPACES=true
+SHELL_SANDBOX=auto         # 'required' once bwrap is installed in the host
+DOCKER_ISOLATION=enforce
+```
+
+Restart octipus, then:
+
+1. **Bootstrap admin.** First boot prints
+   `Bootstrap admin user created` with a one-time password (or honors
+   `ADMIN_BOOTSTRAP_TOKEN`). Log into the web UI as that user.
+2. **Create alice + bob** via **Settings → Admin → Users → New
+   user** (alice non-admin, bob non-admin, both with passwords).
+3. **Issue api tokens** for alice and bob via
+   `/settings/api-tokens` → **New token**. Capture the
+   `octi_…` plaintext shown once.
+4. Save both tokens as shell vars `ALICE`, `BOB`, plus an `ADMIN`
+   token issued the same way for the bootstrap admin.
+
+The remainder of this section uses `curl` against
+`http://localhost:3015/api`.
+
+### 7.1 Cross-tenant session isolation (Phase 1a)
+
+1. As alice, create a session:
+   ```bash
+   AS=$(curl -s -H "Authorization: Bearer $ALICE" \
+     -X POST http://localhost:3015/api/sessions \
+     -H 'content-type: application/json' \
+     -d '{"channelType":"webchat","channelId":"qa-1"}' | jq -r .id)
+   echo "alice session: $AS"
+   ```
+2. As bob, try to read alice's session by id:
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" \
+     -H "Authorization: Bearer $BOB" \
+     http://localhost:3015/api/sessions/$AS
+   ```
+   **Expect:** `404 Not Found`. (NOT 403 — Phase 1a collapses
+   cross-tenant lookups to "doesn't exist" so bob can't enumerate
+   alice's session ids.)
+
+### 7.2 API tokens (Phase 2a/2b)
+
+1. As alice, list tokens: `curl -s -H "Authorization: Bearer $ALICE"
+   http://localhost:3015/api/auth/api-tokens | jq .`. **Expect:** her
+   token's `prefix` shows; no `tokenHash` ever appears.
+2. As bob, try to revoke alice's token by guessing its id:
+   ```bash
+   curl -s -X DELETE -H "Authorization: Bearer $BOB" \
+     http://localhost:3015/api/auth/api-tokens/<alice-token-id> -w "%{http_code}\n"
+   ```
+   **Expect:** `404`. Alice's token is still valid (verify by
+   listing again as alice).
+
+### 7.3 Channel binding (Phase 2d/2e)
+
+1. As alice, generate a one-time link code:
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer $ALICE" \
+     http://localhost:3015/api/auth/channel-bindings/codes \
+     -H 'content-type: application/json' \
+     -d '{"channelType":"telegram"}' | jq .code
+   ```
+2. Visit `/link-account?code=<code>&channel=telegram` in the web
+   UI. **Expect:** the page shows the channel and asks for an
+   external id. Submit a fake `tg-12345`.
+3. Send a message in Telegram from chat id `tg-12345` (or simulate
+   via the gateway test harness). **Expect:** the agent answers
+   under alice's account; audit row shows
+   `principal.userId = alice.id`.
+
+### 7.4 Postgres RLS (Phase 3b)
+
+(Requires Postgres + a non-superuser app role. PGlite skips RLS.)
+
+1. Connect to the database as the app role:
+   ```sql
+   SELECT current_user;  -- should be 'octipus_app' or similar, NOT 'postgres'
+   ```
+2. Try to read alice's sessions WITHOUT setting the GUC:
+   ```sql
+   BEGIN;
+   SET LOCAL app.current_user_id = '<alice-uuid>';
+   SET LOCAL app.bypass_rls = 'false';
+   SELECT count(*) FROM sessions;
+   ROLLBACK;
+   ```
+   **Expect:** count matches alice's session count.
+3. Same query with bob's UUID:
+   ```sql
+   BEGIN;
+   SET LOCAL app.current_user_id = '<bob-uuid>';
+   SET LOCAL app.bypass_rls = 'false';
+   SELECT count(*) FROM sessions WHERE user_id = '<alice-uuid>';
+   ROLLBACK;
+   ```
+   **Expect:** `0`. RLS enforces ownership at the database layer.
+
+### 7.5 Quotas (Phase 3c)
+
+1. As admin, set alice's daily token cap to 100:
+   ```bash
+   curl -s -X PATCH -H "Authorization: Bearer $ADMIN" \
+     http://localhost:3015/api/admin/quotas/<alice-uuid> \
+     -H 'content-type: application/json' \
+     -d '{"dailyTokens":100}'
+   ```
+2. As alice, send a chat message that triggers an LLM call. Repeat
+   until the cap is hit. **Expect:** the second / third call returns
+   a `QuotaExceededError` with HTTP `429`.
+3. Reset by `PATCH … {"dailyTokens": null}`.
+
+### 7.6 Admin impersonation (Phase 3d)
+
+1. As admin, open `/admin/users` and click **Act as** next to
+   alice. **Expect:** a yellow banner appears at the top:
+   `Acting as alice (admin)`.
+2. Send a chat message. **Expect:**
+   - The session is owned by alice.
+   - `audit_log` has TWO rows for the message: one with
+     `userId = alice.id` and one with `userId = admin.id`,
+     details containing `{ impersonate: true, … }`.
+3. Click **Stop** on the banner. **Expect:** the impersonation row
+   is closed (`ended_at` set, `ended_reason = 'explicit'`).
+
+### 7.7 Shell sandbox (Phase 3e)
+
+(Linux only. Install bubblewrap: `apt install bubblewrap`.)
+
+1. As alice, run a shell tool command that tries to escape the
+   workspace:
+   ```bash
+   # Send via chat or POST /api/tools/shell/execute
+   echo "Run shell: ls /etc/shadow"
+   ```
+   **Expect:** the command runs inside the sandbox; either it
+   reports `Permission denied` (read denied to /etc/shadow under
+   bwrap) or the tool returns `EACCES`. No file content leaks.
+2. Inspect the agent's output — `cat /etc/passwd` should also fail.
+3. As admin, set `SHELL_SANDBOX=off` and restart. Re-run; without
+   the sandbox the same command would succeed (this is the
+   regression check).
+
+### 7.8 Docker isolation (Phase 3f)
+
+1. As alice, run via the Docker tool (chat: "list my docker
+   containers"). **Expect:** her own containers only, even if bob
+   has containers running on the same daemon (filtered by
+   `--filter label=octipus.user_id=<alice-uuid>`).
+2. Try to stop bob's container by id (you'll need to grab one):
+   `docker exec bob_running_container ...` via the tool.
+   **Expect:** "container not found".
+3. `docker inspect <alice-container>` directly on the host:
+   should show `octipus.user_id=<alice-uuid>` in `Config.Labels`.
+
+### 7.9 Org / workspace scaffolding (Phase 3g)
+
+1. As admin, create an org via the API:
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer $ADMIN" \
+     http://localhost:3015/api/admin/orgs \
+     -H 'content-type: application/json' \
+     -d '{"slug":"acme","name":"Acme"}' | jq .
+   ```
+2. Add alice as a member:
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer $ADMIN" \
+     http://localhost:3015/api/admin/orgs/<org-id>/members \
+     -H 'content-type: application/json' \
+     -d "{\"userId\":\"<alice-uuid>\"}"
+   ```
+3. As alice, list her orgs (Phase 4 follow-up):
+   ```bash
+   curl -s -H "Authorization: Bearer $ALICE" \
+     http://localhost:3015/api/me/orgs | jq .
+   ```
+   **Expect:** `acme` appears.
+4. As bob (non-member), same call. **Expect:** empty `orgs: []`.
+
+### 7.10 Workspace scoping (Phase 4 + follow-up)
+
+1. As alice, list workspaces. **Expect:** lazy-creates a
+   `default` workspace.
+   ```bash
+   curl -s -H "Authorization: Bearer $ALICE" \
+     http://localhost:3015/api/me/workspaces | jq .
+   ```
+2. Create a second workspace `project-x`:
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer $ALICE" \
+     http://localhost:3015/api/me/workspaces \
+     -H 'content-type: application/json' \
+     -d '{"slug":"project-x","name":"Project X"}'
+   ```
+3. Send a chat message under `project-x`:
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer $ALICE" \
+     -H "X-Octipus-Workspace: project-x" \
+     http://localhost:3015/api/chat \
+     -H 'content-type: application/json' \
+     -d '{"message":"hello from project-x"}'
+   ```
+4. Switch to default workspace and list sessions:
+   ```bash
+   curl -s -H "Authorization: Bearer $ALICE" \
+     -H "X-Octipus-Workspace: default" \
+     http://localhost:3015/api/sessions | jq '.sessions[].channelId'
+   ```
+   **Expect:** the project-x session does NOT appear here. Sessions
+   created BEFORE running the backfill (workspace_id = NULL) DO
+   appear (user-level fallback).
+5. Hand bob alice's workspace UUID:
+   ```bash
+   curl -s -H "Authorization: Bearer $BOB" \
+     -H "X-Octipus-Workspace: <alice-project-x-uuid>" \
+     http://localhost:3015/api/me/workspaces | jq .
+   ```
+   **Expect:** bob sees ONLY his own default workspace. The
+   resolver collapsed the cross-tenant UUID to bob's default.
+
+### 7.11 Backfill script
+
+1. Insert a session with `workspace_id = NULL` directly:
+   ```sql
+   INSERT INTO sessions (user_id, channel_type, channel_id)
+   VALUES ('<alice-uuid>', 'webchat', 'pre-backfill');
+   ```
+2. Dry-run the backfill:
+   ```bash
+   bun run scripts/backfill-workspace-id.ts --dry-run
+   ```
+   **Expect:** logs report `would backfill { userId: ..., sessions: 1 }`.
+3. Run for real: `bun run scripts/backfill-workspace-id.ts`.
+4. Re-run — second run should report all zeros (idempotent).
+5. Verify the session now has alice's default workspace id:
+   ```sql
+   SELECT workspace_id FROM sessions WHERE channel_id = 'pre-backfill';
+   ```
+
+### 7.12 Workspace deletion = user-level fallback
+
+1. As alice, delete `project-x`:
+   ```bash
+   curl -s -X DELETE -H "Authorization: Bearer $ALICE" \
+     http://localhost:3015/api/me/workspaces/<project-x-uuid>
+   ```
+2. List sessions WITHOUT the workspace header:
+   ```bash
+   curl -s -H "Authorization: Bearer $ALICE" \
+     http://localhost:3015/api/sessions | jq '.sessions[].channelId'
+   ```
+   **Expect:** the project-x session is back in the list — its
+   workspace_id was set to NULL by `ON DELETE SET NULL`, so it
+   reverted to user-level scope rather than being cascade-deleted.
+
+### 7.13 Vault workspace scoping (Phase 4 follow-up)
+
+1. As alice, store a workspace-scoped secret bound to project-x via
+   `POST /api/vault` with `scope: 'workspace'`, `workspaceId:
+   '<project-x-uuid>'` (use the admin vault REST endpoint or do it
+   via the chat tool).
+2. With `X-Octipus-Workspace: project-x`, look up the secret by
+   name. **Expect:** found.
+3. With `X-Octipus-Workspace: default`, look up by name.
+   **Expect:** **not** found (workspace narrowed; user-scoped
+   secrets WOULD still be visible — this exercises the workspace
+   override).
+
+### 7.14 Cleanup
+
+```sql
+DELETE FROM sessions WHERE channel_id IN ('qa-1', 'pre-backfill');
+DELETE FROM impersonation_sessions WHERE actor_user_id = '<admin-uuid>';
+DELETE FROM workspaces WHERE slug = 'project-x';
+DELETE FROM org_members WHERE org_id = '<acme-id>';
+DELETE FROM organizations WHERE slug = 'acme';
+DELETE FROM api_tokens WHERE user_id IN ('<alice-uuid>', '<bob-uuid>');
+DELETE FROM users WHERE username IN ('alice', 'bob');
+```
+
+Reset feature flags by removing them from `.env` and restart.
+
+---
+
 ## Reporting issues
 
 If any step here doesn't behave as described:

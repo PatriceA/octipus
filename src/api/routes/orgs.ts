@@ -215,6 +215,23 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
     },
   );
 
+/** /api/me/orgs — caller's own org memberships. */
+export const orgMeRoutes = new Elysia({ prefix: '/me/orgs' })
+  .use(apiContext)
+
+  .get(
+    '/',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const auth = requireAuth(ctx);
+      if (!auth.ok) return auth.body;
+      const orgs = await getOrgWorkspaceManager().listForUser(ctx.principal.userId);
+      return { orgs };
+    },
+    { detail: { tags: ['orgs'] } },
+  );
+
 /** /api/admin/orgs — system-admin org management. */
 export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
   .use(apiContext)

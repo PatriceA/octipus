@@ -23,14 +23,10 @@
  * "user-level" scope), so nothing breaks; the data just isn't
  * partitioned.
  */
-import { isNull } from 'drizzle-orm';
 import { eq, sql } from 'drizzle-orm';
 import { initializeDb, getDb, executeRaw } from '../src/db/postgres';
 import { initializeStorage } from '../src/db/storage';
 import { runMigrations } from '../src/db/migrate';
-import { documents } from '../src/db/schema/documents';
-import { hooks } from '../src/db/schema/hooks';
-import { sessions } from '../src/db/schema/sessions';
 import { users } from '../src/db/schema/users';
 import { getOrgWorkspaceManager } from '../src/security/orgs';
 import { logger } from '../src/utils/logger';
@@ -71,96 +67,87 @@ async function main() {
 
   logger.info({ users: userRows.length, dryRun: args.dryRun }, 'Workspace backfill: starting');
 
-  let totalSessions = 0;
-  let totalDocs = 0;
-  let totalHooks = 0;
+  // Tables to backfill — keyed by table name, with the SQL `user_id`
+  // type. Some tables store user_id as text, others as uuid; the
+  // executeRaw UPDATE has to match.
+  const TABLES: { table: string; uuidUserId: boolean }[] = [
+    { table: 'sessions',         uuidUserId: true  },
+    { table: 'documents',        uuidUserId: false }, // text
+    { table: 'hooks',            uuidUserId: true  },
+    { table: 'agents',           uuidUserId: false }, // text
+    { table: 'notifications',    uuidUserId: true  },
+    { table: 'trajectory_runs',  uuidUserId: true  },
+    { table: 'pipelines',        uuidUserId: true  },
+    { table: 'embeddings',       uuidUserId: true  },
+    { table: 'agent_events',     uuidUserId: false }, // text
+    { table: 'swarm_nodes',      uuidUserId: false }, // text
+    { table: 'vault',            uuidUserId: false }, // text — only scope='workspace' rows are backfilled
+  ];
+
+  const totals: Record<string, number> = {};
+  for (const t of TABLES) totals[t.table] = 0;
 
   for (const user of userRows) {
-    // Counts of unstamped rows for this user.
-    const [{ count: sessionCount }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(sessions)
-      .where(sql`${sessions.userId} = ${user.id}::uuid AND ${sessions.workspaceId} IS NULL`);
-    const [{ count: docCount }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(documents)
-      .where(sql`${documents.userId} = ${user.id} AND ${documents.workspaceId} IS NULL`);
-    const [{ count: hookCount }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(hooks)
-      .where(sql`${hooks.userId} = ${user.id}::uuid AND ${hooks.workspaceId} IS NULL`);
-
-    if (sessionCount === 0 && docCount === 0 && hookCount === 0) continue;
+    // Per-table count of unstamped rows.
+    const counts: Record<string, number> = {};
+    for (const t of TABLES) {
+      const userClause = t.uuidUserId
+        ? `user_id = '${user.id}'::uuid`
+        : `user_id = '${user.id}'`;
+      // Vault: only backfill workspace-scoped rows.
+      const scopeClause = t.table === 'vault' ? `AND scope = 'workspace'` : '';
+      const rows = await db.execute(sql`
+        SELECT count(*)::int AS c FROM ${sql.identifier(t.table)}
+        WHERE ${sql.raw(userClause)} AND workspace_id IS NULL ${sql.raw(scopeClause)}
+      `);
+      const r = rows as unknown as Array<{ c: number }> | { rows: Array<{ c: number }> };
+      const arr = Array.isArray(r) ? r : (r.rows ?? []);
+      counts[t.table] = arr[0]?.c ?? 0;
+    }
+    const grandTotal = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (grandTotal === 0) continue;
 
     if (args.dryRun) {
-      logger.info(
-        { userId: user.id, username: user.username, sessions: sessionCount, documents: docCount, hooks: hookCount },
-        'would backfill',
-      );
-      totalSessions += sessionCount;
-      totalDocs += docCount;
-      totalHooks += hookCount;
+      logger.info({ userId: user.id, username: user.username, ...counts }, 'would backfill');
+      for (const t of TABLES) totals[t.table] += counts[t.table];
       continue;
     }
 
-    // Make sure the user has a default workspace (creates one on
-    // first call). The manager handles the partial-unique-index
-    // semantics so the row is the canonical default.
     const ws = await mgr.ensureDefaultWorkspace(user.id);
 
-    if (sessionCount > 0) {
+    for (const t of TABLES) {
+      if (counts[t.table] === 0) continue;
+      const userClause = t.uuidUserId
+        ? `user_id = '${user.id}'::uuid`
+        : `user_id = '${user.id}'`;
+      const scopeClause = t.table === 'vault' ? `AND scope = 'workspace'` : '';
       await executeRaw(
-        `UPDATE sessions SET workspace_id = '${ws.id}'
-         WHERE user_id = '${user.id}' AND workspace_id IS NULL`,
+        `UPDATE ${t.table} SET workspace_id = '${ws.id}'
+         WHERE ${userClause} AND workspace_id IS NULL ${scopeClause}`,
       );
-      totalSessions += sessionCount;
-    }
-    if (docCount > 0) {
-      await executeRaw(
-        `UPDATE documents SET workspace_id = '${ws.id}'
-         WHERE user_id = '${user.id}' AND workspace_id IS NULL`,
-      );
-      totalDocs += docCount;
-    }
-    if (hookCount > 0) {
-      await executeRaw(
-        `UPDATE hooks SET workspace_id = '${ws.id}'
-         WHERE user_id = '${user.id}' AND workspace_id IS NULL`,
-      );
-      totalHooks += hookCount;
+      totals[t.table] += counts[t.table];
     }
 
     logger.info(
-      {
-        userId: user.id,
-        username: user.username,
-        workspaceId: ws.id,
-        sessions: sessionCount,
-        documents: docCount,
-        hooks: hookCount,
-      },
+      { userId: user.id, username: user.username, workspaceId: ws.id, ...counts },
       'backfilled',
     );
   }
 
-  // Sanity check: count remaining unstamped rows.
-  const [{ count: remainingSessions }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(sessions)
-    .where(isNull(sessions.workspaceId));
-  const [{ count: remainingDocs }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(documents)
-    .where(isNull(documents.workspaceId));
-  const [{ count: remainingHooks }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(hooks)
-    .where(isNull(hooks.workspaceId));
+  // Sanity check: per-table count of remaining unstamped rows.
+  const remaining: Record<string, number> = {};
+  for (const t of TABLES) {
+    const scopeClause = t.table === 'vault' ? `WHERE scope = 'workspace' AND workspace_id IS NULL` : 'WHERE workspace_id IS NULL';
+    const rows = await db.execute(sql`SELECT count(*)::int AS c FROM ${sql.identifier(t.table)} ${sql.raw(scopeClause)}`);
+    const r = rows as unknown as Array<{ c: number }> | { rows: Array<{ c: number }> };
+    const arr = Array.isArray(r) ? r : (r.rows ?? []);
+    remaining[t.table] = arr[0]?.c ?? 0;
+  }
 
   logger.info(
     {
-      backfilled: { sessions: totalSessions, documents: totalDocs, hooks: totalHooks },
-      remaining: { sessions: remainingSessions, documents: remainingDocs, hooks: remainingHooks },
+      backfilled: totals,
+      remaining,
       dryRun: args.dryRun,
     },
     'Workspace backfill: complete',
