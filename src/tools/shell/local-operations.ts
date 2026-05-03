@@ -94,18 +94,38 @@ export class LocalShellOperations implements ShellOperations {
       );
     }
 
+    // Phase 3e — optional process-level sandbox. The wrapper is a
+    // no-op when security.shellSandbox is 'off' (default) or when
+    // the runner isn't installed in 'auto' mode. In 'required' mode
+    // it throws if no runner is available; that surfaces here as a
+    // rejected promise so the agent sees a clear error.
+    const baseArgv: string[] = options.unsafe
+      ? ['sh', '-c', command]
+      : [argv![0], ...argv!.slice(1)];
+
+    const { wrapCommand } = await import('@/security/shell-sandbox');
+    const wrap = wrapCommand(baseArgv, {
+      workspaceRoot: cwd,
+      // The shell tool's `unsafe` path opts the user into a less
+      // restrictive run; allow network there to keep behavior parity
+      // (curl/wget often hide behind unsafe sh -c). Safe-mode shells
+      // stay network-isolated.
+      allowNetwork: !!options.unsafe,
+    });
+    const finalArgv = wrap.argv;
+    if (wrap.wrapped) {
+      coreLogger.debug(
+        { runner: wrap.runner, head: finalArgv.slice(0, 4) },
+        'shell.exec: wrapped in process sandbox',
+      );
+    }
+
     return new Promise((resolve, reject) => {
-      const child = options.unsafe
-        ? spawn('sh', ['-c', command], {
-            cwd,
-            env: { ...process.env, ...options.env },
-            timeout: options.timeout,
-          })
-        : spawn(argv![0], argv!.slice(1), {
-            cwd,
-            env: { ...process.env, ...options.env },
-            timeout: options.timeout,
-          });
+      const child = spawn(finalArgv[0], finalArgv.slice(1), {
+        cwd,
+        env: { ...process.env, ...options.env },
+        timeout: options.timeout,
+      });
 
       let stdout = '';
       let stderr = '';
@@ -145,11 +165,13 @@ export class LocalShellOperations implements ShellOperations {
 
       child.on('close', (code) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
+        wrap.cleanup();
         resolve({ stdout, stderr, exitCode: code, killed });
       });
 
       child.on('error', (error) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
+        wrap.cleanup();
         reject(error);
       });
     });
