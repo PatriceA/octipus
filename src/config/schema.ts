@@ -286,6 +286,15 @@ export const multiuserConfigSchema = z.object({
    * code paths continue to work non-disruptively when this is on.
    */
   rlsEnabled: z.boolean().default(false),
+  /**
+   * Org / workspace grouping layer — Phase 3g. When false (default),
+   * the `/api/me/workspaces` and `/api/admin/orgs` routes return 404
+   * and no part of the runtime consults the orgs/workspaces tables.
+   * The schema is in place (migration 0038) so flipping this on later
+   * requires no migration. Phase 4 wires `workspace_id` onto sessions
+   * and documents and gates that on the same flag.
+   */
+  orgWorkspaces: z.boolean().default(false),
 });
 
 // Workspace configuration schema
