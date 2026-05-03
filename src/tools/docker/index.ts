@@ -1,5 +1,11 @@
 import { spawn } from 'child_process';
-import type { ToolManifest } from '@/core/types';
+import type { AgentContext, ToolManifest } from '@/core/types';
+import {
+  buildIsolationFlags,
+  inspectOwnership,
+  isolationActive,
+  listFilterFlags,
+} from '@/security/docker-isolation';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 const EXEC_TIMEOUT = 30000; // 30s
@@ -64,7 +70,7 @@ export class DockerTool extends BaseTool {
       createParameterSchema({
         show_all: { type: 'boolean', description: 'Show all containers including stopped (default: false)', required: false },
       }),
-      async (args) => this.listContainers(args),
+      async (args, ctx) => this.listContainers(args, ctx),
       { requiresPermission: true },
     );
 
@@ -74,7 +80,7 @@ export class DockerTool extends BaseTool {
       createParameterSchema({
         container: { type: 'string', description: 'Container name or ID', required: true },
       }),
-      async (args) => this.startContainer(args),
+      async (args, ctx) => this.startContainer(args, ctx),
       { requiresPermission: true },
     );
 
@@ -85,7 +91,7 @@ export class DockerTool extends BaseTool {
         container: { type: 'string', description: 'Container name or ID', required: true },
         timeout: { type: 'number', description: 'Timeout in seconds before force kill (default: 10)', required: false },
       }),
-      async (args) => this.stopContainer(args),
+      async (args, ctx) => this.stopContainer(args, ctx),
       { requiresPermission: true },
     );
 
@@ -97,7 +103,7 @@ export class DockerTool extends BaseTool {
         tail: { type: 'number', description: 'Number of lines from the end (default: 100)', required: false },
         since: { type: 'string', description: 'Show logs since timestamp or relative time (e.g., "10m")', required: false },
       }),
-      async (args) => this.containerLogs(args),
+      async (args, ctx) => this.containerLogs(args, ctx),
       { requiresPermission: true },
     );
 
@@ -109,7 +115,7 @@ export class DockerTool extends BaseTool {
         tag: { type: 'string', description: 'Image tag (e.g., "myapp:latest")', required: true },
         dockerfile: { type: 'string', description: 'Dockerfile path relative to context (default: "Dockerfile")', required: false },
       }),
-      async (args) => this.buildImage(args),
+      async (args, ctx) => this.buildImage(args, ctx),
       { requiresPermission: true },
     );
 
@@ -120,7 +126,7 @@ export class DockerTool extends BaseTool {
         container: { type: 'string', description: 'Container name or ID', required: true },
         command: { type: 'string', description: 'Command to execute', required: true },
       }),
-      async (args) => this.execCommand(args),
+      async (args, ctx) => this.execCommand(args, ctx),
       { requiresPermission: true },
     );
   }
@@ -149,9 +155,30 @@ export class DockerTool extends BaseTool {
     });
   }
 
-  private async listContainers(args: Record<string, unknown>): Promise<unknown> {
+  /**
+   * Phase 3f — guard a targeted operation (start/stop/logs/exec) by
+   * verifying the container carries the caller's `octipus.user_id`
+   * label. Returns the input container name on success; throws a
+   * "container not found" error on miss / wrong-owner so the agent
+   * can't enumerate other users' containers by probing.
+   *
+   * No-op when isolation is off — the existing behavior is preserved.
+   */
+  private async assertOwnership(container: string, ctx?: AgentContext): Promise<void> {
+    const userId = ctx?.userId;
+    if (!isolationActive(userId)) return;
+    const result = await inspectOwnership(container, userId!);
+    if (result !== 'ok') {
+      throw new Error(`Container not found: ${container}`);
+    }
+  }
+
+  private async listContainers(args: Record<string, unknown>, ctx?: AgentContext): Promise<unknown> {
     const dockerArgs = ['ps'];
     if (args.show_all) dockerArgs.push('-a');
+    // Phase 3f — when isolation is on, hide containers that don't
+    // carry the caller's user label.
+    dockerArgs.push(...listFilterFlags(ctx?.userId ?? ''));
     dockerArgs.push('--format', '{{json .}}');
 
     const { stdout } = await this.runDocker(dockerArgs);
@@ -168,21 +195,24 @@ export class DockerTool extends BaseTool {
     return { containers, count: containers.length };
   }
 
-  private async startContainer(args: Record<string, unknown>): Promise<unknown> {
+  private async startContainer(args: Record<string, unknown>, ctx?: AgentContext): Promise<unknown> {
     const container = validateArg(args.container as string, 'container');
+    await this.assertOwnership(container, ctx);
     const { stdout, stderr } = await this.runDocker(['start', container]);
     return { container, started: true, output: stdout.trim() || stderr.trim() };
   }
 
-  private async stopContainer(args: Record<string, unknown>): Promise<unknown> {
+  private async stopContainer(args: Record<string, unknown>, ctx?: AgentContext): Promise<unknown> {
     const container = validateArg(args.container as string, 'container');
+    await this.assertOwnership(container, ctx);
     const timeout = (args.timeout as number) || 10;
     const { stdout, stderr } = await this.runDocker(['stop', '-t', String(timeout), container]);
     return { container, stopped: true, output: stdout.trim() || stderr.trim() };
   }
 
-  private async containerLogs(args: Record<string, unknown>): Promise<unknown> {
+  private async containerLogs(args: Record<string, unknown>, ctx?: AgentContext): Promise<unknown> {
     const container = validateArg(args.container as string, 'container');
+    await this.assertOwnership(container, ctx);
     const tail = (args.tail as number) || 100;
     const since = args.since as string | undefined;
 
@@ -198,21 +228,26 @@ export class DockerTool extends BaseTool {
     return { container, logs, lineCount: logs.split('\n').length };
   }
 
-  private async buildImage(args: Record<string, unknown>): Promise<unknown> {
+  private async buildImage(args: Record<string, unknown>, ctx?: AgentContext): Promise<unknown> {
     const path = validateArg(args.path as string, 'path');
     const tag = validateArg(args.tag as string, 'tag');
     const dockerfile = validateArg((args.dockerfile as string) || 'Dockerfile', 'dockerfile');
 
+    // Phase 3f — auto-inject the per-user label so any container
+    // later run from this image can be filtered by ownership. The
+    // image itself doesn't carry a network; that goes on `docker run`.
+    const isoFlags = buildIsolationFlags(ctx?.userId ?? '');
     const { stdout, stderr } = await this.runDocker(
-      ['build', '-t', tag, '-f', dockerfile, path],
+      ['build', ...isoFlags, '-t', tag, '-f', dockerfile, path],
       300000, // 5 minute timeout for builds
     );
 
     return { tag, path, output: (stdout + stderr).slice(-5000) };
   }
 
-  private async execCommand(args: Record<string, unknown>): Promise<unknown> {
+  private async execCommand(args: Record<string, unknown>, ctx?: AgentContext): Promise<unknown> {
     const container = validateArg(args.container as string, 'container');
+    await this.assertOwnership(container, ctx);
     const command = args.command as string;
 
     // Split command into array for safe execution; use sh -c for complex commands
