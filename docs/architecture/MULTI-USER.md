@@ -952,6 +952,104 @@ SHELL_SANDBOX=required
 Verify with `bun test src/security/shell-sandbox.test.ts` —
 the `describe.skipIf(!hasBwrap)` blocks should run and pass.
 
+## Phase 3f — Docker per-user isolation (labels + network)
+
+The Docker tool today operates on whatever containers the daemon
+exposes — there's nothing stopping user A's agent from `docker
+stop`'ing a container created by user B, or `docker exec`'ing a
+command inside one. Phase 3f adds an opt-in label + network
+convention so deployments running multi-user with the Docker tool
+get container-level isolation alongside the FS / process / RLS
+layers shipped in 1b-3 / 3e / 3b.
+
+### Convention
+
+- Every container the tool creates carries
+  `octipus.user_id=<userId>` as a Docker label.
+- Every per-user network is named `octipus_user_<short-uuid>`
+  (first 12 alphanumeric chars of the userId — Docker network
+  names need to stay readable in `docker network ls`).
+- Every list operation passes `--filter
+  label=octipus.user_id=<uuid>` so the agent only sees its own
+  containers.
+- Every targeted operation (`start/stop/logs/exec`) first runs
+  `docker inspect` to verify the label; mismatches surface as
+  **"container not found"** — same shape as a missing container,
+  so attackers can't enumerate other users' container names by
+  probing.
+
+### Config flag (`security.dockerIsolation`)
+
+- `'off'` (default) — no filtering or enforcement. Behavior matches
+  pre-3f.
+- `'enforce'` — when `multiuser.enabled` is also true, isolation
+  fires for every authenticated user. Single-user installs and
+  legacy `system`/`local` sentinel callers stay unaffected.
+
+Env: `DOCKER_ISOLATION=enforce`.
+
+### Helper module (`src/security/docker-isolation.ts`)
+
+- `userLabel(userId)` → `'octipus.user_id=<uuid>'`.
+- `userNetworkName(userId)` → `'octipus_user_<12-chars>'`.
+- `isolationActive(userId)` — combines flag state + the multiuser
+  master switch + the userId sentinel guard.
+- `listFilterFlags(userId)` / `runIsolationFlags(userId)` /
+  `buildIsolationFlags(userId)` — argv fragments to splice into the
+  tool's existing `docker` invocations. Empty array when isolation
+  is off so the call sites don't need to branch.
+- `inspectOwnership(name, userId)` — runs `docker inspect -f
+  '{{ index .Config.Labels "octipus.user_id" }}' <name>` and
+  compares; returns `'ok' | 'not_found' | 'wrong_owner'`.
+- `ensureUserNetwork(userId)` — idempotent `docker network create
+  --driver bridge octipus_user_<id>`. Reserved for the
+  `run_container` op (not in this PR).
+
+### Docker tool wiring (`src/tools/docker/index.ts`)
+
+- `list_containers` — splices `listFilterFlags(ctx.userId)` into
+  the `docker ps` invocation.
+- `start_container / stop_container / container_logs / exec_command`
+  — each calls `assertOwnership(name, ctx)` first; mismatches
+  throw `"Container not found: <name>"` (the agent sees it as a
+  routine miss, not a permission denial).
+- `build_image` — auto-injects `--label octipus.user_id=<uuid>` so
+  any container later run from the image carries the label.
+
+`run_container` (a new operation that creates containers with full
+isolation flags + the per-user network) is deliberately out of
+scope here — the existing tool surface manages pre-existing
+containers, and adding a creation op is a separate feature.
+
+### Tests (12 new)
+
+- 8 helper unit tests: `userLabel` / `userNetworkName` shape;
+  `isolationActive` combines flags correctly across the four
+  off/on/sentinel cases; flag generators emit the right argv when
+  on, empty when off.
+- 1 behavioral (`describe.skipIf(!hasDocker)`): `inspectOwnership`
+  against a real Docker daemon for a nonexistent container returns
+  `'not_found'`. We don't create real containers from tests — that
+  risks leaving state on the host; the missing-container path is
+  enough to verify the helper handles a real `docker inspect`.
+
+Cumulative: **1231 pass / 9 fail / 71 skip** — same 9 pre-existing
+StdioTransport tests, net **+12** unit tests + **+1** added skipped
+behavioral, zero regressions. Lint + typecheck clean.
+
+### Operator runbook
+
+```bash
+# In the deployment env:
+MULTIUSER=true
+DOCKER_ISOLATION=enforce
+```
+
+Existing containers without the label become invisible to every
+non-admin user — operators should add `octipus.user_id` labels to
+any pre-existing containers they want users to manage, or recreate
+them through the tool with isolation on.
+
 ---
 
 ## 1. Goals & Non-Goals
