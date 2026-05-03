@@ -148,10 +148,12 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     '--ro-bind-try', '/bin', '/bin',
     '--ro-bind-try', '/etc', '/etc',
     '--ro-bind-try', '/opt', '/opt',
+    // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
+    // Bound BEFORE the workspace so that workspaces under /tmp aren't
+    // shadowed by this overlay — order matters in bwrap.
+    '--bind', scratch, '/tmp',
     // Read-write the workspace root.
     '--bind', options.workspaceRoot, options.workspaceRoot,
-    // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
-    '--bind', scratch, '/tmp',
     // Standard pseudo filesystems.
     '--proc', '/proc',
     '--dev', '/dev',
