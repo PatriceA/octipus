@@ -525,6 +525,42 @@ export class AgentWorker extends BaseAgentWorker {
         });
       }
 
+      // ── Per-user daily token quota (Phase 3c-2) ─────────────────────
+      // Aggregate across this user's running + completed agents for the
+      // current UTC day. Distinct from the per-agent maxTokenBudget
+      // above: throws QuotaExceededError so callers can distinguish a
+      // user-cap hit from an agent-cap hit. Only fires when multi-user
+      // mode is on and the agent has a real userId (not the legacy
+      // 'system'/'local' sentinel).
+      try {
+        const { getConfig } = await import('@/config');
+        if (
+          getConfig().multiuser?.enabled
+          && this.context.userId
+          && this.context.userId !== 'system'
+          && this.context.userId !== 'local'
+        ) {
+          const { getQuotaManager } = await import('@/security/quotas');
+          // Pre-call check uses delta=0 — we're asking "would we
+          // already be over before this LLM call?" The next call's
+          // tokens are credited after the response by the post-call
+          // bookkeeping; so this gate fires once you cross the line,
+          // not preemptively.
+          const check = await getQuotaManager().willExceed(this.context.userId, 'tokensPerDay', 0);
+          if (!check.allowed) {
+            this.abortController.abort(`user_quota_exceeded:tokensPerDay`);
+            const { QuotaExceededError } = await import('@/security/quota-error');
+            throw new QuotaExceededError({ ...check.reason, userId: this.context.userId });
+          }
+        }
+      } catch (err) {
+        // Don't swallow QuotaExceededError — re-throw it.
+        if (err instanceof Error && err.name === 'QuotaExceededError') throw err;
+        // Any other error inside the quota check (DB hiccup) is logged
+        // but doesn't abort the agent — the per-agent budget above is
+        // the existing safety net.
+      }
+
       // Wall-clock cap — skip if a final/delegation tool already completed
       // (tools are disabled after delegation; we just need one more LLM call for the summary).
       if (this.config.timeout > 0 && this.elapsed() > this.config.timeout && !this.toolExecutor.toolsDisabled) {
