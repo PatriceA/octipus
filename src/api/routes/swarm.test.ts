@@ -36,6 +36,15 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
   beforeAll(async () => {
     await setupIntegrationDb();
 
+    // Defensive reset — bun's mock.module + shared `getConfig()` mean an
+    // earlier test in the run might have left RLS or workspace flags on.
+    // Swarm routes use the unscoped sessionRepository and would 401 if RLS
+    // were enforcing under our non-superuser test role.
+    const { getConfig } = await import('@/config');
+    getConfig().multiuser.rlsEnabled = false;
+    getConfig().multiuser.orgWorkspaces = false;
+    getConfig().multiuser.enabled = false;
+
     const { getDb } = await import('@/db/postgres');
     const { users } = await import('@/db/schema/users');
     const { sessions } = await import('@/db/schema/sessions');
@@ -143,10 +152,13 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
     ]);
 
     const { swarmRoutes } = await import('./swarm');
+    const { principalFromUser } = await import('@/security/principal');
+    const callerUser = { id: testUserId, username: 'swarm-tester', isAdmin: false };
     app = new Elysia()
       .derive({ as: 'global' }, () => ({
-        user: { id: testUserId, username: 'swarm-tester', isAdmin: false },
+        user: callerUser,
         session: null,
+        principal: principalFromUser(callerUser),
       }))
       .use(swarmRoutes);
   });

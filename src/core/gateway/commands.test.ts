@@ -1,12 +1,27 @@
-import { describe, test, expect, beforeEach, mock } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import { CommandRegistry, registerBuiltinCommands } from './commands';
 
 describe('CommandRegistry', () => {
   let registry: CommandRegistry;
+  // Use spyOn (auto-restores) instead of `mock.module()` for the
+  // session-repository fakes — bun's `mock.module` is process-wide and
+  // would leak hard-coded `{id:'sess-1',userId:'user1'}` into every later
+  // test (notably the swarm/agents integration tests whose
+  // canAccessRootSession would always reject under that mock).
+  const findByIdSpy = spyOn(sessionRepository, 'findById');
+  const updateSpy = spyOn(sessionRepository, 'update');
 
   beforeEach(() => {
     registry = new CommandRegistry();
     registerBuiltinCommands(registry);
+    findByIdSpy.mockReset();
+    updateSpy.mockReset();
+  });
+
+  afterEach(() => {
+    findByIdSpy.mockReset();
+    updateSpy.mockReset();
   });
 
   test('executes /help command', async () => {
@@ -82,15 +97,12 @@ describe('CommandRegistry', () => {
   });
 
   test('/clear with webchat session sets clearedAt and returns [clear] signal', async () => {
-    const updateMock = mock(async () => undefined);
-    const findByIdMock = mock(async () => ({
+    findByIdSpy.mockResolvedValue({
       id: 'sess-1',
       userId: 'user1',
       context: { lastTopic: 'coding' },
-    }));
-    mock.module('@/db/repositories/session-repository', () => ({
-      sessionRepository: { findById: findByIdMock, update: updateMock },
-    }));
+    } as never);
+    updateSpy.mockResolvedValue(undefined as never);
 
     const result = await registry.execute('/clear', {
       userId: 'user1',
@@ -100,8 +112,8 @@ describe('CommandRegistry', () => {
     });
 
     expect(result!.text).toBe('[clear]');
-    expect(updateMock).toHaveBeenCalledTimes(1);
-    const updateCall = updateMock.mock.calls[0] as unknown as [string, { context: Record<string, unknown> }];
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const updateCall = updateSpy.mock.calls[0] as unknown as [string, { context: Record<string, unknown> }];
     expect(updateCall[0]).toBe('sess-1');
     expect(typeof updateCall[1].context.clearedAt).toBe('string');
     // ISO-8601 round-trip — invalid string would NaN on Date parse.
@@ -113,15 +125,12 @@ describe('CommandRegistry', () => {
   });
 
   test('/clear preserves transcript on persistent channels (telegram/slack/etc)', async () => {
-    const updateMock = mock(async () => undefined);
-    const findByIdMock = mock(async () => ({
+    findByIdSpy.mockResolvedValue({
       id: 'sess-tg',
       userId: 'user1',
       context: {},
-    }));
-    mock.module('@/db/repositories/session-repository', () => ({
-      sessionRepository: { findById: findByIdMock, update: updateMock },
-    }));
+    } as never);
+    updateSpy.mockResolvedValue(undefined as never);
 
     for (const clientType of ['telegram', 'slack', 'whatsapp', 'teams']) {
       const result = await registry.execute('/clear', {
@@ -136,11 +145,8 @@ describe('CommandRegistry', () => {
   });
 
   test('/clear aliases /cls and /reset both work', async () => {
-    const updateMock = mock(async () => undefined);
-    const findByIdMock = mock(async () => ({ id: 'sess-1', userId: 'user1', context: {} }));
-    mock.module('@/db/repositories/session-repository', () => ({
-      sessionRepository: { findById: findByIdMock, update: updateMock },
-    }));
+    findByIdSpy.mockResolvedValue({ id: 'sess-1', userId: 'user1', context: {} } as never);
+    updateSpy.mockResolvedValue(undefined as never);
 
     for (const cmd of ['/cls', '/reset']) {
       const result = await registry.execute(cmd, {
