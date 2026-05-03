@@ -32,6 +32,47 @@ editor's first iteration both shipped in May; see **Done (recent)
   - VIM IME-aware INSERT mode + named registers (`"a` etc.).
   - Mouse wheel scrolling once Ink exposes mouse APIs.
 
+- **Extension SDK — user-authored TypeScript hooks.** `.octipus/extensions/`
+  auto-discovery + a narrow `ExtensionAPI` (`registerTool`, `registerCommand`,
+  event subscriptions, `ctx.ui.confirm/select/notify`) on top of the existing
+  `event-bus.ts` + permission system. Hot-reload via `/reload`. Ports the
+  pi-mono examples-driven model — patterns like `permission-gate`,
+  `protected-paths`, `git-checkpoint` map directly onto our security surface.
+  Lets users extend octipus without core PRs.
+
+- **Skills — agentskills.io spec alignment.** Today `skills` table + custom
+  format. Next: scan `~/.claude/skills`, `~/.pi/agent/skills`, `.agents/skills`
+  with recursive `SKILL.md` discovery and frontmatter parsing per
+  [agentskills.io](https://agentskills.io/specification). Settings array
+  for extra dirs. Buys interop with the claude-code / pi / codex skill
+  ecosystems for free; existing seeded skills stay valid.
+
+- **Compaction — structured summary + branch summarization.** Anti-thrashing
+  `session-compaction.ts` already decides *when*. Next: harden *what* — adopt
+  pi's structured summary format (cumulative file-op tracker, iterative
+  summary chaining via `firstKeptEntryId` walk-back, `/compact <instructions>`
+  pass-through) and add branch summarization for `/tree`-style navigation.
+  Builds on the existing `CompactionState`; new `compaction_entries` table.
+
+- **RPC stdio adapter for the gateway.** Today gateway is WS-only. Add a
+  second `GatewayAdapter` that speaks strict-LF JSONL over stdin/stdout with
+  the same typed protocol (`prompt` / `steer` / `followUp` /
+  `streamingBehavior`, request-id correlation). Unlocks IDE / CI / subprocess
+  embedding without a WS server. Mirrors pi-mono's `--mode rpc`.
+
+- **Per-tool `executionMode` override.** Today meta-tools all run through the
+  orchestrator with global concurrency. Add `executionMode: "sequential"` on
+  the tool definition itself for tools with shared-state hazards
+  (`spawn_worker`, `create_pipeline`, swarm `spawn_child`). Pi's pattern;
+  small change to `BaseTool` + the orchestrator dispatch path.
+
+- **`before-agent-start` hook with mutable system-prompt options.** Today
+  roles compose system prompts at spawn time inside `worker-spawner.ts`.
+  Expose a typed event on the bus that fires with a mutable
+  `BuildSystemPromptOptions` so extensions can inject per-spawn role
+  preambles, security rules, or project context without editing `roles.ts`.
+  Pairs with the Extension SDK above.
+
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
   `/skills/proposals` web page landed. Next: tighten the proposal
@@ -66,6 +107,8 @@ editor's first iteration both shipped in May; see **Done (recent)
 - **Plugin signing & permissions.** Today plugins in `extensions/` run with full host trust. Capability declarations + signature verification.
 - **Cost-aware routing.** Router considers per-provider cost in addition to capability. Already partial; we want it tunable per user.
 - **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering.
+- **Session-as-tree (fork/branch-aware sessions).** Today messages are a linear PG sequence per session. Add `parentId` on messages and a `/tree` navigation command so users can fork from any point, edit, and replay. Pi-mono's session v3. Defer until a real fork UX is on the table — linear is fine while it isn't.
+- **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
 

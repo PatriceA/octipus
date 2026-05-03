@@ -90,17 +90,17 @@ async function registerCli(binDir: string): Promise<boolean> {
 
   const os = platform();
 
-  // Check if "assistant" command already works
+  // Check if "octi" command already works
   try {
-    const check = Bun.spawn(['assistant', '--help'], { stdout: 'pipe', stderr: 'pipe' });
+    const check = Bun.spawn(['octi', '--help'], { stdout: 'pipe', stderr: 'pipe' });
     if (await check.exited === 0) {
-      console.log('\x1b[32m✓ "assistant" command is already available\x1b[0m');
+      console.log('\x1b[32m✓ "octi" command is already available\x1b[0m');
       return true;
     }
   } catch {}
 
   const doRegister = await confirm({
-    message: 'Register "assistant" command globally?',
+    message: 'Register "octi" command globally?',
     default: true,
   });
 
@@ -120,7 +120,7 @@ async function registerCli(binDir: string): Promise<boolean> {
     });
     const code = await proc.exited;
     if (code === 0) {
-      console.log('\x1b[32m✓ "assistant" command registered via bun link\x1b[0m');
+      console.log('\x1b[32m✓ "octi" command registered via bun link\x1b[0m');
       console.log('\x1b[33m  Note: Restart your terminal if the command is not recognized.\x1b[0m');
       return true;
     }
@@ -220,7 +220,7 @@ function printManualCliInstructions(binDir: string, os: string): void {
       console.log(`    echo 'export PATH="$PATH:${binDir}"' >> ~/.bashrc && source ~/.bashrc\n`);
     }
   }
-  console.log(`  After that, you can use: assistant start, assistant stop, etc.`);
+  console.log(`  After that, you can use: octi start, octi stop, etc.`);
 }
 
 // ── Main ──
@@ -301,8 +301,8 @@ async function main(): Promise<void> {
     console.log('\n\x1b[1m── Database ──\x1b[0m');
     const dbHost = await input({ message: 'PostgreSQL host', default: 'localhost' });
     const dbPort = await input({ message: 'PostgreSQL port', default: '5432' });
-    const dbName = await input({ message: 'Database name', default: 'assistant' });
-    const dbUser = await input({ message: 'Database user', default: 'assistant' });
+    const dbName = await input({ message: 'Database name', default: 'octipus' });
+    const dbUser = await input({ message: 'Database user', default: 'octipus' });
     const dbPassword = await input({ message: 'Database password' });
     databaseUrl = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${dbPort}/${dbName}`;
 
@@ -354,7 +354,7 @@ async function main(): Promise<void> {
       },
       {
         value: 'mcp',
-        name: 'MCP Server (use assistant tools from Claude Code, Gemini CLI, etc.)',
+        name: 'MCP Server (use Octipus tools from Claude Code, Gemini CLI, etc.)',
         checked: true,
       },
     ],
@@ -473,7 +473,7 @@ async function main(): Promise<void> {
           const mcpDistPath = mcpDir + '/dist/index.js';
           const mcpConfig = {
             mcpServers: {
-              assistant: {
+              octipus: {
                 command: 'node',
                 args: [mcpDistPath],
                 env: {
@@ -515,7 +515,7 @@ async function main(): Promise<void> {
   const cliRegistered = await registerCli(binDir);
 
   // ── Summary ──
-  const startCmd = cliRegistered ? 'assistant start --dev' : (platform() === 'win32' ? `"${binDir}\\octi.cmd" start --dev` : `"${binDir}/assistant" start --dev`);
+  const startCmd = cliRegistered ? 'octi start --dev' : (platform() === 'win32' ? `"${binDir}\\octi.cmd" start --dev` : `"${binDir}/octi" start --dev`);
   console.log(`
 \x1b[36m╔═══════════════════════════════════════════════════════════╗
 ║                    SETUP COMPLETE                         ║

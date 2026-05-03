@@ -23,6 +23,12 @@ export interface AgentMessage {
   toolCallId?: string;
   name?: string;
   timestamp: Date;
+  /**
+   * DeepSeek thinking-mode chain-of-thought (assistant messages only).
+   * Set when the response came from `deepseek-reasoner` and must be echoed
+   * back on the next turn. Ignored by every other provider's formatter.
+   */
+  reasoningContent?: string;
 }
 
 export interface ToolCall {

@@ -449,10 +449,10 @@ export class OrchestratorService {
     }
 
     if (classification.topic) {
-      systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as a hint for the child role when calling spawn_child. Prefer spawn_child (single or multiple calls per turn) for nearly all tasks — only use create_pipeline when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review").`;
+      systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as the child role when calling spawn_child. Delegate to specialists via spawn_child (one or more calls per turn) for any substantive task — writing or refactoring code, research, design, security review, devops work, etc. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review"). Narrow exception: if the request is plainly trivial — a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition — answer directly without spawning. When in doubt between delegating and answering directly, delegate. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
     }
     if (classification.type === 'ambiguous') {
-      systemPrompt += `\n\nThe user's message could not be confidently classified. Analyze it yourself and decide the best course of action.`;
+      systemPrompt += `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`;
     }
 
     // Inject workspace awareness
@@ -714,6 +714,7 @@ export class OrchestratorService {
             status: rootStatus,
             usedTokens: worker.getTotalTokens(),
             durationMs: Date.now() - orchStartTime,
+            error: wasStopped ? undefined : (errMsg || undefined),
           },
         });
       } catch (err) {

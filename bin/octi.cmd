@@ -22,22 +22,22 @@ set "BOLD=%ESC%[1m"
 set "DIM=%ESC%[2m"
 set "NC=%ESC%[0m"
 
-:: ─── Assistant CLI (Windows) ────────────────────────────────────────────────
-:: Single-command management for the Assistant application.
+:: ─── Octipus CLI (Windows) ────────────────────────────────────────────────
+:: Single-command management for Octipus.
 ::
 :: Usage:
-::   assistant start [--dev]    Start backend + web UI
-::   assistant stop             Stop all assistant processes
-::   assistant restart [--dev]  Restart everything
-::   assistant status           Show running state
-::   assistant logs             Tail backend logs
-::   assistant open             Open web UI in browser
+::   octi start [--dev]    Start backend + web UI
+::   octi stop             Stop all Octipus processes
+::   octi restart [--dev]  Restart everything
+::   octi status           Show running state
+::   octi logs             Tail backend logs
+::   octi open             Open web UI in browser
 :: ────────────────────────────────────────────────────────────────────────────
 
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "PROJECT_DIR=%%~fI"
 
-set "STATE_DIR=%USERPROFILE%\.assistant"
+set "STATE_DIR=%USERPROFILE%\.octipus"
 set "PID_FILE_BACKEND=%STATE_DIR%\backend.pid"
 set "PID_FILE_WEB=%STATE_DIR%\web.pid"
 set "LOG_FILE=%STATE_DIR%\backend.log"
@@ -77,7 +77,7 @@ goto :cmd_help
 :print_banner
 echo.
 echo   %CYAN%%BOLD%+===================================+
-echo   ^|         A S S I S T A N T         ^|
+echo   ^|                  O C T I P U S         ^|
 echo   +===================================+%NC%
 echo.
 exit /b 0
@@ -98,7 +98,7 @@ set "_CP=%~1"
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('localhost', %_CP%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
 
-:kill_all_assistant
+:kill_all_octipus
 :: Kill tracked processes and free ports
 call :kill_port %API_PORT%
 call :kill_port %WEB_PORT%
@@ -110,7 +110,7 @@ if exist "%STATE_DIR%\run_webui.cmd" (
     powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"CommandLine like '%%run_webui.cmd%%'\" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 )
 :: Also kill any stray bun processes from our project directory
-powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"Name='bun.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*the_assistant*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"Name='bun.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*octipus*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
 if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%"
 exit /b 0
@@ -132,7 +132,7 @@ exit /b 0
 call :print_banner
 
 :: Kill any existing processes first (clean slate)
-call :kill_all_assistant
+call :kill_all_octipus
 timeout /t 1 /nobreak >nul
 
 :: Check bun
@@ -221,22 +221,22 @@ echo   %BLUE%-%NC% Opening browser...
 start "" "http://localhost:%WEB_PORT%"
 
 echo.
-echo   %GREEN%%BOLD%Assistant is running!%NC%
+echo   %GREEN%%BOLD%Octipus is running!%NC%
 echo.
 echo   Web UI:    %CYAN%http://localhost:%WEB_PORT%%NC%
 echo   API:       %CYAN%http://localhost:%API_PORT%%NC%
 echo   API Docs:  %CYAN%http://localhost:%API_PORT%/swagger%NC%
 echo.
 echo   %BOLD%Commands:%NC%
-echo   assistant status    Show running state
-echo   assistant logs      View backend logs
-echo   assistant stop      Stop everything
+echo   octi status    Show running state
+echo   octi logs      View backend logs
+echo   octi stop      Stop everything
 echo.
 exit /b 0
 
 :start_health_timeout
 echo   %RED%x%NC% Backend health check timed out (60s^)
-echo     %DIM%Check logs: assistant logs%NC%
+echo     %DIM%Check logs: octi logs%NC%
 :: Kill the backend we started since it didn't come up
 call :kill_port %API_PORT%
 if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
@@ -246,10 +246,10 @@ exit /b 1
 :cmd_stop
 call :print_banner
 
-echo   %BLUE%-%NC% Stopping assistant...
-call :kill_all_assistant
+echo   %BLUE%-%NC% Stopping Octipus...
+call :kill_all_octipus
 
-echo   %GREEN%v%NC% Assistant stopped
+echo   %GREEN%v%NC% Octipus stopped
 echo.
 exit /b 0
 
@@ -263,7 +263,7 @@ if "%~2"=="-d" set "DEV_MODE=true"
 
 :: ── 1. STOP ─────────────────────────────────────────────────────────────────
 echo   %BLUE%-%NC% Stopping all processes...
-call :kill_all_assistant
+call :kill_all_octipus
 timeout /t 2 /nobreak >nul
 echo   %GREEN%v%NC% Processes stopped
 
@@ -353,7 +353,7 @@ echo   %BLUE%-%NC% Opening browser...
 start "" "http://localhost:%WEB_PORT%"
 
 echo.
-echo   %GREEN%%BOLD%Assistant is running!%NC%
+echo   %GREEN%%BOLD%Octipus is running!%NC%
 echo.
 echo   Web UI:    %CYAN%http://localhost:%WEB_PORT%%NC%
 echo   API:       %CYAN%http://localhost:%API_PORT%%NC%
@@ -363,7 +363,7 @@ exit /b 0
 
 :restart_health_timeout
 echo   %RED%x%NC% Backend health check timed out (60s^)
-echo     %DIM%Check logs: assistant logs%NC%
+echo     %DIM%Check logs: octi logs%NC%
 :: Kill the backend we started since it didn't come up
 call :kill_port %API_PORT%
 if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
@@ -444,7 +444,7 @@ if "%~2"=="--web" (
         echo   %DIM%[Watching %WEB_LOG_FILE%]%NC%
         powershell -NoProfile -Command "Get-Content '%WEB_LOG_FILE%' -Wait -Tail 50"
     ) else (
-        echo   %RED%x%NC% No web log file found. Start the assistant first.
+        echo   %RED%x%NC% No web log file found. Start Octipus first.
     )
 ) else (
     if exist "%LOG_FILE%" (
@@ -453,7 +453,7 @@ if "%~2"=="--web" (
         echo   %DIM%[Watching %LOG_FILE%]%NC%
         powershell -NoProfile -Command "Get-Content '%LOG_FILE%' -Wait -Tail 50"
     ) else (
-        echo   %RED%x%NC% No log file found. Start the assistant first.
+        echo   %RED%x%NC% No log file found. Start Octipus first.
     )
 )
 exit /b 0
@@ -467,11 +467,11 @@ exit /b 0
 :: ─── Help ───────────────────────────────────────────────────────────────────
 :cmd_help
 call :print_banner
-echo   %BOLD%Usage:%NC% assistant ^<command^> [options]
+echo   %BOLD%Usage:%NC% octi ^<command^> [options]
 echo.
 echo   %BOLD%Commands:%NC%
 echo     start [--dev]    Start backend and web UI
-echo     stop             Stop all assistant processes
+echo     stop             Stop all Octipus processes
 echo     restart [--dev]  Restart everything
 echo     status           Show running state and service health
 echo     logs [--web]     Tail backend logs (--web for web UI)

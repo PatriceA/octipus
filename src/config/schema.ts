@@ -298,6 +298,11 @@ export const multiuserConfigSchema = z.object({
 });
 
 // Workspace configuration schema
+export const skillsConfigSchema = z.object({
+  externalEnabled: z.boolean().default(true),
+  externalDirectories: z.array(z.string()).default([]),
+});
+
 export const workspaceConfigSchema = z.object({
   rootPath: z.string().default('./workspace'),
   additionalPaths: z.array(z.string()).default([]),
@@ -335,6 +340,7 @@ export const configSchema = z.object({
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
   swarm: swarmConfigSchema.default({}),
+  skills: skillsConfigSchema.default({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -362,3 +368,4 @@ export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type RateLimitConfig = z.infer<typeof rateLimitConfigSchema>;
 export type SwarmConfig = z.infer<typeof swarmConfigSchema>;
+export type SkillsConfig = z.infer<typeof skillsConfigSchema>;

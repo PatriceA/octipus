@@ -1,8 +1,10 @@
 import { describe, test, expect, mock } from 'bun:test';
 import {
-  serializeConversation,
-  extractFileOperations,
+  buildSummarizationPrompt,
   compactWithSummarization,
+  extractFileOperations,
+  mergeFileOperations,
+  serializeConversation,
 } from './context-compaction';
 import type { AgentMessage } from '@/core/types';
 
@@ -145,6 +147,83 @@ describe('Context Compaction', () => {
       expect(result.compactedMessages[0].content).toContain('Summary of old messages.');
       expect(result.compactedMessages[1].content).toBe('Msg 7');
       expect(result.compactedMessages[3].content).toBe('Msg 9');
+    });
+  });
+
+  describe('mergeFileOperations (cumulative tracker)', () => {
+    test('returns the new bag when no prior bag is provided', () => {
+      const next = { read: ['a.ts'], written: ['b.ts'], edited: [] };
+      expect(mergeFileOperations(undefined, next)).toEqual(next);
+    });
+
+    test('de-duplicates within and across bags, preserving order', () => {
+      const prev = { read: ['a.ts', 'b.ts'], written: ['x.ts'], edited: [] };
+      const next = { read: ['b.ts', 'c.ts'], written: ['x.ts', 'y.ts'], edited: ['z.ts'] };
+
+      expect(mergeFileOperations(prev, next)).toEqual({
+        read: ['a.ts', 'b.ts', 'c.ts'],
+        written: ['x.ts', 'y.ts'],
+        edited: ['z.ts'],
+      });
+    });
+
+    test('drops empty strings', () => {
+      const prev = { read: ['', 'a.ts'], written: [], edited: [] };
+      const next = { read: ['a.ts', ''], written: [''], edited: [] };
+      expect(mergeFileOperations(prev, next)).toEqual({
+        read: ['a.ts'],
+        written: [],
+        edited: [],
+      });
+    });
+  });
+
+  describe('buildSummarizationPrompt (structured + iterative options)', () => {
+    const fileOps = { read: ['a.ts'], written: ['b.ts'], edited: [] };
+
+    test('default prompt includes file activity and standard focus list', () => {
+      const out = buildSummarizationPrompt('CONTENT', fileOps);
+      expect(out).toContain('Files read: a.ts');
+      expect(out).toContain('Files written: b.ts');
+      expect(out).toContain('What the user asked for');
+      expect(out).toContain('Summary:');
+      expect(out).not.toContain('Previous summary');
+      expect(out).not.toContain('User instructions for this summary');
+    });
+
+    test('threads previous summary in for iterative chaining', () => {
+      const out = buildSummarizationPrompt('CONTENT', fileOps, {
+        previousSummary: 'Earlier the user fixed the auth bug.',
+      });
+      expect(out).toContain('Previous summary');
+      expect(out).toContain('Earlier the user fixed the auth bug');
+      expect(out).toContain('fold this into the new summary');
+    });
+
+    test('threads user instructions for /compact focus', () => {
+      const out = buildSummarizationPrompt('CONTENT', fileOps, {
+        userInstructions: 'focus on the database migration',
+      });
+      expect(out).toContain('User instructions for this summary');
+      expect(out).toContain('focus on the database migration');
+    });
+
+    test('previous summary + user instructions co-exist', () => {
+      const out = buildSummarizationPrompt('CONTENT', fileOps, {
+        previousSummary: 'Earlier work.',
+        userInstructions: 'focus on auth.',
+      });
+      expect(out).toContain('Previous summary');
+      expect(out).toContain('User instructions for this summary');
+      expect(out).toContain('Earlier work');
+      expect(out).toContain('focus on auth');
+    });
+
+    test('blank/whitespace-only previous summary is ignored', () => {
+      const out = buildSummarizationPrompt('CONTENT', fileOps, {
+        previousSummary: '   \n  ',
+      });
+      expect(out).not.toContain('Previous summary');
     });
   });
 });

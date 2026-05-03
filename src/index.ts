@@ -61,6 +61,10 @@ async function main() {
     // Subscribe to settings changes for hot-reload
     initializeHotReload();
 
+    // Discover filesystem skills (agentskills.io spec) — additive to DB skills
+    const { getSkillRegistry } = await import('@/skills/registry');
+    getSkillRegistry().loadExternal();
+
     // Clean up any agents left "running" from a previous process
     const { agentRepository } = await import('@/db/repositories/agent-repository');
     const staleCount = await agentRepository.cleanupStale();
@@ -98,6 +102,14 @@ async function main() {
     const gatewayHub = getGatewayHub();
     await gatewayHub.start();
     logger.info('Gateway hub started');
+
+    // Load user-authored extensions (.octipus/extensions/)
+    try {
+      const { getExtensionRegistry } = await import('@/extensions');
+      await getExtensionRegistry(gatewayHub.eventBus).loadAll();
+    } catch (err) {
+      logger.error({ err }, 'Extension loading failed (non-fatal)');
+    }
 
     // Reap orphaned swarm_nodes left `running` by a previous process. Must
     // run after DB init (done in gateway.start above) and alongside the
@@ -138,6 +150,14 @@ async function main() {
         logger.info('All agents stopped');
       } catch {
         // Agent manager may not be initialized
+      }
+
+      // Dispose extensions before tearing down the hub they subscribed to
+      try {
+        const { getExtensionRegistry } = await import('@/extensions');
+        await getExtensionRegistry().disposeAll();
+      } catch {
+        // registry may not have been initialized
       }
 
       stopCronLoop();

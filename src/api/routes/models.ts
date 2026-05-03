@@ -7,6 +7,7 @@ import { getCostTracker } from '@/models/cost-tracker';
 import { getHealthChecker } from '@/models/health-checker';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
+import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { coreLogger } from '@/utils/logger';
 
@@ -122,9 +123,13 @@ const KNOWN_PROVIDER_MODELS: Record<string, KnownModel[]> = {
     { id: 'gemini-embedding-2-preview', label: 'Gemini Embedding 2 (Preview)', contextWindow: 8192, costPerInputToken: 0.20 },
   ],
   deepseek: [
-    // DeepSeek V3.2
-    { id: 'deepseek-chat', label: 'DeepSeek V3.2 (Chat)', contextWindow: 128000, maxOutputTokens: 8192, costPerInputToken: 0.28, costPerOutputToken: 0.42, supportsTools: true },
-    { id: 'deepseek-reasoner', label: 'DeepSeek V3.2 (Reasoner)', contextWindow: 128000, maxOutputTokens: 64000, costPerInputToken: 0.28, costPerOutputToken: 0.42 },
+    // DeepSeek V4 Preview (released 2026-04-24). 1M context, MIT open weights.
+    // Pro pricing reflects the 75%-off promo running through 2026-05-31.
+    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro (Preview)', contextWindow: 1000000, maxOutputTokens: 384000, costPerInputToken: 0.435, costPerOutputToken: 0.87, supportsTools: true },
+    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash (Preview)', contextWindow: 1000000, maxOutputTokens: 384000, costPerInputToken: 0.14, costPerOutputToken: 0.28, supportsTools: true },
+    // DeepSeek V3.2 — deprecated, retires 2026-07-24. Aliased to V4 Flash modes.
+    { id: 'deepseek-chat', label: 'DeepSeek V3.2 Chat (deprecated → V4 Flash)', contextWindow: 128000, maxOutputTokens: 8192, costPerInputToken: 0.28, costPerOutputToken: 0.42, supportsTools: true },
+    { id: 'deepseek-reasoner', label: 'DeepSeek V3.2 Reasoner (deprecated → V4 Flash thinking)', contextWindow: 128000, maxOutputTokens: 64000, costPerInputToken: 0.28, costPerOutputToken: 0.42 },
   ],
   openrouter: [
     // Popular models via OpenRouter (prices are OpenRouter's, may differ from direct)
@@ -682,6 +687,58 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       } catch (err) {
         return { error: `Cannot reach Ollama: ${(err as Error).message}` };
       }
+    },
+    { detail: { tags: ['models'] } }
+  )
+
+  // List available DeepSeek models — live-fetched from the DeepSeek API
+  // and merged with the static catalog so we keep price / context metadata
+  // for known IDs while surfacing any new ones the account has access to.
+  .get(
+    '/providers/deepseek/models',
+    async ({ user }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const router = getProviderRouter();
+      const provider = router.getAllProviders().find(p => p.name === 'deepseek') as
+        | DeepSeekProvider
+        | undefined;
+      if (!provider) return { error: 'DeepSeek provider not registered' };
+
+      const catalog = KNOWN_PROVIDER_MODELS.deepseek || [];
+      const catalogById = new Map(catalog.map(m => [m.id, m]));
+
+      let liveIds: string[] = [];
+      let liveError: string | undefined;
+      try {
+        liveIds = await provider.listModels();
+      } catch (err) {
+        liveError = (err as Error).message;
+      }
+
+      // If we have live IDs, return their union with catalog metadata
+      // (catalog rows also kept so deprecated/legacy IDs stay visible until
+      // they're actually removed upstream). Otherwise return catalog only.
+      if (liveIds.length > 0) {
+        const liveSet = new Set(liveIds);
+        const models = [
+          // Live IDs first — catalog metadata if known, minimal entry otherwise
+          ...liveIds.map(id => {
+            const known = catalogById.get(id);
+            return known
+              ? { ...known, inCatalog: true, live: true }
+              : { id, label: id, inCatalog: false, live: true };
+          }),
+          // Catalog entries the API didn't return (kept for visibility, marked offline)
+          ...catalog
+            .filter(m => !liveSet.has(m.id))
+            .map(m => ({ ...m, inCatalog: true, live: false })),
+        ];
+        return { models, live: true };
+      }
+
+      const models = catalog.map(m => ({ ...m, inCatalog: true, live: false }));
+      return { models, live: false, error: liveError || 'Could not reach DeepSeek API' };
     },
     { detail: { tags: ['models'] } }
   )

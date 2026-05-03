@@ -105,23 +105,30 @@ const codexCliConfig: CLIToolConfig = {
   buildArgs: (prompt: string) => ['exec', '--json', prompt],
   parseOutput: (stdout: string, startTime: number): CompletionResult => {
     try {
-      // Codex outputs JSONL events, take the last message event
+      // Codex outputs JSONL events. Pull text from item.completed/agent_message
+      // and usage totals from turn.completed.
       const lines = stdout.trim().split('\n').filter(Boolean);
       let content = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
       for (const line of lines) {
         try {
           const event = JSON.parse(line);
-          if (event.type === 'message' && event.content) {
+          if (event.type === 'item.completed' && event.item?.type === 'agent_message' && event.item?.text) {
+            content = event.item.text;
+          } else if (event.type === 'message' && event.content) {
             content = event.content;
           } else if (event.type === 'result' && event.text) {
             content = event.text;
+          } else if (event.type === 'turn.completed' && event.usage) {
+            inputTokens = event.usage.input_tokens ?? inputTokens;
+            outputTokens = event.usage.output_tokens ?? outputTokens;
           }
         } catch {
           // Skip non-JSON lines
         }
       }
       if (!content && lines.length > 0) {
-        // Fallback: try to parse the whole output
         try {
           const data = JSON.parse(stdout);
           content = data.result || data.content || data.text || stdout.trim();
@@ -132,7 +139,7 @@ const codexCliConfig: CLIToolConfig = {
       return {
         content,
         finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
         model: 'cli/codex-cli',
         latencyMs: Date.now() - startTime,
       };

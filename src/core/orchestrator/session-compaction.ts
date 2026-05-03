@@ -1,8 +1,10 @@
 import { getConfig } from '@/config';
 import { getGatewayHub } from '@/core/gateway/hub';
 import type { AgentMessage } from '@/core/types';
+import { compactionEntryRepository } from '@/db/repositories/compaction-entry-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { CompactionFileOps } from '@/db/schema/compaction-entries';
 import type { CompactionState, SessionContext } from '@/db/schema/sessions';
 import { calculateTotalTokens, compactMessagesWithSummary } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
@@ -69,6 +71,17 @@ export function decideCompaction(input: CompactionDecisionInput): CompactionDeci
   return { allow: false, reason: 'stalled-awaiting-growth', nextEligibleTokens };
 }
 
+export interface MaybeCompactSessionOptions {
+  /**
+   * Free-form `/compact <instructions>` payload. When provided, bypasses the
+   * threshold checks (the user explicitly asked to compact) but still
+   * respects the stall guard unless `force` is set.
+   */
+  userInstructions?: string;
+  /** Bypass the anti-thrashing stall guard. Used by manual `/compact`. */
+  force?: boolean;
+}
+
 /**
  * Check if a session needs compaction and trigger it if so.
  *
@@ -76,13 +89,20 @@ export function decideCompaction(input: CompactionDecisionInput): CompactionDeci
  * skip further passes until the session has grown by `growthMultiplier` ×
  * the previous pre-compact size, or the token count hits the hard ceiling.
  */
-export async function maybeCompactSession(sessionId: string): Promise<void> {
+export async function maybeCompactSession(
+  sessionId: string,
+  options: MaybeCompactSessionOptions = {},
+): Promise<void> {
   const session = await sessionRepository.findById(sessionId);
   if (!session) return;
 
-  const messageThresholdHit = session.messageCount >= COMPACTION_MESSAGE_THRESHOLD;
-  const tokenThresholdHit = session.tokenCount >= COMPACTION_TOKEN_THRESHOLD;
-  if (!messageThresholdHit && !tokenThresholdHit) return;
+  const userTriggered = Boolean(options.userInstructions || options.force);
+
+  if (!userTriggered) {
+    const messageThresholdHit = session.messageCount >= COMPACTION_MESSAGE_THRESHOLD;
+    const tokenThresholdHit = session.tokenCount >= COMPACTION_TOKEN_THRESHOLD;
+    if (!messageThresholdHit && !tokenThresholdHit) return;
+  }
 
   const { compaction: cfg } = getConfig();
   const context = (session.context as SessionContext) || {};
@@ -94,7 +114,7 @@ export async function maybeCompactSession(sessionId: string): Promise<void> {
     config: cfg,
   });
 
-  if (!decision.allow) {
+  if (!decision.allow && !options.force) {
     coreLogger.debug(
       {
         sessionId,
@@ -107,7 +127,8 @@ export async function maybeCompactSession(sessionId: string): Promise<void> {
     return;
   }
 
-  await compactSessionContext(sessionId, decision.reason);
+  const triggerReason = decision.allow ? decision.reason : 'force';
+  await compactSessionContext(sessionId, triggerReason, options.userInstructions);
 }
 
 /**
@@ -115,10 +136,15 @@ export async function maybeCompactSession(sessionId: string): Promise<void> {
  * context. Records savings ratio, tracks ineffective passes, and emits a
  * `session.compaction_stalled` gateway event when a pass fails to free
  * enough tokens.
+ *
+ * Iterative chaining: when a previous `compaction_entries` row exists for
+ * this session, its summary + cumulative file ops are threaded into the
+ * new pass and a fresh structured row is appended.
  */
 async function compactSessionContext(
   sessionId: string,
-  allowReason: Exclude<CompactionDecision, { allow: false }>['reason'],
+  allowReason: Exclude<CompactionDecision, { allow: false }>['reason'] | 'force',
+  userInstructions?: string,
 ): Promise<void> {
   const messages = await messageRepository.findBySession(sessionId, 200, 0, ['user', 'assistant']);
   if (messages.length < 10) return;
@@ -131,9 +157,15 @@ async function compactSessionContext(
 
   const tokensBefore = calculateTotalTokens(agentMessages);
 
+  // Pull the most recent structured entry to chain summaries iteratively.
+  const previousEntry = await compactionEntryRepository.findLatest(sessionId).catch(() => undefined);
+
   const result = await compactMessagesWithSummary(agentMessages, {
     maxTokens: 4000,
     preserveRecentCount: 6,
+    previousSummary: previousEntry?.summary,
+    previousFileOps: previousEntry?.fileOps as CompactionFileOps | undefined,
+    userInstructions,
   });
 
   const tokensAfter = calculateTotalTokens(result.messages);
@@ -172,6 +204,34 @@ async function compactSessionContext(
       compactionState: nextState,
     },
   });
+
+  // Persist a structured CompactionEntry when the summarizer produced one.
+  // The structured-result variant of `compactMessagesWithSummary` only
+  // populates `summaryText`/`fileOps` when chaining/instructions were used,
+  // so we synthesize from `summaryMsg` for the first-pass case.
+  const structuredSummary = result.summaryText
+    ?? (summaryMsg?.content && summaryMsg.content.replace(/^\[Context Summary[^\]]*\]\s*/, '').split('\n\nFiles ')[0])
+    ?? '';
+  const structuredFileOps = result.fileOps ?? { read: [], written: [], edited: [] };
+
+  if (structuredSummary.trim().length > 0) {
+    try {
+      await compactionEntryRepository.insert({
+        sessionId,
+        parentEntryId: previousEntry?.id ?? null,
+        summary: structuredSummary,
+        fileOps: structuredFileOps,
+        userInstructions: userInstructions ?? null,
+        tokensBefore,
+        tokensAfter,
+        savingsRatio,
+        messagesSummarized: result.removed,
+        triggerReason: allowReason,
+      });
+    } catch (err) {
+      coreLogger.warn({ err, sessionId }, 'Failed to persist compaction entry (non-fatal)');
+    }
+  }
 
   coreLogger.info(
     {

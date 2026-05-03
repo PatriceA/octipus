@@ -14,6 +14,10 @@ const CASUAL_PATTERNS = [
   /^who\s+(am\s+i|are\s+you)\b/i,  // Identity questions
   /^what\s+(do\s+you\s+know\s+about\s+me|is\s+my\s+name)\b/i,  // Self-knowledge questions
   /^(what\s+time|what\s+day|what\s+date|what'?s\s+the\s+(time|date|day))\b/i,  // Time/date questions
+  // Trivial arithmetic / one-shot factual questions — no specialist needed
+  /^\s*(what\s+is\s+|what'?s\s+|how\s+much\s+is\s+)?\d[\d\s+\-*/×÷.()]*\??\s*$/i,  // "2+2", "what is 2+2?"
+  /^(say|repeat|tell\s+me)\s+(the\s+word|"|')/i,  // "Say the word ok", 'Repeat "x"'
+  /^(define|what\s+does)\s+\w+\s+(mean|stand\s+for)/i,  // "Define X", "What does X mean"
 ];
 
 const TASK_KEYWORDS: Record<string, string[]> = {
@@ -169,9 +173,11 @@ export function classifyMessage(message: string): MessageClassification {
     }
   }
 
-  // Short messages without task keywords are likely casual
-  if (normalized.split(/\s+/).length <= 3) {
-    // Check if any task keywords match even in short messages
+  // Short messages without task keywords are likely casual.
+  // Bumped from 3 → 6 words: covers things like "what is 2+2 one word",
+  // "say the word ok", "tell me a joke" — all of which were previously
+  // falling through to 'ambiguous' and getting routed to a coding agent.
+  if (normalized.split(/\s+/).length <= 6) {
     const hasTaskKeyword = Object.values(TASK_KEYWORDS)
       .flat()
       .some(kw => normalized.includes(kw));
