@@ -89,6 +89,25 @@ export class AgentManager {
       throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
     }
 
+    // Phase 3c-2 — per-user concurrency quota. Only fires when
+    // multi-user mode is on; single-user installs rely on the global
+    // cap above and skip the per-user check. Throws QuotaExceededError
+    // (distinct from the global cap's plain Error) so callers can
+    // distinguish.
+    if (
+      getConfig().multiuser?.enabled
+      && options.userId
+      && options.userId !== 'system'
+      && options.userId !== 'local'
+    ) {
+      const { getQuotaManager } = await import('@/security/quotas');
+      const check = await getQuotaManager().willExceed(options.userId, 'concurrentAgents', 1);
+      if (!check.allowed) {
+        const { QuotaExceededError } = await import('@/security/quota-error');
+        throw new QuotaExceededError({ ...check.reason, userId: options.userId });
+      }
+    }
+
     const config = getConfig();
 
     // If both topic and model are already specified, skip re-routing
