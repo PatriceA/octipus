@@ -34,24 +34,31 @@ mock.module('@/models/model-registry', () => ({
   }),
 }));
 
-// Mock config to avoid validation failures
+// Mock config to avoid validation failures.
+// IMPORTANT: bun's `mock.module` is process-wide for the whole test run, so
+// any field omitted here becomes undefined for every subsequent test that
+// imports `@/config`. Build the mock from the real schema defaults + the
+// project's `defaultConfig` so downstream tests (audit-shadow, multiuser
+// fixtures, etc.) don't break.
+import { configSchema } from '@/config/schema';
+import { defaultConfig } from '@/config/defaults';
+const _mockBase = configSchema.parse({
+  ...defaultConfig,
+  litellm: {
+    proxyUrl: 'http://localhost:4000',
+    apiKey: 'test-key',
+    timeout: 10000,
+    maxRetries: 1,
+  },
+  security: {
+    ...defaultConfig.security,
+    masterKey: 'a'.repeat(32),
+    jwtSecret: 'b'.repeat(32),
+    sessionSecret: 'c'.repeat(32),
+  },
+});
 mock.module('@/config', () => ({
-  getConfig: () => ({
-    litellm: {
-      proxyUrl: 'http://localhost:4000',
-      apiKey: 'test-key',
-      timeout: 10000,
-      maxRetries: 1,
-    },
-    security: {
-      masterKey: 'a'.repeat(32),
-      jwtSecret: 'b'.repeat(32),
-      sessionSecret: 'c'.repeat(32),
-    },
-    database: {
-      storageMode: 'embedded',
-    },
-  }),
+  getConfig: () => _mockBase,
 }));
 
 import { describe, test, expect } from 'bun:test';
