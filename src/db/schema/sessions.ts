@@ -6,6 +6,14 @@ export const sessionStatusEnum = pgEnum('session_status', ['active', 'paused', '
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id).notNull(),
+  /**
+   * Phase 4 — optional workspace scope. NULL means "user-level"
+   * (visible to every workspace the user owns); set means "scoped
+   * to this workspace only". The FK uses ON DELETE SET NULL so
+   * deleting a workspace falls back to user-level rather than
+   * cascading the rows away.
+   */
+  workspaceId: uuid('workspace_id'),
   channelType: text('channel_type').notNull(), // telegram, teams, slack, webchat, api
   channelId: text('channel_id').notNull(),
   threadId: text('thread_id'),

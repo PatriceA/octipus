@@ -274,6 +274,13 @@
       "when": 1721800000000,
       "tag": "0038_orgs_workspaces",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1722400000000,
+      "tag": "0039_workspace_id_columns",
+      "breakpoints": true
     }
   ]
 }
