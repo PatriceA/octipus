@@ -40,6 +40,22 @@ export interface Principal {
   /** Display name of the impersonating admin. Convenience for
    *  audit + the web banner. */
   readonly actorUsername?: string | null;
+  /**
+   * Phase 4 — optional workspace scope. When set, scopedRepos
+   * narrow reads/writes to rows whose `workspace_id` matches AND
+   * stamp newly-created rows with this id. NULL/undefined means
+   * "user-level": rows are visible across every workspace owned
+   * by the user.
+   *
+   * Resolved by the auth-derive middleware from the
+   * `X-Octipus-Workspace` request header (slug or uuid). Cross-
+   * tenant headers are silently ignored — alice handing bob's
+   * workspace UUID gets her own default workspace, not bob's row.
+   *
+   * Only populated when `multiuser.orgWorkspaces` is on. Off keeps
+   * the field undefined so existing call sites see no change.
+   */
+  readonly workspaceId?: string | null;
 }
 
 /** Sentinel principal for anonymous/unauthenticated callers. */
