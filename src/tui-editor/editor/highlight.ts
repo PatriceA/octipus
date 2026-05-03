@@ -189,3 +189,54 @@ export function tokenColor(kind: TokenKind): string {
   if (kind === 'plain') return t.fg;
   return t.syntax[kind];
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Pluggable highlighter — tree-sitter slot
+// ─────────────────────────────────────────────────────────────────
+//
+// `highlightLine` is the default highlighter (pattern-based). To
+// swap in a real parser (tree-sitter, textmate grammars, etc.):
+//
+//   import { setHighlighter } from '@/tui-editor/editor/highlight';
+//   setHighlighter((line, lang) => myParserBackedHighlight(line, lang));
+//
+// The contract is the same single-line `(line, lang) => Token[]`
+// shape so the editor's render path doesn't need to know which
+// implementation it's calling. A future tree-sitter integration
+// would build per-language grammars (loaded via `web-tree-sitter`)
+// and tokenize via incremental parses across edits — for now the
+// pattern-based default is good enough for visual differentiation
+// and ships zero new dependencies.
+//
+// Limitations of the pattern-based default (acknowledged):
+//   - No nested template-string parsing.
+//   - Single-line scope — block comments that span lines are only
+//     correctly highlighted on the line containing the opener.
+//   - No JSX tag highlighting (no syntax distinction between
+//     `<Foo>` and a comparison).
+//
+// The interface below lets a tree-sitter or LSP-backed
+// implementation slot in without touching every consumer.
+
+export type HighlighterFn = (line: string, lang: Language) => Token[];
+
+let activeHighlighter: HighlighterFn = highlightLine;
+
+/**
+ * Replace the active highlighter. Called once at app start by
+ * whichever module wires the parser of choice; the TextEditor
+ * component reads through `highlight()`.
+ */
+export function setHighlighter(fn: HighlighterFn): void {
+  activeHighlighter = fn;
+}
+
+/** Reset to the built-in pattern-based highlighter. */
+export function resetHighlighter(): void {
+  activeHighlighter = highlightLine;
+}
+
+/** Highlight a single line with whichever implementation is active. */
+export function highlight(line: string, lang: Language): Token[] {
+  return activeHighlighter(line, lang);
+}

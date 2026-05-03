@@ -8,17 +8,25 @@
 import { randomBytes } from 'node:crypto';
 import { useEffect, useState } from 'react';
 import { GatewayClient } from '../tui/gateway-client';
+import { ApiClient } from './api-client';
 import { Layout } from './components/layout';
+import { loadPersistedState, savePersistedState } from './persist';
 import { AgentStore } from './stores/agent-store';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
 import { WorkspaceStore } from './stores/workspace-store';
+import { setTheme } from './theme';
+import { readFileForBuffer } from './workspace-fs-bridge';
 
 // Shared singletons. Exported so components can import directly.
 export const layoutStore = new LayoutStore();
 export const bufferStore = new BufferStore();
 export const agentStore = new AgentStore();
 export const workspaceStore = new WorkspaceStore();
+export const apiClient = new ApiClient({
+  baseUrl: 'http://localhost:3015/api',
+  workspaceStore,
+});
 
 interface Props {
   gatewayUrl?: string;
@@ -34,6 +42,7 @@ export function TuiEditorApp({ gatewayUrl, projectPath }: Props) {
   const [sessionId] = useState(newSessionId);
   const [client] = useState(() => new GatewayClient({
     url: gatewayUrl,
+    getWorkspace: () => workspaceStore.get().activeSlug,
     onStatusChange: (s) => agentStore.setStatus(s),
     onResponse: (response) => {
       agentStore.pushMessage('assistant', response);
@@ -117,22 +126,64 @@ export function TuiEditorApp({ gatewayUrl, projectPath }: Props) {
 
   useEffect(() => {
     if (projectPath) workspaceStore.setProjectRoot(projectPath);
+
+    // Load persisted layout state. Restoring buffers happens after
+    // we know the project root so paths under it stay valid.
+    const persisted = loadPersistedState();
+    setTheme(persisted.theme);
+    layoutStore.setEditorMode(persisted.editorMode);
+    if (!persisted.treeVisible) layoutStore.toggleTree();
+    if (!persisted.chatVisible) layoutStore.toggleChat();
+    for (const path of persisted.openPaths) {
+      const text = readFileForBuffer(path);
+      if (text !== null) bufferStore.openFile(path, text);
+    }
+    if (persisted.activePath) {
+      const rec = bufferStore.findByPath(persisted.activePath);
+      if (rec) bufferStore.setActive(rec.id);
+    }
+
     client.connect();
 
-    // Fetch workspaces from /api/me/workspaces if multi-user is on.
-    // Failure is silent — single-user installs don't have the route.
-    fetch('http://localhost:3015/api/me/workspaces')
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.workspaces) workspaceStore.setAvailable(data.workspaces);
-      })
-      .catch(() => { /* ignore */ });
+    // Fetch workspaces — passes X-Octipus-Workspace via apiClient.
+    // Failure is silent (single-user installs don't have the route).
+    apiClient.getJson<{ workspaces: { id: string; slug: string; name: string; isDefault: boolean }[] }>(
+      '/me/workspaces',
+    ).then((data) => {
+      if (data?.workspaces) workspaceStore.setAvailable(data.workspaces);
+    });
 
     // Track terminal size for scroll math.
     const updateSize = () => layoutStore.setSize(process.stdout.columns ?? 120, process.stdout.rows ?? 30);
     updateSize();
     process.stdout.on('resize', updateSize);
+
+    // Persist on every layout / buffer / theme / workspace change.
+    // Debounce so a burst of keystrokes doesn't churn disk.
+    let saveTimer: NodeJS.Timeout | null = null;
+    const queueSave = () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        savePersistedState({
+          version: 1,
+          openPaths: bufferStore.get().buffers
+            .map((b) => b.path)
+            .filter((p): p is string => typeof p === 'string'),
+          activePath: bufferStore.active()?.path ?? null,
+          treeVisible: layoutStore.get().treeVisible,
+          chatVisible: layoutStore.get().chatVisible,
+          theme: 'dark', // theme changes don't go through a store yet; conservative default
+          editorMode: layoutStore.get().editorMode,
+        });
+      }, 500);
+    };
+    const offLayout = layoutStore.subscribe(queueSave);
+    const offBuffers = bufferStore.subscribe(queueSave);
+
     return () => {
+      offLayout();
+      offBuffers();
+      if (saveTimer) clearTimeout(saveTimer);
       process.stdout.off('resize', updateSize);
       client.disconnect();
     };
