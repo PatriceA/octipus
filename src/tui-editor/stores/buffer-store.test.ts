@@ -77,4 +77,46 @@ describe('BufferStore', () => {
     expect(s.get().buffers.length).toBe(0);
     expect(s.get().activeId).toBeNull();
   });
+
+  test('lockMode defaults to "lock"', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a.ts', 'foo');
+    expect(a.lockMode).toBe('lock');
+  });
+
+  test('setLockMode toggles', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a.ts', 'foo');
+    s.setLockMode(a.id, 'merge');
+    expect(s.active()?.lockMode).toBe('merge');
+  });
+
+  test('applyAgentEdit in lock mode takes lock and does not modify text', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a.ts', 'before');
+    const applied = s.applyAgentEdit(a.id, 'after');
+    expect(applied).toBe(false);
+    expect(s.active()?.agentLocked).toBe(true);
+    expect(a.buffer.text()).toBe('before');
+  });
+
+  test('applyAgentEdit in merge mode rewrites text + marks dirty', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a.ts', 'before');
+    s.setLockMode(a.id, 'merge');
+    const applied = s.applyAgentEdit(a.id, 'after');
+    expect(applied).toBe(true);
+    expect(a.buffer.text()).toBe('after');
+    expect(s.active()?.dirty).toBe(true);
+  });
+
+  test('merge-mode edit pushes onto undo stack so user can rollback', () => {
+    const s = new BufferStore();
+    const a = s.openFile('/a.ts', 'before');
+    s.setLockMode(a.id, 'merge');
+    s.applyAgentEdit(a.id, 'after');
+    expect(a.buffer.text()).toBe('after');
+    a.buffer.undo();
+    expect(a.buffer.text()).toBe('before');
+  });
 });

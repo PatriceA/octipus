@@ -54,6 +54,14 @@ export const commands: Command[] = [
     } },
   { id: 'new-scratch', title: 'New scratch buffer',
     run: ({ buffers }) => { buffers.openScratch(); } },
+  { id: 'toggle-merge-mode',
+    title: 'Toggle agent-edit mode (lock ↔ merge) for current buffer',
+    keywords: ['agent', 'merge', 'lock'],
+    run: ({ buffers }) => {
+      const a = buffers.active();
+      if (!a) return;
+      buffers.setLockMode(a.id, a.lockMode === 'lock' ? 'merge' : 'lock');
+    } },
 
   // ── Find / goto ─────────────────────────────────────────────────
   { id: 'goto-line', title: 'Go to line…', shortcut: 'Ctrl+G',
@@ -79,6 +87,13 @@ export const commands: Command[] = [
     keywords: ['color', 'palette'],
     run: () => setTheme(name),
   })),
+
+  // ── Editor mode ────────────────────────────────────────────────
+  { id: 'toggle-vim-mode', title: 'Toggle vim mode',
+    keywords: ['modal', 'editor', 'mode'],
+    run: ({ layout }) => layout.setEditorMode(
+      layout.get().editorMode === 'vim' ? 'modeless' : 'vim',
+    ) },
 
   // ── Help ────────────────────────────────────────────────────────
   { id: 'show-shortcuts', title: 'Show all keyboard shortcuts',

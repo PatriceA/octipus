@@ -16,6 +16,8 @@ export type OverlayId =
   | { kind: 'help' }
   | null;
 
+export type EditorMode = 'modeless' | 'vim';
+
 export interface LayoutState {
   treeVisible: boolean;
   chatVisible: boolean;
@@ -24,6 +26,13 @@ export interface LayoutState {
   /** Last terminal size we know about — used by editor scroll math. */
   cols: number;
   rows: number;
+  /**
+   * Editor input mode. `'modeless'` (default) routes every
+   * keystroke to the buffer's modeless handler. `'vim'` routes
+   * NORMAL/VISUAL keystrokes through `editor/vim.ts`; INSERT mode
+   * falls through to the modeless path so typing feels unchanged.
+   */
+  editorMode: EditorMode;
 }
 
 export type LayoutListener = (s: LayoutState) => void;
@@ -36,6 +45,7 @@ export class LayoutStore {
     overlay: null,
     cols: 120,
     rows: 30,
+    editorMode: 'modeless',
   };
   private listeners = new Set<LayoutListener>();
 
@@ -75,4 +85,6 @@ export class LayoutStore {
   closeOverlay(): void { this.set({ overlay: null }); }
 
   setSize(cols: number, rows: number): void { this.set({ cols, rows }); }
+
+  setEditorMode(mode: EditorMode): void { this.set({ editorMode: mode }); }
 }

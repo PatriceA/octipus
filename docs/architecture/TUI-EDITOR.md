@@ -231,17 +231,45 @@ proves out.
 Both share the same `GatewayClient` (`src/tui/gateway-client.ts`)
 so the auth / session / agent-event protocol is identical.
 
-## Open questions
+## Open questions — resolved
 
-1. **Tree-sitter parity?** Pattern-based highlighting covers the
-   common case but won't catch nested templates. Defer to a
-   follow-up; the `highlight.ts` interface is pluggable.
-2. **Mouse wheel scrolling?** Ink doesn't expose mouse APIs out
-   of the box. Skip for now.
-3. **Live agent typing in the editor?** When the agent is editing
-   a buffer the user has open, do we lock the buffer or merge?
-   Initial: lock the buffer until the diff overlay resolves; the
-   `DiffOverlay` shows a banner "agent has the lock".
-4. **Persistent layout state.** Probably yes — write
-   `~/.octipus/tui-editor.json` with last open buffers + pane
-   visibility.
+1. **Tree-sitter parity.** Done as a pluggable interface:
+   `highlight.ts` exposes `setHighlighter(fn)` so a future
+   tree-sitter (or LSP) integration registers itself at app
+   start. The pattern-based default ships zero new dependencies
+   and the swap-in is one line.
+2. **Mouse wheel scrolling.** Deferred (Ink has no mouse API).
+3. **Live agent typing in the editor.** Both modes shipped:
+   `lockMode: 'lock' | 'merge'` per buffer (default `'lock'`).
+   Lock mode = diff overlay (existing). Merge mode applies the
+   agent's edit directly through the buffer's undo stack so
+   `Ctrl+Z` rolls it back; the user keeps typing without an
+   interrupting overlay. Toggle via the command palette
+   ("Toggle agent-edit mode").
+4. **Persistent layout state.** Done. `~/.octipus/tui-editor.json`
+   stores open buffer paths, active path, pane visibility,
+   theme, and editor mode (modeless / vim). Loaded on launch,
+   saved on every layout / buffer change with a 500ms debounce.
+
+## Future iterations — landed in this slice
+
+- **Vim mode.** `editorMode: 'modeless' | 'vim'` toggle in
+  LayoutStore + a command palette entry. The vim handler covers
+  hjkl / w / b / 0 / $ / gg / G / i / a / o / O / v / x / dd / yy
+  / p / u / Ctrl+R, with VISUAL-mode delete + yank. INSERT mode
+  falls through to the modeless code path so typing feels
+  identical. Pure handler tested in `editor/vim.test.ts`.
+- **Workspace header propagation.** `GatewayClient.getWorkspace`
+  callback adds `?workspace=<slug>` to the WS connect URL on
+  every connect; new `ApiClient` wraps `fetch` and injects
+  `X-Octipus-Workspace` on every HTTP request.
+- **`bin/octi-tui-edit` shim.** One-shot launcher in `bin/`
+  registered under `package.json#bin`. New `tui:edit` script too.
+
+## Future iterations — still open
+
+- Tree-sitter / LSP-backed highlighter (the slot is ready).
+- Mouse wheel scrolling (pending Ink support).
+- VIM IME-aware INSERT mode + register (`"a` etc.).
+- Workspace picker → instantly reconnect WS so the new slug
+  applies without a manual restart.
