@@ -29,6 +29,17 @@ export interface Principal {
   readonly sessionToken?: string | null;
   /** Future: roles array for RBAC. Phase 0 derives from `isAdmin` only. */
   readonly roles?: readonly string[];
+  /**
+   * Phase 3d — admin impersonation. When non-null, the request is
+   * being acted on behalf of `userId` BY the admin whose UUID is
+   * recorded here. Audit code tags both sides; the rest of the
+   * application sees the principal as the target user. NULL during
+   * normal auth (the principal is acting as themselves).
+   */
+  readonly actorUserId?: string | null;
+  /** Display name of the impersonating admin. Convenience for
+   *  audit + the web banner. */
+  readonly actorUsername?: string | null;
 }
 
 /** Sentinel principal for anonymous/unauthenticated callers. */
