@@ -136,10 +136,15 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     runner is on PATH; the shell tool's local-operations.exec
     pipes through it. Pairs with WorkspaceFS (Phase 1b-3) for
     full filesystem-level + process-level isolation.
+  - Phase 3f (this PR): Docker per-user isolation. Opt-in
+    `security.dockerIsolation = 'off' | 'enforce'`. Convention:
+    every container carries `octipus.user_id=<uuid>` label; every
+    user gets an `octipus_user_<id>` bridge network. The Docker
+    tool's list filters by the label; targeted ops verify ownership
+    via `docker inspect` and surface mismatches as "container not
+    found" so attackers can't enumerate other users' containers.
 
   **Next.**
-  - Phase 3f — Docker-in-Docker per-user labels + network for
-    deployments using the Docker tool.
   - Phase 3g — optional org/workspace grouping layer (schema is
     already prepared).
 

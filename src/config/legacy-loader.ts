@@ -45,6 +45,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
         if (v === 'auto' || v === 'required') return v;
         return 'off';
       })(),
+      dockerIsolation: process.env.DOCKER_ISOLATION === 'enforce' ? 'enforce' : 'off',
     },
     api: {
       host: process.env.API_HOST || process.env.HOST || defaultConfig.api!.host!,

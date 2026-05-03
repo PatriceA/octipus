@@ -60,6 +60,20 @@ export const securityConfigSchema = z.object({
    * `auto` reduces to `off`.
    */
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
+  /**
+   * Docker tool per-user isolation — Phase 3f. When `'enforce'` and
+   * `multiuser.enabled` is true, the Docker tool:
+   *   - filters list_containers to containers labelled
+   *     octipus.user_id=<userId>;
+   *   - refuses start/stop/logs/exec on containers that don't carry
+   *     the caller's label (returns "container not found");
+   *   - auto-injects the label on every container the tool builds /
+   *     runs going forward.
+   * Off (default) leaves the tool's behavior unchanged. Single-user
+   * installs and deployments that don't use the Docker tool stay
+   * unaffected.
+   */
+  dockerIsolation: z.enum(['off', 'enforce']).default('off'),
 });
 
 // API server configuration schema
