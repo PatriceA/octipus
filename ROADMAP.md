@@ -113,10 +113,18 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     each has a per-user override that falls back to the global
     config default. **No enforcement yet** — operators can see +
     set caps, and 3c-2 wires the runtime gates.
+  - Phase 3c-2 (this PR): runtime quota enforcement.
+    `QuotaExceededError` thrown by three gates, all conditional on
+    `multiuser.enabled`:
+    1. `agent-manager.spawn()` — concurrent-agents check after the
+       global cap.
+    2. `agent-worker` pre-LLM-call — daily token aggregate check
+       next to the existing per-agent budget.
+    3. `rate-limit` middleware — per-user API calls/min sliding
+       window for `/api/*` (auth `/api/auth/*` IP layer unchanged).
+    Phase 3c is now complete.
 
   **Next.**
-  - Phase 3c-2 — wire `quotaManager.willExceed` into the agent
-    spawn / LLM-call / API-request boundaries.
   - Phase 3d — impersonation flow with strong audit (admin enters
     "act as" mode; every action tagged with both actor + target).
   - Phase 3e — shell sandbox via bubblewrap/firejail (opt-in,

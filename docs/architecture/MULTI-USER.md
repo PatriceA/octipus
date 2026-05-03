@@ -710,6 +710,67 @@ agent-spawn / LLM-call / API-request boundaries. Operators can use
 the data + UI here to investigate and pre-set caps; nothing changes
 in user-visible runtime behavior until 3c-2 lands.
 
+## Phase 3c-2 — quota enforcement at runtime
+
+Wires the `QuotaManager.willExceed` gate from 3c-1 into the three
+runtime boundaries. New `QuotaExceededError` (`src/security/quota-error.ts`)
+carries `{ kind, current, max, userId }` so callers can distinguish
+which dimension fired.
+
+Each gate is conditional on `multiuser.enabled` so single-user
+installs are unaffected. The `'system'` and `'local'` legacy
+sentinels are skipped — they aren't real users and have no quota.
+
+### Gate 1 — concurrent agents (`agent-manager.spawn()`)
+
+Inserted right after the existing global `maxConcurrentAgents`
+check. Calls `quotaManager.willExceed(userId, 'concurrentAgents', 1)`
+and throws `QuotaExceededError` on denial. The global cap stays as
+the outer fail-safe.
+
+### Gate 2 — daily tokens (`agent-worker` pre-LLM-call)
+
+Inserted next to the existing per-agent `BudgetExceededError` check
+in the agent loop. Calls `quotaManager.willExceed(userId,
+'tokensPerDay', 0)` — `delta=0` because we're checking the
+already-credited aggregate; the next call's tokens are credited by
+the post-call bookkeeping. On denial, aborts the agent's
+`AbortController` with `user_quota_exceeded:tokensPerDay` and
+throws `QuotaExceededError`. Distinct from `BudgetExceededError`
+which fires on the per-agent cap.
+
+### Gate 3 — API rate limit (`rate-limit` middleware)
+
+The middleware grew a second layer (the per-IP layer for
+`/api/auth/*` is unchanged). For authenticated principals on
+`/api/*`:
+
+- Look up `quotaManager.getEffectiveQuota(userId).maxApiCallsPerMinute`.
+- Sliding-window check via the existing `getRateLimiter()` keyed by
+  `user:rl:<userId>`.
+- 429 with `Retry-After` + `{ quota: { kind, max } }` body when the
+  budget is exhausted.
+
+Anonymous traffic falls through (anonymous users can't be
+per-user-limited).
+
+### Tests (6 new, PGlite + in-memory rate-limiter)
+
+- Concurrent: `willExceed` denies with structured reason when at
+  cap; allows when room remains.
+- Tokens: today's aggregate over the cap denies with kind/current/max.
+- API rate-limit middleware:
+  - Flag off → no per-user limit applied even with a tiny override.
+  - Flag on + tiny cap → 429 after the second request, with
+    `quota.kind === 'apiCallsPerMinute'` in the body.
+  - Flag on + anonymous → middleware skips, no 429.
+
+Cumulative: **1197 pass / 9 fail / 66 skip** — same 9 pre-existing
+StdioTransport tests, net +6, zero regressions. Lint + typecheck clean.
+
+With this commit Phase 3c is complete: operators can see + set caps
+(3c-1) and the runtime enforces them (3c-2). Phase 3d is next.
+
 ---
 
 ## 1. Goals & Non-Goals
