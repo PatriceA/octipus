@@ -10,6 +10,12 @@ export const documentStatusEnum = pgEnum('document_status', [
 export const documents = pgTable('documents', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull(),
+  /**
+   * Phase 4 — optional workspace scope. NULL = user-level. FK in
+   * the migration uses ON DELETE SET NULL so workspace deletion
+   * doesn't cascade to documents.
+   */
+  workspaceId: uuid('workspace_id'),
   filename: text('filename').notNull(),
   originalName: text('original_name').notNull(),
   mimeType: text('mime_type').notNull(),
