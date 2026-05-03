@@ -25,9 +25,28 @@ export interface BufferRecord {
   /**
    * When the agent has taken a write lock on this buffer (Phase 4
    * diff overlay), the user's input is blocked until they accept /
-   * reject the pending diff.
+   * reject the pending diff. Only meaningful when `lockMode` is
+   * `'lock'`.
    */
   agentLocked: boolean;
+  /**
+   * How agent edits to this buffer are presented:
+   *
+   *   - `'lock'`  (default) — the diff overlay opens, the user
+   *     accepts / rejects, the buffer is read-only meanwhile.
+   *
+   *   - `'merge'` — the agent's edit applies directly to the
+   *     buffer's text. The change lands on the buffer's undo
+   *     stack so Ctrl+Z rolls it back, and a one-line "merged
+   *     edit from agent" notice shows in the chat for traceability.
+   *     The user keeps typing alongside the agent without an
+   *     interrupting overlay.
+   *
+   * Per-buffer setting so a user can have a "scratchpad" merge
+   * buffer open while keeping their main code under the safer
+   * `'lock'` discipline.
+   */
+  lockMode: 'lock' | 'merge';
   createdAt: number;
 }
 
@@ -85,6 +104,7 @@ export class BufferStore {
       buffer: buf,
       dirty: false,
       agentLocked: false,
+      lockMode: 'lock',
       createdAt: Date.now(),
     };
     this.set({ buffers: [...this.state.buffers, rec], activeId: id });
@@ -103,6 +123,7 @@ export class BufferStore {
       buffer: new TextBuffer(''),
       dirty: false,
       agentLocked: false,
+      lockMode: 'lock',
       createdAt: Date.now(),
     };
     this.set({ buffers: [...this.state.buffers, rec], activeId: id });
@@ -141,6 +162,38 @@ export class BufferStore {
   setAgentLocked(id: string, locked: boolean): void {
     const next = this.state.buffers.map((b) => b.id === id ? { ...b, agentLocked: locked } : b);
     this.set({ buffers: next });
+  }
+
+  /** Switch a buffer between `'lock'` and `'merge'` agent-edit modes. */
+  setLockMode(id: string, mode: 'lock' | 'merge'): void {
+    const next = this.state.buffers.map((b) => b.id === id ? { ...b, lockMode: mode } : b);
+    this.set({ buffers: next });
+  }
+
+  /**
+   * Apply an agent-proposed edit to a buffer.
+   *
+   *   - `'lock'` mode: take the agent lock and return false. The
+   *     caller (the chat → diff-overlay glue) is expected to open
+   *     the diff overlay against `proposed`; the user accepts or
+   *     rejects.
+   *   - `'merge'` mode: replace the buffer's text in-place via the
+   *     existing `setText` (which pushes onto the undo stack), mark
+   *     the buffer dirty, and return true. No overlay needed.
+   *
+   * Returns whether the edit was applied directly. `false` means
+   * the caller should open the overlay flow.
+   */
+  applyAgentEdit(id: string, proposed: string): boolean {
+    const rec = this.state.buffers.find((b) => b.id === id);
+    if (!rec) return false;
+    if (rec.lockMode === 'merge') {
+      rec.buffer.setText(proposed);
+      this.markDirty(id, true);
+      return true;
+    }
+    this.setAgentLocked(id, true);
+    return false;
   }
 
   /**

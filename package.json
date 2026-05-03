@@ -4,12 +4,14 @@
   "description": "Autonomous development assistant with multi-channel support",
   "type": "module",
   "bin": {
-    "octi": "./bin/octi.mjs"
+    "octi": "./bin/octi.mjs",
+    "octi-tui-edit": "./bin/octi-tui-edit.mjs"
   },
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "tui": "bun run src/tui/index.tsx",
+    "tui:edit": "bun run src/tui-editor/index.tsx",
     "start:all": "bin/octi start",
     "stop:all": "bin/octi stop",
     "build": "bun build src/index.ts --outdir dist --target bun",

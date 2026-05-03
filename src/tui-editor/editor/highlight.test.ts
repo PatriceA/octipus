@@ -3,7 +3,7 @@
  * t.text)` reconstructs the original line.
  */
 import { describe, expect, test } from 'bun:test';
-import { highlightLine } from './highlight';
+import { highlight, highlightLine, resetHighlighter, setHighlighter } from './highlight';
 
 describe('highlightLine', () => {
   test('round-trip: tokens reconstruct the input', () => {
@@ -42,5 +42,21 @@ describe('highlightLine', () => {
     const tokens = highlightLine('hello world', 'text');
     expect(tokens.length).toBe(1);
     expect(tokens[0].kind).toBe('plain');
+  });
+});
+
+describe('pluggable highlighter', () => {
+  test('default highlighter is the pattern-based one', () => {
+    const a = highlight('const x = 1', 'typescript');
+    const b = highlightLine('const x = 1', 'typescript');
+    expect(a).toEqual(b);
+  });
+
+  test('setHighlighter swaps the implementation', () => {
+    setHighlighter((line) => [{ text: line, kind: 'comment' }]);
+    const t = highlight('const x = 1', 'typescript');
+    expect(t).toEqual([{ text: 'const x = 1', kind: 'comment' }]);
+    resetHighlighter();
+    expect(highlight('const x = 1', 'typescript')[0].kind).toBe('keyword');
   });
 });
