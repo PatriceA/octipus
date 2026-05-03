@@ -196,6 +196,24 @@ export default function AdminUsersPage() {
                     >
                       {u.isAdmin ? 'Revoke admin' : 'Grant admin'}
                     </button>
+                    <button
+                      type="button"
+                      disabled={isSelf || !u.isActive}
+                      onClick={() => {
+                        const reason = window.prompt(
+                          `Act as "${u.username}"? This is fully audited under both your account and theirs. Optional reason:`,
+                          '',
+                        );
+                        if (reason === null) return; // cancelled
+                        api.post(`/admin/impersonate/${u.id}`, { reason })
+                          .then(() => { window.location.href = '/'; })
+                          .catch((err: Error) => alert(err.message));
+                      }}
+                      className="px-2 py-1 text-xs bg-yellow-700/40 rounded hover:bg-yellow-700/60 text-yellow-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      title={isSelf ? 'You cannot impersonate yourself' : !u.isActive ? 'Cannot impersonate a disabled user' : 'Start impersonation (audited)'}
+                    >
+                      Act as
+                    </button>
                   </td>
                 </tr>
               );

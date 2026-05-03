@@ -12,6 +12,7 @@ export * from './evaluations';
 export * from './experts';
 export * from './hook-executions';
 export * from './hooks';
+export * from './impersonation-sessions';
 export * from './messages';
 export * from './models';
 export * from './notifications';
