@@ -10,6 +10,16 @@ export interface GatewayClientOptions {
   onCommandResult?: (name: string, result: unknown, error?: string) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
   onError?: (error: string) => void;
+  /**
+   * Phase 4 workspace propagation. When set, the connect URL gets
+   * a `?workspace=<slug-or-uuid>` query parameter that the backend
+   * gateway feeds into `resolveWorkspace`. The resolver maps the
+   * value to a workspace owned by the principal; cross-tenant /
+   * unknown values collapse to the user's default. Re-evaluated
+   * on every connect (including reconnects), so a runtime
+   * workspace switch picks up after the next disconnect cycle.
+   */
+  getWorkspace?: () => string | null | undefined;
 }
 
 /**
@@ -32,7 +42,11 @@ export class GatewayClient {
    * Connect to the gateway.
    */
   async connect(): Promise<void> {
-    const url = this.options.url || 'ws://localhost:3007/gateway';
+    const baseUrl = this.options.url || 'ws://localhost:3007/gateway';
+    const ws = this.options.getWorkspace?.();
+    const url = ws
+      ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(ws)}`
+      : baseUrl;
     const token = readLocalToken() || ensureLocalToken();
 
     this.setStatus('connecting');

@@ -10,9 +10,10 @@
  * buffer's `version` (for memoization-friendly re-renders).
  */
 import { Box, Text, useInput } from 'ink';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { bufferStore, layoutStore } from '../app';
-import { highlightLine, tokenColor } from '../editor/highlight';
+import { highlight, tokenColor } from '../editor/highlight';
+import { newVimState, type VimState, step as vimStep } from '../editor/vim';
 import { useStore } from '../stores/use-store';
 import { getTheme } from '../theme';
 import { writeFileForBuffer } from '../workspace-fs-bridge';
@@ -25,7 +26,11 @@ interface Props {
 export function TextEditor({ focused, height }: Props) {
   const theme = getTheme();
   const active = useStore(bufferStore, (s) => s.buffers.find((b) => b.id === s.activeId) ?? null);
+  const editorMode = useStore(layoutStore, (s) => s.editorMode);
   const [scrollLine, setScrollLine] = useState(0);
+  // Vim state held in a ref so input handlers see the latest value
+  // synchronously without re-binding on every keystroke.
+  const vimRef = useRef<VimState>(newVimState());
   // Track cursor changes by version so the rendered cursor stays in sync.
   const version = active?.buffer.version ?? 0;
 
@@ -42,6 +47,22 @@ export function TextEditor({ focused, height }: Props) {
     if (active.agentLocked) return; // diff overlay handles input
 
     const buf = active.buffer;
+
+    // Vim mode: route NORMAL/VISUAL keys through the vim handler
+    // first. INSERT mode falls through to the modeless code path.
+    if (editorMode === 'vim' && vimRef.current.mode !== 'INSERT') {
+      const r = vimStep(buf, {
+        char: input ?? '',
+        ctrl: key.ctrl,
+        shift: key.shift,
+        escape: key.escape,
+      }, vimRef.current);
+      vimRef.current = r.state;
+      if (r.consumed) {
+        bufferStore.markDirty(active.id, true);
+        return;
+      }
+    }
 
     // Cursor motion
     if (key.leftArrow) { buf.moveCursor(0, -1, key.shift); bufferStore.markDirty(active.id, active.dirty); return; }
@@ -102,7 +123,7 @@ export function TextEditor({ focused, height }: Props) {
       {visible.map((line, i) => {
         const lineNo = scrollLine + i;
         const isCurLine = lineNo === cur.line;
-        const tokens = highlightLine(line, active.language);
+        const tokens = highlight(line, active.language);
         return (
           <Box key={lineNo}>
             <Text color={isCurLine ? theme.lineNumberCurrent : theme.lineNumber}>
