@@ -864,6 +864,94 @@ Cumulative: **1215 pass / 9 fail / 66 skip** — same 9 pre-existing
 StdioTransport tests, net **+18** (9 manager + 9 route), zero
 regressions. Lint + typecheck + web typecheck clean.
 
+## Phase 3e — shell sandbox (bubblewrap / firejail)
+
+Process-level isolation for shell-tool spawns. Pairs with the
+filesystem-level WorkspaceFS sandbox from Phase 1b-3: WorkspaceFS
+blocks the agent from supplying out-of-bounds paths; the shell
+sandbox blocks a command running through `sh -c` (or any binary
+that follows symlinks under the hood) from reading/writing outside
+the workspace.
+
+### Config flag (`security.shellSandbox`)
+
+- `'off'` (default) — no wrapping; behavior matches pre-3e.
+- `'auto'` — wrap when `bwrap` or `firejail` is on PATH; fall back
+  to unsandboxed execution when not.
+- `'required'` — wrap when available; **refuse** to spawn when no
+  runner is found (operational deployments use this once they've
+  installed a runner).
+
+Environment override: `SHELL_SANDBOX=auto|required`. Linux-only;
+on macOS/Windows the runners aren't typically available, so `auto`
+reduces to `off`.
+
+### `wrapCommand(argv, options)` (`src/security/shell-sandbox.ts`)
+
+Returns `{ wrapped, runner, argv, cleanup }`:
+- `wrapped`: false when sandbox is `off` or no runner is found in
+  `auto` mode.
+- `runner`: `'bwrap' | 'firejail' | null`.
+- `argv`: the wrapped command line (or original if not wrapped).
+- `cleanup()`: removes the per-spawn `/tmp` scratch dir; safe to
+  call even when `wrapped` is false.
+
+Profile (bubblewrap, the preferred backend):
+- `--unshare-pid`, `--unshare-uts`, `--unshare-ipc`,
+  `--unshare-cgroup-try`, `--die-with-parent`.
+- `--unshare-net` by default; `allowNetwork: true` keeps it on.
+- `--ro-bind /usr /lib /lib64 /bin /etc /opt`.
+- `--bind <workspaceRoot>` — read-write.
+- Per-spawn `--bind <fresh-tmp> /tmp` for transient writes
+  (cleaned up by `cleanup()`).
+- `--proc /proc`, `--dev /dev`, `--chdir <workspace>`.
+
+firejail backend: `--noprofile --private-tmp --private-dev
+--noroot --seccomp --whitelist=<workspaceRoot>` plus `--net=none`
+when `allowNetwork` is false.
+
+Runner detection is cached after first lookup (operators don't
+install/remove sandbox runners while the server is up).
+
+### Shell tool integration
+
+`src/tools/shell/local-operations.ts` builds the base argv exactly
+as before (safe-tokenized argv vs `sh -c` for `unsafe`), then runs
+it through `wrapCommand` before handing to `child_process.spawn`.
+Cleanup runs on both close + error paths. The `unsafe` path opts
+into `allowNetwork: true` so `curl/wget` keep working when the
+user has explicitly accepted the broader run.
+
+### Tests
+
+- 4 unit (always run): mode `'off'` returns argv unwrapped;
+  `getSandboxMode` reads config; `'required'` without a runner
+  throws (only meaningful on hosts without bwrap).
+- 5 behavioral (`describe.skipIf(!hasBwrap)`): bwrap argv shape;
+  `--unshare-net` toggle on `allowNetwork`; `cleanup` removes the
+  scratch dir; `printf` round-trip through bwrap; reads outside the
+  workspace return non-zero (proves the sandbox actually blocks).
+
+Cumulative: **1219 pass / 9 fail / 71 skip** — same 9 pre-existing
+StdioTransport tests, net **+4** unit tests + 5 added skipped (need
+bwrap to run), zero regressions. Lint + typecheck clean.
+
+### Operator runbook
+
+```bash
+# Install on Debian/Ubuntu:
+sudo apt-get install bubblewrap
+
+# Or Fedora/RHEL:
+sudo dnf install bubblewrap
+
+# Then in your env:
+SHELL_SANDBOX=required
+```
+
+Verify with `bun test src/security/shell-sandbox.test.ts` —
+the `describe.skipIf(!hasBwrap)` blocks should run and pass.
+
 ---
 
 ## 1. Goals & Non-Goals

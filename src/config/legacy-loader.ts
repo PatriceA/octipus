@@ -40,6 +40,11 @@ export function loadFromEnvLegacy(): Partial<Config> {
       passkeyRpId: process.env.PASSKEY_RP_ID || defaultConfig.security!.passkeyRpId!,
       passkeyRpName: process.env.PASSKEY_RP_NAME || defaultConfig.security!.passkeyRpName!,
       passkeyOrigin: process.env.PASSKEY_ORIGIN || defaultConfig.security!.passkeyOrigin!,
+      shellSandbox: ((): 'off' | 'auto' | 'required' => {
+        const v = process.env.SHELL_SANDBOX;
+        if (v === 'auto' || v === 'required') return v;
+        return 'off';
+      })(),
     },
     api: {
       host: process.env.API_HOST || process.env.HOST || defaultConfig.api!.host!,
