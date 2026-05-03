@@ -253,6 +253,13 @@
       "when": 1720000000000,
       "tag": "0035_rls_policies_remaining",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1720600000000,
+      "tag": "0036_user_quotas",
+      "breakpoints": true
     }
   ]
 }
