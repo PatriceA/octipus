@@ -143,23 +143,40 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     tool's list filters by the label; targeted ops verify ownership
     via `docker inspect` and surface mismatches as "container not
     found" so attackers can't enumerate other users' containers.
-  - Phase 3g (this PR): org / workspace grouping scaffolding.
+  - Phase 3g: org / workspace grouping scaffolding.
     Migration `0038` adds `organizations`, `org_members`, and
     `workspaces` tables with RLS policies. New
     `OrgWorkspaceManager` handles CRUD with admin gating on orgs,
     per-user CRUD on workspaces, and the same cross-tenant
     enumeration-collapse pattern as scopedRepos. Feature flag
     `multiuser.orgWorkspaces` (default off); when on, REST surface
-    `/api/me/workspaces` + `/api/admin/orgs` lights up. No existing
-    table grows a new column — Phase 4 adopts `workspace_id` on
-    sessions / documents / hooks / vault. **Phase 3 is now
+    `/api/me/workspaces` + `/api/admin/orgs` lights up. **Phase 3
     complete.**
+  - Phase 4 (this PR): workspace_id adoption. Migration `0039`
+    adds nullable `workspace_id` to sessions / documents / hooks
+    with composite `(user_id, workspace_id)` indexes; FK uses ON
+    DELETE SET NULL so workspace deletion falls back to user-level
+    scope rather than cascading. New `resolveWorkspace(principal,
+    header)` maps `X-Octipus-Workspace` (slug or uuid) to a
+    workspace owned by the principal — cross-tenant headers
+    collapse to the user's default. ScopedSessionRepo /
+    ScopedDocumentRepo / ScopedHookRepo filter on workspace_id
+    when set (NULL rows stay visible — un-backfilled data keeps
+    working) and stamp the principal's workspaceId onto new rows.
+    `scripts/backfill-workspace-id.ts` walks every user, ensures
+    a default workspace, and updates rows with NULL
+    `workspace_id`. All gated on `multiuser.orgWorkspaces`; off
+    keeps every existing call site untouched.
 
-  **Next.**
-  - Phase 4 — wire `workspace_id` onto sessions/documents/hooks/vault
-    and scope reads through it. Org-shared resources (system models,
-    shared skills) routed through `org_members`. Optional add-on
-    after Phase 3 lands in production.
+  **Next (optional follow-ups).**
+  - Vault `scope=workspace` wiring (vault has its own per-row DEK
+    + scope enum that warrants a focused PR).
+  - Workspace pickers in the web UI.
+  - Org-shared resources (system models, shared skills) routed
+    through `org_members`.
+  - Workspace adoption on the rest of the user-owned tables
+    (`agents`, `notifications`, `trajectory_runs`, `pipelines`,
+    `embeddings`, `agent_events`, `swarm_nodes`).
 
 ## Next (months)
 
