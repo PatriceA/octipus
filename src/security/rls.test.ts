@@ -106,14 +106,31 @@ describe('RLS wrapper — PGlite (no enforcement, just wiring)', () => {
     await expect(withRlsPrincipal(ANONYMOUS_PRINCIPAL, async () => 1)).rejects.toThrow();
   });
 
-  test('migration installed the policies on the four target tables', async () => {
+  test('migration installed policies on every user-owned table (3b + 3b-2)', async () => {
     const { queryRaw } = await import('@/db/postgres');
     const { rows } = await queryRaw(
       `SELECT tablename FROM pg_policies WHERE schemaname='public' ORDER BY tablename`,
     );
-    const tables = rows.map((r: any) => r.tablename).sort();
-    for (const expected of ['api_tokens', 'channel_identities', 'sessions', 'vault']) {
-      expect(tables).toContain(expected);
+    const tables = new Set(rows.map((r: any) => r.tablename));
+    // Phase 3b — high-value tables.
+    for (const t of ['sessions', 'vault', 'api_tokens', 'channel_identities']) {
+      expect(tables.has(t)).toBe(true);
+    }
+    // Phase 3b-2 — remaining direct user_id (NOT NULL) tables.
+    for (const t of [
+      'documents', 'agents', 'hooks', 'pipelines', 'notifications',
+      'trajectory_runs', 'recurring_tasks',
+      'skill_permissions', 'permission_requests',
+    ]) {
+      expect(tables.has(t)).toBe(true);
+    }
+    // Phase 3b-2 — direct user_id (nullable Phase-0 back-compat columns).
+    for (const t of ['agent_events', 'embeddings', 'hook_executions', 'swarm_nodes']) {
+      expect(tables.has(t)).toBe(true);
+    }
+    // Phase 3b-2 — ownership via FK subquery.
+    for (const t of ['messages', 'pipeline_stages']) {
+      expect(tables.has(t)).toBe(true);
     }
   });
 });
