@@ -39,7 +39,7 @@ import { mcpRoutes } from './routes/mcp';
 import { modelRoutes } from './routes/models';
 import { notificationRoutes } from './routes/notifications';
 import { oauthRoutes } from './routes/oauth';
-import { orgAdminRoutes, workspaceMeRoutes } from './routes/orgs';
+import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
 import { pipelineRoutes } from './routes/pipelines';
 import { pluginRoutes } from './routes/plugins';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
@@ -290,6 +290,7 @@ export function createServer() {
         .use(channelBindingRoutes)
         .use(adminRoutes)
         .use(orgAdminRoutes)
+        .use(orgMeRoutes)
         .use(workspaceMeRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
