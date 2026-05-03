@@ -1193,16 +1193,163 @@ MULTIUSER=true
 MULTIUSER_ORG_WORKSPACES=true
 ```
 
-Phase 4 will:
+Phase 4 wires `workspace_id` onto the user-owned tables and lets
+scopedRepos filter on it.
 
-1. Add `workspace_id` (nullable) to `sessions`, `documents`,
-   `hooks`, and `vault_entries`.
-2. Backfill rows to each user's default workspace.
-3. Make `principal.workspaceId` an explicit field (resolved from a
-   `X-Octipus-Workspace` header or query) and have scopedRepos
-   filter on it when set.
-4. Wire org-shared resources (system models, shared skills) through
-   `org_members` membership.
+---
+
+## Phase 4 — workspace_id adoption
+
+Phase 3g shipped the `workspaces` table but kept it isolated from
+the rest of the schema. Phase 4 finishes the wiring: sessions,
+documents, and hooks each gain a nullable `workspace_id` column,
+the auth derive layer maps a request header to a workspace owned
+by the principal, and scopedRepos narrow reads + stamp writes when
+that context is set.
+
+### Schema (migration `0039`)
+
+```sql
+ALTER TABLE sessions  ADD COLUMN workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL;
+ALTER TABLE documents ADD COLUMN workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL;
+ALTER TABLE hooks     ADD COLUMN workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL;
+
+-- Plus per-table workspace_id index AND composite (user_id, workspace_id) index —
+-- the dominant query shape once the runtime starts filtering.
+```
+
+- **Nullable**: existing rows stay valid without backfill. NULL =
+  "user-level" (visible to every workspace owned by the user).
+- **`ON DELETE SET NULL`**: deleting a workspace doesn't cascade-
+  delete the user's sessions / documents / hooks; rows just fall
+  back to user-level scope.
+- **Idempotent**: every ALTER uses `IF NOT EXISTS`.
+
+Tables left for a follow-up: `vault_entries` (already has a
+`scope` enum that's a nuanced enough story to deserve its own PR),
+`agents`, `notifications`, `trajectory_runs`, `pipelines`,
+`embeddings`. The Phase 4 slice covers the user-visible primary
+nouns first.
+
+### Backfill (`scripts/backfill-workspace-id.ts`)
+
+Walks every user, ensures they have a default workspace via
+`OrgWorkspaceManager.ensureDefaultWorkspace`, and stamps rows with
+`workspace_id IS NULL` to the default. Idempotent — re-runs after
+full backfill are no-ops.
+
+```bash
+bun run scripts/backfill-workspace-id.ts            # backfill all
+bun run scripts/backfill-workspace-id.ts --dry-run  # report only
+bun run scripts/backfill-workspace-id.ts --user=<uuid>
+```
+
+Skipping the backfill is also fine: rows with NULL workspace_id
+continue to be visible across every workspace owned by the user
+(the "user-level" scope), so nothing breaks; the data just isn't
+partitioned. Operators usually run the script just before flipping
+`MULTIUSER_ORG_WORKSPACES=true`.
+
+### Principal extension
+
+```ts
+interface Principal {
+  // ...existing fields...
+  /** Phase 4 — narrow scopedRepos to this workspace. */
+  workspaceId?: string | null;
+}
+```
+
+Always optional. Off-feature deployments leave it undefined and
+all the existing call sites see no change.
+
+### Workspace resolver (`src/security/workspace-resolver.ts`)
+
+`resolveWorkspace(principal, header)` maps the
+`X-Octipus-Workspace` request header to a workspace UUID:
+
+- Flag off → `{ workspaceId: null }`. Pass-through.
+- No header / `"all"` / `"default"` → user's default workspace
+  (lazily created on first call).
+- UUID → accepted only if owned by the principal; cross-tenant
+  collapses to default. **Same enumeration-collapse pattern** as
+  scopedRepos: bob handing alice's UUID gets bob's default, not
+  alice's row.
+- Slug → looked up by `(user_id, slug)`; misses fall back to
+  default.
+
+The auth derive in `src/api/server.ts` runs the resolver as a
+second `.derive()` step so the auth branch above stays a flat
+list of early returns. When the flag is on the resolver picks up
+on every authenticated request; when off the chain returns early.
+
+### scopedRepos filtering + stamping
+
+`workspaceFilter(principal, column)` returns
+```sql
+(workspace_id = $1 OR workspace_id IS NULL)
+```
+or `undefined` when the principal has no workspace context. The
+NULL clause is intentional: un-backfilled rows stay visible after
+the runtime starts filtering, so a deployment that flips the flag
+without running the backfill keeps working.
+
+Wired into `ScopedSessionRepo.findById/listOwn/update/delete`,
+`ScopedDocumentRepo.findById/listOwn/listOwnByCategory/delete/updateStatus`,
+`ScopedHookRepo.findById/listOwn`. **Admins are NOT exempted** —
+an admin browsing their own UI under a specific workspace should
+see only that workspace's rows; the global view is reached via
+the explicit `*Admin` methods that don't go through scoping.
+
+`create` stamps the principal's workspaceId onto the new row
+unless the caller-supplied `data.workspaceId` overrides (admin
+seed-data path). Off-feature deployments fall through with NULL.
+
+### Tests (17 new)
+
+
+- 9 resolver tests (`src/security/workspace-resolver.test.ts`):
+  flag off ⇒ null; no header ⇒ default; `all`/`default` ⇒ default;
+  owned UUID ⇒ that workspace; cross-tenant UUID ⇒ default; owned
+  slug ⇒ that workspace; unknown slug ⇒ default; cross-tenant slug
+  ⇒ default; anonymous ⇒ null.
+- 8 scoped-repo tests (`src/db/repositories/workspace-scoped.test.ts`):
+  no context ⇒ all rows; default-workspace context sees its own
+  rows + NULL but not project-x; create stamps the workspace id;
+  caller-supplied workspaceId on create wins; cross-workspace
+  findById/update/delete collapse to null/false; documents repo
+  same isolation pattern.
+
+Cumulative: **1286 pass / 9 fail / 71 skip** — same 9 pre-existing
+StdioTransport tests, net **+17** new tests added in this PR
+(scaled from 1269 in Phase 3g). Lint + typecheck clean.
+
+### Operator runbook
+
+```bash
+# Run the backfill once before flipping the runtime.
+bun run scripts/backfill-workspace-id.ts --dry-run   # preview
+bun run scripts/backfill-workspace-id.ts             # execute
+
+# Flip the runtime:
+MULTIUSER=true
+MULTIUSER_ORG_WORKSPACES=true
+```
+
+Clients select a workspace per request via
+`X-Octipus-Workspace: <slug-or-uuid>`. Omitting the header keeps
+the user in their default workspace.
+
+### Out of scope (follow-ups)
+
+- Vault `scope=workspace` wiring (vault has its own scope enum and
+  per-row DEKs that warrant a separate PR).
+- Workspace pickers in the web UI.
+- Org-shared resources (system models, shared skills) routed
+  through `org_members`.
+- Workspace-aware backfill on the rest of the user-owned tables
+  (`agents`, `notifications`, `trajectory_runs`, `pipelines`,
+  `embeddings`, `agent_events`, `swarm_nodes`).
 
 ---
 
