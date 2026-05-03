@@ -267,6 +267,13 @@
       "when": 1721200000000,
       "tag": "0037_impersonation_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1721800000000,
+      "tag": "0038_orgs_workspaces",
+      "breakpoints": true
     }
   ]
 }
