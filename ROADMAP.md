@@ -8,203 +8,29 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-- **Multi-user architecture — feature complete (Phases 0–4 landed, 2026-05).**
-  Octipus is moving from single-tenant self-hosted to a central backend
-  serving multiple authenticated users with strict isolation of
-  sessions, secrets, settings, filesystem, embeddings, and agents. Full
-  plan: [`docs/architecture/MULTI-USER.md`](docs/architecture/MULTI-USER.md).
+Nothing currently in flight. The multi-user track and the TUI
+editor's first iteration both shipped in May; see **Done (recent)
+→ 2026-05 batch** below. New work will land here.
 
-  **Integration state.** All work is gated behind feature flags
-  (`MULTIUSER`, `MULTIUSER_AUDIT_SHADOW`, `MULTIUSER_ENFORCE_PERMISSIONS`)
-  that default off. Existing single-user installs see byte-for-byte
-  unchanged behavior; the new code paths only activate when an operator
-  flips the flag. **1107 pass / 9 fail / 62 skip** on the merge branch
-  (the 9 are the same pre-existing `StdioTransport` MCP tests from
-  before the work started); net **+92 isolation tests** added across
-  the phases. Branch:
-  `claude/multi-user-architecture-plan-baDCd`.
+## Next (months)
 
-  **Done so far.**
-  - Phase 0 (commit `90347f7`): `Principal` type +
-    `principalFromUser`/`principalFromMasterKey`/`ANONYMOUS_PRINCIPAL`/
-    `SYSTEM_PRINCIPAL`, server-side derivation alongside legacy `user`,
-    shadow-mode audit middleware (`audit_log` row per state-changing
-    request, never blocks), schema additions for nullable owner columns
-    on `embeddings`, `agent_events`, `swarm_nodes`, `hook_executions`,
-    plus `users.org_id` (migration `0029`).
-  - Phase 1a (commits `9d1f859`, `c3330b8`, `15a773d`, `f5251a7`):
-    `scopedRepos(principal)` factory binding 8 entities (sessions,
-    messages, agents, documents, notifications, trajectories, hooks,
-    pipelines). Cross-tenant reads return `null`/`[]` to prevent UUID
-    enumeration; mutations check ownership in WHERE and strip
-    caller-smuggled `user_id`. **Two complete-bypass auth gaps closed**:
-    `PUT/DELETE /api/pipelines/templates/:id` had no auth check at all
-    (any user could mutate any template, including system presets);
-    `GET /api/chat/approvals/pending` was global; `markRead` on
-    notifications accepted any id; trajectories listed every user's
-    runs. 11 routes converted across 4 commits.
-  - Phase 1b (commits `3e60b77`, `07ee462`): vault `scope` enum
-    (`system`/`user`/`workspace`) with backfill + strict reads (kills
-    the `getSystemSecret` fallback that scanned every user's secrets);
-    per-user data-encryption keys via `HKDF(masterKey, salt=userId,
-    info=scope:userId)` with opportunistic v1 → v2 re-encryption on
-    read; `scripts/rotate-vault-keys.ts` for batch rotation;
-    `WorkspaceFS` per-user filesystem sandbox with traversal /
-    absolute-path / symlink-escape blocks; `src/tools/filesystem`
-    rewired through `WorkspaceFS.forAgent(context)` so flat
-    (single-user) and per-user nested layouts share one call site.
-    Migrations `0030` + `0031`.
-
-  **Done so far (continued).**
-  - Phase 1c (PR #4): `permissionManager.approve/deny` cross-tenant
-    guard — pre-PR any caller with a leaked `requestId` could resolve
-    another user's pending permission request. The legacy
-    `isSystemUser` bypass in `BaseTool.executeWithMiddleware` now
-    gates on `multiuser.enforcePermissions`. Closes Phase 1.
-  - Phase 2a backend (this PR): personal access tokens. New
-    `api_tokens` table (migration `0032`); `octi_<43-char-base64url>`
-    bearer format with SHA-256 hash storage; `.derive()` accepts
-    api-token Bearer between session validation and the legacy
-    `MASTER_KEY` fallback; `/api/auth/api-tokens` CRUD with
-    cross-tenant safety. Lets CI / MCP / scripted clients
-    authenticate as a real user once `MULTIUSER=true` is flipped.
-
-  **Done so far (continued).**
-  - Phase 2b/2c/2d (this PR): API tokens web UI, admin console
-    (`/admin/users` + `/admin/audit`), and channel binding —
-    `channel_identities` table (migration `0033`), 6-char one-time
-    code redemption flow, web `/link-account` page. Lazy backfill
-    from legacy `users.channelBindings` JSONB column on first read.
-
-  **Done so far (continued).**
-  - Phase 2e: channel adapters swap to
-    `channelBindingManager.findUserRecordByExternalId`. O(1) on the
-    new `(channel_type, external_id)` unique index, with the
-    manager's JSONB fallback + lazy backfill so legacy bindings keep
-    resolving. `channels/linking.ts` is now a thin bridge over the
-    manager; codes live in `channel_link_codes` (Postgres, 15-min
-    TTL) instead of Redis. Phase 2 is closed.
-  - Phase 3a: master-key rotation tooling.
-    `rotateVaultRowMasterKey(rowId, oldMaster, newMaster)` helper +
-    `scripts/rotate-master-key.ts` walker (`--dry-run`, `--batch=N`).
-    Idempotent re-runs return `'skipped'` for rows already rotated.
-    Cross-user isolation preserved across the rewrite — alice's DEK
-    still can't decrypt bob's row.
-  - Phase 3b (this PR): Postgres Row-Level Security on the
-    highest-value tables (sessions, vault, api_tokens,
-    channel_identities). New `withRlsPrincipal(principal, fn)` /
-    `withRlsBypass(fn)` wrappers; `multiuser.rlsEnabled` flag
-    (default off). Policies use the "bypass on missing GUC" pattern
-    so existing code paths keep working when the flag flips on.
-    PGlite ignores RLS — embedded installs unaffected; external
-    Postgres needs a non-superuser app role for enforcement to
-    actually fire.
-
-  - Phase 3b-2 (this PR): extend RLS to the remaining user-owned
-    tables. Migration `0035` covers documents, agents, agent_events,
-    embeddings, hooks, hook_executions, pipelines, pipeline_stages,
-    notifications, trajectory_runs, swarm_nodes, recurring_tasks,
-    skill_permissions, permission_requests, plus messages and
-    pipeline_stages via FK subqueries. Every user-owned table in the
-    schema now has a policy — 19 in total.
-  - Phase 3c-1 (this PR): per-user quotas — schema + read-side
-    QuotaManager + admin REST + `/admin/quotas` web tab. Three
-    dimensions (concurrent agents, daily tokens, API calls/min);
-    each has a per-user override that falls back to the global
-    config default. **No enforcement yet** — operators can see +
-    set caps, and 3c-2 wires the runtime gates.
-  - Phase 3c-2 (this PR): runtime quota enforcement.
-    `QuotaExceededError` thrown by three gates, all conditional on
-    `multiuser.enabled`:
-    1. `agent-manager.spawn()` — concurrent-agents check after the
-       global cap.
-    2. `agent-worker` pre-LLM-call — daily token aggregate check
-       next to the existing per-agent budget.
-    3. `rate-limit` middleware — per-user API calls/min sliding
-       window for `/api/*` (auth `/api/auth/*` IP layer unchanged).
-    Phase 3c is now complete.
-  - Phase 3d (this PR): admin impersonation. New
-    `impersonation_sessions` table (migration `0037`), short-lived
-    "act as" window keyed by SHA-256 of the admin's session token.
-    Auth-derive middleware swaps the request's identity to the
-    target user; audit-shadow middleware dual-tags every state-
-    changing request under both actor and target. Web banner +
-    "Act as" button on `/admin/users`.
-  - Phase 3e (this PR): shell sandbox via bubblewrap/firejail.
-    `security.shellSandbox = 'off' | 'auto' | 'required'` (default
-    off). `wrapCommand(argv, opts)` returns wrapped argv when a
-    runner is on PATH; the shell tool's local-operations.exec
-    pipes through it. Pairs with WorkspaceFS (Phase 1b-3) for
-    full filesystem-level + process-level isolation.
-  - Phase 3f: Docker per-user isolation. Opt-in
-    `security.dockerIsolation = 'off' | 'enforce'`. Convention:
-    every container carries `octipus.user_id=<uuid>` label; every
-    user gets an `octipus_user_<id>` bridge network. The Docker
-    tool's list filters by the label; targeted ops verify ownership
-    via `docker inspect` and surface mismatches as "container not
-    found" so attackers can't enumerate other users' containers.
-  - Phase 3g: org / workspace grouping scaffolding.
-    Migration `0038` adds `organizations`, `org_members`, and
-    `workspaces` tables with RLS policies. New
-    `OrgWorkspaceManager` handles CRUD with admin gating on orgs,
-    per-user CRUD on workspaces, and the same cross-tenant
-    enumeration-collapse pattern as scopedRepos. Feature flag
-    `multiuser.orgWorkspaces` (default off); when on, REST surface
-    `/api/me/workspaces` + `/api/admin/orgs` lights up. **Phase 3
-    complete.**
-  - Phase 4: workspace_id adoption. Migration `0039` adds nullable
-    `workspace_id` to sessions / documents / hooks with composite
-    `(user_id, workspace_id)` indexes; FK uses ON DELETE SET NULL
-    so workspace deletion falls back to user-level scope rather
-    than cascading. New `resolveWorkspace(principal, header)` maps
-    `X-Octipus-Workspace` (slug or uuid) to a workspace owned by
-    the principal — cross-tenant headers collapse to the user's
-    default. ScopedSessionRepo / ScopedDocumentRepo /
-    ScopedHookRepo filter on workspace_id when set (NULL rows
-    stay visible — un-backfilled data keeps working) and stamp
-    the principal's workspaceId onto new rows.
-    `scripts/backfill-workspace-id.ts` walks every user, ensures
-    a default workspace, and updates rows with NULL
-    `workspace_id`. All gated on `multiuser.orgWorkspaces`; off
-    keeps every existing call site untouched.
-  - Phase 4 follow-up (this PR): workspace coverage extended to
-    the rest of the user-owned schema. Migration `0040` adds
-    nullable `workspace_id` to `agents`, `notifications`,
-    `trajectory_runs`, `pipelines`, `embeddings`, `agent_events`,
-    `swarm_nodes`, and `vault`. ScopedAgentRepo /
-    ScopedNotificationRepo / ScopedTrajectoryRepo gain the same
-    workspace filter + stamping as the Phase 4 trio. Vault gains
-    workspace-scoped reads (`getByName(userId, name, { workspaceId
-    })` / `list(userId, { workspaceId })`) — when a workspace
-    context is supplied, user-scoped rows stay visible AND
-    workspace-scoped rows narrow on the column (with
-    `workspace_id IS NULL` fallback). New `/api/me/orgs` returns
-    the caller's org memberships. Backfill script walks every
-    user-owned table. **Multi-user feature is now feature-
-    complete.** [`CHANGELOG.md`](CHANGELOG.md) +
-    [`docs/QA.md`](docs/QA.md) ship in this PR.
-
-  **Open follow-ups (defer / nice-to-have).**
+- **Multi-user follow-ups (carry-overs from the May feature work).**
   - Web UI workspace + org pickers (REST surface is in place).
   - Org-shared resources (system models, shared skills) routed
     through `org_members` — needs `org_id` on `models` and
     `skills` first.
-  - SCIM provisioning + SAML SSO (Phase 4 in the design doc).
+  - Vault `scope=workspace` UI / admin surface (the read path
+    landed in Phase 4 follow-up).
+  - SCIM provisioning + SAML SSO.
   - Per-user billing hooks (token cost accounting already exists).
 
-- **TUI editor (in flight, 2026-05).** A full-screen terminal
-  editor that doubles as the agent's collaborator —
-  editor-first instead of the current chat-first surface.
-  Inspired by [pi-mono](https://github.com/badlogic/pi-mono).
-  Multi-pane layout (file tree / editor / chat), real
-  multi-line editing with cursor + selection + undo, command
-  palette, in-buffer diff overlays for agent edits, inline
-  permission prompts, multi-user workspace awareness. Shipping
-  alongside the existing chat TUI (`src/tui/`) under a new
-  `src/tui-editor/` so neither surface blocks the other. Full
-  plan: [`docs/architecture/TUI-EDITOR.md`](docs/architecture/TUI-EDITOR.md).
-
-## Next (months)
+- **TUI editor — second iteration.**
+  - Tree-sitter (or LSP) implementation of the pluggable
+    highlighter slot for ts/tsx/py/rust/go.
+  - Workspace switch → instant reconnect so the new slug applies
+    without a manual restart.
+  - VIM IME-aware INSERT mode + named registers (`"a` etc.).
+  - Mouse wheel scrolling once Ink exposes mouse APIs.
 
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
@@ -242,6 +68,64 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 - **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering.
 
 ## Done (recent)
+
+### 2026-05 batch
+
+- **Multi-user architecture — feature complete.** Octipus moved
+  from single-tenant self-hosted to a central backend serving
+  multiple authenticated users with strict isolation of sessions,
+  secrets, settings, filesystem, embeddings, and agents.
+  Five phased PRs (#3 Phase 0 → #18 Phase 4 follow-up); every
+  behavioral change gated behind a feature flag that defaults
+  off, so existing single-user installs see byte-for-byte
+  unchanged behavior. Highlights: `Principal` type +
+  `scopedRepos(principal)` factory with cross-tenant
+  enumeration-collapse, vault `scope` enum + per-user HKDF DEKs,
+  `WorkspaceFS` filesystem sandbox, personal access tokens
+  (`octi_<43-char>` Bearer), admin console (users / audit /
+  quotas / impersonate), channel binding via
+  `channel_identities`, Postgres RLS on 19 user-owned tables,
+  per-user quotas (concurrent agents / daily tokens / API rpm),
+  admin impersonation with dual-tagged audit, shell sandbox
+  (bubblewrap / firejail), Docker per-user labels + network
+  isolation, organizations / org_members / workspaces tables,
+  `workspace_id` on every user-owned table with
+  `X-Octipus-Workspace` header → workspace resolver +
+  scopedRepos workspace filter. Migrations `0029`–`0040`. Full
+  design + per-phase rationale in
+  [`docs/architecture/MULTI-USER.md`](docs/architecture/MULTI-USER.md);
+  release-style summary in [`CHANGELOG.md`](CHANGELOG.md);
+  manual validation steps in
+  [`docs/QA.md` §7](docs/QA.md#7-multi-user--full-feature-exercise).
+  Net **~+130 isolation tests**.
+
+- **TUI editor — first shippable iteration.** A full-screen
+  terminal editor that doubles as the agent's collaborator —
+  editor-first instead of the chat-first surface, inspired by
+  [pi-mono](https://github.com/badlogic/pi-mono). Three-pane
+  layout (file tree · editor · chat) with status / mode bars
+  and an overlay layer for command palette, file picker,
+  find/replace, goto-line, workspace picker, help, agent diff.
+  Editor primitives: transactional buffer with cursor +
+  selection + undo/redo, language detection, **pluggable**
+  pattern-based syntax highlighter (tree-sitter slot ready),
+  incremental search + replace, line-level LCS diff for agent
+  edits. Per-buffer `lockMode: 'lock' | 'merge'` for agent
+  edits. **Vim-like motion mode** under a toggle (hjkl / w / b
+  / 0 / $ / gg / G / i / a / o / O / v / x / dd / yy / p / u).
+  Multi-user aware: fetches `/api/me/workspaces`, the workspace
+  picker switches `workspaceStore.activeSlug`, and both the
+  gateway client (WS connect query) + a new `ApiClient` (HTTP
+  header) propagate `X-Octipus-Workspace` / `?workspace=…`.
+  Layout state persists to `~/.octipus/tui-editor.json` (open
+  buffers, pane visibility, theme, editor mode) with debounced
+  atomic writes. Coexists with the chat TUI under
+  `src/tui-editor/`; launch via `bun run tui:edit` or the new
+  `octi-tui-edit` bin. PRs #19 (initial) + #20 (follow-ups).
+  Plan + open questions in
+  [`docs/architecture/TUI-EDITOR.md`](docs/architecture/TUI-EDITOR.md).
+  Net **+113 tests** across stores + buffer + highlighter +
+  diff + search + vim + persistence + commands.
 
 ### 2026-04 batch
 
