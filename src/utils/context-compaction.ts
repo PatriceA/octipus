@@ -1,6 +1,7 @@
 import {
   buildSummarizationPrompt,
   extractFileOperations,
+  mergeFileOperations,
   serializeConversation,
 } from '@/core/context-compaction';
 import type { AgentMessage } from '@/core/types';
@@ -9,7 +10,7 @@ import { getModelRegistry } from '@/models/model-registry';
 
 export type { CompactionResult } from '@/core/context-compaction';
 // Re-export for convenience
-export { compactWithSummarization, extractFileOperations } from '@/core/context-compaction';
+export { compactWithSummarization, extractFileOperations, mergeFileOperations } from '@/core/context-compaction';
 
 interface CompactionOptions {
   maxMessages?: number;
@@ -207,22 +208,59 @@ export function slidingWindowCompact(
   return [...systemMessages, ...recentMessages];
 }
 
+export interface CreateLLMSummaryOptions {
+  /** Previous compaction's summary, threaded in for iterative chaining. */
+  previousSummary?: string;
+  /** Previous compaction's cumulative file operations — merged with current pass's. */
+  previousFileOps?: { read: string[]; written: string[]; edited: string[] };
+  /** Free-form `/compact <instructions>` payload. */
+  userInstructions?: string;
+}
+
+export interface CreateLLMSummaryResult {
+  message: AgentMessage;
+  /** The raw summary text (no file-ops appendix), suitable for storing in a CompactionEntry. */
+  summaryText: string;
+  /** Cumulative file ops after merging previous + current. */
+  fileOps: { read: string[]; written: string[]; edited: string[] };
+}
+
 /**
  * Create an LLM-generated summary of removed messages.
  * Uses file-operation-aware summarization for richer context preservation.
  * Falls back to createSummaryMessage() on error.
+ *
+ * Backwards-compatible: when called without `options`, returns the same
+ * AgentMessage shape as before (signature uses overloads below).
  */
 export async function createLLMSummary(
   removedMessages: AgentMessage[],
-  summaryModel: string
-): Promise<AgentMessage> {
+  summaryModel: string,
+): Promise<AgentMessage>;
+export async function createLLMSummary(
+  removedMessages: AgentMessage[],
+  summaryModel: string,
+  options: CreateLLMSummaryOptions,
+): Promise<CreateLLMSummaryResult>;
+export async function createLLMSummary(
+  removedMessages: AgentMessage[],
+  summaryModel: string,
+  options?: CreateLLMSummaryOptions,
+): Promise<AgentMessage | CreateLLMSummaryResult> {
   try {
     const client = getLiteLLMClient();
 
-    // Use the richer serialization and file-operation extraction
-    const fileOps = extractFileOperations(removedMessages);
+    // Cumulative file ops = previous bag merged with current pass's extracted ops
+    const currentOps = extractFileOperations(removedMessages);
+    const fileOps = options?.previousFileOps
+      ? mergeFileOperations(options.previousFileOps, currentOps)
+      : currentOps;
+
     const serialized = serializeConversation(removedMessages);
-    const prompt = buildSummarizationPrompt(serialized.slice(0, 8000), fileOps);
+    const prompt = buildSummarizationPrompt(serialized.slice(0, 8000), fileOps, {
+      previousSummary: options?.previousSummary,
+      userInstructions: options?.userInstructions,
+    });
 
     const result = await client.complete({
       model: summaryModel,
@@ -250,24 +288,48 @@ export async function createLLMSummary(
       fileOps.edited.length > 0 ? `Files edited: ${fileOps.edited.join(', ')}` : null,
     ].filter(Boolean).join('\n');
 
-    return {
+    const message: AgentMessage = {
       role: 'system',
       content: `[Context Summary - ${removedMessages.length} earlier messages compacted]\n\n${result.content}${fileOpsSection ? '\n\n' + fileOpsSection : ''}`,
       timestamp: new Date(),
     };
+
+    if (options) {
+      return { message, summaryText: result.content, fileOps };
+    }
+    return message;
   } catch {
     // Fall back to keyword-based summary
-    return createSummaryMessage(removedMessages);
+    const fallback = createSummaryMessage(removedMessages);
+    if (options) {
+      const merged = options.previousFileOps
+        ? mergeFileOperations(options.previousFileOps, extractFileOperations(removedMessages))
+        : extractFileOperations(removedMessages);
+      return { message: fallback, summaryText: fallback.content, fileOps: merged };
+    }
+    return fallback;
   }
 }
 
 /**
  * Compact messages and generate an LLM summary for removed messages.
+ *
+ * When `options.previousSummary`, `options.previousFileOps`, or
+ * `options.userInstructions` is provided, the returned object includes
+ * `summaryText` and `fileOps` for callers that want to persist a
+ * structured CompactionEntry.
  */
+export interface CompactMessagesWithSummaryOptions extends CompactionOptions, CreateLLMSummaryOptions {}
+
 export async function compactMessagesWithSummary(
   messages: AgentMessage[],
-  options: CompactionOptions = {}
-): Promise<{ messages: AgentMessage[]; removed: number }> {
+  options: CompactMessagesWithSummaryOptions = {}
+): Promise<{
+  messages: AgentMessage[];
+  removed: number;
+  summaryText?: string;
+  fileOps?: { read: string[]; written: string[]; edited: string[] };
+}> {
   const { messages: compactedMessages, removed } = compactMessages(messages, options);
 
   if (removed === 0) {
@@ -291,7 +353,26 @@ export async function compactMessagesWithSummary(
     }
     model = defaultModel.modelId;
   }
-  const summary = await createLLMSummary(nonSystemRemoved, model);
+
+  // Detect iterative-summary intent to pick the structured-result overload.
+  const iterative = Boolean(options.previousSummary || options.previousFileOps || options.userInstructions);
+
+  let summary: AgentMessage;
+  let summaryText: string | undefined;
+  let mergedFileOps: { read: string[]; written: string[]; edited: string[] } | undefined;
+
+  if (iterative) {
+    const result = await createLLMSummary(nonSystemRemoved, model, {
+      previousSummary: options.previousSummary,
+      previousFileOps: options.previousFileOps,
+      userInstructions: options.userInstructions,
+    });
+    summary = result.message;
+    summaryText = result.summaryText;
+    mergedFileOps = result.fileOps;
+  } else {
+    summary = await createLLMSummary(nonSystemRemoved, model);
+  }
 
   // Insert summary after system messages
   const systemMessages = compactedMessages.filter((m) => m.role === 'system');
@@ -300,6 +381,8 @@ export async function compactMessagesWithSummary(
   return {
     messages: [...systemMessages, summary, ...otherMessages],
     removed,
+    summaryText,
+    fileOps: mergedFileOps,
   };
 }
 

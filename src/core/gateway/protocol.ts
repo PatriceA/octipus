@@ -75,6 +75,8 @@ export type GatewayEventType =
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'
+  // Extensions (user-authored)
+  | 'extension.notify'
   // Reserved
   | 'test.event'
   | 'error';

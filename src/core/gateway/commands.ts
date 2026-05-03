@@ -50,6 +50,21 @@ export class CommandRegistry {
   }
 
   /**
+   * Remove a command and all its aliases. Used by the extension loader
+   * to clean up on `/reload` and shutdown. Returns whether the command
+   * was actually present.
+   */
+  unregister(name: string): boolean {
+    const cmd = this.commands.get(name);
+    if (!cmd) return false;
+    this.commands.delete(name);
+    for (const alias of cmd.aliases) {
+      if (this.aliases.get(alias) === name) this.aliases.delete(alias);
+    }
+    return true;
+  }
+
+  /**
    * Parse and execute a command string (e.g., "/expert researcher").
    * Returns null if input is not a command.
    */
@@ -264,14 +279,19 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'compact',
     aliases: [],
-    description: 'Compact session context — summarizes history and saves to session folder',
+    description: 'Compact session context — summarizes history and saves to session folder. Optional: /compact <focus instructions>',
     minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session to compact.' };
       try {
         const { maybeCompactSession } = await import('@/core/orchestrator/session-compaction');
-        await maybeCompactSession(ctx.sessionId);
-        return { text: 'Session compacted. Older messages summarized, recent messages preserved.' };
+        const instructions = ctx.rawArgs.trim();
+        await maybeCompactSession(ctx.sessionId, {
+          userInstructions: instructions || undefined,
+          force: instructions.length > 0,
+        });
+        const note = instructions ? ` (focus: ${instructions})` : '';
+        return { text: `Session compacted${note}. Older messages summarized, recent messages preserved.` };
       } catch (err) {
         return { text: `Compaction failed: ${(err as Error).message}` };
       }
@@ -356,6 +376,22 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         return { text: diff.trim() || 'No unstaged changes.' };
       } catch {
         return { text: 'Not a git repository or git not available.' };
+      }
+    },
+  });
+
+  registry.register({
+    name: 'reload-extensions',
+    aliases: ['reload'],
+    description: 'Re-discover and reload user extensions from .octipus/extensions/',
+    minTrustLevel: 'local',
+    handler: async () => {
+      try {
+        const { getExtensionRegistry } = await import('@/extensions');
+        const result = await getExtensionRegistry().reload();
+        return { text: `Reloaded extensions (${result.count} active).` };
+      } catch (err) {
+        return { text: `Failed to reload extensions: ${(err as Error).message}` };
       }
     },
   });

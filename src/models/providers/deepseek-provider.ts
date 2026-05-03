@@ -72,6 +72,11 @@ export class DeepSeekProvider implements ModelProvider {
       }
       const choice = response.choices[0];
 
+      // deepseek-reasoner returns reasoning_content alongside content. Capture
+      // it so the next turn can echo it back (DeepSeek rejects with 400
+      // "reasoning_content in the thinking mode must be passed back" otherwise).
+      const reasoningContent = (choice.message as { reasoning_content?: string }).reasoning_content;
+
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
@@ -82,6 +87,7 @@ export class DeepSeekProvider implements ModelProvider {
         },
         model: response.model,
         latencyMs,
+        ...(reasoningContent ? { reasoningContent } : {}),
       };
 
       if (choice.message.tool_calls?.length) {
@@ -206,6 +212,22 @@ export class DeepSeekProvider implements ModelProvider {
     }
   }
 
+  /**
+   * Live-list models from the DeepSeek API. Returns the array of model IDs
+   * the account currently has access to. Throws if no API key is configured
+   * or the upstream call fails — callers handle the error and fall back to
+   * the static catalog.
+   */
+  async listModels(): Promise<string[]> {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) {
+      throw new Error('DeepSeek API key not configured');
+    }
+    const client = new OpenAI({ baseURL: this.baseUrl, apiKey });
+    const res = await client.models.list();
+    return res.data.map((m) => m.id);
+  }
+
   // -- Private helpers --
 
   private async getApiKey(): Promise<string | null> {
@@ -251,7 +273,9 @@ export class DeepSeekProvider implements ModelProvider {
       }
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        return {
+        // Echo reasoning_content back when present (DeepSeek thinking mode
+        // requires it on every prior assistant turn or returns 400).
+        const out: ChatCompletionMessageParam & { reasoning_content?: string } = {
           role: 'assistant' as const,
           content: msg.content || null,
           tool_calls: msg.toolCalls.map((tc) => ({
@@ -263,12 +287,18 @@ export class DeepSeekProvider implements ModelProvider {
             },
           })),
         };
+        if (msg.reasoningContent) out.reasoning_content = msg.reasoningContent;
+        return out;
       }
 
-      return {
+      const base: ChatCompletionMessageParam & { reasoning_content?: string } = {
         role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
       };
+      if (msg.role === 'assistant' && msg.reasoningContent) {
+        base.reasoning_content = msg.reasoningContent;
+      }
+      return base;
     });
   }
 }

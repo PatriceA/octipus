@@ -145,13 +145,28 @@ export class HealthChecker {
     const cached = await this.cache.get<ModelHealth>(cacheKey);
     if (cached) return cached;
 
-    // Skip LiteLLM completion check for CLI and direct providers
+    // Skip LiteLLM completion check for CLI and direct providers — but still
+    // ask the provider itself whether it is configured (e.g. API key present).
+    // Without this, a provider with no credentials reports healthy, lying to
+    // the dashboard.
     const providerPrefix = provider || modelName.split('/')[0];
     if (HealthChecker.SKIP_LITELLM_PROVIDERS.has(providerPrefix)) {
-      const result: ModelHealth = {
-        name: modelName,
-        status: 'healthy', // Assume available; provider router handles actual errors
-      };
+      let status: ModelHealth['status'] = 'healthy';
+      let error: string | undefined;
+      try {
+        const { getProviderRouter } = await import('@/models/providers');
+        const p = getProviderRouter().getProviderByName(providerPrefix);
+        if (p) {
+          const h = await p.checkHealth();
+          if (!h.healthy) {
+            status = 'unhealthy';
+            error = h.error;
+          }
+        }
+      } catch (err) {
+        modelLogger.debug({ err, providerPrefix }, 'Direct-provider health check failed');
+      }
+      const result: ModelHealth = { name: modelName, status, error };
       await this.cache.set(cacheKey, result);
       return result;
     }

@@ -39,11 +39,17 @@ export async function testExpertRegistryParity(runner: TestRunner, client: APICl
     else if (data.experts?.length) expertName = data.experts[0].name;
   }
 
+  // Track every session created during this test so we can clean up at the end.
+  // Without this, sessions leak into the user's chat history (each WS path sends
+  // an attach-marker chat message which then shows up as a session in the UI).
+  const createdSessions: string[] = [];
+
   async function newSession(tag: string): Promise<string> {
     const { data } = await client.request<{ id: string }>(
       'POST', '/sessions', { channelType: 'webchat', channelId: `parity-${tag}-${Date.now()}` },
     );
     if (!data.id) throw new Error(`Could not create session (${tag})`);
+    createdSessions.push(data.id);
     return data.id;
   }
 
@@ -67,8 +73,12 @@ export async function testExpertRegistryParity(runner: TestRunner, client: APICl
     const ws = new GatewayWSClient();
     try {
       await ws.connect();
-      // Attach the session to the connection via a chat message so ctx.sessionId is set.
-      ws.send({ type: 'chat.send', sessionId, content: 'attach session' });
+      // Attach the session to the connection. The gateway only binds
+      // ctx.sessionId on chat.send, so we need *some* chat frame, but using a
+      // visible string like "attach session" pollutes the chat history. A
+      // single non-printing character keeps the binding while leaving nothing
+      // human-readable behind (the session is also deleted in cleanup below).
+      ws.send({ type: 'chat.send', sessionId, content: '​' });
       await ws.waitForEvent('chat.response', 30_000);
 
       const cmdArgs = args ? { name: args } : undefined;
@@ -185,4 +195,14 @@ export async function testExpertRegistryParity(runner: TestRunner, client: APICl
       `WS session still has activeExpertId: ${JSON.stringify(wsSess.context?.activeExpertId)}`,
     );
   });
+
+  // Clean up every session created during this test run so they don't show
+  // up in the user's chat history. Best-effort — individual failures are fine.
+  for (const sid of createdSessions) {
+    try {
+      await client.request('DELETE', `/sessions/${sid}`);
+    } catch {
+      // Ignore — session may already be gone or DELETE not implemented.
+    }
+  }
 }

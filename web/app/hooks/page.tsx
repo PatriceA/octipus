@@ -1183,6 +1183,7 @@ export default function HooksPage() {
     try {
       await api.delete(`/hooks/${hookId}`);
       queryClient.invalidateQueries({ queryKey: ['hooks'] });
+      queryClient.invalidateQueries({ queryKey: ['hook-suggestions'] });
     } catch {
       // Ignore
     }

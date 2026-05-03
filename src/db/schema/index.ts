@@ -6,6 +6,7 @@ export * from './api-tokens';
 export * from './audit';
 export * from './channel-identities';
 export * from './cleanup-log';
+export * from './compaction-entries';
 export * from './documents';
 export * from './embeddings';
 export * from './evaluations';

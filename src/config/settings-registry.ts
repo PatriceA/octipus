@@ -640,6 +640,26 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PUBLIC_URL',
   },
 
+  // ── Skills (filesystem discovery, agentskills.io spec) ──
+  {
+    key: 'skills.externalEnabled',
+    category: 'skills',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Discover skills from filesystem dirs (~/.octipus/agent/skills, .octipus/skills, etc.) per agentskills.io spec',
+    isSecret: false,
+    envVar: 'SKILLS_EXTERNAL_ENABLED',
+  },
+  {
+    key: 'skills.externalDirectories',
+    category: 'skills',
+    valueType: 'string_array',
+    defaultValue: [],
+    description: 'Extra skill dirs to scan (absolute or ~-prefixed). Recursively finds SKILL.md; root *.md treated as flat skills in pi-style locations.',
+    isSecret: false,
+    envVar: 'SKILLS_EXTERNAL_DIRS',
+  },
+
   // ── API (runtime-changeable subset) ──
   {
     key: 'api.corsOrigins',

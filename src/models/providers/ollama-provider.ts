@@ -159,6 +159,30 @@ export class OllamaProvider implements ModelProvider {
       return result;
     } catch (error) {
       modelLogger.error({ error, model: params.model, provider: this.name }, 'Ollama completion failed');
+      // Ollama's Go-side chat parser sometimes returns 400 with a body like
+      // `{"error":"Value looks like object, but can't find closing '}' symbol"}`
+      // when a smaller model (qwen3.6, etc.) emits malformed tool-call JSON
+      // mid-stream. Treat it like a malformed-tool-call: classify as
+      // TOOL_CALL_INVALID + RETRY_NOW so the agent-worker re-runs the turn
+      // instead of bubbling the failure to the user.
+      const msg = (error as { message?: string }).message || '';
+      // Ollama's tool-call parsers (Go side) reject malformed model output
+      // with a few stable signatures. Smaller models (qwen3.6, etc.) emit
+      // unbalanced JSON, mixed-format XML tags, or interleaved think/tool
+      // markers. Treat any of these as recoverable — the agent-worker retries.
+      if (
+        /Value looks like object|find closing '\}' symbol/.test(msg) ||
+        /XML syntax error.*element|<parameter>.*<\/function>/.test(msg)
+      ) {
+        throw new ClassifiedError({
+          reason: FailoverReason.TOOL_CALL_INVALID,
+          recovery: RecoveryAction.RETRY_NOW,
+          message: `Ollama rejected request as malformed model output: ${msg}`,
+          providerHint: this.name,
+          metadata: { model: params.model, raw: msg.slice(0, 300) },
+          cause: error,
+        });
+      }
       throw classifyError(error, this.name);
     }
   }

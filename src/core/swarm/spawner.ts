@@ -715,6 +715,7 @@ export class SwarmSpawner {
       usedTokens,
       durationMs,
       output: typeof output === 'string' ? output.slice(0, 400) : undefined,
+      error: status === 'ok' ? undefined : (notes || undefined),
     });
 
     // Cycle-graph cleanup: on failure, drop the fingerprint so a future

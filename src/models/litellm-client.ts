@@ -41,6 +41,13 @@ export interface CompletionResult {
   };
   model: string;
   latencyMs: number;
+  /**
+   * DeepSeek thinking-mode chain-of-thought. The reasoner returns this
+   * alongside `content`; on the next turn we MUST echo it back inside the
+   * prior assistant message or the API rejects the call with 400. Other
+   * providers ignore it.
+   */
+  reasoningContent?: string;
 }
 
 export interface StreamChunk {

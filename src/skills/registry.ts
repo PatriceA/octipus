@@ -1,5 +1,7 @@
 import { skillRepository } from '@/db/repositories/skill-repository';
 import type { Skill } from '@/db/schema/skills';
+import { logger } from '@/utils/logger';
+import { isExternalSkillId, loadExternalSkills, type LoadExternalSkillsOptions } from './external-loader';
 
 function buildPromptFragment(skill: Skill): string {
   // Prefer markdown content (Claude Code-style) over structured fields
@@ -32,20 +34,73 @@ function buildPromptFragment(skill: Skill): string {
 }
 
 /**
- * High-level skill operations. Goes through `skillRepository` for all
- * data access — see DESIGN.md "Repository pattern consistency".
+ * High-level skill operations. Goes through `skillRepository` for DB rows
+ * and `external-loader` for filesystem skills (agentskills.io spec).
+ *
+ * External skills have ids prefixed `external:` and live in memory only —
+ * they do not appear in `skill_topic_assignments` and cannot be edited via
+ * the API; they reload from disk via `loadExternal()`.
  */
 export class SkillRegistry {
+  private external: Map<string, Skill> = new Map();
+  private externalLoaded = false;
+
+  /**
+   * Scan filesystem locations once and cache. Idempotent — call again to
+   * pick up new files (e.g. from a `/reload` command).
+   */
+  loadExternal(opts: LoadExternalSkillsOptions = {}): void {
+    try {
+      const skills = loadExternalSkills(opts);
+      this.external = new Map(skills.map(s => [s.id, s]));
+      this.externalLoaded = true;
+      if (skills.length > 0) {
+        logger.info(`[skills] loaded ${skills.length} external skills from filesystem`);
+      }
+    } catch (err) {
+      logger.warn(`[skills] external skill discovery failed: ${(err as Error).message}`);
+      this.external = new Map();
+      this.externalLoaded = true;
+    }
+  }
+
+  private ensureLoaded(): void {
+    if (!this.externalLoaded) this.loadExternal();
+  }
+
+  /** Read-only view of cached external skills (test / debug helper). */
+  getExternalSkills(): Skill[] {
+    this.ensureLoaded();
+    return [...this.external.values()];
+  }
+
   async getAll(userId?: string): Promise<Skill[]> {
-    return skillRepository.findAll(userId);
+    this.ensureLoaded();
+    const dbSkills = await skillRepository.findAll(userId);
+    return [...dbSkills, ...this.external.values()];
   }
 
   async get(skillId: string): Promise<Skill | undefined> {
+    this.ensureLoaded();
+    if (isExternalSkillId(skillId)) return this.external.get(skillId);
     return skillRepository.findById(skillId);
   }
 
   async getByIds(skillIds: string[]): Promise<Skill[]> {
-    return skillRepository.findByIds(skillIds);
+    this.ensureLoaded();
+    const externalIds = skillIds.filter(isExternalSkillId);
+    const dbIds = skillIds.filter(id => !isExternalSkillId(id));
+
+    const [dbRows, externalRows] = await Promise.all([
+      skillRepository.findByIds(dbIds),
+      Promise.resolve(
+        externalIds
+          .map(id => this.external.get(id))
+          .filter((s): s is Skill => s !== undefined),
+      ),
+    ]);
+
+    return [...dbRows, ...externalRows];
   }
 
   async buildPromptFragment(skillIds: string[]): Promise<string> {
@@ -72,4 +127,9 @@ export function getSkillRegistry(): SkillRegistry {
     instance = new SkillRegistry();
   }
   return instance;
+}
+
+/** Reset the singleton — used by tests and `/reload`. */
+export function resetSkillRegistry(): void {
+  instance = null;
 }

@@ -17,7 +17,7 @@ if (process.platform === 'win32') {
   });
   child.on('exit', (code) => process.exit(code ?? 1));
 } else {
-  const child = spawn('bash', [join(__dirname, 'assistant'), ...args], {
+  const child = spawn('bash', [join(__dirname, 'octi'), ...args], {
     stdio: 'inherit',
     cwd: process.cwd(),
   });

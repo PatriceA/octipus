@@ -128,12 +128,11 @@ export class CLIArgumentBuilder {
       args.push('-p', prompt, '--verbose', '--output-format', 'stream-json');
     }
 
-    // --bare: skip hooks, plugins, auto-memory, CLAUDE.md auto-discovery.
-    // Prevents host-user plugins (e.g. caveman) from leaking into spawned
-    // agent output. Opt out by setting OCTIPUS_CLI_PRESERVE_HOST_CONFIG=1.
-    if (process.env.OCTIPUS_CLI_PRESERVE_HOST_CONFIG !== '1') {
-      args.push('--bare');
-    }
+    // Note: do NOT pass --bare. It explicitly disables OAuth and keychain
+    // reads ("Anthropic auth is strictly ANTHROPIC_API_KEY or apiKeyHelper"),
+    // which makes the spawned subprocess return "Not logged in · Please run
+    // /login" for users authenticated via `claude login` (OAuth). Plugin/hook
+    // leakage from the host config is the accepted trade-off.
 
     const permMode = settings.permissionMode || 'bypassPermissions';
     args.push('--permission-mode', permMode);

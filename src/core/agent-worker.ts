@@ -1099,6 +1099,7 @@ export class AgentWorker extends BaseAgentWorker {
       content: result.content,
       toolCalls: result.toolCalls,
       timestamp: new Date(),
+      ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
     };
     this.messages.push(octiMessage);
 

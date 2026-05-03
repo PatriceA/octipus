@@ -2,17 +2,17 @@
 set -eu
 set -o pipefail 2>/dev/null || true
 
-# ─── Assistant CLI ────────────────────────────────────────────────────────────
-# Single-command management for the Assistant application.
+# ─── Octipus CLI ────────────────────────────────────────────────────────────
+# Single-command management for Octipus.
 #
 # Usage:
-#   assistant start [--dev]    Start backend + web UI
-#   assistant stop             Stop all assistant processes
-#   assistant restart [--dev]  Restart everything
-#   assistant tui              Launch terminal chat interface
-#   assistant status           Show running state
-#   assistant logs             Tail backend logs
-#   assistant open             Open web UI in browser
+#   octi start [--dev]    Start backend + web UI
+#   octi stop             Stop all Octipus processes
+#   octi restart [--dev]  Restart everything
+#   octi tui              Launch terminal chat interface
+#   octi status           Show running state
+#   octi logs             Tail backend logs
+#   octi open             Open web UI in browser
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Resolve project root (follow symlinks, then go up from bin/)
@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # State directory
-STATE_DIR="$HOME/.assistant"
+STATE_DIR="$HOME/.octipus"
 PID_FILE_BACKEND="$STATE_DIR/backend.pid"
 PID_FILE_WEB="$STATE_DIR/web.pid"
 LOG_FILE="$STATE_DIR/backend.log"
@@ -68,7 +68,7 @@ init_state_dir() {
 print_banner() {
   echo -e "${CYAN}${BOLD}"
   echo "  ╔═══════════════════════════════════╗"
-  echo "  ║         A S S I S T A N T         ║"
+  echo "  ║          O C T I P U S            ║"
   echo "  ╚═══════════════════════════════════╝"
   echo -e "${NC}"
 }
@@ -223,8 +223,8 @@ kill_tracked() {
   fi
 }
 
-# Kill all assistant-related processes (orphans included)
-kill_all_assistant() {
+# kill all octipus-related processes (orphans included)
+kill_all_octipus() {
   # Kill tracked processes
   kill_tracked "$PID_FILE_BACKEND" "backend"
   kill_tracked "$PID_FILE_WEB" "web UI"
@@ -341,7 +341,7 @@ diagnose_backend_failure() {
   fi
 
   if [[ $issues -eq 0 ]]; then
-    log_warn "No obvious issues found. Check full logs with: assistant logs"
+    log_warn "No obvious issues found. Check full logs with: octi logs"
   else
     echo ""
     log_error "Found $issues issue(s). Fix them and try again."
@@ -366,7 +366,7 @@ cmd_start() {
   # Kill any existing processes first (clean slate)
   if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
     log_step "Stopping existing processes..."
-    kill_all_assistant
+    kill_all_octipus
     sleep 1
   fi
 
@@ -428,16 +428,16 @@ cmd_start() {
       local _mcp_key="${MASTER_KEY:-}"
       local _env_block=""
       if [[ -n "$_mcp_key" ]]; then
-        _env_block=",\"ASSISTANT_API_KEY\":\"${_mcp_key}\""
+        _env_block=",\"OCTIPUS_API_KEY\":\"${_mcp_key}\""
       fi
       cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
 {
   "mcpServers": {
-    "assistant": {
+    "octipus": {
       "command": "node",
       "args": ["${_mcp_entry}"],
       "env": {
-        "ASSISTANT_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
+        "OCTIPUS_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
       }
     }
   }
@@ -448,12 +448,12 @@ MCPEOF
 
     # Auto-register with Gemini CLI (if installed, idempotent)
     if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
-      if ! gemini mcp list 2>/dev/null | grep -q "assistant:"; then
+      if ! gemini mcp list 2>/dev/null | grep -q "octipus:"; then
         local _mkey="${MASTER_KEY:-}"
-        gemini mcp add assistant node "$PROJECT_DIR/mcp-server/dist/index.js" \
+        gemini mcp add octipus node "$PROJECT_DIR/mcp-server/dist/index.js" \
           -s user --trust \
-          -e "ASSISTANT_URL=http://127.0.0.1:${API_PORT}" \
-          ${_mkey:+-e "ASSISTANT_API_KEY=${_mkey}"} >/dev/null 2>&1 \
+          -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
+          ${_mkey:+-e "OCTIPUS_API_KEY=${_mkey}"} >/dev/null 2>&1 \
           && log_info "Gemini CLI: MCP server registered" \
           || true
       fi
@@ -486,7 +486,7 @@ MCPEOF
   if [[ "$use_tui" == true ]]; then
     # TUI mode — skip web UI, launch terminal interface
     echo ""
-    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
     echo ""
     echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
     echo ""
@@ -522,16 +522,16 @@ MCPEOF
     open_browser "http://localhost:$WEB_PORT"
 
     echo ""
-    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
     echo ""
     echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
     echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
     echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
     echo ""
     echo -e "  ${BOLD}Commands:${NC}"
-    echo -e "  assistant status    Show running state"
-    echo -e "  assistant logs      View backend logs"
-    echo -e "  assistant stop      Stop everything"
+    echo -e "  octi status    Show running state"
+    echo -e "  octi logs      View backend logs"
+    echo -e "  octi stop      Stop everything"
     echo ""
   fi
 }
@@ -546,13 +546,13 @@ cmd_stop() {
     had_processes=true
   fi
 
-  kill_all_assistant
+  kill_all_octipus
 
   if [[ "$had_processes" == true ]]; then
     echo ""
-    log_info "Assistant stopped"
+    log_info "Octipus stopped"
   else
-    log_info "No assistant processes were running"
+    log_info "No Octipus processes were running"
     # Still clean up orphans silently
   fi
 }
@@ -572,7 +572,7 @@ cmd_restart() {
 
   # ── 1. STOP ──────────────────────────────────────────────────────────────────
   log_step "Stopping all processes..."
-  kill_all_assistant
+  kill_all_octipus
   sleep 1
 
   # ── 2. CLEAR CACHES ─────────────────────────────────────────────────────────
@@ -636,16 +636,16 @@ cmd_restart() {
       local _mcp_key="${MASTER_KEY:-}"
       local _env_block=""
       if [[ -n "$_mcp_key" ]]; then
-        _env_block=",\"ASSISTANT_API_KEY\":\"${_mcp_key}\""
+        _env_block=",\"OCTIPUS_API_KEY\":\"${_mcp_key}\""
       fi
       cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
 {
   "mcpServers": {
-    "assistant": {
+    "octipus": {
       "command": "node",
       "args": ["${_mcp_entry}"],
       "env": {
-        "ASSISTANT_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
+        "OCTIPUS_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
       }
     }
   }
@@ -656,12 +656,12 @@ MCPEOF
 
     # Auto-register with Gemini CLI (if installed, idempotent)
     if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
-      if ! gemini mcp list 2>/dev/null | grep -q "assistant:"; then
+      if ! gemini mcp list 2>/dev/null | grep -q "octipus:"; then
         local _mkey="${MASTER_KEY:-}"
-        gemini mcp add assistant node "$PROJECT_DIR/mcp-server/dist/index.js" \
+        gemini mcp add octipus node "$PROJECT_DIR/mcp-server/dist/index.js" \
           -s user --trust \
-          -e "ASSISTANT_URL=http://127.0.0.1:${API_PORT}" \
-          ${_mkey:+-e "ASSISTANT_API_KEY=${_mkey}"} >/dev/null 2>&1 \
+          -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
+          ${_mkey:+-e "OCTIPUS_API_KEY=${_mkey}"} >/dev/null 2>&1 \
           && log_info "Gemini CLI: MCP server registered" \
           || true
       fi
@@ -691,7 +691,7 @@ MCPEOF
 
   if [[ "$use_tui" == true ]]; then
     echo ""
-    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
     echo ""
     echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
     echo ""
@@ -722,7 +722,7 @@ MCPEOF
     open_browser "http://localhost:$WEB_PORT"
 
     echo ""
-    echo -e "  ${GREEN}${BOLD}Assistant is running!${NC}"
+    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
     echo ""
     echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
     echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
@@ -819,7 +819,7 @@ cmd_logs() {
     tail -f "$log_target"
   else
     log_error "No log file found at $log_target"
-    log_error "Start the assistant first: assistant start"
+    log_error "Start Octipus first: octi start"
   fi
 }
 
@@ -831,7 +831,7 @@ cmd_open() {
 cmd_tui() {
   if ! curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
     log_error "Backend is not running on port $API_PORT"
-    log_hint "Start it first: assistant start"
+    log_hint "Start it first: octi start"
     return 1
   fi
 
@@ -842,11 +842,11 @@ cmd_tui() {
 
 cmd_help() {
   print_banner
-  echo -e "  ${BOLD}Usage:${NC} assistant <command> [options]"
+  echo -e "  ${BOLD}Usage:${NC} octi <command> [options]"
   echo ""
   echo -e "  ${BOLD}Commands:${NC}"
   echo -e "    start [options]  Start backend + web UI (or TUI)"
-  echo -e "    stop             Stop all assistant processes"
+  echo -e "    stop             Stop all Octipus processes"
   echo -e "    restart [options] Restart everything"
   echo -e "    tui              Launch terminal chat (backend must be running)"
   echo -e "    status           Show running state and service health"
