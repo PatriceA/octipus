@@ -32,6 +32,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyRpId: 'localhost',
     passkeyRpName: 'Octipus',
     passkeyOrigin: 'http://localhost:3000',
+    shellSandbox: 'off',
   },
   api: {
     host: '0.0.0.0',

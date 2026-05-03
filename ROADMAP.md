@@ -130,10 +130,14 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     target user; audit-shadow middleware dual-tags every state-
     changing request under both actor and target. Web banner +
     "Act as" button on `/admin/users`.
+  - Phase 3e (this PR): shell sandbox via bubblewrap/firejail.
+    `security.shellSandbox = 'off' | 'auto' | 'required'` (default
+    off). `wrapCommand(argv, opts)` returns wrapped argv when a
+    runner is on PATH; the shell tool's local-operations.exec
+    pipes through it. Pairs with WorkspaceFS (Phase 1b-3) for
+    full filesystem-level + process-level isolation.
 
   **Next.**
-  - Phase 3e — shell sandbox via bubblewrap/firejail (opt-in,
-    Linux-only).
   - Phase 3f — Docker-in-Docker per-user labels + network for
     deployments using the Docker tool.
   - Phase 3g — optional org/workspace grouping layer (schema is
