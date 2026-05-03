@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
+import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { AuthProvider } from '@/lib/auth-context';
 import { PermissionProvider } from '@/lib/permission-context';
 
@@ -21,7 +22,10 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <PermissionProvider>{children}</PermissionProvider>
+        <PermissionProvider>
+          <ImpersonationBanner />
+          {children}
+        </PermissionProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

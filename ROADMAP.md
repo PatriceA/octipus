@@ -123,10 +123,15 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     3. `rate-limit` middleware — per-user API calls/min sliding
        window for `/api/*` (auth `/api/auth/*` IP layer unchanged).
     Phase 3c is now complete.
+  - Phase 3d (this PR): admin impersonation. New
+    `impersonation_sessions` table (migration `0037`), short-lived
+    "act as" window keyed by SHA-256 of the admin's session token.
+    Auth-derive middleware swaps the request's identity to the
+    target user; audit-shadow middleware dual-tags every state-
+    changing request under both actor and target. Web banner +
+    "Act as" button on `/admin/users`.
 
   **Next.**
-  - Phase 3d — impersonation flow with strong audit (admin enters
-    "act as" mode; every action tagged with both actor + target).
   - Phase 3e — shell sandbox via bubblewrap/firejail (opt-in,
     Linux-only).
   - Phase 3f — Docker-in-Docker per-user labels + network for

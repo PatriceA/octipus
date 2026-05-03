@@ -217,6 +217,35 @@ export function createServer() {
         username: session.username,
         isAdmin: session.isAdmin,
       };
+
+      // Phase 3d — admin impersonation. If the admin's session token
+      // has an active impersonation row, swap the request's identity
+      // to the target user but stamp the principal with actorUserId
+      // so downstream audit can record both sides.
+      if (userObj.isAdmin) {
+        try {
+          const { getImpersonationManager } = await import('@/security/impersonation');
+          const active = await getImpersonationManager().findActive(token);
+          if (active) {
+            const db = getDb();
+            const [target] = await db.select({
+              id: users.id, username: users.username, isAdmin: users.isAdmin,
+            }).from(users).where(eq(users.id, active.targetUserId)).limit(1);
+            if (target) {
+              const targetObj = { id: target.id, username: target.username, isAdmin: target.isAdmin };
+              const principal = {
+                ...principalFromUser(targetObj, token),
+                actorUserId: userObj.id,
+                actorUsername: userObj.username,
+              };
+              return { user: targetObj, session, principal };
+            }
+          }
+        } catch (err) {
+          apiLogger.warn({ err }, 'Impersonation lookup failed; proceeding as admin');
+        }
+      }
+
       return {
         user: userObj,
         session,
