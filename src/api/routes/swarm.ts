@@ -19,23 +19,26 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
-import { sessionRepository } from '@/db/repositories/session-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
 import type { SwarmNodeRecord } from '@/db/schema/swarm-nodes';
+import { type Principal, isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
 /**
  * Check the caller has permission to act on a given `rootSessionId`.
- * Admins bypass; non-admins must own the session.
+ * Admins bypass; non-admins must own the session. The lookup goes through
+ * the scoped session repo so the SQL filter (`sessions.user_id = principal.userId`)
+ * does the ownership check — keeps this aligned with `agents.ts` and avoids
+ * the unscoped `sessionRepository` singleton.
  */
 async function canAccessRootSession(
-  user: { id: string; isAdmin: boolean },
+  principal: Principal,
   rootSessionId: string,
 ): Promise<boolean> {
-  if (user.isAdmin) return true;
+  if (isAdmin(principal)) return true;
   try {
-    const session = await sessionRepository.findById(rootSessionId);
-    if (!session) return false;
-    return session.userId === user.id;
+    const session = await scopedRepos(principal).sessions.findById(rootSessionId);
+    return session !== null;
   } catch (err) {
     apiLogger.error({ err, rootSessionId }, 'Failed to check session ownership for swarm node');
     return false;
@@ -81,12 +84,12 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // to rebuild the tree before subscribing to new events.
   .get(
     '/nodes',
-    async ({ user, query }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, query }) => {
+      if (!user || !principal) return { error: 'Not authenticated' };
       const rootSessionId = query.rootSessionId;
       if (!rootSessionId) return { error: 'rootSessionId is required' };
 
-      const allowed = await canAccessRootSession(user, rootSessionId);
+      const allowed = await canAccessRootSession(principal, rootSessionId);
       if (!allowed) return { error: 'Not authorized' };
 
       try {
@@ -106,14 +109,14 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // ── Single-node detail (full result jsonb) ──────────────────────────
   .get(
     '/nodes/:id',
-    async ({ user, params }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params }) => {
+      if (!user || !principal) return { error: 'Not authenticated' };
 
       try {
         const node = await swarmNodeRepository.findById(params.id);
         if (!node) return { error: 'Swarm node not found' };
 
-        const allowed = await canAccessRootSession(user, node.rootSessionId);
+        const allowed = await canAccessRootSession(principal, node.rootSessionId);
         if (!allowed) return { error: 'Not authorized' };
 
         return {
@@ -142,14 +145,14 @@ export const swarmRoutes = new Elysia({ prefix: '/swarm' })
   // flipped to `cancelled` by the stop path).
   .post(
     '/nodes/:id/cancel',
-    async ({ user, params }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, principal, params }) => {
+      if (!user || !principal) return { error: 'Not authenticated' };
 
       try {
         const node = await swarmNodeRepository.findById(params.id);
         if (!node) return { error: 'Swarm node not found' };
 
-        const allowed = await canAccessRootSession(user, node.rootSessionId);
+        const allowed = await canAccessRootSession(principal, node.rootSessionId);
         if (!allowed) return { error: 'Not authorized' };
 
         const agentManager = getAgentManager();
