@@ -261,8 +261,15 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
   // ── 3. Complex job — orchestrator → agent → subagents ───────────────
   await runner.test('Complex job — 3-level swarm fans out, results aggregate, answer returns', async () => {
+    if (process.env.E2E_SKIP_SLOW_SWARM === '1') {
+      console.log('    \x1b[33m⊘ E2E_SKIP_SLOW_SWARM=1 — skipping\x1b[0m');
+      return;
+    }
     const sessionId = await newSession('complex');
-    const timeoutMs = 240_000; // Complex takes longer — 4 min ceiling.
+    // 6-minute ceiling. Per-level wall-clock cap is 240s (config.defaults).
+    // A child failing once and triggering retry burst (2+4+8s) leaves no
+    // headroom under a 240s outer fetch deadline — give the retry path room.
+    const timeoutMs = 360_000;
     const { spawns, completions, response, error } = await runTurn(
       sessionId,
       // Multi-faceted prompt that maps cleanly to multiple specialist roles.
@@ -329,6 +336,10 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   // judgment call — sometimes the Agent synthesizes directly), the test
   // still passes but logs the outcome so the user sees the signal.
   await runner.test('Agent spawns Subagent — 3-level chain when the task warrants it', async () => {
+    if (process.env.E2E_SKIP_SLOW_SWARM === '1') {
+      console.log('    \x1b[33m⊘ E2E_SKIP_SLOW_SWARM=1 — skipping\x1b[0m');
+      return;
+    }
     const sessionId = await newSession('subagent');
     const { spawns, completions, response, error } = await runTurn(
       sessionId,
@@ -341,7 +352,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
         '(2) the Docker image that runs the auth service (delegate to a devops specialist), ' +
         '(3) the handler code review for the token-refresh endpoint (delegate to a code-review specialist). ' +
         'Delegate each sub-part to the right subagent, then synthesize a one-paragraph summary.',
-      240_000,
+      360_000,
     );
 
     assert(!error, `chat returned error: ${error}`);
@@ -389,8 +400,12 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   // must overlap — i.e. the second sibling starts before the first one
   // finishes. Serial execution would show them strictly non-overlapping.
   await runner.test('Parallel fan-out — siblings overlap in wall-clock', async () => {
+    if (process.env.E2E_SKIP_SLOW_SWARM === '1') {
+      console.log('    \x1b[33m⊘ E2E_SKIP_SLOW_SWARM=1 — skipping\x1b[0m');
+      return;
+    }
     const sessionId = await newSession('parallel');
-    const timeoutMs = 240_000;
+    const timeoutMs = 360_000;
     const { spawns, completions, response, error } = await runTurn(
       sessionId,
       // Three independent, orthogonal sub-questions. The prompt *explicitly*

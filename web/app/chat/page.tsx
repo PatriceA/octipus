@@ -12,7 +12,7 @@ import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
-import SwarmTree, { type SwarmTreeEvent } from '@/components/swarm-tree';
+import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { api, createWebSocket } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 

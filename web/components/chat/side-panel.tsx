@@ -305,11 +305,6 @@ export default function SidePanel({
     disconnected: 'Disconnected',
   };
 
-  // Session duration from first tracked agent
-  const firstStartTime = agentArray.length
-    ? Math.min(...agentArray.map((a) => a.startTime))
-    : undefined;
-
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-surface-container">
       {/* Section 1: Connection & Model */}
