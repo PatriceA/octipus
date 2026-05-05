@@ -23,6 +23,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+export interface PersistedCursor { line: number; col: number }
+
 export interface PersistedState {
   /** Schema version so a future shape change can ignore old files. */
   version: 1;
@@ -32,6 +34,8 @@ export interface PersistedState {
   chatVisible: boolean;
   theme: 'dark' | 'light';
   editorMode: 'modeless' | 'vim';
+  /** Cursor position per file, persisted so re-opens land where the user left off. */
+  cursorByPath?: Record<string, PersistedCursor>;
 }
 
 export const DEFAULT_PERSISTED_STATE: PersistedState = {
@@ -42,6 +46,7 @@ export const DEFAULT_PERSISTED_STATE: PersistedState = {
   chatVisible: true,
   theme: 'dark',
   editorMode: 'modeless',
+  cursorByPath: {},
 };
 
 function defaultPath(): string {
@@ -69,6 +74,7 @@ export function loadPersistedState(path: string = defaultPath()): PersistedState
       chatVisible: typeof parsed.chatVisible === 'boolean' ? parsed.chatVisible : true,
       theme: parsed.theme === 'light' ? 'light' : 'dark',
       editorMode: parsed.editorMode === 'vim' ? 'vim' : 'modeless',
+      cursorByPath: sanitizeCursors(parsed.cursorByPath),
     };
   } catch {
     return DEFAULT_PERSISTED_STATE;
@@ -79,6 +85,19 @@ export function loadPersistedState(path: string = defaultPath()): PersistedState
  * Atomic-ish save: write to `<path>.tmp` then rename. A crash
  * mid-write at worst leaves the previous state intact.
  */
+function sanitizeCursors(value: unknown): Record<string, PersistedCursor> {
+  if (!value || typeof value !== 'object') return {};
+  const out: Record<string, PersistedCursor> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as { line?: unknown; col?: unknown };
+    if (typeof r.line === 'number' && typeof r.col === 'number') {
+      out[key] = { line: Math.max(0, Math.floor(r.line)), col: Math.max(0, Math.floor(r.col)) };
+    }
+  }
+  return out;
+}
+
 export function savePersistedState(state: PersistedState, path: string = defaultPath()): boolean {
   try {
     const dir = dirname(path);

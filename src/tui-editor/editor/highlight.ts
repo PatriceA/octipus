@@ -11,7 +11,6 @@
  * later if we need real parsing.
  */
 
-import { getTheme } from '../theme';
 import type { Language } from './lang';
 
 export type TokenKind =
@@ -181,13 +180,6 @@ export function highlightLine(line: string, lang: Language): Token[] {
     i = j;
   }
   return out;
-}
-
-/** Look up the color string for a token kind via the active theme. */
-export function tokenColor(kind: TokenKind): string {
-  const t = getTheme();
-  if (kind === 'plain') return t.fg;
-  return t.syntax[kind];
 }
 
 // ─────────────────────────────────────────────────────────────────

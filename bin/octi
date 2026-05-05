@@ -10,6 +10,7 @@ set -o pipefail 2>/dev/null || true
 #   octi stop             Stop all Octipus processes
 #   octi restart [--dev]  Restart everything
 #   octi tui              Launch terminal chat interface
+#   octi edit             Launch TUI editor
 #   octi status           Show running state
 #   octi logs             Tail backend logs
 #   octi open             Open web UI in browser
@@ -492,7 +493,7 @@ MCPEOF
     echo ""
     log_step "Launching TUI..."
     cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec bun run src/tui/index.tsx
+    API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts
   else
     # Web UI mode
     log_step "Clearing web UI cache..."
@@ -697,7 +698,7 @@ MCPEOF
     echo ""
     log_step "Launching TUI..."
     cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec bun run src/tui/index.tsx
+    API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts
   else
     cd "$PROJECT_DIR/web"
     if [[ "$dev_mode" == true ]]; then
@@ -837,7 +838,19 @@ cmd_tui() {
 
   log_info "Connecting TUI to gateway at localhost:$API_PORT..."
   cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec bun run src/tui/index.tsx
+  API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts
+}
+
+cmd_edit() {
+  if ! curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
+    log_error "Backend is not running on port $API_PORT"
+    log_hint "Start it first: octi start"
+    return 1
+  fi
+
+  log_info "Launching TUI editor (gateway at localhost:$API_PORT)..."
+  cd "$PROJECT_DIR"
+  API_PORT="$API_PORT" exec bun run src/tui-editor/index.ts "$@"
 }
 
 cmd_help() {
@@ -849,6 +862,7 @@ cmd_help() {
   echo -e "    stop             Stop all Octipus processes"
   echo -e "    restart [options] Restart everything"
   echo -e "    tui              Launch terminal chat (backend must be running)"
+  echo -e "    edit             Launch TUI editor (backend must be running)"
   echo -e "    status           Show running state and service health"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
@@ -876,6 +890,7 @@ main() {
     stop)    cmd_stop ;;
     restart) cmd_restart "$@" ;;
     tui)     cmd_tui ;;
+    edit)    cmd_edit "$@" ;;
     status)  cmd_status ;;
     logs)    cmd_logs "$@" ;;
     open)    cmd_open ;;

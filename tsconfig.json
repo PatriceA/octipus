@@ -13,7 +13,6 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
@@ -27,6 +26,6 @@
       "@utils/*": ["src/utils/*"]
     }
   },
-  "include": ["src/**/*", "tui/**/*", "scripts/**/*"],
+  "include": ["src/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist", "web"]
 }
