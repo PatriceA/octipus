@@ -33,6 +33,7 @@ describe('persist', () => {
       chatVisible: true,
       theme: 'light' as const,
       editorMode: 'vim' as const,
+      cursorByPath: { '/a.ts': { line: 4, col: 7 } },
     };
     expect(savePersistedState(state, path)).toBe(true);
     expect(loadPersistedState(path)).toEqual(state);

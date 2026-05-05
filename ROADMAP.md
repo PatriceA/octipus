@@ -8,9 +8,10 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-Nothing currently in flight. The multi-user track and the TUI
-editor's first iteration both shipped in May; see **Done (recent)
-→ 2026-05 batch** below. New work will land here.
+Nothing currently in flight. The multi-user track shipped in May;
+the TUI rewrite onto [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)
+(both chat shell and editor) shipped right after — see
+**Done (recent) → 2026-05 batch** below. New work will land here.
 
 ## Next (months)
 
@@ -24,13 +25,16 @@ editor's first iteration both shipped in May; see **Done (recent)
   - SCIM provisioning + SAML SSO.
   - Per-user billing hooks (token cost accounting already exists).
 
-- **TUI editor — second iteration.**
+- **TUI — second iteration.** (Pi-tui-based chat shell + editor are
+  shipped; this is the followup work.)
   - Tree-sitter (or LSP) implementation of the pluggable
     highlighter slot for ts/tsx/py/rust/go.
   - Workspace switch → instant reconnect so the new slug applies
     without a manual restart.
   - VIM IME-aware INSERT mode + named registers (`"a` etc.).
-  - Mouse wheel scrolling once Ink exposes mouse APIs.
+  - Mouse wheel scrolling once pi-tui exposes mouse APIs.
+  - Scrollable messages pane (PageUp / PageDown history) so a long
+    agent reply doesn't push the user's input off the chat pane.
 
 - **Extension SDK — user-authored TypeScript hooks.** `.octipus/extensions/`
   auto-discovery + a narrow `ExtensionAPI` (`registerTool`, `registerCommand`,
@@ -141,6 +145,29 @@ editor's first iteration both shipped in May; see **Done (recent)
   manual validation steps in
   [`docs/QA.md` §7](docs/QA.md#7-multi-user--full-feature-exercise).
   Net **~+130 isolation tests**.
+
+- **TUI rewrite onto pi-tui (2026-05).** Both terminal surfaces —
+  chat shell (`octi tui`, `src/tui-pi/`) and editor (`octi edit`,
+  `src/tui-editor/`) — moved off Ink and onto
+  [`@mariozechner/pi-tui`](https://www.npmjs.com/package/@mariozechner/pi-tui),
+  a small differential-rendering TUI library. Pi-tui's `Editor`
+  primitive backs both the chat composer and the file-buffer
+  editor, so paste markers / undo / history nav / fuzzy file
+  completion / slash-command autocomplete behave identically
+  across surfaces. Keybinding overrides live at
+  `~/.octipus/keybindings.json`. Defaults avoid `Ctrl+M`, `Ctrl+H`,
+  `Ctrl+J`, `Ctrl+I`, `Ctrl+[` (indistinguishable from Enter /
+  Backspace / LF / Tab / Esc on non-Kitty terminals) and `Ctrl+Tab`
+  (unreliable). Glyph table defaults to ASCII on terminals whose
+  fonts lack the emoji subset and switches to emoji on known
+  emoji-capable terminals (`OCTIPUS_TUI_ICONS=emoji|ascii` to
+  override). New e2e harness at `tests/tui/harness.ts` plus
+  `chat.e2e.test.ts` / `editor.e2e.test.ts` covering launch,
+  focus cycling, slash commands, the picker filter, the command
+  palette, and `/quit`. New `octi edit` command in `bin/octi`.
+  Full notes in
+  [`CHANGELOG.md`](CHANGELOG.md#tui-rewrite-on-pi-tui) and
+  [`docs/architecture/TUI-EDITOR.md`](docs/architecture/TUI-EDITOR.md).
 
 - **TUI editor — first shippable iteration.** A full-screen
   terminal editor that doubles as the agent's collaborator —

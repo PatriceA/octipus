@@ -7,8 +7,95 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
-Nothing pending right now. The multi-user track closed; the TUI
-editor track is in flight on a separate branch.
+### TUI rewrite on pi-tui
+
+Both terminal surfaces — the chat shell (`octi tui`,
+`src/tui-pi/`) and the editor (`octi edit`, `src/tui-editor/`) —
+were rewritten on top of [`@mariozechner/pi-tui`](https://www.npmjs.com/package/@mariozechner/pi-tui),
+replacing the previous Ink (React for the terminal) implementation.
+
+#### Why
+- Pi-tui's differential renderer is materially faster on long chats
+  and large file buffers (only changed cells are written; no virtual
+  DOM diff).
+- The same `Editor` primitive backs **both** the chat composer and
+  the file-buffer editor, so paste markers, undo, history nav,
+  fuzzy file completion (`@…`, `./…`), and slash-command
+  autocomplete behave identically across surfaces.
+- Pi-tui exposes a small `KeybindingsManager` we extend with app
+  ids (`app.palette.open`, `app.tree.toggle`, …) and let users
+  override via `~/.octipus/keybindings.json`.
+
+#### Chat shell (`octi tui`)
+- Status bar + welcome + scrolling messages pane (markdown for
+  assistant, plain wrap for user/system).
+- Composer with slash command + fuzzy file autocomplete.
+- Activity line (live tool spinner with hold-on-completion).
+- Permission prompt overlay, command palette (`Ctrl+P` / `F4`).
+- TUI-local commands `/exit`, `/quit`, `/cost`, `/project`
+  short-circuit before hitting the gateway; everything else flows
+  through the standard slash registry.
+
+#### Editor (`octi edit`)
+- Three-pane layout (file tree / buffers / chat) with `Ctrl+B`,
+  `Alt+J`, `Ctrl+\` toggling and `Alt+,` / `Alt+.` cycling buffers.
+- File picker (`Ctrl+O`) with case-insensitive substring filter on
+  the relative path.
+- Find / replace overlays, diff overlay (accept/reject agent edits),
+  workspace picker, MCP server list, scrollable hotkeys overlay (`F5`).
+- Vim mode toggle (`editorMode: 'modeless' | 'vim'`) covering
+  hjkl / w / b / 0 / $ / gg / G / i / a / o / O / v / x / dd / yy
+  / p / u / Ctrl+R, with VISUAL-mode delete + yank.
+- Persisted layout / cursor / open-buffer state at
+  `~/.octipus/tui-editor.json`.
+- New `octi edit` command in `bin/octi`.
+
+#### Key-binding rationale (defaults avoid terminal collisions)
+- `Ctrl+M`, `Ctrl+H`, `Ctrl+J`, `Ctrl+I`, `Ctrl+[` are
+  indistinguishable from `Enter`, `Backspace`, `LF`, `Tab`, `Esc`
+  on terminals without the Kitty keyboard protocol — none are
+  bound by default. (`Ctrl+H` was previously `app.replace.open`
+  and `Ctrl+M` was `app.mcp.list`; both silently ate `Enter` /
+  `Backspace` in overlays.)
+- `Ctrl+Tab` doesn't reach most terminals — buffer cycle moved to
+  `Alt+,` / `Alt+.` (also `F2` / `F3`).
+- `F1` is hijacked by many terminals as a help key — hotkeys
+  overlay rebound to `F5`.
+
+#### Glyphs
+- Tree / status emojis replaced with a glyph table that defaults
+  to ASCII (`[+]`, `·`, `❯`) on terminals whose fonts lack the
+  emoji subset, and switches to emoji only when a known
+  emoji-capable terminal is detected (`kitty`, `wezterm`,
+  `iterm.app`, `vscode`, `apple_terminal`, `ghostty`). Override
+  with `OCTIPUS_TUI_ICONS=emoji|ascii`.
+
+#### E2E tests
+- New harness at `tests/tui/harness.ts` (spawn under fixed
+  `COLUMNS` / `LINES`, send raw bytes, ANSI-strip, `waitFor`).
+- Suites `tests/tui/chat.e2e.test.ts`, `tests/tui/editor.e2e.test.ts`
+  cover launch, focus cycling, slash commands, the picker filter,
+  the command palette, and `/quit` exit code. Skipped when the
+  gateway isn't reachable.
+
+#### Notable bug fixes during the rewrite
+- Chat submit dropped to a no-op because the editor's
+  `submitValue()` clears state *before* invoking `onSubmit`, and
+  the host then read back the (empty) state via
+  `getExpandedText()`. Now uses the `rawText` argument the editor
+  passes through.
+- Editor pane height collapsed to the floor (5 rows) via a
+  feedback loop where `setHeight(N)` was sourced from the previous
+  render's `editorLines.length`. Heights now derive from
+  `tui.terminal.rows` directly.
+- Markdown hyperlinks (`OSC 8`) leaked into the visible-width
+  count so cursor moves shifted the editor↔chat divider in by ~7
+  cells. `SplitPane.fitTo` uses pi-tui's `visibleWidth` (CSI + OSC
+  + wide-char aware).
+- Hotkeys overlay shrank instead of scrolling — it now reads the
+  terminal height (matching the 85% `maxHeight` in
+  `overlays/registry.ts`), reserves rows for chrome, and emits a
+  fixed-size viewport every render with a position indicator.
 
 ## 2026-05 — Multi-user feature complete
 
