@@ -130,7 +130,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             if (s.key === 'openrouter.apiKey' && s.value && String(s.value) !== '' && String(s.value) !== '••••••••') configured.add('openrouter');
           }
           // Check vault-based providers by testing their health
-          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'openrouter'] as const;
+          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'grok', 'openrouter'] as const;
           const healthResults = await Promise.allSettled(
             providerChecks.map(p => api.get<{ configured?: boolean }>(`/models/providers/${p}/available`))
           );

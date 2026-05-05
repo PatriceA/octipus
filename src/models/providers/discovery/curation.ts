@@ -33,11 +33,13 @@ const DEPRECATED_PATTERNS = [/deprecated/i, /legacy/i];
 export function inferTier(id: string, label?: string): DiscoveryTier {
   const s = `${id} ${label ?? ''}`.toLowerCase().trim();
   if (/embedding/.test(s)) return 'embedding';
+  // "non-reasoning" is explicitly a cheap/fast variant (Grok); skip the reasoning bucket.
+  if (/non-reasoning/.test(s)) return 'cheap';
   if (/\bo\d+(-mini|-pro)?\b|\breason|\bthinking\b/.test(s)) return 'reasoning';
   // Cheap *first* — "lite/mini/nano/haiku" beats flagship matchers like "opus" (none collide here).
   // Use \b boundaries so "geMINI" doesn't match "mini" and "claUDE" doesn't match "lite".
   if (/(-mini|-haiku|-lite|-nano|-small|-tiny|-fast|-flash-lite|\b8b\b|haiku\b)/.test(s)) return 'cheap';
-  if (/(\bopus|frontier|ultra|\bpro\b|\bgpt-5\b|gpt-5\.|gpt-5-|gpt-4\.5|claude-opus|gemini-\d+(\.\d+)?-pro)/.test(s)) return 'flagship';
+  if (/(\bopus|frontier|ultra|\bpro\b|\bgpt-5\b|gpt-5\.|gpt-5-|gpt-4\.5|claude-opus|gemini-\d+(\.\d+)?-pro|\bgrok-\d)/.test(s)) return 'flagship';
   // Plain "flash" lands here (not flash-lite which is cheap, caught above).
   if (/(sonnet|gpt-4o|gemini-\d+(\.\d+)?-flash|\bmedium\b)/.test(s)) return 'balanced';
   return 'other';

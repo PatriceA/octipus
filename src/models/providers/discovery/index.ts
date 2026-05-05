@@ -4,6 +4,7 @@ import { modelLogger } from '@/utils/logger';
 import { AnthropicDiscovery } from './anthropic';
 import { curate } from './curation';
 import { GeminiDiscovery } from './gemini';
+import { GrokDiscovery } from './grok';
 import { OllamaDiscovery } from './ollama';
 import { OpenAIDiscovery } from './openai';
 import { OpenRouterDiscovery } from './openrouter';
@@ -18,6 +19,7 @@ const CLIENTS: Record<string, ProviderDiscovery> = {
   anthropic: new AnthropicDiscovery(),
   gemini: new GeminiDiscovery(),
   google: new GeminiDiscovery(),
+  grok: new GrokDiscovery(),
   openrouter: new OpenRouterDiscovery(),
   ollama: new OllamaDiscovery(),
 };
@@ -52,6 +54,7 @@ async function resolveCreds(provider: string): Promise<DiscoveryCreds> {
     anthropic: 'ANTHROPIC_API_KEY',
     gemini: 'GEMINI_API_KEY',
     google: 'GEMINI_API_KEY',
+    grok: 'XAI_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
   };
   const vaultKeyMap: Record<string, string> = {
@@ -59,6 +62,7 @@ async function resolveCreds(provider: string): Promise<DiscoveryCreds> {
     anthropic: 'anthropic_api_key',
     gemini: 'gemini_api_key',
     google: 'gemini_api_key',
+    grok: 'xai_api_key',
     openrouter: 'openrouter_api_key',
   };
 

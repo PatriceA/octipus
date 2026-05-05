@@ -10,6 +10,7 @@ import { AnthropicProvider } from './anthropic-provider';
 import { CLIProvider } from './cli-provider';
 import { DeepSeekProvider } from './deepseek-provider';
 import { GeminiProvider } from './gemini-provider';
+import { GrokProvider } from './grok-provider';
 import type { ModelProvider } from './interface';
 import { LiteLLMProvider } from './litellm-provider';
 import { OllamaProvider } from './ollama-provider';
@@ -21,6 +22,7 @@ export { AnthropicProvider } from './anthropic-provider';
 export { CLIProvider } from './cli-provider';
 export { DeepSeekProvider } from './deepseek-provider';
 export { GeminiProvider } from './gemini-provider';
+export { GrokProvider } from './grok-provider';
 export type { ModelProvider, ProviderHealthStatus, ProviderType, QuotaStatus } from './interface';
 export { LiteLLMProvider } from './litellm-provider';
 export { OllamaProvider } from './ollama-provider';
@@ -62,7 +64,7 @@ function isRateLimitResponse(error: unknown): boolean {
  *
  * Now integrates per-provider rate limiting and circuit breaking.
  *
- * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → DeepSeek → OpenRouter → LiteLLM (catch-all)
+ * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → Grok → DeepSeek → OpenRouter → LiteLLM (catch-all)
  * LiteLLM is only registered if proxyUrl is configured.
  */
 export class ProviderRouter {
@@ -91,6 +93,7 @@ export class ProviderRouter {
     this.providers.push(new OpenAIProvider());
     this.providers.push(new AnthropicProvider());
     this.providers.push(new GeminiProvider());
+    this.providers.push(new GrokProvider());
     this.providers.push(new DeepSeekProvider());
     this.providers.push(new OpenRouterProvider());
     this.providers.push(new VoyageProvider()); // embeddings only

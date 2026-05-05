@@ -28,6 +28,14 @@ describe('inferTier', () => {
     expect(inferTier('o3')).toBe('reasoning');
     expect(inferTier('o4-mini')).toBe('reasoning');
   });
+
+  it('classifies Grok models', () => {
+    expect(inferTier('grok-4')).toBe('flagship');
+    expect(inferTier('grok-4.20')).toBe('flagship');
+    expect(inferTier('grok-4-fast-reasoning')).toBe('reasoning');
+    expect(inferTier('grok-4-1-fast-reasoning')).toBe('reasoning');
+    expect(inferTier('grok-4-fast-non-reasoning')).toBe('cheap');
+  });
 });
 
 describe('curate', () => {
