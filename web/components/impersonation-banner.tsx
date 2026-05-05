@@ -50,11 +50,16 @@ export function ImpersonationBanner() {
   if (!data?.actorUserId) return null;
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-40 bg-yellow-600 text-[#0e0e0e] px-4 py-2 text-sm font-medium shadow-md">
-      <div className="flex items-center justify-between max-w-6xl mx-auto">
-        <div className="flex items-center gap-2">
-          <Eye className="w-4 h-4" />
-          <span>
+    // Renders inline at the top of AppShell as a full-width bar so it pushes
+    // sidebar + header + content down rather than overlapping them. Solid
+    // background (no glass / blur) — the bar is a stop-the-world warning,
+    // not decoration. z-50 keeps it above any sticky pickers / overlays in
+    // the page body if a route ever escapes the AppShell flow.
+    <div className="relative z-50 w-full bg-yellow-500 text-[#0e0e0e] px-4 py-2 text-sm font-medium shadow-md border-b border-yellow-700">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2 min-w-0">
+          <Eye className="w-4 h-4 shrink-0" />
+          <span className="truncate">
             <strong>{data.actorUsername ?? data.actorUserId}</strong> is acting as{' '}
             <strong>{data.username}</strong>. Every action is audited.
           </span>
@@ -63,7 +68,7 @@ export function ImpersonationBanner() {
           type="button"
           onClick={() => stopMutation.mutate()}
           disabled={stopMutation.isPending}
-          className="px-3 py-1 bg-[#0e0e0e] text-yellow-200 rounded text-xs font-bold uppercase tracking-wide hover:bg-black disabled:opacity-50 cursor-pointer"
+          className="px-3 py-1 bg-[#0e0e0e] text-yellow-200 rounded text-xs font-bold uppercase tracking-wide hover:bg-black disabled:opacity-50 cursor-pointer shrink-0"
         >
           {stopMutation.isPending ? 'Stopping…' : 'Stop'}
         </button>

@@ -239,7 +239,11 @@ export function createServer() {
                 actorUserId: userObj.id,
                 actorUsername: userObj.username,
               };
-              return { user: targetObj, session, principal };
+              return {
+                user: targetObj,
+                session: { ...session, token } as typeof session & { token: string },
+                principal,
+              };
             }
           }
         } catch (err) {
@@ -249,7 +253,13 @@ export function createServer() {
 
       return {
         user: userObj,
-        session,
+        // Attach the raw bearer/cookie token onto the session record so
+        // routes that need it (e.g. /admin/impersonate, which uses the
+        // admin's session token as the impersonation lookup key) can
+        // read `session.token` without a second cookie/header dance.
+        // SessionData itself doesn't store the token (only its sha256
+        // hash) so we splice it in at the request boundary.
+        session: { ...session, token } as typeof session & { token: string },
         principal: principalFromUser(userObj, token),
       };
     })

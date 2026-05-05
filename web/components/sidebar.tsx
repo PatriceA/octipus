@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/auth-context';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';
 
@@ -73,9 +74,20 @@ const navGroups: NavGroup[] = [
   },
 ];
 
+const adminOnlyGroup: NavGroup = {
+  label: 'Multi-user',
+  items: [
+    // The /admin layout already exposes Quotas + Audit log as tabs alongside
+    // Users — duplicating them here just makes two paths to the same page.
+    { name: 'Users', href: '/admin/users', icon: Users },
+  ],
+};
+
 export function Sidebar() {
   const pathname = usePathname();
   const { collapsed, toggle } = useSidebarStore();
+  const { user } = useAuth();
+  const groups = user?.isAdmin ? [...navGroups, adminOnlyGroup] : navGroups;
 
   return (
     <aside
@@ -111,7 +123,7 @@ export function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-5">
-        {navGroups.map((group) => (
+        {groups.map((group, groupIndex) => (
           <div key={group.label}>
             {!collapsed && (
               <div className="px-4 mb-1.5">
@@ -146,7 +158,7 @@ export function Sidebar() {
               })}
             </div>
             {/* Group spacer — no divider lines per design spec */}
-            {group.label !== 'Admin' && !collapsed && (
+            {groupIndex < groups.length - 1 && !collapsed && (
               <div className="h-3" />
             )}
           </div>

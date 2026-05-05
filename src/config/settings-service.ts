@@ -64,11 +64,25 @@ export class SettingsService {
       await this.cache.set(`settings:${row.key}`, value, CACHE_TTL);
     }
 
-    // Fill defaults for keys not yet in DB
+    // Fill defaults for keys not yet in DB. Precedence:
+    //   DB row (already loaded above) > env var > registry default.
+    // The previous version always wrote `defaultValue`, so env-only flags
+    // (e.g. MULTIUSER_ORG_WORKSPACES) couldn't be flipped on without an
+    // explicit DB row — runtime-loader's env fallback then never fired
+    // because getSync returned the boolean default instead of `undefined`.
     for (const def of SETTINGS_REGISTRY) {
-      if (!this.localCache.has(def.key)) {
-        this.localCache.set(def.key, def.defaultValue);
+      if (this.localCache.has(def.key)) continue;
+      let value: unknown = def.defaultValue;
+      if (def.envVar) {
+        const envVal = process.env[def.envVar];
+        if (envVal !== undefined && envVal !== '') {
+          value = def.valueType === 'number' ? Number(envVal)
+            : def.valueType === 'boolean' ? envVal !== 'false'
+            : def.valueType === 'string_array' ? envVal.split(',').map((s) => s.trim()).filter(Boolean)
+            : envVal;
+        }
       }
+      this.localCache.set(def.key, value);
     }
 
     logger.debug({ count: rows.length }, 'Settings cache warmed');

@@ -28,8 +28,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // List sessions
   .get(
     '/',
-    async ({ user, principal, query }) => {
+    async ({ user, principal, query, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
@@ -56,13 +57,15 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Get session by ID
   .get(
     '/:id',
-    async ({ user, principal, params }) => {
+    async ({ user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
       const session = await scopedRepos(principal).sessions.findById(params.id);
       if (!session) {
+        set.status = 404;
         return { error: 'Session not found' };
       }
       return session;
@@ -78,8 +81,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Create new session
   .post(
     '/',
-    async ({ user, principal, body }) => {
+    async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
@@ -108,8 +112,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Update session
   .patch(
     '/:id',
-    async ({ user, principal, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
@@ -118,6 +123,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         body as Partial<import('@/db/schema/sessions').NewSession>,
       );
       if (!updated) {
+        set.status = 404;
         return { error: 'Session not found' };
       }
       return updated;
@@ -139,8 +145,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Delete session
   .delete(
     '/:id',
-    async ({ user, principal, params }) => {
+    async ({ user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
@@ -150,6 +157,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // the principal owns the row.
       const owned = await scopedRepos(principal).sessions.findById(params.id);
       if (!owned) {
+        set.status = 404;
         return { error: 'Session not found' };
       }
       const deleted = await sessionRepository.delete(params.id);
@@ -166,14 +174,16 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Get session messages
   .get(
     '/:id/messages',
-    async ({ user, principal, params, query }) => {
+    async ({ user, principal, params, query, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
       const repos = scopedRepos(principal);
       const session = await repos.sessions.findById(params.id);
       if (!session) {
+        set.status = 404;
         return { error: 'Session not found' };
       }
 
@@ -225,8 +235,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Complete session
   .post(
     '/:id/complete',
-    async ({ user, principal, params }) => {
+    async ({ user, principal, params, set }) => {
       if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
         return { error: 'Not authenticated' };
       }
 
@@ -235,6 +246,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         completedAt: new Date(),
       });
       if (!updated) {
+        set.status = 404;
         return { error: 'Session not found' };
       }
       return updated;
