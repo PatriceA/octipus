@@ -146,7 +146,16 @@ export default function ModelsPage() {
         </div>
       )}
 
-      <CLIStatusPanel tools={cliTools} registeredModels={models} onAdd={handleAddModel} />
+      <CLIStatusPanel
+        tools={cliTools}
+        registeredModels={models}
+        onAdd={handleAddModel}
+        onUpdate={async (id, patch) => {
+          const m = models.find(mm => mm.id === id);
+          if (!m) return;
+          await handleSaveModel(m.name, patch);
+        }}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {models.length === 0 ? (

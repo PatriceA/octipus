@@ -137,6 +137,14 @@ export class CLIArgumentBuilder {
     const permMode = settings.permissionMode || 'bypassPermissions';
     args.push('--permission-mode', permMode);
 
+    // Model override: env var > settings > vendor default. Vendor accepts an
+    // alias ('sonnet', 'opus') or a full model id ('claude-sonnet-4-6').
+    // https://code.claude.com/docs/en/cli-reference
+    const claudeModel = process.env.CLAUDE_MODEL || settings.model;
+    if (claudeModel) {
+      args.push('--model', claudeModel);
+    }
+
     if (systemMessages.length > 0) {
       const sysPrompt = systemMessages.join('\n');
       if (IS_WIN) {
@@ -182,6 +190,13 @@ export class CLIArgumentBuilder {
 
     const approvalMode = settings.permissionMode || 'yolo';
     args.push('--approval-mode', approvalMode);
+
+    // Model override: env var > settings. Vendor uses gemini-2.5-flash by default.
+    // https://github.com/google-gemini/gemini-cli (Quickstart, `-m` flag)
+    const geminiModel = process.env.GEMINI_MODEL || settings.model;
+    if (geminiModel) {
+      args.push('-m', geminiModel);
+    }
 
     // Note: Gemini CLI does NOT support --mcp-config or --system-instruction flags.
     // It uses its own `gemini mcp` subcommand to manage MCP servers.
@@ -233,7 +248,7 @@ export class CLIArgumentBuilder {
     // a host default like `gpt-5.2-codex` (blocked on ChatGPT-account auth)
     // cannot silently exit 1 for every codex-routed swarm child. Default to
     // gpt-5.4 (the successor per codex migration notice) unless overridden.
-    const modelOverride = settings?.model || process.env.CODEX_MODEL || 'gpt-5.4';
+    const modelOverride = process.env.CODEX_MODEL || settings?.model || 'gpt-5.4';
     const baseArgs = [
       'exec',
       '--skip-git-repo-check',

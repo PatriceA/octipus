@@ -5,6 +5,29 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../litell
 import { getQuotaTracker } from '../quota-tracker';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
 
+/**
+ * Vendor-managed billing info for a CLI tool.
+ * Plan tiers, quotas, and what counts toward subscription vs. metered API
+ * billing are vendor-controlled and change. We only carry pointers and a
+ * non-paraphrased note so the UI can warn users without making promises.
+ */
+export interface CLIBillingInfo {
+  /** Vendor name shown in UI */
+  vendor: string;
+  /** Free-form plan note ("Pro/Max/Team/Enterprise + API key") */
+  planNote: string;
+  /** How billing is shaped */
+  billingMode: 'subscription' | 'api-key' | 'mixed';
+  /** Vendor docs URL for current plans/pricing */
+  pricingDocUrl: string;
+  /** Vendor docs URL for available models */
+  modelsDocUrl: string;
+  /** Vendor docs URL for the model-selection flag */
+  modelFlagDocUrl: string;
+  /** Short caveat shown next to the picker */
+  warning: string;
+}
+
 /** Configuration for a CLI model tool (exported for CLIAgentWorker) */
 export interface CLIToolConfig {
   /** Display name */
@@ -21,6 +44,12 @@ export interface CLIToolConfig {
   isQuotaError: (output: string) => boolean;
   /** Provider identifier for quota tracking */
   quotaProvider: string;
+  /** Vendor-managed billing/usage pointers (surfaced in UI) */
+  billingInfo: CLIBillingInfo;
+  /** Direct provider whose model catalog drives the picker for this CLI */
+  modelProvider: 'anthropic' | 'google' | 'openai';
+  /** Flag the CLI uses to select a model (`--model`, `-m`) — for docs only */
+  modelFlag: string;
 }
 
 // ---- Claude Code CLI ----
@@ -59,6 +88,17 @@ const claudeCodeConfig: CLIToolConfig = {
   isQuotaError: (output: string) =>
     /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
   quotaProvider: 'claude-code',
+  modelProvider: 'anthropic',
+  modelFlag: '--model',
+  billingInfo: {
+    vendor: 'Anthropic',
+    planNote: 'Claude Pro / Max / Team / Enterprise, or Console (API) auth',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://www.anthropic.com/pricing',
+    modelsDocUrl: 'https://docs.anthropic.com/en/docs/about-claude/models/overview',
+    modelFlagDocUrl: 'https://code.claude.com/docs/en/cli-reference',
+    warning: 'Subscription vs. metered-API spillover is vendor-controlled and changes. Consult your Anthropic account for what counts toward your plan.',
+  },
 };
 
 // ---- Gemini CLI ----
@@ -95,6 +135,17 @@ const geminiCliConfig: CLIToolConfig = {
   isQuotaError: (output: string) =>
     /rate.?limit|quota|exceeded|resource.?exhausted/i.test(output),
   quotaProvider: 'gemini-cli',
+  modelProvider: 'google',
+  modelFlag: '-m',
+  billingInfo: {
+    vendor: 'Google',
+    planNote: 'Personal Google account (free-tier quota), GEMINI_API_KEY (metered), or Vertex AI via GOOGLE_CLOUD_PROJECT',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://ai.google.dev/pricing',
+    modelsDocUrl: 'https://ai.google.dev/gemini-api/docs/models',
+    modelFlagDocUrl: 'https://github.com/google-gemini/gemini-cli',
+    warning: 'Free-tier limits and metered pricing are vendor-controlled. Heavy use will spill over into API billing.',
+  },
 };
 
 // ---- Codex CLI ----
@@ -156,6 +207,17 @@ const codexCliConfig: CLIToolConfig = {
   isQuotaError: (output: string) =>
     /rate.?limit|quota|exceeded|limit reached/i.test(output),
   quotaProvider: 'codex-cli',
+  modelProvider: 'openai',
+  modelFlag: '-m',
+  billingInfo: {
+    vendor: 'OpenAI',
+    planNote: 'ChatGPT Plus / Pro / Business / Edu / Enterprise (subscription), or OPENAI_API_KEY (usage-based)',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://openai.com/api/pricing/',
+    modelsDocUrl: 'https://platform.openai.com/docs/models',
+    modelFlagDocUrl: 'https://developers.openai.com/codex/cli/features',
+    warning: 'Plan entitlements (incl. Fast mode) are vendor-controlled. ChatGPT-account auth and API-key auth bill differently.',
+  },
 };
 
 /** All registered CLI tool configs */
@@ -295,11 +357,25 @@ export class CLIProvider implements ModelProvider {
   }
 
   /** List all available CLI tools */
-  async getAvailableTools(): Promise<{ name: string; available: boolean; modelPatterns: string[] }[]> {
+  async getAvailableTools(): Promise<{
+    name: string;
+    available: boolean;
+    modelPatterns: string[];
+    modelProvider: 'anthropic' | 'google' | 'openai';
+    modelFlag: string;
+    billingInfo: CLIBillingInfo;
+  }[]> {
     const results = [];
     for (const tool of CLI_TOOLS) {
       const available = this.toolAvailability.get(tool.name) ?? await this.checkToolAvailable(tool);
-      results.push({ name: tool.name, available, modelPatterns: tool.modelPatterns });
+      results.push({
+        name: tool.name,
+        available,
+        modelPatterns: tool.modelPatterns,
+        modelProvider: tool.modelProvider,
+        modelFlag: tool.modelFlag,
+        billingInfo: tool.billingInfo,
+      });
     }
     return results;
   }

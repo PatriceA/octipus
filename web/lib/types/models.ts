@@ -24,15 +24,31 @@ export interface Model {
       maxBudgetUsd?: number;
       mcpConfigPath?: string;
       extraArgs?: string[];
+      model?: string;
     };
   };
   health?: 'healthy' | 'unhealthy' | 'unknown';
+}
+
+export interface CLIBillingInfo {
+  vendor: string;
+  planNote: string;
+  billingMode: 'subscription' | 'api-key' | 'mixed';
+  pricingDocUrl: string;
+  modelsDocUrl: string;
+  modelFlagDocUrl: string;
+  warning: string;
 }
 
 export interface CLITool {
   name: string;
   available: boolean;
   modelPatterns: string[];
+  /** Direct provider whose model catalog drives this CLI's picker. */
+  modelProvider?: 'anthropic' | 'google' | 'openai';
+  /** CLI flag for model selection (display only). */
+  modelFlag?: string;
+  billingInfo?: CLIBillingInfo;
   quota: {
     provider: string;
     hasQuota: boolean;

@@ -66,98 +66,6 @@ function mapOpenRouterModel(m: OpenRouterApiModel) {
   };
 }
 
-// ── Known model catalog with specs & pricing ────────────────────────
-// Prices are per 1M tokens. Context/max output in tokens.
-interface KnownModel {
-  id: string;
-  label: string;
-  contextWindow?: number;
-  maxOutputTokens?: number;
-  costPerInputToken?: number;   // $ per 1M input tokens
-  costPerOutputToken?: number;  // $ per 1M output tokens
-  supportsVision?: boolean;
-  supportsTools?: boolean;
-}
-
-const KNOWN_PROVIDER_MODELS: Record<string, KnownModel[]> = {
-  openai: [
-    // GPT-5.4 frontier family
-    { id: 'gpt-5.4', label: 'GPT-5.4', contextWindow: 1000000, maxOutputTokens: 128000, costPerInputToken: 2.50, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', contextWindow: 400000, maxOutputTokens: 128000, costPerInputToken: 0.75, costPerOutputToken: 4.50, supportsVision: true, supportsTools: true },
-    { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', contextWindow: 400000, maxOutputTokens: 128000, costPerInputToken: 0.20, costPerOutputToken: 1.25, supportsVision: true, supportsTools: true },
-    // GPT-4o family
-    { id: 'gpt-4o', label: 'GPT-4o', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 2.50, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
-    { id: 'gpt-4o-mini', label: 'GPT-4o Mini', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
-    // Reasoning
-    { id: 'o3', label: 'o3', contextWindow: 200000, maxOutputTokens: 100000, costPerInputToken: 2.00, costPerOutputToken: 8.00, supportsVision: true, supportsTools: true },
-    { id: 'o4-mini', label: 'o4 Mini', contextWindow: 200000, maxOutputTokens: 100000, costPerInputToken: 1.10, costPerOutputToken: 4.40, supportsVision: true, supportsTools: true },
-    // Embeddings
-    { id: 'text-embedding-3-large', label: 'Embedding 3 Large', contextWindow: 8191, costPerInputToken: 0.13 },
-    { id: 'text-embedding-3-small', label: 'Embedding 3 Small', contextWindow: 8191, costPerInputToken: 0.02 },
-    // Transcription / TTS
-    { id: 'gpt-4o-transcribe', label: 'GPT-4o Transcribe (STT)', contextWindow: 128000 },
-    { id: 'gpt-4o-mini-tts', label: 'GPT-4o Mini TTS', contextWindow: 128000 },
-  ],
-  anthropic: [
-    // Claude 4.6 (latest)
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', contextWindow: 1000000, maxOutputTokens: 128000, costPerInputToken: 5.00, costPerOutputToken: 25.00, supportsVision: true, supportsTools: true },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', contextWindow: 1000000, maxOutputTokens: 64000, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
-    // Claude 4.5
-    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 1.00, costPerOutputToken: 5.00, supportsVision: true, supportsTools: true },
-    { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', contextWindow: 1000000, maxOutputTokens: 64000, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
-    { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 5.00, costPerOutputToken: 25.00, supportsVision: true, supportsTools: true },
-    // Claude 4
-    { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
-    { id: 'claude-opus-4-20250514', label: 'Claude Opus 4', contextWindow: 200000, maxOutputTokens: 32000, costPerInputToken: 15.00, costPerOutputToken: 75.00, supportsVision: true, supportsTools: true },
-  ],
-  gemini: [
-    // Gemini 3 (preview)
-    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 2.00, costPerOutputToken: 12.00, supportsVision: true, supportsTools: true },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.50, costPerOutputToken: 3.00, supportsVision: true, supportsTools: true },
-    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite (Preview)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.25, costPerOutputToken: 1.50, supportsVision: true, supportsTools: true },
-    // Gemini 2.5 (stable)
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 1.25, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.30, costPerOutputToken: 2.50, supportsVision: true, supportsTools: true },
-    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.10, costPerOutputToken: 0.40, supportsVision: true, supportsTools: true },
-    // Embeddings
-    { id: 'gemini-embedding-2-preview', label: 'Gemini Embedding 2 (Preview)', contextWindow: 8192, costPerInputToken: 0.20 },
-  ],
-  deepseek: [
-    // DeepSeek V4 Preview (released 2026-04-24). 1M context, MIT open weights.
-    // Pro pricing reflects the 75%-off promo running through 2026-05-31.
-    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro (Preview)', contextWindow: 1000000, maxOutputTokens: 384000, costPerInputToken: 0.435, costPerOutputToken: 0.87, supportsTools: true },
-    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash (Preview)', contextWindow: 1000000, maxOutputTokens: 384000, costPerInputToken: 0.14, costPerOutputToken: 0.28, supportsTools: true },
-    // DeepSeek V3.2 — deprecated, retires 2026-07-24. Aliased to V4 Flash modes.
-    { id: 'deepseek-chat', label: 'DeepSeek V3.2 Chat (deprecated → V4 Flash)', contextWindow: 128000, maxOutputTokens: 8192, costPerInputToken: 0.28, costPerOutputToken: 0.42, supportsTools: true },
-    { id: 'deepseek-reasoner', label: 'DeepSeek V3.2 Reasoner (deprecated → V4 Flash thinking)', contextWindow: 128000, maxOutputTokens: 64000, costPerInputToken: 0.28, costPerOutputToken: 0.42 },
-  ],
-  openrouter: [
-    // Popular models via OpenRouter (prices are OpenRouter's, may differ from direct)
-    { id: 'openai/gpt-4o', label: 'GPT-4o (via OpenRouter)', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 2.50, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
-    { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini (via OpenRouter)', contextWindow: 128000, maxOutputTokens: 16384, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
-    { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (via OpenRouter)', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 3.00, costPerOutputToken: 15.00, supportsVision: true, supportsTools: true },
-    { id: 'anthropic/claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (via OpenRouter)', contextWindow: 200000, maxOutputTokens: 64000, costPerInputToken: 1.00, costPerOutputToken: 5.00, supportsVision: true, supportsTools: true },
-    { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (via OpenRouter)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.15, costPerOutputToken: 0.60, supportsVision: true, supportsTools: true },
-    { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro (via OpenRouter)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 1.25, costPerOutputToken: 10.00, supportsVision: true, supportsTools: true },
-    { id: 'deepseek/deepseek-chat-v3-0324', label: 'DeepSeek V3 (via OpenRouter)', contextWindow: 128000, maxOutputTokens: 8192, costPerInputToken: 0.28, costPerOutputToken: 0.42, supportsTools: true },
-    { id: 'meta-llama/llama-4-scout', label: 'Llama 4 Scout (via OpenRouter)', contextWindow: 512000, maxOutputTokens: 32768, costPerInputToken: 0.15, costPerOutputToken: 0.40, supportsVision: true, supportsTools: true },
-    { id: 'meta-llama/llama-4-maverick', label: 'Llama 4 Maverick (via OpenRouter)', contextWindow: 1048576, maxOutputTokens: 65536, costPerInputToken: 0.25, costPerOutputToken: 0.75, supportsVision: true, supportsTools: true },
-    { id: 'qwen/qwen-3-235b-a22b', label: 'Qwen 3 235B (via OpenRouter)', contextWindow: 131072, maxOutputTokens: 32768, costPerInputToken: 0.30, costPerOutputToken: 1.20, supportsTools: true },
-  ],
-  voyage: [
-    // Primary models
-    { id: 'voyage-4-large', label: 'Voyage 4 Large', contextWindow: 32000, costPerInputToken: 0.12 },
-    { id: 'voyage-4', label: 'Voyage 4', contextWindow: 32000, costPerInputToken: 0.06 },
-    { id: 'voyage-4-lite', label: 'Voyage 4 Lite', contextWindow: 32000, costPerInputToken: 0.02 },
-    { id: 'voyage-context-3', label: 'Voyage Context 3', contextWindow: 32000, costPerInputToken: 0.18 },
-    { id: 'voyage-code-3', label: 'Voyage Code 3', contextWindow: 32000, costPerInputToken: 0.18 },
-    // Specialized
-    { id: 'voyage-finance-2', label: 'Voyage Finance 2', contextWindow: 32000, costPerInputToken: 0.12 },
-    { id: 'voyage-law-2', label: 'Voyage Law 2', contextWindow: 16000, costPerInputToken: 0.12 },
-    { id: 'voyage-multilingual-2', label: 'Voyage Multilingual 2', contextWindow: 32000, costPerInputToken: 0.12 },
-    { id: 'voyage-code-2', label: 'Voyage Code 2', contextWindow: 16000, costPerInputToken: 0.12 },
-  ],
-};
 
 export const modelRoutes = new Elysia({ prefix: '/models' })
   .use(apiContext)
@@ -705,9 +613,6 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         | undefined;
       if (!provider) return { error: 'DeepSeek provider not registered' };
 
-      const catalog = KNOWN_PROVIDER_MODELS.deepseek || [];
-      const catalogById = new Map(catalog.map(m => [m.id, m]));
-
       let liveIds: string[] = [];
       let liveError: string | undefined;
       try {
@@ -716,29 +621,14 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         liveError = (err as Error).message;
       }
 
-      // If we have live IDs, return their union with catalog metadata
-      // (catalog rows also kept so deprecated/legacy IDs stay visible until
-      // they're actually removed upstream). Otherwise return catalog only.
-      if (liveIds.length > 0) {
-        const liveSet = new Set(liveIds);
-        const models = [
-          // Live IDs first — catalog metadata if known, minimal entry otherwise
-          ...liveIds.map(id => {
-            const known = catalogById.get(id);
-            return known
-              ? { ...known, inCatalog: true, live: true }
-              : { id, label: id, inCatalog: false, live: true };
-          }),
-          // Catalog entries the API didn't return (kept for visibility, marked offline)
-          ...catalog
-            .filter(m => !liveSet.has(m.id))
-            .map(m => ({ ...m, inCatalog: true, live: false })),
-        ];
-        return { models, live: true };
-      }
-
-      const models = catalog.map(m => ({ ...m, inCatalog: true, live: false }));
-      return { models, live: false, error: liveError || 'Could not reach DeepSeek API' };
+      const { inferTier } = await import('@/models/providers/discovery/curation');
+      const models = liveIds.map(id => ({
+        id,
+        label: id,
+        tier: inferTier(id),
+        live: true,
+      }));
+      return { models, live: liveIds.length > 0, error: liveError };
     },
     { detail: { tags: ['models'] } }
   )
@@ -846,14 +736,20 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     }
   )
 
-  // Known models for a provider (static list — kept for backwards compat)
+  // Known models for a provider — now derived from live discovery cache.
+  // Returns shortlist ids only, for legacy callers that just want a string[].
   .get(
     '/providers/:provider/known',
     async ({ user, params }) => {
       if (!user) return { error: 'Not authenticated' };
-
-      const catalog = KNOWN_PROVIDER_MODELS[params.provider];
-      return { models: catalog ? catalog.map(m => m.id) : [] };
+      const { discover, getDiscoverableProviders } = await import(
+        '@/models/providers/discovery'
+      );
+      if (!getDiscoverableProviders().includes(params.provider)) {
+        return { models: [] };
+      }
+      const result = await discover(params.provider);
+      return { models: result.shortlist.map(m => m.id) };
     },
     {
       params: t.Object({ provider: t.String() }),
@@ -861,71 +757,58 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     }
   )
 
-  // List available models for a direct provider (checks configuration first)
+  // List available models for a direct provider — live discovery + curation.
+  // No hardcoded id arrays: every result comes from the vendor's list endpoint
+  // (with Redis cache + stale-while-revalidate). See ./discovery/.
   .get(
     '/providers/:provider/available',
     async ({ user, params, query }) => {
       if (!user) return { error: 'Not authenticated' };
 
+      const { discover, getDiscoverableProviders } = await import(
+        '@/models/providers/discovery'
+      );
       const provider = params.provider;
 
-      // Ollama: live model list (supports custom endpoint via ?endpoint=)
-      if (provider === 'ollama') {
-        const config = getConfig();
-        const url = query.endpoint || config.ollama?.url;
-        if (!url) return { configured: false, error: 'Ollama URL not configured' };
-        try {
-          const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return { configured: false, error: `Ollama unreachable at ${url} (${res.status})` };
-          const data = await res.json();
-          const models = (data.models || []).map((m: { name: string; details?: { parameter_size?: string; family?: string } }) => ({
-            id: m.name,
-            label: m.name,
-            parameterSize: m.details?.parameter_size,
-          }));
-          return { configured: true, models };
-        } catch (err) {
-          return { configured: false, error: `Cannot reach Ollama at ${url}: ${(err as Error).message}` };
-        }
+      if (!getDiscoverableProviders().includes(provider)) {
+        return { configured: false, error: `Discovery not supported for provider: ${provider}` };
       }
 
-      // Cloud providers: check API key
-      const router = getProviderRouter();
-      const directProvider = router.getAllProviders().find(p => p.name === provider);
-      if (!directProvider) {
-        return { configured: false, error: `Unknown provider: ${provider}` };
+      const credsOverride = provider === 'ollama' && query.endpoint
+        ? { endpoint: query.endpoint }
+        : undefined;
+
+      const result = await discover(
+        provider,
+        {
+          includePreview: query.preview === 'true',
+          includeNonChat: query.embeddings === 'true',
+          bypassCache: query.refresh === 'true',
+        },
+        credsOverride,
+      );
+
+      if (result.source === 'unconfigured') {
+        return { configured: false, error: result.error };
       }
 
-      const health = await directProvider.checkHealth();
-      if (!health.healthy && health.error?.toLowerCase().includes('not configured')) {
-        return { configured: false, error: `${provider} API key not configured. Add it on the Secrets page.` };
-      }
-
-      // Merge built-in catalog with user-customized entries from settings
-      const builtIn = KNOWN_PROVIDER_MODELS[provider] || [];
-      let custom: KnownModel[] = [];
-      try {
-        const { getSettingsService } = await import('@/config/settings-service');
-        const svc = getSettingsService();
-        const raw = svc.getSync('models.catalog.' + provider) as KnownModel[] | undefined;
-        if (Array.isArray(raw)) custom = raw;
-      } catch (err) { coreLogger.error({ err }, 'silent failure in models'); }
-
-      // Custom entries override built-in by id, then append new ones
-      const builtInIds = new Set(builtIn.map(m => m.id));
-      const merged = [
-        ...builtIn.map(m => {
-          const override = custom.find(c => c.id === m.id);
-          return override ? { ...m, ...override } : m;
-        }),
-        ...custom.filter(c => !builtInIds.has(c.id)),
-      ];
-
-      return { configured: true, models: merged, source: 'known' };
+      return {
+        configured: true,
+        models: result.shortlist,
+        hiddenCount: result.hiddenCount,
+        lastFetched: result.lastFetched,
+        source: result.source,
+        error: result.error,
+      };
     },
     {
       params: t.Object({ provider: t.String() }),
-      query: t.Object({ endpoint: t.Optional(t.String()) }),
+      query: t.Object({
+        endpoint: t.Optional(t.String()),
+        preview: t.Optional(t.String()),
+        embeddings: t.Optional(t.String()),
+        refresh: t.Optional(t.String()),
+      }),
       detail: { tags: ['models'] },
     }
   )
