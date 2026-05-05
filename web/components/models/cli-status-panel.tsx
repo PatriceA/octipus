@@ -149,25 +149,38 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
               {tool.available && registered && (
                 <div className="flex items-center gap-2 pl-4 text-xs">
                   <label className="text-on-surface-variant shrink-0">Model:</label>
-                  <select
-                    value={currentModel}
-                    onChange={(e) => handleModelChange(tool, registered, e.target.value)}
-                    disabled={!onUpdate || options.length === 0}
-                    className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-white text-xs flex-1 max-w-xs"
-                  >
-                    <option value="">(vendor default)</option>
-                    {options.map(opt => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label} {opt.tier ? `· ${opt.tier}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                  {options.length > 0 ? (
+                    <select
+                      value={currentModel}
+                      onChange={(e) => handleModelChange(tool, registered, e.target.value)}
+                      disabled={!onUpdate}
+                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-white text-xs flex-1 max-w-xs"
+                    >
+                      <option value="">(vendor default)</option>
+                      {options.map(opt => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label} {opt.tier ? `· ${opt.tier}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      defaultValue={currentModel}
+                      onBlur={(e) => {
+                        if (e.target.value !== currentModel) handleModelChange(tool, registered, e.target.value);
+                      }}
+                      disabled={!onUpdate}
+                      placeholder="(vendor default)"
+                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-white text-xs flex-1 max-w-xs font-mono"
+                    />
+                  )}
                   {tool.modelFlag && (
                     <span className="text-[10px] text-on-surface-variant font-mono">→ {tool.modelFlag}</span>
                   )}
                   {options.length === 0 && provider && (
                     <span className="text-[10px] text-on-surface-variant">
-                      (configure {provider} API key for picker)
+                      (no {provider} key — type to set)
                     </span>
                   )}
                 </div>

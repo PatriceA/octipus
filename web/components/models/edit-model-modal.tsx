@@ -1,8 +1,28 @@
 'use client';
 
 import { Terminal, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS, type Model } from '@/lib/types/models';
+
+type CliKind = 'claude' | 'gemini' | 'codex' | null;
+
+function detectCliKind(modelId: string): CliKind {
+  const id = modelId.toLowerCase();
+  if (id.includes('claude')) return 'claude';
+  if (id.includes('gemini')) return 'gemini';
+  if (id.includes('codex')) return 'codex';
+  return null;
+}
+
+function cliProviderForKind(kind: CliKind): 'anthropic' | 'gemini' | 'openai' | null {
+  if (kind === 'claude') return 'anthropic';
+  if (kind === 'gemini') return 'gemini';
+  if (kind === 'codex') return 'openai';
+  return null;
+}
+
+interface DiscoveredModel { id: string; label: string; tier?: string }
 
 export interface EditModelModalProps {
   model: Model;
@@ -31,10 +51,32 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     cliMaxBudgetUsd: cliAgent.maxBudgetUsd ?? '',
     cliMcpConfigPath: cliAgent.mcpConfigPath || '',
     cliExtraArgs: (cliAgent.extraArgs || []).join(' '),
+    cliModel: cliAgent.model || '',
   });
   const [error, setError] = useState('');
+  const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
 
   const isCli = model.provider === 'cli';
+  const cliKind: CliKind = isCli ? detectCliKind(model.modelId) : null;
+  const cliProvider = cliProviderForKind(cliKind);
+
+  useEffect(() => {
+    if (!isCli || !cliProvider) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get<{ configured: boolean; models?: DiscoveredModel[] }>(
+          `/models/providers/${cliProvider}/available`
+        );
+        if (!cancelled && res?.configured && Array.isArray(res.models)) {
+          setDiscoveredCliModels(res.models);
+        }
+      } catch {
+        // No API key configured for the underlying provider — picker stays as a free-text input.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isCli, cliProvider]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,11 +107,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       if (isCli) {
         const cliAgentConfig: Record<string, unknown> = {};
         if (formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
-        if (formData.cliAllowedTools.trim()) {
-          cliAgentConfig.allowedTools = formData.cliAllowedTools.split(',').map(t => t.trim()).filter(Boolean);
-        }
-        if (formData.cliMaxBudgetUsd !== '') {
-          cliAgentConfig.maxBudgetUsd = Number(formData.cliMaxBudgetUsd);
+        if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
+        // Claude-only fields: only persist when applicable.
+        if (cliKind === 'claude') {
+          if (formData.cliAllowedTools.trim()) {
+            cliAgentConfig.allowedTools = formData.cliAllowedTools.split(',').map(t => t.trim()).filter(Boolean);
+          }
+          if (formData.cliMaxBudgetUsd !== '') {
+            cliAgentConfig.maxBudgetUsd = Number(formData.cliMaxBudgetUsd);
+          }
         }
         if (formData.cliMcpConfigPath) cliAgentConfig.mcpConfigPath = formData.cliMcpConfigPath;
         if (formData.cliExtraArgs.trim()) {
@@ -245,6 +291,33 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               </p>
 
               <div>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">
+                  Model {cliKind ? `(${cliKind})` : ''}
+                </label>
+                <input
+                  type="text"
+                  list={cliKind ? `cli-models-${cliKind}` : undefined}
+                  value={formData.cliModel}
+                  onChange={(e) => setFormData({ ...formData, cliModel: e.target.value })}
+                  placeholder="(vendor default)"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                />
+                {discoveredCliModels.length > 0 && cliKind && (
+                  <datalist id={`cli-models-${cliKind}`}>
+                    {discoveredCliModels.map(m => (
+                      <option key={m.id} value={m.id}>{m.label}{m.tier ? ` · ${m.tier}` : ''}</option>
+                    ))}
+                  </datalist>
+                )}
+                <p className="text-xs text-on-surface-variant mt-1">
+                  Pass-through to the CLI binary. Leave empty to use the vendor default.
+                  {discoveredCliModels.length === 0 && cliProvider && (
+                    <> Configure {cliProvider} API key on Secrets to populate suggestions.</>
+                  )}
+                </p>
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Permission Mode</label>
                 <select
                   value={formData.cliPermissionMode}
@@ -252,29 +325,41 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
                 >
                   <option value="">Default</option>
-                  <option value="bypassPermissions">Bypass Permissions (Claude)</option>
-                  <option value="yolo">YOLO (Gemini)</option>
-                  <option value="plan">Plan Only</option>
-                  <option value="acceptEdits">Accept Edits (Claude)</option>
-                  <option value="auto_edit">Auto Edit (Gemini)</option>
+                  {cliKind === 'claude' && <option value="bypassPermissions">Bypass Permissions</option>}
+                  {cliKind === 'claude' && <option value="acceptEdits">Accept Edits</option>}
+                  {cliKind === 'claude' && <option value="plan">Plan Only</option>}
+                  {cliKind === 'gemini' && <option value="yolo">YOLO</option>}
+                  {cliKind === 'gemini' && <option value="auto_edit">Auto Edit</option>}
+                  {cliKind === 'codex' && <option value="auto">Auto</option>}
+                  {!cliKind && (
+                    <>
+                      <option value="bypassPermissions">Bypass Permissions (Claude)</option>
+                      <option value="acceptEdits">Accept Edits (Claude)</option>
+                      <option value="plan">Plan Only (Claude)</option>
+                      <option value="yolo">YOLO (Gemini)</option>
+                      <option value="auto_edit">Auto Edit (Gemini)</option>
+                    </>
+                  )}
                 </select>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-on-surface-variant mb-1">
-                  Max Budget (USD per invocation)
-                </label>
-                <input
-                  type="number"
-                  step="0.10"
-                  min="0"
-                  value={formData.cliMaxBudgetUsd}
-                  onChange={(e) => setFormData({ ...formData, cliMaxBudgetUsd: e.target.value })}
-                  placeholder="No limit"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
-                />
-                <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Leave empty for no limit.</p>
-              </div>
+              {cliKind === 'claude' && (
+                <div>
+                  <label className="block text-sm font-medium text-on-surface-variant mb-1">
+                    Max Budget (USD per invocation)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.10"
+                    min="0"
+                    value={formData.cliMaxBudgetUsd}
+                    onChange={(e) => setFormData({ ...formData, cliMaxBudgetUsd: e.target.value })}
+                    placeholder="No limit"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                  />
+                  <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Leave empty for no limit.</p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">MCP Config Path</label>
@@ -287,17 +372,19 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-on-surface-variant mb-1">Allowed Tools</label>
-                <input
-                  type="text"
-                  value={formData.cliAllowedTools}
-                  onChange={(e) => setFormData({ ...formData, cliAllowedTools: e.target.value })}
-                  placeholder="Bash, Read, Edit, WebSearch"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
-                />
-                <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Comma-separated. Empty = all tools.</p>
-              </div>
+              {cliKind === 'claude' && (
+                <div>
+                  <label className="block text-sm font-medium text-on-surface-variant mb-1">Allowed Tools</label>
+                  <input
+                    type="text"
+                    value={formData.cliAllowedTools}
+                    onChange={(e) => setFormData({ ...formData, cliAllowedTools: e.target.value })}
+                    placeholder="Bash, Read, Edit, WebSearch"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                  />
+                  <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Comma-separated. Empty = all tools.</p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Extra CLI Arguments</label>
