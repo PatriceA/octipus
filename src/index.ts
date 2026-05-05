@@ -132,6 +132,18 @@ async function main() {
     await startServer();
     logger.info('API server started');
 
+    // Mint / refresh the MCP bootstrap api token when multi-user is on so
+    // bin/octi can stamp it into .mcp.json instead of MASTER_KEY.
+    try {
+      const { getConfig } = await import('@/config');
+      if (getConfig().multiuser?.enabled) {
+        const { ensureMcpBootstrapToken } = await import('@/security/mcp-token-bootstrap');
+        await ensureMcpBootstrapToken();
+      }
+    } catch (err) {
+      logger.error({ err }, 'MCP token bootstrap failed (non-fatal)');
+    }
+
     // Start recurring task scheduler
     startCronLoop();
     logger.info('Cron scheduler started');

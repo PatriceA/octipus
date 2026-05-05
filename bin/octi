@@ -125,6 +125,56 @@ open_browser() {
   esac
 }
 
+regen_mcp_config() {
+  # Re-stamps .mcp.json + the user-scope `gemini mcp` registration with
+  # the freshest API key. Called twice during start: once before
+  # launching the backend (so single-user / legacy installs still get
+  # MASTER_KEY wired up immediately) and once after it's healthy
+  # (multi-user backends mint ~/.octipus/mcp-token at boot, which only
+  # exists after the API server reports healthy).
+  if [[ ! -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
+    return 0
+  fi
+  local _mcp_token_path="$HOME/.octipus/mcp-token"
+  local _mcp_key=""
+  if [[ -f "$_mcp_token_path" ]]; then
+    _mcp_key=$(head -n1 "$_mcp_token_path" 2>/dev/null | tr -d '\r\n' || true)
+  fi
+  if [[ -z "$_mcp_key" ]]; then
+    if [[ -z "${MASTER_KEY:-}" && -f "$PROJECT_DIR/.env" ]]; then
+      MASTER_KEY=$(grep -E '^MASTER_KEY=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
+    fi
+    _mcp_key="${MASTER_KEY:-}"
+  fi
+  local _mcp_entry="$PROJECT_DIR/mcp-server/dist/index.js"
+  local _env_block=""
+  if [[ -n "$_mcp_key" ]]; then
+    _env_block=",\"OCTIPUS_API_KEY\":\"${_mcp_key}\""
+  fi
+  cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
+{
+  "mcpServers": {
+    "octipus": {
+      "command": "node",
+      "args": ["${_mcp_entry}"],
+      "env": {
+        "OCTIPUS_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
+      }
+    }
+  }
+}
+MCPEOF
+  if command -v gemini &>/dev/null; then
+    # Re-register so the gemini CLI picks up the rotated key. Best
+    # effort — the CLI is optional.
+    gemini mcp remove octipus -s user >/dev/null 2>&1 || true
+    gemini mcp add octipus node "$_mcp_entry" \
+      -s user --trust \
+      -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
+      ${_mcp_key:+-e "OCTIPUS_API_KEY=${_mcp_key}"} >/dev/null 2>&1 || true
+  fi
+}
+
 wait_for_health() {
   local url="$1"
   local max_attempts="${2:-30}"
@@ -418,47 +468,8 @@ cmd_start() {
     cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
 
-    # Read MASTER_KEY from .env if not already in environment
-    if [[ -z "${MASTER_KEY:-}" && -f "$PROJECT_DIR/.env" ]]; then
-      MASTER_KEY=$(grep -E '^MASTER_KEY=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
-    fi
-
-    # Generate .mcp.json with current MASTER_KEY and correct paths (cross-platform)
-    if [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
-      local _mcp_entry="$PROJECT_DIR/mcp-server/dist/index.js"
-      local _mcp_key="${MASTER_KEY:-}"
-      local _env_block=""
-      if [[ -n "$_mcp_key" ]]; then
-        _env_block=",\"OCTIPUS_API_KEY\":\"${_mcp_key}\""
-      fi
-      cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
-{
-  "mcpServers": {
-    "octipus": {
-      "command": "node",
-      "args": ["${_mcp_entry}"],
-      "env": {
-        "OCTIPUS_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
-      }
-    }
-  }
-}
-MCPEOF
-      log_info ".mcp.json generated with current API key"
-    fi
-
-    # Auto-register with Gemini CLI (if installed, idempotent)
-    if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
-      if ! gemini mcp list 2>/dev/null | grep -q "octipus:"; then
-        local _mkey="${MASTER_KEY:-}"
-        gemini mcp add octipus node "$PROJECT_DIR/mcp-server/dist/index.js" \
-          -s user --trust \
-          -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
-          ${_mkey:+-e "OCTIPUS_API_KEY=${_mkey}"} >/dev/null 2>&1 \
-          && log_info "Gemini CLI: MCP server registered" \
-          || true
-      fi
-    fi
+    regen_mcp_config
+    log_info ".mcp.json generated"
   fi
 
   # Start backend
@@ -477,6 +488,9 @@ MCPEOF
   log_step "Waiting for backend to be ready..."
   if wait_for_health "http://localhost:$API_PORT/api/health" 60; then
     log_info "Backend is ready on port $API_PORT"
+    # The backend just minted ~/.octipus/mcp-token (multi-user mode);
+    # restamp .mcp.json so MCP clients pick it up without a manual step.
+    regen_mcp_config
   else
     # Backend didn't come up — diagnose and bail
     kill_tracked "$PID_FILE_BACKEND" "backend"
@@ -626,47 +640,8 @@ cmd_restart() {
     cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
 
-    # Read MASTER_KEY from .env if not already in environment
-    if [[ -z "${MASTER_KEY:-}" && -f "$PROJECT_DIR/.env" ]]; then
-      MASTER_KEY=$(grep -E '^MASTER_KEY=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
-    fi
-
-    # Generate .mcp.json with current MASTER_KEY and correct paths (cross-platform)
-    if [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
-      local _mcp_entry="$PROJECT_DIR/mcp-server/dist/index.js"
-      local _mcp_key="${MASTER_KEY:-}"
-      local _env_block=""
-      if [[ -n "$_mcp_key" ]]; then
-        _env_block=",\"OCTIPUS_API_KEY\":\"${_mcp_key}\""
-      fi
-      cat > "$PROJECT_DIR/.mcp.json" <<MCPEOF
-{
-  "mcpServers": {
-    "octipus": {
-      "command": "node",
-      "args": ["${_mcp_entry}"],
-      "env": {
-        "OCTIPUS_URL": "http://127.0.0.1:${API_PORT}"${_env_block}
-      }
-    }
-  }
-}
-MCPEOF
-      log_info ".mcp.json generated with current API key"
-    fi
-
-    # Auto-register with Gemini CLI (if installed, idempotent)
-    if command -v gemini &>/dev/null && [[ -f "$PROJECT_DIR/mcp-server/dist/index.js" ]]; then
-      if ! gemini mcp list 2>/dev/null | grep -q "octipus:"; then
-        local _mkey="${MASTER_KEY:-}"
-        gemini mcp add octipus node "$PROJECT_DIR/mcp-server/dist/index.js" \
-          -s user --trust \
-          -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
-          ${_mkey:+-e "OCTIPUS_API_KEY=${_mkey}"} >/dev/null 2>&1 \
-          && log_info "Gemini CLI: MCP server registered" \
-          || true
-      fi
-    fi
+    regen_mcp_config
+    log_info ".mcp.json generated"
   fi
 
   # Start backend
@@ -684,6 +659,9 @@ MCPEOF
   log_step "Waiting for backend to be ready..."
   if wait_for_health "http://localhost:$API_PORT/api/health" 60; then
     log_info "Backend is ready on port $API_PORT"
+    # The backend just minted ~/.octipus/mcp-token (multi-user mode);
+    # restamp .mcp.json so MCP clients pick it up without a manual step.
+    regen_mcp_config
   else
     kill_tracked "$PID_FILE_BACKEND" "backend"
     diagnose_backend_failure

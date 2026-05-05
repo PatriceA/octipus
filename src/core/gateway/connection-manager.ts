@@ -286,15 +286,47 @@ export class ConnectionManager {
         }
 
         case 'api_key': {
-          // API key auth — validated against master key or user API keys
+          // API key auth — accepts either:
+          //   1. A personal api token (`octi_…`) issued via Settings →
+          //      API Tokens. Checked against the api_tokens table.
+          //   2. The bootstrap MASTER_KEY (only when multi-user is off).
+          //
+          // The browser extension and any third-party WS client should
+          // use a personal token; MASTER_KEY support stays for
+          // single-user installs that explicitly disabled multi-user.
           const key = msg.credentials.key as string;
           if (!key) {
             this.sendAuthError(conn, 'Missing API key');
             return;
           }
-          // Check against MASTER_KEY as fallback
+          const { getApiTokenManager, looksLikeApiToken } = await import('@/security/api-tokens');
+          const { getDb } = await import('@/db');
+          const { users } = await import('@/db/schema/users');
+          const { eq } = await import('drizzle-orm');
+          if (looksLikeApiToken(key)) {
+            const validated = await getApiTokenManager().validate(key);
+            if (validated) {
+              const [u] = await getDb()
+                .select({ id: users.id, isAdmin: users.isAdmin })
+                .from(users)
+                .where(eq(users.id, validated.userId))
+                .limit(1);
+              if (u) {
+                userId = u.id;
+                trustLevel = u.isAdmin ? 'system' : 'user';
+                isAdmin = u.isAdmin;
+                break;
+              }
+            }
+            this.sendAuthError(conn, 'Invalid API key');
+            return;
+          }
+          // Legacy MASTER_KEY — only honored when multi-user is off so
+          // an attacker can't bypass the per-user scope by guessing it.
+          const { getConfig } = await import('@/config');
+          const multiuserOn = !!getConfig().multiuser?.enabled;
           const masterKey = process.env.MASTER_KEY;
-          if (masterKey && key === masterKey) {
+          if (!multiuserOn && masterKey && key === masterKey) {
             userId = 'system';
             trustLevel = 'system';
             isAdmin = true;

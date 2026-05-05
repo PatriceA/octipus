@@ -7,6 +7,55 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Multi-user is the default
+
+Multi-user isolation (`multiuser.enabled`, `enforcePermissions`,
+`orgWorkspaces`) flipped from opt-in to default-on. The
+`MASTER_KEY` Bearer fallback is suppressed by default — every
+HTTP and WebSocket request now must carry either a real session
+token (cookie, after logging in) or a personal `octi_…` api
+token. Existing installs that want the legacy single-user path
+can set `MULTIUSER=false` in `.env`.
+
+#### Master key role
+- Stays as the **vault encryption root** (HKDF derives per-user
+  DEKs from it). Rotating the master key still goes through
+  `scripts/rotate-vault-keys.ts`.
+- No longer authenticates HTTP / WS clients on its own. The
+  Bearer fallback remains only when `multiuser.enabled=false`.
+
+#### MCP / CLI clients — automatic bootstrap token
+- On startup (when multi-user is on), the backend mints a
+  personal api token named `mcp-bootstrap` for the first active
+  admin user and writes the plaintext to `~/.octipus/mcp-token`
+  (mode 600). Idempotent — a second restart keeps the existing
+  token if the file + DB row are still valid.
+- `bin/octi` now reads `~/.octipus/mcp-token` first when
+  regenerating `.mcp.json` and the user-scope `gemini mcp`
+  registration. The .mcp.json regen is called twice during
+  `octi start` — once before launching the backend (so legacy
+  installs still work) and once after backend health (so the
+  freshly minted bootstrap token lands in the file). Rotating
+  the MCP key is now `rm ~/.octipus/mcp-token` then
+  `octi restart`.
+
+#### WebSocket gateway accepts api-tokens
+- `connection-manager.ts:auth_method=api_key` previously matched
+  only against `MASTER_KEY`. It now validates `octi_…` tokens
+  against the `api_tokens` table (the same path the REST `.derive`
+  middleware uses) and only honors `MASTER_KEY` when multi-user
+  is off. The browser extension's WS connection now works with
+  any personal api token from Settings → API Tokens.
+
+#### Bug fixes from the QA exercise
+See the previous Unreleased entries — this release rolls them in:
+session 404 status leak, missing `multiuser.orgWorkspaces` registry
+entry, env-var fallback dead in `settings-service.warmCache`, admin
+sidebar nav, impersonation banner placement, and `session.token`
+splicing for `/admin/impersonate/*`.
+
+
+
 ### TUI rewrite on pi-tui
 
 Both terminal surfaces — the chat shell (`octi tui`,

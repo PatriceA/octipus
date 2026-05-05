@@ -74,11 +74,15 @@ export const defaultConfig: Partial<Config> = {
     orchestratorHookTimeoutMs: 2700000,
   },
   multiuser: {
-    enabled: false,
+    // Multi-user is the default since v0.3 — the legacy single-user
+    // path with MASTER_KEY Bearer auth is still reachable by setting
+    // MULTIUSER=false in .env, but new installs go straight onto the
+    // scoped-repos + api-tokens stack.
+    enabled: true,
     auditShadow: true,
-    enforcePermissions: false,
-    rlsEnabled: false,
-    orgWorkspaces: false,
+    enforcePermissions: true,
+    rlsEnabled: false,           // requires non-superuser app role; opt-in
+    orgWorkspaces: true,
   },
   workspace: {
     rootPath: './workspace',
