@@ -1,6 +1,6 @@
 'use client';
 
-import { Brain, Cpu, Database, Layers, RefreshCw, Server, Sparkles, Zap } from 'lucide-react';
+import { Brain, Compass, Cpu, Database, Globe, Layers, RefreshCw, Rocket, Server, Settings2, Sparkles, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface ServiceHealth {
@@ -19,19 +19,27 @@ interface HealthStatusProps {
     anthropic: ServiceHealth;
     gemini: ServiceHealth;
     deepseek: ServiceHealth;
+    grok: ServiceHealth;
+    voyage: ServiceHealth;
+    openrouter: ServiceHealth;
+    custom: ServiceHealth;
   };
   isFetching?: boolean;
 }
 
 const SERVICE_CONFIG = [
   { key: 'database', label: 'PostgreSQL', icon: Database, description: 'Primary database' },
-  { key: 'redis', label: 'Redis', icon: Server, description: 'Cache & sessions' },
+  { key: 'redis', label: 'Valkey', icon: Server, description: 'Cache & sessions' },
   { key: 'litellm', label: 'LiteLLM', icon: Layers, description: 'Model proxy' },
   { key: 'ollama', label: 'Ollama', icon: Cpu, description: 'Local models' },
   { key: 'openai', label: 'OpenAI', icon: Zap, description: 'GPT models' },
   { key: 'anthropic', label: 'Anthropic', icon: Brain, description: 'Claude models' },
   { key: 'gemini', label: 'Gemini', icon: Sparkles, description: 'Google AI' },
   { key: 'deepseek', label: 'DeepSeek', icon: Layers, description: 'DeepSeek models' },
+  { key: 'grok', label: 'Grok (xAI)', icon: Rocket, description: 'xAI Grok models' },
+  { key: 'voyage', label: 'Voyage', icon: Compass, description: 'Embeddings' },
+  { key: 'openrouter', label: 'OpenRouter', icon: Globe, description: 'Model gateway' },
+  { key: 'custom', label: 'Custom', icon: Settings2, description: 'Custom endpoints' },
 ] as const;
 
 export function HealthStatus({ health, isFetching }: HealthStatusProps) {

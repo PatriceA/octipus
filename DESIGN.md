@@ -108,7 +108,7 @@ Octipus should be fully usable with:
 
 - Local models via Ollama
 - Embedded PostgreSQL (PGlite) instead of a real DB
-- In-memory cache instead of Redis
+- In-memory cache instead of Valkey (Redis-compatible)
 - No external API keys at all
 
 Cloud providers are upgrades, not requirements. A new feature that only works with a specific cloud provider is suspicious.

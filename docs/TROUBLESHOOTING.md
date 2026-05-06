@@ -66,12 +66,12 @@ docker compose up -d db
 docker exec <db-container> psql -U <user> -d octipus -c "SELECT 1;"
 ```
 
-## Redis Connection Failed
+## Valkey Connection Failed
 
 ```bash
-cd ~/docker-services && docker compose ps redis
-docker compose up -d redis
-docker exec <redis-container> redis-cli ping
+cd ~/docker-services && docker compose ps valkey
+docker compose up -d valkey
+docker exec <valkey-container> valkey-cli ping
 ```
 
 ## LiteLLM Not Running

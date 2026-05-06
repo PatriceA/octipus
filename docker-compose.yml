@@ -14,8 +14,8 @@ services:
     environment:
       # Database — hardcoded to Docker service names (overrides .env.docker)
       - DATABASE_URL=postgresql://octipus:${POSTGRES_PASSWORD:-octipus}@octipus-db:5432/octipus
-      # Redis
-      - REDIS_URL=redis://octipus-redis:6379
+      # Valkey (Redis-compatible) — REDIS_URL var name kept for code/lib compat
+      - REDIS_URL=redis://octipus-valkey:6379
       # Security
       - MASTER_KEY=${MASTER_KEY}
       - JWT_SECRET=${JWT_SECRET}
@@ -45,7 +45,7 @@ services:
     depends_on:
       octipus-db:
         condition: service_healthy
-      octipus-redis:
+      octipus-valkey:
         condition: service_healthy
 
   octipus-db:
@@ -66,23 +66,24 @@ services:
       timeout: 3s
       retries: 5
 
-  octipus-redis:
-    image: redis:7-alpine
-    container_name: octipus-redis
+  octipus-valkey:
+    image: valkey/valkey:7.2-alpine
+    container_name: octipus-valkey
     restart: unless-stopped
+    command: valkey-server --appendonly yes
     volumes:
-      - octipus-redis:/data
+      - octipus-valkey:/data
     ports:
       - "${REDIS_PORT:-6389}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
 volumes:
   octipus-pgdata:
-  octipus-redis:
+  octipus-valkey:
   octipus-workspace:
   octipus-documents:
   octipus-extensions:

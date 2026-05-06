@@ -157,13 +157,13 @@ if "!STORAGE_MODE!"=="external" (
     )
     echo   %GREEN%v%NC% PostgreSQL is reachable
 
-    call :check_port 6379
+    call :check_port 6380
     if errorlevel 1 (
-        echo   %RED%x%NC% Redis not reachable on port 6379
-        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d redis%NC%
+        echo   %RED%x%NC% Valkey not reachable on port 6380
+        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d valkey%NC%
         exit /b 1
     )
-    echo   %GREEN%v%NC% Redis is reachable
+    echo   %GREEN%v%NC% Valkey is reachable
 ) else (
     echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-memory cache^)%NC%
 )
@@ -294,13 +294,13 @@ if "!STORAGE_MODE!"=="external" (
     )
     echo   %GREEN%v%NC% PostgreSQL is reachable
 
-    call :check_port 6379
+    call :check_port 6380
     if errorlevel 1 (
-        echo   %RED%x%NC% Redis not reachable on port 6379
-        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d redis%NC%
+        echo   %RED%x%NC% Valkey not reachable on port 6380
+        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d valkey%NC%
         exit /b 1
     )
-    echo   %GREEN%v%NC% Redis is reachable
+    echo   %GREEN%v%NC% Valkey is reachable
 ) else (
     echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-memory cache^)%NC%
 )
@@ -402,11 +402,11 @@ if "!STORAGE_MODE!"=="external" (
         echo   %GREEN%v%NC% PostgreSQL: reachable %DIM%(port 5432^)%NC%
     )
 
-    call :check_port 6379
+    call :check_port 6380
     if errorlevel 1 (
-        echo   %RED%x%NC% Redis: not reachable
+        echo   %RED%x%NC% Valkey: not reachable
     ) else (
-        echo   %GREEN%v%NC% Redis: reachable %DIM%(port 6379^)%NC%
+        echo   %GREEN%v%NC% Valkey: reachable %DIM%(port 6380^)%NC%
     )
 ) else (
     echo   %GREEN%v%NC% PGlite:     embedded database

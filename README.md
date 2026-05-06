@@ -41,7 +41,7 @@ Channels → Gateway (WebSocket, typed Zod protocol)
             → Agents (3-level Swarm: Orchestrator → Agent → Subagent)
               → Tools / Skills / Experts / Pipelines
                 → Models (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LiteLLM, CLI)
-                  → Postgres + pgvector + Redis (or PGlite + in-memory for embedded)
+                  → Postgres + pgvector + Valkey (or PGlite + in-memory for embedded)
 ```
 
 **Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
@@ -101,7 +101,7 @@ bun run dev
 Open [http://localhost:3005/setup](http://localhost:3005/setup) to finish configuration.
 
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
-**External Postgres + Redis:** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+**External Postgres + Valkey (Redis-compatible):** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 Requirements: **Bun ≥ 1.1**, **Node ≥ 18**, **Docker** (for the full stack), **Postgres 15** (external mode).
 

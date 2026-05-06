@@ -348,13 +348,13 @@ diagnose_backend_failure() {
     log_info "PostgreSQL is reachable"
   fi
 
-  # Check Redis
-  if ! check_service "localhost" "6379"; then
-    log_error "Redis is not reachable on port 6379"
-    log_hint "Run: cd ~/docker-services && docker compose up -d redis"
+  # Check Valkey
+  if ! check_service "localhost" "6380"; then
+    log_error "Valkey is not reachable on port 6380"
+    log_hint "Run: cd ~/docker-services && docker compose up -d valkey"
     issues=$((issues + 1))
   else
-    log_info "Redis is reachable"
+    log_info "Valkey is reachable"
   fi
 
   # Check .env
@@ -445,11 +445,11 @@ cmd_start() {
       services_ok=false
     fi
 
-    if check_service "localhost" "6379"; then
-      log_info "Redis is reachable"
+    if check_service "localhost" "6380"; then
+      log_info "Valkey is reachable"
     else
-      log_error "Redis not reachable on port 6379"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d redis"
+      log_error "Valkey not reachable on port 6380"
+      log_hint "Start it: cd ~/docker-services && docker compose up -d valkey"
       services_ok=false
     fi
 
@@ -617,11 +617,11 @@ cmd_restart() {
       services_ok=false
     fi
 
-    if check_service "localhost" "6379"; then
-      log_info "Redis is reachable"
+    if check_service "localhost" "6380"; then
+      log_info "Valkey is reachable"
     else
-      log_error "Redis not reachable on port 6379"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d redis"
+      log_error "Valkey not reachable on port 6380"
+      log_hint "Start it: cd ~/docker-services && docker compose up -d valkey"
       services_ok=false
     fi
 
@@ -745,11 +745,11 @@ cmd_status() {
       log_hint "cd ~/docker-services && docker compose up -d db"
     fi
 
-    if check_service "localhost" "6379"; then
-      log_info "Redis:      reachable (port 6379)"
+    if check_service "localhost" "6380"; then
+      log_info "Valkey:     reachable (port 6380)"
     else
-      log_error "Redis:      not reachable"
-      log_hint "cd ~/docker-services && docker compose up -d redis"
+      log_error "Valkey:     not reachable"
+      log_hint "cd ~/docker-services && docker compose up -d valkey"
     fi
   else
     log_info "PGlite:     embedded database"

@@ -8,7 +8,7 @@ Octipus runs as a multi-container Docker application with three services:
 |---------|-------|---------|
 | `octipus-app` | Custom (Bun + Next.js) | API backend + web frontend |
 | `octipus-db` | pgvector/pgvector:pg16 | PostgreSQL with vector extensions |
-| `octipus-redis` | redis:7-alpine | Caching and pub/sub |
+| `octipus-valkey` | valkey/valkey:7.2-alpine | Caching and pub/sub (Redis-compatible) |
 
 ## Quick Start
 
@@ -30,7 +30,7 @@ docker compose logs -f octipus
 | API | 3015 | `OCTIPUS_API_PORT` |
 | Web UI | 3017 | `OCTIPUS_WEB_PORT` |
 | PostgreSQL | 5442 | `POSTGRES_PORT` |
-| Redis | 6389 | `REDIS_PORT` |
+| Valkey | 6389 | `REDIS_PORT` |
 
 ## Volumes
 
@@ -40,7 +40,7 @@ docker compose logs -f octipus
 | `octipus-documents` | `/data/documents` | Uploaded documents |
 | `octipus-extensions` | `/data/extensions` | Plugins and extensions |
 | `octipus-pgdata` | PostgreSQL data | Database persistence |
-| `octipus-redis` | Redis data | Cache persistence |
+| `octipus-valkey` | Valkey data | Cache persistence |
 
 ## Installed CLI Tools
 
@@ -70,7 +70,7 @@ Docker containers are isolated from the host system. This affects what Octipus c
 | **Browser Extension** | Works. The browser extension runs in the **user's real browser** on the host and connects to the container's WebSocket endpoint (`ws://localhost:{API_PORT}/ws/browser-bridge`). No special Docker configuration needed. |
 | **Playwright** | Headless browser runs inside the container. Useful for web scraping and automation that doesn't need user sessions. Requires chromium installation (`bunx playwright install chromium --with-deps`). |
 | **Database** | Full PostgreSQL with pgvector. Accessible from the container and optionally from the host via the exposed port. |
-| **Redis** | Full Redis access for caching and pub/sub. |
+| **Valkey** | Full Valkey (Redis-compatible) access for caching and pub/sub. |
 | **MCP Servers** | MCP servers using SSE transport work (network-accessible). Stdio-based MCP servers must be installed inside the container. |
 | **Network** | Full outbound network access. Can reach external APIs, webhooks, etc. |
 

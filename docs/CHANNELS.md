@@ -307,7 +307,7 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=         # Business Account ID (optional)
 
 - Link codes expire after 5 minutes — generate a new one
 - Ensure the web account is logged in before entering the code
-- Check that Redis is running (link codes are stored in Redis)
+- Check that Valkey is running (link codes are stored in Valkey)
 
 ### Permission requests in channels
 

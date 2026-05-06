@@ -50,7 +50,7 @@ octipus/
 | `bun run db:generate` | Generate migrations from schema changes |
 | `bun run db:studio` | Open Drizzle Studio |
 | `bun run setup` | Interactive setup wizard |
-| `bun run backup` | Backup database, Redis, config, vault |
+| `bun run backup` | Backup database, Valkey, config, vault |
 
 ## Running Tests
 
@@ -81,7 +81,7 @@ Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`, or create via API (`P
 | Backend | Elysia |
 | ORM | Drizzle |
 | Database | PostgreSQL + pgvector |
-| Cache | Redis (ioredis) |
+| Cache | Valkey (Redis-compatible, via ioredis client) |
 | Web UI | Next.js 14, React 18, Tailwind CSS |
 | LLM Client | OpenAI SDK (via LiteLLM proxy) |
 | Channels | grammY (Telegram), Bolt.js (Slack), Bot Framework (Teams), WhatsApp Cloud API |
