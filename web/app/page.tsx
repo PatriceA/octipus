@@ -27,6 +27,10 @@ interface HealthData {
     anthropic: ServiceHealth;
     gemini: ServiceHealth;
     deepseek: ServiceHealth;
+    grok: ServiceHealth;
+    voyage: ServiceHealth;
+    openrouter: ServiceHealth;
+    custom: ServiceHealth;
   };
   agents?: { running: number; total: number };
 }
@@ -48,7 +52,7 @@ export default function DashboardPage() {
     refetchInterval: (query) => {
       const h = query.state.data?.health;
       if (!h) return 3000; // No data yet — poll fast
-      const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek]
+      const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.voyage, h.openrouter, h.custom]
         .map(s => s?.status)
         .filter(s => s && s !== 'not_configured');
       const allHealthy = statuses.every(s => s === 'healthy');
