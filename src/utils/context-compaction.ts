@@ -215,6 +215,8 @@ export interface CreateLLMSummaryOptions {
   previousFileOps?: { read: string[]; written: string[]; edited: string[] };
   /** Free-form `/compact <instructions>` payload. */
   userInstructions?: string;
+  /** Calling user — threaded so providers can resolve user-scoped vault keys. */
+  userId?: string;
 }
 
 export interface CreateLLMSummaryResult {
@@ -264,6 +266,7 @@ export async function createLLMSummary(
 
     const result = await client.complete({
       model: summaryModel,
+      userId: options?.userId,
       messages: [
         {
           role: 'system',
@@ -366,6 +369,7 @@ export async function compactMessagesWithSummary(
       previousSummary: options.previousSummary,
       previousFileOps: options.previousFileOps,
       userInstructions: options.userInstructions,
+      userId: options.userId,
     });
     summary = result.message;
     summaryText = result.summaryText;

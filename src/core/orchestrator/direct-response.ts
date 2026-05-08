@@ -108,6 +108,7 @@ export async function directResponse(
       temperature: 0.7,
       maxTokens: 512,
       extraBody: modelMeta?.extraBody,
+      userId,
     });
 
     const tokens = result.usage?.totalTokens || 0;

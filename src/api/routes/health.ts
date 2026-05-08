@@ -41,23 +41,47 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         }));
       };
 
+      /**
+       * Health probe for custom-* providers. Custom endpoints don't expose a
+       * uniform health/models route, so we just verify TCP/TLS reachability:
+       * any HTTP response (incl. 4xx) means the host is up and routable.
+       * Only network errors (DNS, refused, timeout) mark the endpoint unhealthy.
+       *
+       * Probes each unique base URL across all configured custom-openai /
+       * custom-gemini models (so multiple models on the same host aren't
+       * probed N times).
+       */
       const customCheck = async () => {
         try {
           const registry = getModelRegistry();
           const models = await registry.getAllModels();
-          const customModels = models.filter((m) => m.provider === 'custom' && m.endpoint);
+          const customModels = models.filter(
+            (m) => (m.provider === 'custom-openai' || m.provider === 'custom-gemini') && m.endpoint,
+          );
           if (customModels.length === 0) {
             return { service: 'custom', status: 'not_configured' as const, message: 'No custom endpoints registered', lastChecked: new Date() };
           }
-          // Probe the first custom endpoint's /models route. Network errors → unhealthy.
+
+          const uniqueBases = Array.from(new Set(customModels.map((m) => m.endpoint!.replace(/\/+$/, ''))));
           const start = Date.now();
-          const target = customModels[0].endpoint!.replace(/\/+$/, '');
-          const res = await fetch(`${target}/models`, { signal: AbortSignal.timeout(5000) });
+          const probes = await Promise.allSettled(
+            uniqueBases.map(async (base) => {
+              const res = await fetch(base, { method: 'HEAD', signal: AbortSignal.timeout(5000), redirect: 'manual' })
+                .catch(() => fetch(base, { method: 'GET', signal: AbortSignal.timeout(5000), redirect: 'manual' }));
+              return { base, ok: !!res, status: res?.status };
+            }),
+          );
+
+          const reachable = probes.filter((p) => p.status === 'fulfilled' && p.value.ok).length;
+          const total = uniqueBases.length;
+          const allReachable = reachable === total;
+          const noneReachable = reachable === 0;
+
           return {
             service: 'custom',
-            status: res.ok ? ('healthy' as const) : ('unhealthy' as const),
+            status: allReachable ? ('healthy' as const) : noneReachable ? ('unhealthy' as const) : ('degraded' as const),
             latency: Date.now() - start,
-            message: res.ok ? `${customModels.length} endpoint(s)` : `HTTP ${res.status}`,
+            message: `${reachable}/${total} endpoint${total === 1 ? '' : 's'} reachable (${customModels.length} model${customModels.length === 1 ? '' : 's'})`,
             lastChecked: new Date(),
           };
         } catch (e) {

@@ -11,6 +11,34 @@ import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { coreLogger } from '@/utils/logger';
 
+/**
+ * Resolve a custom-provider API key from an apiKeyRef.
+ * Mirrors BaseCustomProvider.resolveApiKey but used at the API layer
+ * for the test-model endpoint (where the provider hasn't been called yet).
+ *
+ * Lookup order: env: prefix → user's vault → system vault.
+ */
+async function resolveCustomApiKey(
+  apiKeyRef: string | undefined,
+  userId?: string,
+): Promise<string | null> {
+  if (!apiKeyRef) return null;
+  if (apiKeyRef.startsWith('env:')) {
+    return process.env[apiKeyRef.slice(4)] || null;
+  }
+  try {
+    const { getVault } = await import('@/security/vault');
+    const vault = getVault();
+    if (userId && userId !== 'system') {
+      const v = await vault.getByName(userId, apiKeyRef);
+      if (v) return v;
+    }
+    return (await vault.getByName('system', apiKeyRef)) || null;
+  } catch {
+    return null;
+  }
+}
+
 // ── OpenRouter live model search cache ──────────────────────────────
 interface OpenRouterApiModel {
   id: string;
@@ -89,6 +117,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           provider: m.provider,
           modelId: m.modelId,
           endpoint: m.endpoint,
+          apiKeyRef: m.apiKeyRef,
           maxTokens: m.maxTokens,
           contextWindow: m.contextWindow,
           supportsVision: m.supportsVision,
@@ -144,6 +173,8 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
 
       const { provider, modelId, endpoint } = body;
+      const apiKeyRef = (body as { apiKeyRef?: string }).apiKeyRef;
+      const metadata = (body as { metadata?: { customProvider?: import('@/db/schema/models').CustomProviderConfig } }).metadata;
 
       try {
         if (provider === 'ollama') {
@@ -228,6 +259,56 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           const testData = await testRes.json();
           const reply = testData.message?.content || '';
           return { success: true, message: `Model responded: "${reply.slice(0, 100)}"` };
+
+        } else if (provider === 'custom-openai' || provider === 'custom-gemini') {
+          // Custom providers — model row may not exist yet (test happens
+          // before save). Resolve API key from apiKeyRef and call the provider
+          // with a customProviderOverride so it skips the DB lookup.
+          if (!endpoint) {
+            return { success: false, error: 'Endpoint URL is required for custom providers' };
+          }
+          if (!metadata?.customProvider) {
+            return { success: false, error: 'metadata.customProvider config is required for custom providers' };
+          }
+
+          const apiKey = await resolveCustomApiKey(apiKeyRef, user?.id);
+          if (!apiKey) {
+            return {
+              success: false,
+              error: `Could not resolve API key (apiKeyRef='${apiKeyRef ?? '<none>'}'). Use 'env:VAR_NAME' or store in vault.`,
+            };
+          }
+
+          const router = getProviderRouter();
+          const directProvider = router.getAllProviders().find(p => p.name === provider);
+          if (!directProvider) {
+            return { success: false, error: `Provider '${provider}' not registered` };
+          }
+
+          try {
+            const result = await directProvider.complete({
+              model: modelId,
+              messages: [{ role: 'user', content: 'Say ok', timestamp: new Date() }],
+              maxTokens: 16,
+              temperature: 0,
+              customProviderOverride: {
+                baseUrl: endpoint,
+                apiKey,
+                modelId,
+                custom: metadata.customProvider,
+              },
+            });
+            const reply = result.content || '';
+            return {
+              success: true,
+              message: `Model responded: "${reply.slice(0, 100)}"`,
+            };
+          } catch (directErr) {
+            return {
+              success: false,
+              error: `Direct ${provider} test failed: ${(directErr as Error).message}`,
+            };
+          }
 
         } else if (provider === 'cli') {
           // CLI models — check if binary exists
@@ -315,6 +396,8 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         provider: t.String(),
         modelId: t.String(),
         endpoint: t.Optional(t.String()),
+        apiKeyRef: t.Optional(t.String()),
+        metadata: t.Optional(t.Any()),
       }),
       detail: { tags: ['models'] },
     }
@@ -370,6 +453,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         priority: t.Optional(t.Number()),
         costPerInputToken: t.Optional(t.Number()),
         costPerOutputToken: t.Optional(t.Number()),
+        metadata: t.Optional(t.Any()),
       }),
       detail: { tags: ['models'] },
     }

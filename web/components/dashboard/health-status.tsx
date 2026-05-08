@@ -39,7 +39,7 @@ const SERVICE_CONFIG = [
   { key: 'grok', label: 'Grok (xAI)', icon: Rocket, description: 'xAI Grok models' },
   { key: 'voyage', label: 'Voyage', icon: Compass, description: 'Embeddings' },
   { key: 'openrouter', label: 'OpenRouter', icon: Globe, description: 'Model gateway' },
-  { key: 'custom', label: 'Custom', icon: Settings2, description: 'Custom endpoints' },
+  { key: 'custom', label: 'Custom Providers', icon: Settings2, description: 'OpenAI / Gemini compatible endpoints' },
 ] as const;
 
 export function HealthStatus({ health, isFetching }: HealthStatusProps) {

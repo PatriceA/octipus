@@ -121,13 +121,13 @@ export class DocumentProcessor {
       }
 
       // Step 3: Categorize
-      const category = await this.categorize(extractedText, doc.originalName);
+      const category = await this.categorize(extractedText, doc.originalName, doc.userId);
 
       // Step 4: Move file to category folder
       const newPath = await this.moveToCategory(doc.storagePath, category);
 
       // Step 5: Summarize
-      const summary = await this.summarize(extractedText, doc.originalName);
+      const summary = await this.summarize(extractedText, doc.originalName, doc.userId);
 
       // Step 6: Index into knowledge base
       await this.indexDocument(documentId, extractedText, doc.originalName, category);
@@ -589,7 +589,7 @@ export class DocumentProcessor {
   /**
    * Categorize document content using LLM.
    */
-  private async categorize(text: string, filename: string): Promise<string> {
+  private async categorize(text: string, filename: string, userId: string): Promise<string> {
     try {
       const client = getLiteLLMClient();
       const model = await this.getModel();
@@ -614,6 +614,7 @@ export class DocumentProcessor {
         temperature: 0.1,
         maxTokens: 20,
         extraBody: { think: false },
+        userId,
       });
 
       const category = result.content.trim().toLowerCase();
@@ -660,7 +661,7 @@ export class DocumentProcessor {
   /**
    * Summarize the document content using LLM.
    */
-  private async summarize(text: string, filename: string): Promise<string> {
+  private async summarize(text: string, filename: string, userId: string): Promise<string> {
     try {
       const client = getLiteLLMClient();
       const model = await this.getModel();
@@ -685,6 +686,7 @@ export class DocumentProcessor {
         temperature: 0.3,
         maxTokens: 200,
         extraBody: { think: false },
+        userId,
       });
 
       return result.content.trim();

@@ -33,6 +33,7 @@ export interface EditModelModalProps {
 
 export function EditModelModal({ model, onClose, onSave, loading }: EditModelModalProps) {
   const cliAgent = model.metadata?.cliAgent || {};
+  const customProvider = model.metadata?.customProvider;
   const [formData, setFormData] = useState({
     endpoint: model.endpoint || '',
     contextWindow: model.contextWindow,
@@ -52,11 +53,19 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     cliMcpConfigPath: cliAgent.mcpConfigPath || '',
     cliExtraArgs: (cliAgent.extraArgs || []).join(' '),
     cliModel: cliAgent.model || '',
+    // Custom provider settings
+    customAuthType: (customProvider?.auth?.type || 'bearer') as 'bearer' | 'header' | 'query',
+    customAuthHeaderName: customProvider?.auth?.headerName || '',
+    customAuthParamName: customProvider?.auth?.paramName || '',
+    customRequestEnvelope: (customProvider?.requestEnvelope || 'standard') as 'standard' | 'gemini-blocks-config',
+    customPathOverride: customProvider?.pathOverride || '',
+    customApiKeyRef: model.apiKeyRef || '',
   });
   const [error, setError] = useState('');
   const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
 
   const isCli = model.provider === 'cli';
+  const isCustomProvider = model.provider === 'custom-openai' || model.provider === 'custom-gemini';
   const cliKind: CliKind = isCli ? detectCliKind(model.modelId) : null;
   const cliProvider = cliProviderForKind(cliKind);
 
@@ -96,12 +105,35 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       };
 
       // Include thinking and CLI agent settings in metadata
-      if (formData.disableThinking || isCli) {
+      if (formData.disableThinking || isCli || isCustomProvider) {
         const existingMeta = model.metadata || {};
         const extraBody = formData.disableThinking
           ? { ...(existingMeta.extraBody || {}), think: false }
           : (() => { const { think, ...rest } = (existingMeta.extraBody || {}); return Object.keys(rest).length ? rest : undefined; })();
         payload.metadata = { ...existingMeta, extraBody };
+      }
+
+      if (isCustomProvider) {
+        const cp: Record<string, unknown> = {
+          auth: {
+            type: formData.customAuthType,
+            ...(formData.customAuthType === 'header' && formData.customAuthHeaderName
+              ? { headerName: formData.customAuthHeaderName }
+              : {}),
+            ...(formData.customAuthType === 'query' && formData.customAuthParamName
+              ? { paramName: formData.customAuthParamName }
+              : {}),
+          },
+        };
+        if (formData.customPathOverride) cp.pathOverride = formData.customPathOverride;
+        if (model.provider === 'custom-gemini' && formData.customRequestEnvelope !== 'standard') {
+          cp.requestEnvelope = formData.customRequestEnvelope;
+        }
+        payload.metadata = {
+          ...((payload.metadata as Record<string, unknown>) || model.metadata || {}),
+          customProvider: cp,
+        };
+        payload.apiKeyRef = formData.customApiKeyRef || undefined;
       }
 
       if (isCli) {
@@ -278,6 +310,93 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               <span className="text-sm text-on-surface-variant">Disable Thinking</span>
             </label>
           </div>
+
+          {/* Custom Provider Settings */}
+          {isCustomProvider && (
+            <div className="border border-outline-variant/20 rounded-lg p-4 space-y-3 bg-surface-container">
+              <h3 className="text-sm font-semibold text-white">
+                {model.provider === 'custom-openai' ? 'OpenAI-compatible Settings' : 'Gemini-compatible Settings'}
+              </h3>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-on-surface-variant mb-1">Auth Scheme</label>
+                  <select
+                    value={formData.customAuthType}
+                    onChange={(e) => setFormData({ ...formData, customAuthType: e.target.value as 'bearer' | 'header' | 'query' })}
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                  >
+                    <option value="bearer">Bearer token</option>
+                    <option value="header">Custom header</option>
+                    <option value="query">Query parameter</option>
+                  </select>
+                </div>
+                {formData.customAuthType === 'header' && (
+                  <div>
+                    <label className="block text-xs font-medium text-on-surface-variant mb-1">Header Name *</label>
+                    <input
+                      type="text"
+                      value={formData.customAuthHeaderName}
+                      onChange={(e) => setFormData({ ...formData, customAuthHeaderName: e.target.value })}
+                      placeholder="x-api-key"
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    />
+                  </div>
+                )}
+                {formData.customAuthType === 'query' && (
+                  <div>
+                    <label className="block text-xs font-medium text-on-surface-variant mb-1">Query Param Name *</label>
+                    <input
+                      type="text"
+                      value={formData.customAuthParamName}
+                      onChange={(e) => setFormData({ ...formData, customAuthParamName: e.target.value })}
+                      placeholder="key"
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {model.provider === 'custom-gemini' && (
+                <div>
+                  <label className="block text-xs font-medium text-on-surface-variant mb-1">Request Envelope</label>
+                  <select
+                    value={formData.customRequestEnvelope}
+                    onChange={(e) => setFormData({ ...formData, customRequestEnvelope: e.target.value as 'standard' | 'gemini-blocks-config' })}
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                  >
+                    <option value="standard">Standard (native Gemini /v1beta/models/&#123;model&#125;:generateContent)</option>
+                    <option value="gemini-blocks-config">Gemini Blocks + Config (Anthropic-style messages, /generate)</option>
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-on-surface-variant mb-1">Path Override (optional)</label>
+                <input
+                  type="text"
+                  value={formData.customPathOverride}
+                  onChange={(e) => setFormData({ ...formData, customPathOverride: e.target.value })}
+                  placeholder={model.provider === 'custom-openai' ? '/v1/chat/completions (default)' : '/generate or /v1beta/models/{model}:generateContent'}
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-on-surface-variant mb-1">API Key Reference</label>
+                <input
+                  type="text"
+                  value={formData.customApiKeyRef}
+                  onChange={(e) => setFormData({ ...formData, customApiKeyRef: e.target.value })}
+                  placeholder="vault entry name, or env:MY_API_KEY"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                />
+                <p className="text-xs text-on-surface-variant mt-1">
+                  Use <code className="bg-surface-container-high px-1 rounded">env:VAR_NAME</code> for an env var, or a vault entry name.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* CLI Agent Settings */}
           {isCli && (

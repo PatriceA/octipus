@@ -222,7 +222,7 @@ registerCommand({
     }
 
     // Compile the brief
-    const brief = await compileBrief(state);
+    const brief = await compileBrief(state, ctx.userId);
     state.brief = brief;
     state.active = false;
     await saveState(ctx.sessionId, state);
@@ -249,7 +249,7 @@ registerCommand({
   },
 });
 
-async function compileBrief(state: PlanningState): Promise<string> {
+async function compileBrief(state: PlanningState, userId: string): Promise<string> {
   const qa = state.answers
     .map(a => {
       // Strip the examples/hints from questions for the brief — keep just the first line
@@ -315,6 +315,7 @@ Rules:
       ],
       temperature: 0.3,
       maxTokens: 2048,
+      userId,
     });
 
     const content = result.content?.trim();

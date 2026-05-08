@@ -67,6 +67,32 @@ export interface ModelMetadata {
   extraBody?: Record<string, unknown>;
   /** CLI sub-agent configuration (only for provider='cli') */
   cliAgent?: CLIAgentConfig;
+  /** Custom provider configuration (only for provider='custom-openai' or 'custom-gemini') */
+  customProvider?: CustomProviderConfig;
+}
+
+export interface CustomProviderConfig {
+  /** Authentication scheme used by the upstream endpoint */
+  auth: {
+    type: 'bearer' | 'header' | 'query';
+    /** Header name when type='header' (e.g. 'x-api-key') */
+    headerName?: string;
+    /** Query parameter name when type='query' (e.g. 'key') */
+    paramName?: string;
+  };
+  /** Override the default request path (defaults: '/v1/chat/completions' for openai, '/v1beta/models/{model}:generateContent' for gemini) */
+  pathOverride?: string;
+  /** Extra headers to include on every request */
+  extraHeaders?: Record<string, string>;
+  /**
+   * Request envelope transform. Most proxies use 'standard'. Use a named envelope
+   * for proxies that wrap params in non-standard shapes.
+   *
+   * - 'standard': native OpenAI or native Gemini wire format (depending on provider flavor)
+   * - 'gemini-blocks-config': Anthropic-style content blocks + camelCase {temperature,maxTokens,...}
+   *   nested under a top-level `config:` object. Used by some Gemini-fronting proxies.
+   */
+  requestEnvelope?: 'standard' | 'gemini-blocks-config';
 }
 
 export const costLog = pgTable('cost_log', {

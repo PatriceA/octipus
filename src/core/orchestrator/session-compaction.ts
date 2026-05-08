@@ -128,7 +128,7 @@ export async function maybeCompactSession(
   }
 
   const triggerReason = decision.allow ? decision.reason : 'force';
-  await compactSessionContext(sessionId, triggerReason, options.userInstructions);
+  await compactSessionContext(sessionId, triggerReason, options.userInstructions, session.userId);
 }
 
 /**
@@ -145,6 +145,7 @@ async function compactSessionContext(
   sessionId: string,
   allowReason: Exclude<CompactionDecision, { allow: false }>['reason'] | 'force',
   userInstructions?: string,
+  userId?: string,
 ): Promise<void> {
   const messages = await messageRepository.findBySession(sessionId, 200, 0, ['user', 'assistant']);
   if (messages.length < 10) return;
@@ -166,6 +167,7 @@ async function compactSessionContext(
     previousSummary: previousEntry?.summary,
     previousFileOps: previousEntry?.fileOps as CompactionFileOps | undefined,
     userInstructions,
+    userId,
   });
 
   const tokensAfter = calculateTotalTokens(result.messages);

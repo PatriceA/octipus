@@ -55,6 +55,13 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     priority: 50,
     costPerInputToken: 0,
     costPerOutputToken: 0,
+    // Custom provider fields (only used when provider is 'custom-openai' or 'custom-gemini')
+    customAuthType: 'bearer' as 'bearer' | 'header' | 'query',
+    customAuthHeaderName: '',
+    customAuthParamName: '',
+    customRequestEnvelope: 'standard' as 'standard' | 'gemini-blocks-config',
+    customPathOverride: '',
+    customApiKeyRef: '',
   });
   const [error, setError] = useState('');
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
@@ -121,7 +128,8 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         // Always include providers that don't need configuration
         configured.add('ollama');
         configured.add('cli');
-        configured.add('custom');
+        configured.add('custom-openai');
+        configured.add('custom-gemini');
         try {
           const settings = await api.get<{ settings: Record<string, Array<{ key: string; value: unknown }>> }>('/settings');
           const all = Object.values(settings?.settings || {}).flat();
@@ -148,9 +156,16 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
 
   // Fetch available models when provider changes (direct connection only)
   const fetchAvailableModels = useCallback(async (provider: string, endpoint?: string) => {
-    if (!provider || provider === 'cli' || provider === 'litellm') {
+    if (
+      !provider
+      || provider === 'cli'
+      || provider === 'litellm'
+      || provider === 'custom-openai'
+      || provider === 'custom-gemini'
+    ) {
       setAvailableModels([]);
       setProviderConfigured(null);
+      setProviderError('');
       return;
     }
 
@@ -224,6 +239,8 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       contextWindow: 4096, maxTokens: 4096, supportsVision: false,
       supportsTools: true, supportsStreaming: true, disableThinking: false,
       topics: [], priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
+      customAuthType: 'bearer', customAuthHeaderName: '', customAuthParamName: '',
+      customRequestEnvelope: 'standard', customPathOverride: '', customApiKeyRef: '',
     });
     setError('');
     setTestResult(null);
@@ -250,6 +267,12 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       priority: 50,
       costPerInputToken: 0,
       costPerOutputToken: 0,
+      customAuthType: 'bearer',
+      customAuthHeaderName: '',
+      customAuthParamName: '',
+      customRequestEnvelope: 'standard',
+      customPathOverride: '',
+      customApiKeyRef: '',
     });
     setError('');
     setTestResult(null);
@@ -265,10 +288,32 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     setTestResult(null);
     setError('');
     try {
+      const isCustomProvider =
+        formData.provider === 'custom-openai' || formData.provider === 'custom-gemini';
+      const customProvider = isCustomProvider
+        ? {
+            auth: {
+              type: formData.customAuthType,
+              ...(formData.customAuthType === 'header' && formData.customAuthHeaderName
+                ? { headerName: formData.customAuthHeaderName }
+                : {}),
+              ...(formData.customAuthType === 'query' && formData.customAuthParamName
+                ? { paramName: formData.customAuthParamName }
+                : {}),
+            },
+            ...(formData.customPathOverride ? { pathOverride: formData.customPathOverride } : {}),
+            ...(formData.provider === 'custom-gemini' && formData.customRequestEnvelope !== 'standard'
+              ? { requestEnvelope: formData.customRequestEnvelope }
+              : {}),
+          }
+        : undefined;
+
       const result = await api.post<{ success: boolean; message?: string; error?: string }>('/models/test', {
         provider: formData.provider,
         modelId: formData.modelId,
         endpoint: formData.endpoint || undefined,
+        apiKeyRef: isCustomProvider ? formData.customApiKeyRef || undefined : undefined,
+        metadata: customProvider ? { customProvider } : undefined,
       });
       setTestResult(result);
     } catch (err) {
@@ -285,16 +330,39 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     if (!formData.modelId.trim()) { setError('Model ID is required'); return; }
 
     try {
-      // Custom provider: route through ollama provider with API key ref
-      const isCustom = formData.provider === 'custom';
-      const effectiveProvider = isCustom ? 'ollama' : formData.provider;
+      const isCustomProvider =
+        formData.provider === 'custom-openai' || formData.provider === 'custom-gemini';
+
+      // Build metadata: merge thinking-disable flag and customProvider config
+      const metadata: Record<string, unknown> = {};
+      if (formData.disableThinking) metadata.extraBody = { think: false };
+      if (isCustomProvider) {
+        const customProvider: Record<string, unknown> = {
+          auth: {
+            type: formData.customAuthType,
+            ...(formData.customAuthType === 'header' && formData.customAuthHeaderName
+              ? { headerName: formData.customAuthHeaderName }
+              : {}),
+            ...(formData.customAuthType === 'query' && formData.customAuthParamName
+              ? { paramName: formData.customAuthParamName }
+              : {}),
+          },
+        };
+        if (formData.customPathOverride) customProvider.pathOverride = formData.customPathOverride;
+        if (formData.provider === 'custom-gemini' && formData.customRequestEnvelope !== 'standard') {
+          customProvider.requestEnvelope = formData.customRequestEnvelope;
+        }
+        metadata.customProvider = customProvider;
+      }
 
       await onAdd({
         name: formData.name,
-        provider: effectiveProvider,
+        provider: formData.provider,
         modelId: formData.modelId,
         endpoint: formData.endpoint || undefined,
-        apiKeyRef: isCustom ? 'custom_api_key' : undefined,
+        apiKeyRef: isCustomProvider
+          ? formData.customApiKeyRef || `${formData.provider}_${formData.name.toLowerCase().replace(/\W+/g, '_')}_key`
+          : undefined,
         contextWindow: formData.contextWindow,
         maxTokens: formData.maxTokens,
         supportsVision: formData.supportsVision,
@@ -304,7 +372,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         priority: formData.priority,
         costPerInputToken: formData.costPerInputToken,
         costPerOutputToken: formData.costPerOutputToken,
-        metadata: formData.disableThinking ? { extraBody: { think: false } } : undefined,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       });
       onClose();
     } catch (err) {
@@ -619,27 +687,116 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               </div>
             )}
 
-            {connectionType === 'direct' && formData.provider === 'custom' && (
-              <p className="text-xs text-on-surface-variant bg-surface-container-high px-3 py-2 rounded-lg">
-                Custom providers use the OpenAI-compatible API format (/v1/chat/completions). Set the API key on the <strong>Secrets</strong> page under &quot;Custom Provider&quot;.
-              </p>
+            {connectionType === 'direct' && (formData.provider === 'custom-openai' || formData.provider === 'custom-gemini') && (
+              <div className="space-y-3 border border-outline-variant/10 rounded-lg p-3 bg-surface-container">
+                <p className="text-xs text-on-surface-variant">
+                  {formData.provider === 'custom-openai'
+                    ? 'OpenAI-compatible endpoint (/v1/chat/completions wire format).'
+                    : 'Gemini-compatible endpoint. Native Gemini wire format on the response side.'}
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-on-surface-variant mb-1">Auth Scheme</label>
+                    <select
+                      value={formData.customAuthType}
+                      onChange={(e) => setFormData({ ...formData, customAuthType: e.target.value as 'bearer' | 'header' | 'query' })}
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                    >
+                      <option value="bearer">Bearer token</option>
+                      <option value="header">Custom header</option>
+                      <option value="query">Query parameter</option>
+                    </select>
+                  </div>
+                  {formData.customAuthType === 'header' && (
+                    <div>
+                      <label className="block text-xs font-medium text-on-surface-variant mb-1">Header Name *</label>
+                      <input
+                        type="text"
+                        value={formData.customAuthHeaderName}
+                        onChange={(e) => setFormData({ ...formData, customAuthHeaderName: e.target.value })}
+                        placeholder="x-api-key"
+                        className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                      />
+                    </div>
+                  )}
+                  {formData.customAuthType === 'query' && (
+                    <div>
+                      <label className="block text-xs font-medium text-on-surface-variant mb-1">Query Param Name *</label>
+                      <input
+                        type="text"
+                        value={formData.customAuthParamName}
+                        onChange={(e) => setFormData({ ...formData, customAuthParamName: e.target.value })}
+                        placeholder="key"
+                        className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {formData.provider === 'custom-gemini' && (
+                  <div>
+                    <label className="block text-xs font-medium text-on-surface-variant mb-1">Request Envelope</label>
+                    <select
+                      value={formData.customRequestEnvelope}
+                      onChange={(e) => setFormData({ ...formData, customRequestEnvelope: e.target.value as 'standard' | 'gemini-blocks-config' })}
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                    >
+                      <option value="standard">Standard (native Gemini /v1beta/models/&#123;model&#125;:generateContent)</option>
+                      <option value="gemini-blocks-config">Gemini Blocks + Config (Anthropic-style messages, /generate)</option>
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-on-surface-variant mb-1">Path Override (optional)</label>
+                  <input
+                    type="text"
+                    value={formData.customPathOverride}
+                    onChange={(e) => setFormData({ ...formData, customPathOverride: e.target.value })}
+                    placeholder={formData.provider === 'custom-openai' ? '/v1/chat/completions (default)' : '/generate or /v1beta/models/{model}:generateContent'}
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-on-surface-variant mb-1">API Key Reference (optional)</label>
+                  <input
+                    type="text"
+                    value={formData.customApiKeyRef}
+                    onChange={(e) => setFormData({ ...formData, customApiKeyRef: e.target.value })}
+                    placeholder="vault entry name, or env:MY_API_KEY"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  />
+                  <p className="text-xs text-on-surface-variant mt-1">
+                    Use <code className="text-xs bg-surface-container-high px-1 rounded">env:VAR_NAME</code> for an env var, or a vault entry name. Leave blank to auto-generate.
+                  </p>
+                </div>
+              </div>
             )}
 
-            {!isCli && (connectionType === 'litellm' || formData.provider === 'ollama' || formData.provider === 'custom') && (
+            {!isCli && (connectionType === 'litellm' || formData.provider === 'ollama' || formData.provider === 'custom-openai' || formData.provider === 'custom-gemini') && (
               <div>
-                <label className="block text-sm font-medium text-on-surface-variant mb-1">Endpoint URL {formData.provider === 'custom' ? '*' : ''}</label>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">
+                  Endpoint URL {(formData.provider === 'custom-openai' || formData.provider === 'custom-gemini') ? '*' : ''}
+                </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={formData.endpoint}
                     onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
-                    placeholder={connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)' : formData.provider === 'custom' ? 'e.g., https://api.provider.com' : 'e.g., http://192.168.1.100:11434'}
+                    placeholder={
+                      connectionType === 'litellm' ? 'Uses LiteLLM proxy (auto)'
+                      : formData.provider === 'custom-openai' ? 'e.g., https://api.provider.com'
+                      : formData.provider === 'custom-gemini' ? 'e.g., https://api.example.com'
+                      : 'e.g., http://192.168.1.100:11434'
+                    }
                     className="flex-1 px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
                   />
-                  {connectionType === 'direct' && (formData.provider === 'ollama' || formData.provider === 'custom') && formData.endpoint && (
+                  {connectionType === 'direct' && formData.provider === 'ollama' && formData.endpoint && (
                     <button
                       type="button"
-                      onClick={() => fetchAvailableModels('ollama', formData.endpoint)}  /* custom uses same Ollama-compat endpoint */
+                      onClick={() => fetchAvailableModels('ollama', formData.endpoint)}
                       className="px-3 py-2 border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-on-surface-variant text-sm flex items-center gap-1 cursor-pointer"
                       title="Reload models from this endpoint"
                     >

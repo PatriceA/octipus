@@ -582,6 +582,7 @@ export class AgentWorker extends BaseAgentWorker {
           preserveSystemMessages: true,
           preserveRecentCount: 10,
           summaryModel: this.context.model,
+          userId: this.context.userId,
         });
         if (proactiveRemoved > 0) {
           this.messages = proactiveCompacted;
@@ -598,6 +599,7 @@ export class AgentWorker extends BaseAgentWorker {
         preserveSystemMessages: true,
         preserveRecentCount: 20,
         summaryModel: this.context.model,
+        userId: this.context.userId,
       });
 
       if (removed > 0) {
@@ -656,6 +658,7 @@ export class AgentWorker extends BaseAgentWorker {
             preserveSystemMessages: true,
             preserveRecentCount: 6,
             summaryModel: this.context.model,
+            userId: this.context.userId,
           });
           this.messages = compacted;
           continue;
@@ -1074,6 +1077,7 @@ export class AgentWorker extends BaseAgentWorker {
       extraBody,
       endpoint: model.endpoint || undefined,
       apiKey,
+      userId: this.context.userId,
     };
 
     // Route to the correct provider based on DB config.

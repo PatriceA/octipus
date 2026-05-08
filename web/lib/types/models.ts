@@ -4,6 +4,7 @@ export interface Model {
   provider: string;
   modelId: string;
   endpoint?: string;
+  apiKeyRef?: string | null;
   isEnabled: boolean;
   isDefault: boolean;
   supportsVision: boolean;
@@ -25,6 +26,16 @@ export interface Model {
       mcpConfigPath?: string;
       extraArgs?: string[];
       model?: string;
+    };
+    customProvider?: {
+      auth: {
+        type: 'bearer' | 'header' | 'query';
+        headerName?: string;
+        paramName?: string;
+      };
+      pathOverride?: string;
+      extraHeaders?: Record<string, string>;
+      requestEnvelope?: 'standard' | 'gemini-blocks-config';
     };
   };
   health?: 'healthy' | 'unhealthy' | 'unknown';
@@ -113,7 +124,8 @@ export const PROVIDER_LABELS: Record<string, string> = {
   voyage: 'Voyage AI (Embeddings)',
   cli: 'CLI (Subscription)',
   litellm: 'LiteLLM Proxy',
-  custom: 'Custom (OpenAI-compatible)',
+  'custom-openai': 'Custom (OpenAI-compatible)',
+  'custom-gemini': 'Custom (Gemini-compatible)',
 };
 
 /** Default model capabilities by provider */
@@ -126,4 +138,6 @@ export const PROVIDER_DEFAULTS: Record<string, { contextWindow: number; maxToken
   grok: { contextWindow: 256000, maxTokens: 8192, supportsVision: true, supportsTools: true },
   openrouter: { contextWindow: 128000, maxTokens: 16384, supportsVision: true, supportsTools: true },
   litellm: { contextWindow: 8192, maxTokens: 4096, supportsVision: false, supportsTools: true },
+  'custom-openai': { contextWindow: 32000, maxTokens: 4096, supportsVision: false, supportsTools: true },
+  'custom-gemini': { contextWindow: 1000000, maxTokens: 8192, supportsVision: false, supportsTools: true },
 };

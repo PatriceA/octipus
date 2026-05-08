@@ -26,6 +26,23 @@ export interface CompletionOptions {
   endpoint?: string;
   /** Per-model API key (e.g. custom OpenAI-compatible provider) */
   apiKey?: string;
+  /**
+   * Calling user ID — threaded through so providers can look up user-scoped
+   * vault entries (e.g. custom-provider apiKeyRef stored under the user, not
+   * the system scope).
+   */
+  userId?: string;
+  /**
+   * Pre-resolved custom-provider config that bypasses DB lookup.
+   * Used by the test-model endpoint where the model row hasn't been saved yet.
+   * When set, BaseCustomProvider.resolveModelConfig() returns this directly.
+   */
+  customProviderOverride?: {
+    baseUrl: string;
+    apiKey: string;
+    modelId: string;
+    custom: import('@/db/schema/models').CustomProviderConfig;
+  };
 }
 
 export interface CompletionResult {

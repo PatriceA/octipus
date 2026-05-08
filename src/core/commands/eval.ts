@@ -223,6 +223,7 @@ async function runQuality(
         temperature: 0.1,
         maxTokens: 512,
         extraBody: (modelEntry.metadata as Record<string, unknown>)?.extraBody as Record<string, unknown> ?? {},
+        userId,
       });
       output = result.content;
     } catch (err) {
