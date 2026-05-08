@@ -63,7 +63,16 @@ export async function directResponse(
     const summary = clearedAt ? undefined : (session?.context as SessionContext)?.compactedSummary;
     const now = new Date();
     const dateContext = `\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
-    let basePrompt = SECURITY_PREAMBLE + 'You are a friendly development assistant. Keep casual responses brief and helpful.' + dateContext;
+    // Persona: dev-flavored when the session is in a coding workspace (devMode / projectPath set),
+    // generalist Octipus otherwise. Octipus is a multi-domain orchestrator: coding, research,
+    // writing, design, devops, security, data, finance, planning, voice, etc. Casual replies
+    // shouldn't pre-narrow the user's expectations.
+    const sessionCtx = (sessionForBoundary?.context as SessionContext) || {};
+    const isDevSession = Boolean(sessionCtx.devMode || sessionCtx.projectPath);
+    const persona = isDevSession
+      ? 'You are Octipus, a friendly development assistant. Keep casual responses brief and helpful.'
+      : 'You are Octipus, a friendly general-purpose AI assistant. You can route to specialized experts (coding, research, writing, design, devops, security, data, finance, planning, voice, etc.) when the user has a real task, but for casual chat keep replies brief and conversational. Don\'t pre-categorize yourself as a coding-only assistant — describe what the user needs help with rather than what tooling sits behind you.';
+    let basePrompt = SECURITY_PREAMBLE + persona + dateContext;
     if (guardFlags.length > 0) {
       basePrompt += buildSecurityReminder(guardFlags);
     }
