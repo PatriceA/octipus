@@ -260,11 +260,14 @@ export async function spawnWorker(
     }
   }
 
-  // ── Inject topic-assigned active skills ──
+  // ── Inject topic-assigned active skills (hybrid discovery) ──
   let topicSkillFragment = '';
   try {
-    const { getSkillRegistry } = await import('@/skills/registry');
-    topicSkillFragment = await getSkillRegistry().buildTopicPromptFragment(roleConfig.defaultTopic);
+    const { buildPromptFragmentForMessage } = await import('@/skills/discovery');
+    topicSkillFragment = await buildPromptFragmentForMessage({
+      topic: roleConfig.defaultTopic,
+      message: task,
+    });
     if (topicSkillFragment) {
       coreLogger.debug({ topic: roleConfig.defaultTopic }, 'Injected topic-assigned skills');
     }

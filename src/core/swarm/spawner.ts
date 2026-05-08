@@ -332,6 +332,7 @@ export class SwarmSpawner {
     const { model: childModel, expertId, systemPrompt } = await this.resolveChildModelAndExpert(
       parent.model,
       childRole,
+      brief.taskBrief,
       params.expertId,
       internal.excludeExpertId,
     );
@@ -787,6 +788,7 @@ export class SwarmSpawner {
   private async resolveChildModelAndExpert(
     parentModel: string,
     childRole: AgentRole,
+    childMessage: string,
     preferredExpertId?: string,
     excludeExpertId?: string,
   ): Promise<{ model: string; expertId?: string; systemPrompt?: string }> {
@@ -856,7 +858,11 @@ export class SwarmSpawner {
       // Topic-assigned skills: skills assigned to the child's role/topic
       // via skill_topic_assignments. No assertion — the user may or may not
       // have assigned any; it's not a bug if none are configured.
-      const topicFragment = await skillReg.buildTopicPromptFragment(childRole);
+      const { buildPromptFragmentForMessage } = await import('@/skills/discovery');
+      const topicFragment = await buildPromptFragmentForMessage({
+        topic: childRole,
+        message: childMessage,
+      });
       if (topicFragment) skillFragments.push(`# Domain Knowledge (topic)\n${topicFragment}`);
     } catch (err) {
       coreLogger.error(
