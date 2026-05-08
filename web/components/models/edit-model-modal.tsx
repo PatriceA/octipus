@@ -95,6 +95,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       const payload: Record<string, unknown> = {
         endpoint: formData.endpoint || undefined,
         contextWindow: formData.contextWindow,
+        maxTokens: formData.maxTokens,
         topics: formData.topics,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
@@ -209,11 +210,11 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               <input
                 type="number"
                 value={formData.maxTokens}
-                disabled
-                title="Model capability limit — max tokens the model can generate per API call"
-                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-low text-on-surface-variant cursor-not-allowed"
+                onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 0 })}
+                title="Maximum tokens this model can generate per API call"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
               />
-              <p className="text-xs text-on-surface-variant mt-0.5">Max tokens per response (model limit, set on add)</p>
+              <p className="text-xs text-on-surface-variant mt-0.5">Bump higher if responses are getting truncated (e.g. thinking models burn tokens before replying).</p>
             </div>
           </div>
 
