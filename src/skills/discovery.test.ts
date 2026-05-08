@@ -54,7 +54,7 @@ mock.module('@/core/rag/embeddings', () => ({
       if (embeddingError) throw embeddingError;
       if (!currentEmbedding) {
         // Default — neutral zero-ish vector (won't match anything via cosine).
-        return new Array(768).fill(0).map((_, i) => (i === 0 ? 1 : 0));
+        return new Array(1024).fill(0).map((_, i) => (i === 0 ? 1 : 0));
       }
       return currentEmbedding;
     },
@@ -75,11 +75,11 @@ import { skillRepository } from '@/db/repositories/skill-repository';
 // ── Test topic — unique per file run so we never collide with other tests ──
 const TEST_TOPIC = `test-discovery-${rand(4)}`;
 
-// Three orthogonal, normalized 768-dim vectors so cosine sim is
+// Three orthogonal, normalized 1024-dim vectors so cosine sim is
 // deterministic: same vector ⇒ sim ~1.0, orthogonal ⇒ sim ~0.0.
-const VEC_A = new Array(768).fill(0).map((_, i) => (i === 0 ? 1 : 0));
-const VEC_B = new Array(768).fill(0).map((_, i) => (i === 1 ? 1 : 0));
-const VEC_C = new Array(768).fill(0).map((_, i) => (i === 2 ? 1 : 0));
+const VEC_A = new Array(1024).fill(0).map((_, i) => (i === 0 ? 1 : 0));
+const VEC_B = new Array(1024).fill(0).map((_, i) => (i === 1 ? 1 : 0));
+const VEC_C = new Array(1024).fill(0).map((_, i) => (i === 2 ? 1 : 0));
 
 beforeAll(async () => {
   const { initializeDb } = await import('@/db/postgres');

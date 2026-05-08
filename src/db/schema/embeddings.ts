@@ -7,7 +7,7 @@ import { customType, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzl
 // Custom type for pgvector's vector column
 export const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
-    return 'vector(768)';
+    return 'vector(1024)';
   },
   toDriver(value: number[]): string {
     return `[${value.join(',')}]`;

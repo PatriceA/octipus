@@ -316,6 +316,13 @@
       "when": 1725400000000,
       "tag": "0044_skills_discovery",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1726000000000,
+      "tag": "0045_embeddings_1024",
+      "breakpoints": true
     }
   ]
 }

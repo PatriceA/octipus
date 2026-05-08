@@ -32,7 +32,7 @@ let currentEmbedding: number[] | null = null;
 mock.module('@/core/rag/embeddings', () => ({
   getEmbeddingService: () => ({
     generateEmbedding: async (_text: string) => {
-      if (!currentEmbedding) return new Array(768).fill(0).map((_, i) => (i === 0 ? 1 : 0));
+      if (!currentEmbedding) return new Array(1024).fill(0).map((_, i) => (i === 0 ? 1 : 0));
       return currentEmbedding;
     },
   }),
@@ -46,9 +46,9 @@ import { skills } from '@/db/schema/skills';
 const TEST_TOPIC = `int-discovery-${rand(4)}`;
 
 // Three orthogonal unit vectors → cosine sim is 1.0 (same) or 0.0 (different).
-const PYTHON_VEC = new Array(768).fill(0).map((_, i) => (i === 10 ? 1 : 0));
-const GIT_VEC = new Array(768).fill(0).map((_, i) => (i === 11 ? 1 : 0));
-const ARCH_VEC = new Array(768).fill(0).map((_, i) => (i === 12 ? 1 : 0));
+const PYTHON_VEC = new Array(1024).fill(0).map((_, i) => (i === 10 ? 1 : 0));
+const GIT_VEC = new Array(1024).fill(0).map((_, i) => (i === 11 ? 1 : 0));
+const ARCH_VEC = new Array(1024).fill(0).map((_, i) => (i === 12 ? 1 : 0));
 
 const SEEDED_SKILL_IDS = [
   'int-skill-always',
@@ -144,7 +144,7 @@ beforeEach(() => {
 
 describe('discoverSkillIds — integration: 5-skill seeded fixture', () => {
   test('"hello" (no triggers, neutral vector) → only always_inject + stale row', async () => {
-    currentEmbedding = new Array(768).fill(0).map((_, i) => (i === 50 ? 1 : 0)); // unrelated
+    currentEmbedding = new Array(1024).fill(0).map((_, i) => (i === 50 ? 1 : 0)); // unrelated
     const { discoverSkillIds } = await import('./discovery');
     const ids = await discoverSkillIds({
       topic: TEST_TOPIC,
@@ -159,7 +159,7 @@ describe('discoverSkillIds — integration: 5-skill seeded fixture', () => {
   });
 
   test('"please push my changes" → trigger hit on git skill, plus always-inject + stale', async () => {
-    currentEmbedding = new Array(768).fill(0).map((_, i) => (i === 50 ? 1 : 0));
+    currentEmbedding = new Array(1024).fill(0).map((_, i) => (i === 50 ? 1 : 0));
     const { discoverSkillIds } = await import('./discovery');
     const ids = await discoverSkillIds({
       topic: TEST_TOPIC,
