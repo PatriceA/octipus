@@ -309,6 +309,13 @@
       "when": 1724800000000,
       "tag": "0043_org_sso_config",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1725400000000,
+      "tag": "0044_skills_discovery",
+      "breakpoints": true
     }
   ]
 }

@@ -5,7 +5,7 @@ import { customType, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzl
 // CREATE EXTENSION IF NOT EXISTS vector;
 
 // Custom type for pgvector's vector column
-const vector = customType<{ data: number[]; driverData: string }>({
+export const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
     return 'vector(768)';
   },

@@ -1,4 +1,5 @@
 import { boolean, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { vector } from './embeddings';
 import { organizations } from './organizations';
 import { users } from './users';
 
@@ -19,6 +20,14 @@ export const skills = pgTable(
     userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
     /** Org-shared skill. NULL = personal/system. Members of the org see this row alongside their own. */
     orgId: uuid('org_id').references(() => organizations.id, { onDelete: 'cascade' }),
+    /** Keyword/regex strings — case-insensitive substring match against user message during discovery. */
+    triggers: jsonb('triggers').$type<string[]>().notNull().default([]),
+    /** Embedding of `name + description` (768-dim, matches default embedding model). NULL until backfilled. */
+    descriptionEmbedding: vector('description_embedding'),
+    /** sha256(name + description) — used to detect staleness vs the current embedding. */
+    descriptionHash: text('description_hash'),
+    /** Bypass discovery — when true, skill is always injected for its topic regardless of message content. */
+    alwaysInject: boolean('always_inject').notNull().default(false),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },

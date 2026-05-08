@@ -167,6 +167,10 @@ function toSkill(loc: ScanLocation, found: FoundFile): Skill | undefined {
     isSystem: true,
     userId: null,
     orgId: null,
+    triggers: [],
+    descriptionEmbedding: null,
+    descriptionHash: null,
+    alwaysInject: false,
     createdAt: now,
     updatedAt: now,
   } satisfies Skill;
