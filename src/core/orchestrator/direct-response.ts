@@ -99,6 +99,12 @@ export async function directResponse(
     const resolvedModel = await registry.getModelByModelId(modelName);
     const modelMeta = resolvedModel?.metadata as import('@/db/schema/models').ModelMetadata | null;
 
+    // Casual replies should be short, but thinking models (Gemini 3, o1, etc.)
+    // burn output tokens on internal reasoning before emitting text. Use the
+    // model's configured default (capped at 4096 for casual chat) so
+    // thinking-budget models can finish their reply.
+    const casualCap = Math.min(resolvedModel?.defaultMaxTokens || 1024, 4096);
+
     const result = await client.complete({
       model: modelName,
       messages: [
@@ -106,7 +112,7 @@ export async function directResponse(
         ...historyMessages,
       ],
       temperature: 0.7,
-      maxTokens: 512,
+      maxTokens: casualCap,
       extraBody: modelMeta?.extraBody,
       userId,
     });
