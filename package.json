@@ -18,6 +18,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
+    "db:backfill-skill-embeddings": "bun run scripts/backfill-skill-embeddings.ts",
     "setup": "bun run scripts/setup.ts",
     "backup": "bun run scripts/backup.ts",
     "test": "bun test src scripts",

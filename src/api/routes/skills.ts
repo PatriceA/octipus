@@ -2,6 +2,7 @@ import { eq, inArray, or } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
+import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
 import { type Skill, skills } from '@/db/schema/skills';
 import { getUserOrgIds } from '@/services/org-membership';
 import {
@@ -127,8 +128,10 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
             continue;
           }
 
-          // Update existing skill
-          const updateData: Record<string, unknown> = {
+          // Update existing skill — go through the repository so the
+          // description-embedding invalidation hook fires when description
+          // changes (skill-discovery Phase 2).
+          const updateData: SkillUpdate = {
             category: portable.category ?? existing.category,
             description: portable.description,
             content: portable.content ?? existing.content,
@@ -136,10 +139,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
             bestPractices: portable.bestPractices ?? existing.bestPractices,
             antiPatterns: portable.antiPatterns ?? existing.antiPatterns,
             frameworks: portable.frameworks ?? existing.frameworks,
-            updatedAt: new Date(),
           };
 
-          await db.update(skills).set(updateData).where(eq(skills.id, existing.id));
+          await skillRepository.update(existing.id, updateData);
           updated.push(existing.id);
           continue;
         }
@@ -294,7 +296,10 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       // System skills can be edited by any authenticated user; custom skills only by owner or admin
       if (!existing.isSystem && !user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
 
-      const updateData: Record<string, unknown> = { updatedAt: new Date() };
+      // Go through the repository so the description-embedding
+      // invalidation hook fires when name or description change
+      // (skill-discovery Phase 2). The repo also stamps updatedAt.
+      const updateData: SkillUpdate = {};
       if (body.name !== undefined) updateData.name = body.name;
       if (body.category !== undefined) updateData.category = body.category;
       if (body.description !== undefined) updateData.description = body.description;
@@ -304,11 +309,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       if (body.antiPatterns !== undefined) updateData.antiPatterns = body.antiPatterns;
       if (body.frameworks !== undefined) updateData.frameworks = body.frameworks;
 
-      const [updated] = await db
-        .update(skills)
-        .set(updateData)
-        .where(eq(skills.id, params.id))
-        .returning();
+      const updated = await skillRepository.update(params.id, updateData);
 
       return updated;
     },
