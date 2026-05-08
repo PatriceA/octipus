@@ -12,7 +12,7 @@
  * will hoist it into proper stores when the UI grows beyond chat.
  */
 import { randomBytes } from 'node:crypto';
-import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
 import { MessagesPane } from './components/messages-pane';
@@ -77,6 +77,14 @@ export class OctipusTuiApp {
     tui.addInputListener((data) => {
       const kb = getKeybindings();
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
+      if (matchesKey(data, 'pageUp')) {
+        if (this.messages.scrollUp()) this.tui.requestRender();
+        return { consume: true };
+      }
+      if (matchesKey(data, 'pageDown')) {
+        if (this.messages.scrollDown()) this.tui.requestRender();
+        return { consume: true };
+      }
       return undefined;
     });
 
@@ -107,7 +115,12 @@ export class OctipusTuiApp {
   }
 
   private pushMessage(role: 'user' | 'assistant' | 'system', content: string): void {
+    // Live-tail rule: only auto-pin to the bottom when the user is
+    // already there. Mid-scroll messages stay out of view until the
+    // user explicitly returns to the latest.
+    const wasAtBottom = this.messages.getScrollOffset() === 0;
     this.messages.push({ role, content: sanitize(content), timestamp: new Date() });
+    if (wasAtBottom) this.messages.scrollToBottom();
     this.tui.requestRender();
   }
 
@@ -251,6 +264,21 @@ export class OctipusTuiApp {
           this.status.setProject(value.split(/[/\\]/).pop());
           this.pushMessage('system', `Project set to: ${value}`);
         }
+        return;
+      }
+      case 'workspace': {
+        const current = this.adapter.getWorkspace();
+        if (!value) {
+          this.pushMessage('system', `Current workspace: ${current ?? '(default)'}`);
+          return;
+        }
+        const next = value === '-' || value === 'default' ? null : value;
+        this.pushMessage('system', `Switching workspace to ${next ?? '(default)'}…`);
+        this.adapter.reconnectWithWorkspace(next).then(() => {
+          this.pushMessage('system', `Workspace: ${next ?? '(default)'}`);
+        }).catch((err: unknown) => {
+          this.pushMessage('system', `Workspace switch failed: ${(err as Error).message}`);
+        });
         return;
       }
       default:

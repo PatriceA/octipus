@@ -65,4 +65,50 @@ describe('MessagesPane', () => {
     pane.reset();
     expect(pane.render(80)).toEqual([]);
   });
+
+  test('scrollUp reveals older messages, scrollDown returns to live tail', () => {
+    const pane = new MessagesPane({ maxVisible: 2 });
+    pane.push({ role: 'system', content: 'first', timestamp: new Date() });
+    pane.push({ role: 'system', content: 'second', timestamp: new Date() });
+    pane.push({ role: 'system', content: 'third', timestamp: new Date() });
+
+    // At bottom: see second/third
+    const atBottom = pane.render(80).map(strip).join('\n');
+    expect(atBottom).toContain('second');
+    expect(atBottom).toContain('third');
+    expect(atBottom).not.toContain('first');
+
+    // Scroll up: see first/second
+    expect(pane.scrollUp(2)).toBe(true);
+    const scrolled = pane.render(80).map(strip).join('\n');
+    expect(scrolled).toContain('first');
+    expect(scrolled).toContain('second');
+    expect(scrolled).toContain('newer message');
+    expect(pane.getScrollOffset()).toBeGreaterThan(0);
+
+    // Scroll back to bottom
+    expect(pane.scrollDown(2)).toBe(true);
+    expect(pane.getScrollOffset()).toBe(0);
+  });
+
+  test('scrollUp clamps at the top of history', () => {
+    const pane = new MessagesPane({ maxVisible: 2 });
+    pane.push({ role: 'system', content: 'a', timestamp: new Date() });
+    pane.push({ role: 'system', content: 'b', timestamp: new Date() });
+    pane.push({ role: 'system', content: 'c', timestamp: new Date() });
+
+    expect(pane.scrollUp(10)).toBe(true);
+    const max = pane.getScrollOffset();
+    // Already at top — second call cannot move further.
+    expect(pane.scrollUp(10)).toBe(false);
+    expect(pane.getScrollOffset()).toBe(max);
+  });
+
+  test('scrollToBottom is a no-op when already pinned', () => {
+    const pane = new MessagesPane();
+    pane.push({ role: 'system', content: 'a', timestamp: new Date() });
+    expect(pane.getScrollOffset()).toBe(0);
+    pane.scrollToBottom();
+    expect(pane.getScrollOffset()).toBe(0);
+  });
 });

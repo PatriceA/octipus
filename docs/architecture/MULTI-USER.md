@@ -1917,8 +1917,9 @@ usage in the user menu.
 ### Phase 4 — Optional
 - Session sharing.
 - Org-shared knowledge base.
-- SCIM provisioning, SAML SSO.
-- Per-user billing hooks (token cost accounting already exists).
+- ✅ SCIM provisioning, ✅ SAML SSO (2026-05b — see § 22 below).
+- ✅ Per-user billing hooks (`BillingProvider` abstraction + Stripe
+  stub, hooked into `CostTracker.logUsage`).
 
 Each phase is independently shippable with a kill switch
 (`MULTIUSER`, `ENFORCE_PERMISSIONS`, `RLS_ENABLED`,
@@ -1972,3 +1973,103 @@ Each phase is independently shippable with a kill switch
 
 Schema is already 80% ready; the dominant cost is the enforcement
 sweep through repositories, the orchestrator gate, and the admin UI.
+
+---
+
+## 22. SSO + SCIM (2026-05b)
+
+Per-org identity-provider integration. Configuration lives in
+`org_sso_config` (migration `0043`); one row per organization
+that has SSO and/or SCIM enabled.
+
+### Database
+
+```sql
+CREATE TABLE org_sso_config (
+  org_id               uuid PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+  saml_enabled         boolean NOT NULL DEFAULT false,
+  saml_entity_id       text,
+  saml_sso_url         text,
+  saml_x509_cert       text,
+  saml_attribute_map   jsonb NOT NULL DEFAULT '{}',
+  scim_enabled         boolean NOT NULL DEFAULT false,
+  scim_token_vault_ref text,
+  metadata             jsonb NOT NULL DEFAULT '{}',
+  created_at           timestamp NOT NULL DEFAULT now(),
+  updated_at           timestamp NOT NULL DEFAULT now()
+);
+```
+
+`scim_token_vault_ref` is the **name** of a vault entry in the
+`system` scope that holds the actual bearer token. Storing the
+ref instead of the token keeps a database dump from leaking a
+usable credential.
+
+### SAML 2.0 SP routes
+
+`samlify` does the XML / signature heavy lifting. The SP entity
+is built per request from the per-org config so a single Octipus
+install serves many orgs each with their own IdP.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/saml/:orgSlug/metadata` | SP metadata XML — give this URL to the IdP |
+| `GET /api/saml/:orgSlug/login` | SP-initiated login — 302 to the IdP SSO URL |
+| `POST /api/saml/:orgSlug/acs` | Assertion Consumer Service |
+
+The auth-guard exempts `/api/saml/*` because the routes do their
+own validation (signature check by `samlify`). On a successful
+ACS the handler:
+
+1. Verifies the assertion signature against `saml_x509_cert`.
+2. Maps attributes via `saml_attribute_map` (defaults match
+   Okta / Azure AD / OneLogin: `username`, `email`, common
+   `urn:oid:` claims, NameID fallback).
+3. Upserts the user (rows can come from password login *or*
+   SAML — `username` is the join key).
+4. Ensures `org_members(orgId, userId, role='member')`.
+5. Mints a session via the existing `SessionManager`, sets the
+   same `session_token` HttpOnly cookie used by password login.
+6. Redirects to RelayState (sanitized to same-origin paths) or
+   `/`.
+
+The schema validator defaults to a noop (samlify still checks
+signatures). Operators wanting strict XSD validation install
+`@authenio/samlify-xsd-schema-validator` and set
+`SAML_SCHEMA_VALIDATOR=strict`.
+
+### SCIM 2.0 inbound
+
+`/api/scim/v2/Users` supports List / Get / Create / PATCH /
+DELETE; `/Groups` supports List + Get. RFC 7643 / 7644 shapes.
+
+Per-org Bearer auth: the route resolves the org by matching the
+incoming token against every `org_sso_config` row's
+`scim_token_vault_ref` (vault entries in the `system` scope).
+The auth-guard exempts `/api/scim/*`.
+
+| Operation | Effect on Octipus state |
+|---|---|
+| `POST /Users` | Upsert by `userName`; ensure `org_members` row |
+| `PATCH /Users/:id` | Update `is_active` / `username` / `email` |
+| `DELETE /Users/:id` | Drop org membership; mark user inactive (soft) |
+| `GET /Groups` | Returns the `org_admin` group with current admins |
+
+### Admin surface
+
+`GET /api/admin/orgs/:id/sso` and `PATCH /api/admin/orgs/:id/sso`
+manage the row. The web admin page at
+`/admin/orgs/[id]/sso` provides the paste-in form (entity ID,
+SSO URL, x509 cert, attribute map, SCIM toggle, vault-ref).
+
+### What's not done
+
+- Single Logout (SLO). The IdP can revoke its own session; the
+  octipus session lives until the cookie expires or the user
+  signs out manually.
+- IdP-initiated login (today only SP-initiated via `/login` is
+  wired). Adding it is mainly a matter of accepting an
+  unsolicited assertion at ACS — `samlify` already supports it.
+- Auto-promotion of SCIM `org_admin` group members to
+  `role='org_admin'`. Today new SCIM users land as `member`
+  and the admin role is set manually.

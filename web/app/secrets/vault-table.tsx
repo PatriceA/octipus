@@ -13,9 +13,11 @@ import {
 interface VaultTableProps {
   credentials: Credential[];
   onRefresh: () => void;
+  workspaceId?: string | null;
+  workspaceName?: string | null;
 }
 
-export function VaultTable({ credentials, onRefresh }: VaultTableProps) {
+export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName }: VaultTableProps) {
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [rotateId, setRotateId] = useState<string | null>(null);
@@ -58,9 +60,14 @@ export function VaultTable({ credentials, onRefresh }: VaultTableProps) {
     credentialType: CredentialType;
     description?: string;
     tags?: string[];
+    scope: 'user' | 'workspace';
   }) => {
     try {
-      await api.post('/vault', data);
+      const payload: Record<string, unknown> = { ...data };
+      if (data.scope === 'workspace' && workspaceId) {
+        payload.workspaceId = workspaceId;
+      }
+      await api.post('/vault', payload);
       setShowAddModal(false);
       onRefresh();
     } catch (error) {
@@ -184,6 +191,8 @@ export function VaultTable({ credentials, onRefresh }: VaultTableProps) {
         <AddSecretForm
           onCancel={() => setShowAddModal(false)}
           onAdd={handleAdd}
+          workspaceName={workspaceName ?? null}
+          workspaceAvailable={!!workspaceId}
         />
       </Modal>
 
@@ -224,15 +233,20 @@ export function VaultTable({ credentials, onRefresh }: VaultTableProps) {
 function AddSecretForm({
   onCancel,
   onAdd,
+  workspaceName,
+  workspaceAvailable,
 }: {
   onCancel: () => void;
-  onAdd: (data: { name: string; value: string; credentialType: CredentialType; description?: string; tags?: string[] }) => void;
+  onAdd: (data: { name: string; value: string; credentialType: CredentialType; description?: string; tags?: string[]; scope: 'user' | 'workspace' }) => void;
+  workspaceName: string | null;
+  workspaceAvailable: boolean;
 }) {
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [credentialType, setCredentialType] = useState<CredentialType>('api_key');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
+  const [scope, setScope] = useState<'user' | 'workspace'>('user');
 
   return (
     <div className="space-y-3">
@@ -280,6 +294,19 @@ function AddSecretForm({
           placeholder="Optional description"
         />
       </div>
+      {workspaceAvailable && (
+        <div>
+          <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Scope</label>
+          <select
+            value={scope}
+            onChange={(e) => setScope(e.target.value as 'user' | 'workspace')}
+            className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+          >
+            <option value="user">User (visible everywhere)</option>
+            <option value="workspace">Workspace ({workspaceName ?? 'current'})</option>
+          </select>
+        </div>
+      )}
       <div>
         <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Tags (comma-separated)</label>
         <input
@@ -305,6 +332,7 @@ function AddSecretForm({
               credentialType,
               description: description || undefined,
               tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+              scope,
             })
           }
           disabled={!name || !value}

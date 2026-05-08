@@ -224,11 +224,70 @@ bun test tests/tui/
 
 Skipped when the gateway isn't running on `API_PORT`.
 
+## Tree-sitter highlighter (2026-05b)
+
+The pluggable `setHighlighter()` slot is now wired to a
+buffer-oriented tree-sitter adapter at
+`src/tui-editor/editor/highlight-tree-sitter.ts`.
+
+### Grammars
+
+`web-tree-sitter` + the per-language packages
+(`tree-sitter-typescript`, `tree-sitter-python`,
+`tree-sitter-rust`, `tree-sitter-go`, `tree-sitter-java`) are
+runtime dependencies. The `.wasm` files are **not** vendored in
+the repo — the adapter resolves them through Bun's module
+resolver (`Bun.resolveSync('tree-sitter-<lang>/package.json',
+import.meta.dir)`) and reads them from `node_modules/` on first
+use. Adding a language is a `bun add tree-sitter-<lang>` plus
+one row in `GRAMMAR_FILES`.
+
+### Lifecycle
+
+- `installTreeSitterHighlighter()` runs in `OctipusEditorApp.start()`
+  before the TUI starts. It only registers the function — no
+  WASM is loaded yet.
+- The first call to `setSource(lang, text)` triggers
+  `Parser.init()` (Emscripten / WASM threading bring-up) and the
+  grammar load for `lang`. Both are awaited; failures are
+  swallowed and the line-based fallback runs instead.
+- `OctipusEditorApp.openFile` calls `setSource` for every newly
+  opened buffer, so the cache is warm before the renderer asks
+  for tokens.
+
+### Cache
+
+The adapter parses the **whole buffer** on `setSource` and walks
+the syntax tree once, building a `Map<lineIndex, Token[]>`. The
+editor's render path calls `hintLineIndex(idx)` immediately
+before each `highlight(line, lang)` call so the lookup knows
+which row to fetch — keeping the `(line, lang) => Token[]`
+contract intact. If the cached line text doesn't match the
+incoming line (the buffer drifted from the last `setSource`),
+the lookup falls through to the regex highlighter.
+
+A real-world editor would use tree-sitter's incremental parsing
+(`Parser.parse(text, oldTree)` already wired); we hold the
+previous `Tree` per language but currently re-parse on every
+`setSource`. Wiring incremental edits requires the editor to
+emit text-delta events, which is a follow-up.
+
+### Token mapping
+
+Tree-sitter node types collapse onto the existing `TokenKind`
+union (`keyword | string | number | comment | function | type |
+operator | punctuation | plain`) via three sets in the adapter:
+
+- Named-node sets for strings, numbers, comments, types, and
+  function declarations (covers the common cases across all
+  shipped grammars).
+- Anonymous-node classification for operators, punctuation, and
+  keywords (tree-sitter exposes literal tokens like `function`
+  or `;` as anonymous nodes with their text as the `type`).
+
+Anything we don't have an opinion about stays `plain`, so the
+editor never paints noise.
+
 ## Open follow-ups
 
-- Tree-sitter (or LSP) implementation of the pluggable highlighter
-  slot for ts/tsx/py/rust/go.
-- Workspace switch → instant reconnect so the new slug applies
-  without a manual restart.
-- VIM IME-aware INSERT mode + named registers (`"a` etc.).
 - Mouse wheel scrolling once pi-tui exposes mouse APIs.

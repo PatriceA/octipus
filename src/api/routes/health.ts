@@ -29,25 +29,57 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
       const allProviders = router.getAllProviders();
       const providerByName = (name: string) => allProviders.find(p => p.name === name);
 
-      const [litellm, ollama, openai, anthropic, gemini, deepseek] = await Promise.all([
+      const directCheck = (name: string) => {
+        const p = providerByName(name);
+        if (!p) {
+          return Promise.resolve({
+            service: name, status: 'not_configured' as const, message: 'Provider not registered', lastChecked: new Date(),
+          });
+        }
+        return healthChecker.checkDirectProvider(name, p).catch((e: Error) => ({
+          service: name, status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
+        }));
+      };
+
+      const customCheck = async () => {
+        try {
+          const registry = getModelRegistry();
+          const models = await registry.getAllModels();
+          const customModels = models.filter((m) => m.provider === 'custom' && m.endpoint);
+          if (customModels.length === 0) {
+            return { service: 'custom', status: 'not_configured' as const, message: 'No custom endpoints registered', lastChecked: new Date() };
+          }
+          // Probe the first custom endpoint's /models route. Network errors → unhealthy.
+          const start = Date.now();
+          const target = customModels[0].endpoint!.replace(/\/+$/, '');
+          const res = await fetch(`${target}/models`, { signal: AbortSignal.timeout(5000) });
+          return {
+            service: 'custom',
+            status: res.ok ? ('healthy' as const) : ('unhealthy' as const),
+            latency: Date.now() - start,
+            message: res.ok ? `${customModels.length} endpoint(s)` : `HTTP ${res.status}`,
+            lastChecked: new Date(),
+          };
+        } catch (e) {
+          return { service: 'custom', status: 'unhealthy' as const, message: (e as Error).message, lastChecked: new Date() };
+        }
+      };
+
+      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, voyage, openrouter, custom] = await Promise.all([
         healthChecker.checkLiteLLMProxy().catch((e: Error) => ({
           service: 'litellm', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
         })),
         healthChecker.checkOllama().catch((e: Error) => ({
           service: 'ollama', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
         })),
-        healthChecker.checkDirectProvider('openai', providerByName('openai')!).catch((e: Error) => ({
-          service: 'openai', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
-        })),
-        healthChecker.checkDirectProvider('anthropic', providerByName('anthropic')!).catch((e: Error) => ({
-          service: 'anthropic', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
-        })),
-        healthChecker.checkDirectProvider('gemini', providerByName('gemini')!).catch((e: Error) => ({
-          service: 'gemini', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
-        })),
-        healthChecker.checkDirectProvider('deepseek', providerByName('deepseek')!).catch((e: Error) => ({
-          service: 'deepseek', status: 'not_configured' as const, message: e.message, lastChecked: new Date(),
-        })),
+        directCheck('openai'),
+        directCheck('anthropic'),
+        directCheck('gemini'),
+        directCheck('deepseek'),
+        directCheck('grok'),
+        directCheck('voyage'),
+        directCheck('openrouter'),
+        customCheck(),
       ]);
 
       const toHealthEntry = (h: { service?: string; status: string; latency?: number; message?: string; lastChecked?: Date }) => ({
@@ -76,6 +108,10 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           anthropic: toHealthEntry(anthropic),
           gemini: toHealthEntry(gemini),
           deepseek: toHealthEntry(deepseek),
+          grok: toHealthEntry(grok),
+          voyage: toHealthEntry(voyage),
+          openrouter: toHealthEntry(openrouter),
+          custom: toHealthEntry(custom),
         },
       };
     } catch (_error) {
@@ -95,6 +131,10 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           anthropic: fallback('anthropic'),
           gemini: fallback('gemini'),
           deepseek: fallback('deepseek'),
+          grok: fallback('grok'),
+          voyage: fallback('voyage'),
+          openrouter: fallback('openrouter'),
+          custom: fallback('custom'),
         },
       };
     }

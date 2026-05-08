@@ -2,7 +2,8 @@ import { and, desc, eq, gte, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { RedisCache } from '@/db/redis';
 import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
-import { modelLogger } from '@/utils/logger';
+import { getBillingProvider } from '@/services/billing/provider';
+import { coreLogger, modelLogger } from '@/utils/logger';
 
 export interface UsageStats {
   totalInputTokens: number;
@@ -45,6 +46,24 @@ export class CostTracker {
 
     // Invalidate relevant caches
     await this.invalidateUserCache(entry.userId);
+
+    // Emit a billing event. Fire-and-forget — never block the request.
+    void getBillingProvider().recordUsage({
+      userId: entry.userId,
+      orgId: null,
+      workspaceId: null,
+      modelName: entry.modelName,
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+      costUsd: entry.totalCost,
+      sessionId: entry.sessionId ?? null,
+      agentId: entry.agentId ?? null,
+      requestType: entry.requestType ?? null,
+      metadata: entry.metadata as Record<string, unknown> | undefined,
+      occurredAt: new Date(),
+    }).catch((err: unknown) => {
+      coreLogger.error({ err: (err as Error).message }, 'billing.recordUsage failed');
+    });
 
     return result[0];
   }

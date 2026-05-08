@@ -166,6 +166,7 @@ function toSkill(loc: ScanLocation, found: FoundFile): Skill | undefined {
     frameworks: portable.frameworks ?? [],
     isSystem: true,
     userId: null,
+    orgId: null,
     createdAt: now,
     updatedAt: now,
   } satisfies Skill;

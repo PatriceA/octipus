@@ -86,6 +86,7 @@ export const AVAILABLE_TOPICS = [
   { value: 'pm', label: 'Project Mgmt', description: 'Project planning, tracking, coordination' },
   { value: 'writing', label: 'Writing', description: 'Documentation, technical writing' },
   { value: 'voice', label: 'Voice', description: 'Phone call conversations — use a fast model for low latency' },
+  { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */

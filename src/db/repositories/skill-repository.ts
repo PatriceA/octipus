@@ -1,4 +1,5 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
+import { getUserOrgIds } from '@/services/org-membership';
 import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
 import { type Skill, skills } from '../schema/skills';
@@ -14,9 +15,10 @@ export class SkillRepository {
 
   async findAll(userId?: string): Promise<Skill[]> {
     if (userId) {
-      return this.db.select().from(skills).where(
-        or(eq(skills.isSystem, true), eq(skills.userId, userId)),
-      );
+      const orgIds = await getUserOrgIds(userId);
+      const clauses = [eq(skills.isSystem, true), eq(skills.userId, userId)];
+      if (orgIds.length > 0) clauses.push(inArray(skills.orgId, orgIds));
+      return this.db.select().from(skills).where(or(...clauses));
     }
     return this.db.select().from(skills);
   }

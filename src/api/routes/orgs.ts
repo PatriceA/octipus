@@ -1,6 +1,12 @@
+import { and, eq, gte, sql } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
+import { getDb } from '@/db/postgres';
+import { costLog, modelConfig } from '@/db/schema/models';
+import { orgMembers } from '@/db/schema/organizations';
+import { orgSsoConfig } from '@/db/schema/org-sso';
+import { skills } from '@/db/schema/skills';
 import { getOrgWorkspaceManager, OrgWorkspaceError } from '@/security/orgs';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 
@@ -345,6 +351,222 @@ export const orgAdminRoutes = new Elysia({ prefix: '/admin/orgs' })
         userId: t.String(),
         role: t.Optional(t.Union([t.Literal('member'), t.Literal('org_admin')])),
       }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .post(
+    '/:id/models',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+      const updated = await getDb()
+        .update(modelConfig)
+        .set({ orgId: ctx.params.id })
+        .where(eq(modelConfig.id, ctx.body.modelId))
+        .returning();
+      if (updated.length === 0) {
+        ctx.set.status = 404;
+        return { error: 'Model not found' };
+      }
+      return updated[0];
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ modelId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .delete(
+    '/:id/models/:modelId',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+      const updated = await getDb()
+        .update(modelConfig)
+        .set({ orgId: null })
+        .where(eq(modelConfig.id, ctx.params.modelId))
+        .returning();
+      if (updated.length === 0) {
+        ctx.set.status = 404;
+        return { error: 'Model not found' };
+      }
+      return { removed: true };
+    },
+    {
+      params: t.Object({ id: t.String(), modelId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .post(
+    '/:id/skills',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+      const updated = await getDb()
+        .update(skills)
+        .set({ orgId: ctx.params.id })
+        .where(eq(skills.id, ctx.body.skillId))
+        .returning();
+      if (updated.length === 0) {
+        ctx.set.status = 404;
+        return { error: 'Skill not found' };
+      }
+      return updated[0];
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ skillId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .delete(
+    '/:id/skills/:skillId',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+      const updated = await getDb()
+        .update(skills)
+        .set({ orgId: null })
+        .where(eq(skills.id, ctx.params.skillId))
+        .returning();
+      if (updated.length === 0) {
+        ctx.set.status = 404;
+        return { error: 'Skill not found' };
+      }
+      return { removed: true };
+    },
+    {
+      params: t.Object({ id: t.String(), skillId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .get(
+    '/:id/sso',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+      const [row] = await getDb()
+        .select()
+        .from(orgSsoConfig)
+        .where(eq(orgSsoConfig.orgId, ctx.params.id))
+        .limit(1);
+      // Strip sensitive fields when returning to the admin UI; the
+      // cert + token ref stay because admins manage them, but they
+      // are still scope=admin only via the guard above.
+      return row ?? {
+        orgId: ctx.params.id,
+        samlEnabled: false,
+        samlEntityId: null,
+        samlSsoUrl: null,
+        samlX509Cert: null,
+        samlAttributeMap: {},
+        scimEnabled: false,
+        scimTokenVaultRef: null,
+      };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .patch(
+    '/:id/sso',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+      const db = getDb();
+      const now = new Date();
+      const patch = {
+        samlEnabled: ctx.body.samlEnabled,
+        samlEntityId: ctx.body.samlEntityId ?? null,
+        samlSsoUrl: ctx.body.samlSsoUrl ?? null,
+        samlX509Cert: ctx.body.samlX509Cert ?? null,
+        samlAttributeMap: ctx.body.samlAttributeMap ?? {},
+        scimEnabled: ctx.body.scimEnabled,
+        scimTokenVaultRef: ctx.body.scimTokenVaultRef ?? null,
+        updatedAt: now,
+      };
+      const [updated] = await db
+        .insert(orgSsoConfig)
+        .values({ orgId: ctx.params.id, ...patch })
+        .onConflictDoUpdate({ target: orgSsoConfig.orgId, set: patch })
+        .returning();
+      return updated;
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        samlEnabled: t.Boolean(),
+        samlEntityId: t.Optional(t.String()),
+        samlSsoUrl: t.Optional(t.String()),
+        samlX509Cert: t.Optional(t.String()),
+        samlAttributeMap: t.Optional(t.Record(t.String(), t.String())),
+        scimEnabled: t.Boolean(),
+        scimTokenVaultRef: t.Optional(t.String()),
+      }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .get(
+    '/:id/usage',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const guard = requireAdminGuard(ctx);
+      if (!guard.ok) return guard.body;
+
+      const since = ctx.query.since ? new Date(ctx.query.since) : undefined;
+      const conditions = [eq(orgMembers.orgId, ctx.params.id)];
+      if (since) conditions.push(gte(costLog.createdAt, since));
+
+      const rows = await getDb()
+        .select({
+          totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
+          totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+          totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
+          requestCount: sql<number>`COUNT(*)::int`,
+        })
+        .from(costLog)
+        .innerJoin(orgMembers, eq(orgMembers.userId, costLog.userId))
+        .where(and(...conditions));
+
+      const byModel = await getDb()
+        .select({
+          modelName: costLog.modelName,
+          totalInputTokens: sql<number>`COALESCE(SUM(${costLog.inputTokens}), 0)::int`,
+          totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
+          totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
+          requestCount: sql<number>`COUNT(*)::int`,
+        })
+        .from(costLog)
+        .innerJoin(orgMembers, eq(orgMembers.userId, costLog.userId))
+        .where(and(...conditions))
+        .groupBy(costLog.modelName);
+
+      return { stats: rows[0], byModel };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: t.Object({ since: t.Optional(t.String()) }),
       detail: { tags: ['admin'] },
     },
   )

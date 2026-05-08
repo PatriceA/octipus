@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { WorkspacePicker } from './workspace-picker';
 
 interface Notification {
   id: string;
@@ -250,6 +251,8 @@ export function Header() {
 
       {/* Actions */}
       <div className="flex items-center gap-4">
+        <WorkspacePicker />
+
         {/* Notification bell */}
         <div className="relative" ref={notifRef}>
           <button

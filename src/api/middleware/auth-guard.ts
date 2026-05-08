@@ -23,6 +23,10 @@ function isPublicPath(path: string): boolean {
   if (path.startsWith('/api/channels/whatsapp/webhook')) return true;
   // Mobile device pairing — code-based auth
   if (path === '/api/devices/pair/redeem') return true;
+  // SCIM 2.0 — per-org Bearer token, validated inside the route
+  if (path.startsWith('/api/scim/')) return true;
+  // SAML SP routes — IdP-initiated, signature-validated inside the route
+  if (path.startsWith('/api/saml/')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 

@@ -442,14 +442,11 @@ export async function runConformanceTests(
 
     const capabilities = capabilitiesFromModel(model);
 
-    // Conformance tests verify provider connectivity — disable thinking to avoid
-    // token budget issues (thinking consumes output tokens, leaving empty responses).
-    // LiteLLM and Ollama support think:false. Direct providers like Gemini/Anthropic
-    // reject unknown fields, so only add for compatible providers.
+    // Eval and conformance always run with think:true so reasoning models
+    // exercise their full path. Providers that don't understand the flag
+    // either ignore it (LiteLLM/Ollama) or get it dropped at the provider layer.
     const modelExtra = (model.metadata as any)?.extraBody ?? {};
-    const noThinkProviders = new Set(['litellm', 'ollama']);
-    const thinkOverride = noThinkProviders.has(model.provider) ? { think: false } : {};
-    const extraBody = { ...modelExtra, ...thinkOverride };
+    const extraBody = { ...modelExtra, think: true };
 
     // Route based on DB-configured provider field.
     // Models added via LiteLLM have provider='litellm' → use proxy.
@@ -479,15 +476,17 @@ export async function runConformanceTests(
         continue;
       }
 
-      // Run test with timeout
+      // Run test with timeout — grok reasoning models can take minutes per vendor docs.
+      // Per-model effective timeout: respect explicit override, else expand for grok.
       const testStart = Date.now();
+      const effectiveTimeout = computeTestTimeout(model, timeout, options?.timeout != null);
       console.log(`  [${model.name}] ${tc.name} ...`);
 
       try {
         await Promise.race([
           tc.run(ctx),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Test timed out after ${timeout}ms`)), timeout),
+            setTimeout(() => reject(new Error(`Test timed out after ${effectiveTimeout}ms`)), effectiveTimeout),
           ),
         ]);
 
@@ -530,6 +529,35 @@ export async function runConformanceTests(
     results,
     summary,
   };
+}
+
+/**
+ * Compute the effective per-test timeout for a model.
+ * Grok reasoning models can take many minutes (vendor docs recommend up to 3600s).
+ * If the caller passed an explicit timeout, honor it as a floor; otherwise expand.
+ */
+function computeTestTimeout(model: ModelConfigEntry, baseTimeout: number, explicit: boolean): number {
+  if (explicit) return baseTimeout;
+  const lower = model.modelId.toLowerCase();
+
+  if (model.provider === 'grok') {
+    const isExplicitlyNonReasoning = /non-reasoning/.test(lower);
+    const isReasoning = !isExplicitlyNonReasoning && (
+      /reasoning/.test(lower) ||
+      /^grok-4(\b|-)/.test(lower) ||
+      /^grok-code/.test(lower) ||
+      /^grok-3-mini/.test(lower)
+    );
+    return Math.max(baseTimeout, isReasoning ? 600_000 : 180_000);
+  }
+
+  if (model.provider === 'deepseek') {
+    // Mirror DeepSeekProvider's reasoning detection.
+    const isReasoning = /reasoner|r1|thinking|flash|v4|preview/.test(lower);
+    return Math.max(baseTimeout, isReasoning ? 600_000 : 180_000);
+  }
+
+  return baseTimeout;
 }
 
 /** Get all registered test case names */

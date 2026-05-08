@@ -36,6 +36,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   const tabs = [
     { href: '/admin/users', label: 'Users' },
+    { href: '/admin/orgs', label: 'Orgs' },
     { href: '/admin/quotas', label: 'Quotas' },
     { href: '/admin/audit', label: 'Audit log' },
   ];

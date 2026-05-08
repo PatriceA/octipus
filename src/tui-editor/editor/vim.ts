@@ -48,9 +48,23 @@ export type VimMode = 'NORMAL' | 'INSERT' | 'VISUAL';
 
 export interface VimState {
   mode: VimMode;
-  /** Pending leader key for multi-key sequences (`g`, `d`, `y`). */
+  /** Pending leader key for multi-key sequences (`g`, `d`, `y`, `"`). */
   pending: string | null;
-  /** Last yanked text (single register, `"`). */
+  /**
+   * Named registers. The default register is `"`; other names follow
+   * vim convention (`"a`-`"z`, `"+` for the system clipboard).
+   */
+  registers: Record<string, string>;
+  /**
+   * Register that the next y/d/p operation reads from / writes to.
+   * Set by typing `"x` in NORMAL mode; resets to `"` after the
+   * operation completes.
+   */
+  activeRegister: string;
+  /**
+   * Backwards-compat mirror of `registers['"']`. Older callers still
+   * read `state.register`; updates flow through this field too.
+   */
   register: string;
   /** Pending leader expiry — caller compares to `Date.now()`. */
   pendingUntil: number;
@@ -58,8 +72,32 @@ export interface VimState {
 
 export const PENDING_TIMEOUT_MS = 600;
 
+const DEFAULT_REGISTER = '"';
+
 export function newVimState(): VimState {
-  return { mode: 'NORMAL', pending: null, register: '', pendingUntil: 0 };
+  return {
+    mode: 'NORMAL',
+    pending: null,
+    registers: {},
+    activeRegister: DEFAULT_REGISTER,
+    register: '',
+    pendingUntil: 0,
+  };
+}
+
+function writeRegister(state: VimState, value: string): VimState {
+  const name = state.activeRegister;
+  const registers = { ...state.registers, [name]: value };
+  return {
+    ...state,
+    registers,
+    register: name === DEFAULT_REGISTER ? value : (registers[DEFAULT_REGISTER] ?? state.register),
+    activeRegister: DEFAULT_REGISTER,
+  };
+}
+
+function readRegister(state: VimState): string {
+  return state.registers[state.activeRegister] ?? (state.activeRegister === DEFAULT_REGISTER ? state.register : '');
 }
 
 export interface VimKey {
@@ -68,6 +106,12 @@ export interface VimKey {
   ctrl?: boolean;
   shift?: boolean;
   escape?: boolean;
+  /**
+   * True while an IME composition is in progress. Suppresses vim
+   * leader matching so a multi-byte CJK / dead-key sequence doesn't
+   * accidentally trigger `gg`, `dd`, `yy`, or a register prefix.
+   */
+  composing?: boolean;
   /**
    * Special "j/k/h/l only" — Ink fires arrow keys for those, but
    * vim purists also bind to the letter keys. We accept either; the
@@ -105,21 +149,38 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
     return { state, consumed: false };
   }
 
+  // While an IME composition is active, swallow keys without matching
+  // any vim leader/motion so a multi-byte CJK sequence doesn't fire
+  // `gg`/`dd`/`yy` mid-compose. The composed character will arrive as
+  // a normal printable once the IME commits.
+  if (key.composing) {
+    return { state, consumed: true };
+  }
+
   const now = Date.now();
   const pending = state.pendingUntil > now ? state.pending : null;
 
-  // Multi-key sequences first. `gg` / `dd` / `yy`.
+  // Register prefix: `"x` selects the register for the next y/d/p.
+  if (pending === '"' && key.char) {
+    return {
+      state: { ...state, pending: null, activeRegister: key.char },
+      consumed: true,
+    };
+  }
+
+  // Multi-key sequences. `gg` / `dd` / `yy`.
   if (pending === 'g' && key.char === 'g') {
     buf.moveDocStart(state.mode === 'VISUAL');
     return { state: { ...state, pending: null }, consumed: true };
   }
   if (pending === 'd' && key.char === 'd') {
-    state = { ...state, register: buf.getLine(buf.getCursor().line) + '\n' };
+    state = writeRegister(state, buf.getLine(buf.getCursor().line) + '\n');
     buf.deleteLine();
     return { state: { ...state, pending: null }, consumed: true };
   }
   if (pending === 'y' && key.char === 'y') {
-    return { state: { ...state, pending: null, register: buf.getLine(buf.getCursor().line) + '\n' }, consumed: true };
+    state = writeRegister(state, buf.getLine(buf.getCursor().line) + '\n');
+    return { state: { ...state, pending: null }, consumed: true };
   }
   // Cancel pending if a non-matching key arrives.
   if (pending) {
@@ -154,7 +215,7 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
           const end = i === b.line - a.line ? b.col : line.length;
           return line.slice(start, end);
         }).join('\n');
-        state = { ...state, register: text };
+        state = writeRegister(state, text);
       }
       buf.deleteForward();
       return { state: { ...state, mode: 'NORMAL' }, consumed: true };
@@ -169,15 +230,16 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
           const end = i === b.line - a.line ? b.col : line.length;
           return line.slice(start, end);
         }).join('\n');
-        state = { ...state, register: text };
+        state = writeRegister(state, text);
       }
       buf.clearSelection();
       return { state: { ...state, mode: 'NORMAL' }, consumed: true };
     }
   }
 
-  // Multi-key leaders (NORMAL only).
-  if (state.mode === 'NORMAL' && (c === 'g' || c === 'd' || c === 'y')) {
+  // Multi-key leaders (NORMAL only). `"` opens register selection;
+  // `g` / `d` / `y` open their respective two-char sequences.
+  if (state.mode === 'NORMAL' && (c === 'g' || c === 'd' || c === 'y' || c === '"')) {
     return { state: { ...state, pending: c, pendingUntil: now + PENDING_TIMEOUT_MS }, consumed: true };
   }
 
@@ -205,7 +267,11 @@ export function step(buf: Buffer, key: VimKey, state: VimState): VimResult {
     if (c === 'x') { buf.deleteForward(); return { state, consumed: true }; }
     if (c === 'u') { buf.undo(); return { state, consumed: true }; }
     if (key.ctrl && c === 'r') { buf.redo(); return { state, consumed: true }; }
-    if (c === 'p') { buf.insert(state.register); return { state, consumed: true }; }
+    if (c === 'p') {
+      const value = readRegister(state);
+      buf.insert(value);
+      return { state: { ...state, activeRegister: DEFAULT_REGISTER }, consumed: true };
+    }
   }
 
   // Unknown — consumed=true so we don't accidentally type characters in NORMAL.

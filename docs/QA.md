@@ -615,6 +615,248 @@ Reset feature flags by removing them from `.env` and restart.
 
 ---
 
+## 8. Multi-user + TUI follow-ups (2026-05b)
+
+Validates the second batch of multi-user + TUI follow-ups: web UI
+workspace pickers, org-shared models / skills, vault workspace
+scope, SCIM provisioning, billing hooks, the tree-sitter
+highlighter, vim named registers, scrollable messages pane, and
+the `/workspace` reconnect.
+
+**Prerequisites.** Multi-user enabled (`MULTIUSER=true`) and the
+`multiuser.orgWorkspaces` flag on (Settings → Configuration →
+Multi-user → Org/Workspaces). At least one admin user available.
+
+### 8.1 Web UI — workspace picker
+
+1. Sign in to the web UI as a non-admin user.
+2. Open DevTools → Network. Confirm the request to `/api/me/workspaces`
+   returns ≥1 workspace.
+3. The header shows a workspace combobox to the left of the
+   notification bell, displaying the active workspace name.
+4. Click it. The dropdown lists every workspace; the active one
+   has a checkmark. Each row shows `/<slug>` and the `· default`
+   tag where applicable.
+5. Click "Create workspace…", enter slug `qa-test` and name
+   "QA Test", click Create.
+   - The new workspace becomes active; the header label updates.
+   - `localStorage.octipus.activeWorkspace` holds the new id.
+   - All subsequent API requests carry `X-Octipus-Workspace:
+     qa-test` (verify in DevTools Network tab → Request Headers).
+6. Switch back to the default workspace via the dropdown.
+   Confirm the header header changes immediately and existing
+   data (sessions, models, skills) re-fetches with the original
+   slug.
+
+### 8.2 Web UI — admin orgs
+
+1. Sign in as an admin.
+2. Navigate to `/admin/orgs` (or via the picker → "Manage orgs…").
+3. Empty state shows "No organizations yet."
+4. Click "New org", enter slug `qa-org`, name "QA Org". Confirm
+   the row appears. Expand it; the members list is empty (the
+   admin who created it isn't auto-joined — that's correct).
+5. Add a member via the existing admin → users page → assign org
+   (or directly via `POST /api/admin/orgs/<id>/members` with a
+   user id). The expanded members list updates on the next page
+   refresh.
+6. Disable `multiuser.orgWorkspaces` in Settings; reload
+   `/admin/orgs`. The page now shows the "Multi-user orgs are
+   disabled" hint instead of crashing. Re-enable to continue.
+
+### 8.3 Org-shared models + skills
+
+1. As admin, ensure at least one model row exists in `/models`
+   (e.g. an OpenAI gpt-4o entry).
+2. Get the model id (`SELECT id FROM model_config LIMIT 1` via
+   admin DB shell or via `/api/models`).
+3. `curl -X POST /api/admin/orgs/<orgId>/models -d '{"modelId":"<id>"}'`
+   with admin Bearer token. The response shows `org_id` set.
+4. Sign in as a user who **is** in that org → `/models` page
+   shows the model. Sign in as a user who **isn't** → the model
+   does not appear.
+5. Repeat with a skill: `POST /api/admin/orgs/<orgId>/skills
+   {"skillId":"<id>"}`. Verify same visibility rule on `/skills`.
+6. `DELETE /api/admin/orgs/<orgId>/models/<modelId>` returns the
+   row to `org_id IS NULL`; non-org-member should now see it
+   again (system-wide).
+
+### 8.4 Vault `scope=workspace`
+
+1. As any user, switch to a workspace via the header picker.
+2. Open `/secrets`. Click "Add Secret" in the All Vault Entries
+   section.
+3. The Add modal now shows a **Scope** select with two options:
+   "User (visible everywhere)" and "Workspace (<workspace name>)".
+4. Pick Workspace, fill in name `qa-workspace-secret` + a value,
+   click Add.
+5. The secret appears in the list. Confirm in DB:
+   `SELECT scope, workspace_id FROM vault WHERE name='qa-workspace-secret'`
+   → scope='workspace', workspace_id matches the active workspace.
+6. Switch to a different workspace via the header picker. The
+   secret no longer appears in the list (correct — it's scoped
+   to the original workspace).
+7. Switch back. Secret reappears.
+
+### 8.5 SAML SSO
+
+1. As admin, navigate to `/admin/orgs`, expand an org, click
+   "SSO + SCIM".
+2. Toggle SAML on. Paste the IdP entity ID, SSO URL, and x509
+   certificate (the easy way to get a sandbox IdP is
+   [SAMLTest.id](https://samltest.id)). Map `username` to
+   `urn:oid:0.9.2342.19200300.100.1.1` (or whatever your IdP
+   emits). Save.
+3. The page shows the SP metadata URL and ACS URL. Hand the
+   metadata URL to the IdP — most providers accept "fetch from
+   URL" or paste the XML body of `GET /api/saml/<slug>/metadata`.
+4. Open `/api/saml/<slug>/login` in a private window. You should
+   be redirected to the IdP's login page.
+5. Authenticate at the IdP. The IdP POSTs back to ACS; on success
+   the response is a 302 to `/` with a `session_token` cookie set.
+6. Reload `/`. You're signed in as the SAML user. The user is
+   created on first login if it didn't exist; subsequent logins
+   re-use the row.
+7. SQL check:
+   ```sql
+   SELECT u.username, om.role FROM users u
+     JOIN org_members om ON om.user_id = u.id
+     WHERE om.org_id = '<orgId>';
+   ```
+   shows the new SAML user as `member`.
+8. Negative path: tamper with the assertion XML or the cert in
+   the org config. The ACS responds 401 with
+   `{"error":"SAML response validation failed"}`.
+9. Strict schema (optional): install
+   `@authenio/samlify-xsd-schema-validator`, set
+   `SAML_SCHEMA_VALIDATOR=strict` in `.env`, restart, and confirm
+   the ACS still works against the same IdP. Malformed XML is
+   now rejected at the schema layer.
+
+### 8.6 SCIM provisioning
+
+1. As admin, open SQL shell:
+   ```sql
+   INSERT INTO org_sso_config (org_id, scim_enabled, scim_token_vault_ref)
+   VALUES ('<orgId>', true, 'scim_token_qa');
+   ```
+2. Store the bearer token in vault as `system` scope:
+   `curl -X POST /api/vault -d '{"name":"scim_token_qa","value":"sekret-bearer","credentialType":"api_key","systemLevel":true}'`
+   (admin auth).
+3. Provision a user:
+   ```sh
+   curl -X POST /api/scim/v2/Users \
+     -H 'Authorization: Bearer sekret-bearer' \
+     -H 'Content-Type: application/scim+json' \
+     -d '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"qa-scim","active":true,"emails":[{"value":"q@s.test","primary":true}]}'
+   ```
+   Expect 201 with the SCIM User resource.
+4. List users:
+   `curl -H 'Authorization: Bearer sekret-bearer' /api/scim/v2/Users`
+   → 200 with the new user in `Resources[]`.
+5. Disable: `PATCH /api/scim/v2/Users/<id>` with body
+   `{"schemas":["..."],"Operations":[{"op":"replace","path":"active","value":false}]}`.
+   Confirm `users.is_active` is now false.
+6. Wrong / missing token returns 401 with the SCIM error shape.
+
+### 8.7 Billing hooks
+
+1. Run any chat that exercises a model so a row lands in
+   `cost_log`.
+2. With `BILLING_PROVIDER` unset, no billing-side error appears
+   in logs and `cost_log` is populated as usual (provider is
+   no-op).
+3. Set `BILLING_PROVIDER=stripe` in `.env`, restart. With
+   `STRIPE_API_KEY` unset, expect a single warn-level log
+   `BILLING_PROVIDER=stripe but STRIPE_API_KEY is unset`.
+4. Per-org rollup:
+   `curl -H 'Authorization: Bearer <admin>' /api/admin/orgs/<orgId>/usage`
+   returns `{ stats, byModel }` where `stats.totalCost` aggregates
+   spend across every member of that org.
+
+### 8.8 TUI — tree-sitter highlighter
+
+1. `bun run tui:edit` to open the editor.
+2. Open a `.ts` file (Ctrl+O → pick a TypeScript source). Confirm
+   keywords (`const`, `function`, `return`) are coloured
+   distinctly from strings, numbers, and comments.
+3. Repeat with `.py`, `.rs`, `.go`, `.java`. Each language
+   should highlight without manual configuration.
+4. Open a `.md` file. Markdown has no grammar — confirm the
+   regex highlighter still paints headings / code spans (no
+   crash, no plain-only output).
+5. Edit a TS file rapidly. The highlighter caches the parse from
+   the last `setSource`; lines you haven't drifted away from
+   stay coloured, lines that drift fall back to regex until the
+   next save / open.
+
+### 8.9 TUI — `/workspace` instant reconnect
+
+1. `bun run tui` to launch the chat shell.
+2. Confirm the connection bar shows "connected".
+3. Type `/workspace` (no arg). Expect "Current workspace:
+   (default)" or your active workspace slug.
+4. Type `/workspace qa-test`. The status flashes
+   "Switching workspace to qa-test…" → reconnect → "Workspace:
+   qa-test". The WS reconnects with `?workspace=qa-test` in the
+   URL.
+5. `/workspace -` (or `/workspace default`) returns to the
+   backend default; same reconnect behavior.
+6. Send a chat message after the switch — the agent should see
+   the new workspace's filesystem root and any workspace-scoped
+   secrets.
+
+### 8.10 TUI — scrollable messages pane
+
+1. In the chat shell, send several long messages (or run a
+   command that produces multiple agent replies) until the
+   visible chat fills with > 30 lines.
+2. Press `PageUp`. The pane scrolls up; the bottom shows
+   "↓ N newer messages · ↑ M older".
+3. While scrolled up, send another message. The new reply
+   appears at the bottom of the buffer but the pane stays where
+   you were — the indicator's "newer" count rises.
+4. Press `PageDown` until you're back at the live tail. New
+   replies again auto-pin to the bottom.
+5. Press `PageUp` past the start of history; the offset clamps,
+   no crash.
+
+### 8.11 TUI — vim named registers + IME
+
+1. With editor in vim mode (`:set vim`-equivalent or via the
+   layout setting), open any text file.
+2. `"ayy` on line 1, `j`, `"byy` on line 2. Inspect state via a
+   debug log or test build: `state.registers.a` and
+   `state.registers.b` hold each line's text.
+3. `j`, `"ap`. Line 1's text is pasted from register `a`.
+4. `"bp`. Line 2's text is pasted from register `b`.
+5. After every paste, the active register resets to `"`
+   (default). A bare `yy` after a `"ap` writes to the default
+   register, *not* `a`.
+6. (Optional, manual.) On macOS / Linux with a CJK input method
+   active: enter INSERT mode, type Pinyin / IME input rapidly.
+   Vim leader sequences (`gg`, `dd`) **must not** fire while the
+   IME composition is in progress. Octipus depends on the host
+   passing `composing: true` to `VimKey`; this currently lands
+   from pi-tui's input pipeline. If you observe a leader firing
+   mid-compose, file a bug — it's a regression.
+
+### 8.12 Loading grammars from `node_modules`
+
+The tree-sitter wasm files are NOT vendored in the repo. They're
+loaded via `Bun.resolveSync('tree-sitter-typescript/package.json',
+…)` and read from disk on first use.
+
+1. Confirm `ls node_modules/tree-sitter-typescript/*.wasm`
+   returns the wasm binary.
+2. `bun pm ls | grep tree-sitter` shows the four grammar
+   packages + `web-tree-sitter`.
+3. `rm -rf node_modules/tree-sitter-python` and reopen the
+   editor. Open a `.py` file — the regex highlighter renders
+   instead, no crash. Reinstall (`bun install`) to recover.
+
+---
+
 ## Reporting issues
 
 If any step here doesn't behave as described:

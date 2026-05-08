@@ -23,18 +23,25 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   // List credentials (metadata only)
   .get(
     '/',
-    async ({ user }) => {
+    async ({ user, query }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
 
       const vault = getVault();
-      const entries = await vault.list(user.id);
+      const entries = await vault.list(user.id, {
+        workspaceId: query.workspaceId ?? null,
+      });
       // Admins also see system-level credentials, but avoid duplicates if user IS system
       const systemEntries = (user.isAdmin && user.id !== 'system') ? await vault.list('system') : [];
       return { credentials: [...entries, ...systemEntries] };
     },
-    { detail: { tags: ['vault'] } }
+    {
+      query: t.Object({
+        workspaceId: t.Optional(t.String()),
+      }),
+      detail: { tags: ['vault'] },
+    }
   )
 
   // Create credential
@@ -48,6 +55,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
       const vault = getVault();
       // System-level credentials (e.g. OAuth client IDs) are stored under 'system' user
       const ownerId = body.systemLevel ? 'system' : user.id;
+      const scope = body.scope ?? (body.systemLevel ? 'system' : 'user');
+      const workspaceId = scope === 'workspace' ? body.workspaceId ?? null : null;
 
       // Check if credential already exists — update instead of creating duplicate
       const existing = await vault.getByName(ownerId, body.name);
@@ -76,6 +85,8 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         allowedTools: body.allowedTools,
         allowedAgents: body.allowedAgents,
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+        scope,
+        workspaceId,
       });
 
       resetTelephonyIfNeeded(body.name);
@@ -103,6 +114,12 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
         allowedAgents: t.Optional(t.Array(t.String())),
         expiresAt: t.Optional(t.String()),
         systemLevel: t.Optional(t.Boolean()),
+        scope: t.Optional(t.Union([
+          t.Literal('system'),
+          t.Literal('user'),
+          t.Literal('workspace'),
+        ])),
+        workspaceId: t.Optional(t.String()),
       }),
       detail: { tags: ['vault'] },
     }

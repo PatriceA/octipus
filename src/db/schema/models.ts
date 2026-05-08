@@ -1,4 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { organizations } from './organizations';
 
 export const modelConfig = pgTable('model_config', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -7,6 +8,8 @@ export const modelConfig = pgTable('model_config', {
   modelId: text('model_id').notNull(), // gpt-4o, claude-3-opus, llama3.2, etc.
   endpoint: text('endpoint'), // Custom endpoint URL
   apiKeyRef: text('api_key_ref'), // Reference to vault entry
+  /** Org-shared registry. NULL = system-wide. Members of the org see this row in their list. */
+  orgId: uuid('org_id').references(() => organizations.id, { onDelete: 'cascade' }),
   // Capabilities
   maxTokens: integer('max_tokens').default(4096).notNull(),
   contextWindow: integer('context_window').default(128000).notNull(),
@@ -33,6 +36,7 @@ export const modelConfig = pgTable('model_config', {
 }, (table) => ({
   providerIdx: index('model_config_provider_idx').on(table.provider),
   topicsIdx: index('model_config_topics_idx').on(table.topics),
+  orgIdIdx: index('model_config_org_id_idx').on(table.orgId),
 }));
 
 export interface CLIAgentConfig {

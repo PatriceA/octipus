@@ -295,6 +295,20 @@
       "when": 1723600000000,
       "tag": "0041_compaction_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1724200000000,
+      "tag": "0042_org_scoped_models_skills",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1724800000000,
+      "tag": "0043_org_sso_config",
+      "breakpoints": true
     }
   ]
 }

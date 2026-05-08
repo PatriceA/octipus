@@ -7,6 +7,110 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Multi-user + TUI follow-ups (2026-05 batch b)
+
+Carry-overs from the May feature work — the Web UI / org-shared
+resources / vault workspace / SSO / billing / TUI iteration v2
+items the prior multi-user and pi-tui PRs deferred.
+
+#### Web
+
+- **Workspace + org pickers.** `WorkspaceProvider` now wraps the
+  app under `AuthProvider`. Header gets a workspace combobox that
+  lists the user's workspaces, supports inline "Create
+  workspace…", and (for admins) shortcuts to `/admin/orgs`. The
+  picker writes the active workspace id to `localStorage` under
+  `octipus.activeWorkspace` and tells the API client the active
+  *slug*, which is sent on every request as `X-Octipus-Workspace`.
+- **Admin orgs page** at `/admin/orgs`: list, create, expand to
+  view members. Uses the existing `/api/admin/orgs` surface; gated
+  on `multiuser.orgWorkspaces` (returns 404 → page renders an
+  inline "feature is disabled" hint).
+- **Secrets page** wires the active workspace through: GET `/vault`
+  passes `?workspaceId=<id>`, the Add modal exposes a Scope select
+  (User / Workspace) when a workspace is active, and workspace-scoped
+  secrets are listed alongside user-scoped ones.
+
+#### Backend
+
+- **`org_id` on `model_config` and `skills`** (migration `0042`).
+  Visibility rule `org_id IS NULL OR user_id = U OR org_id IN
+  org_members(U)` lives in `src/services/org-membership.ts` and is
+  applied by `SkillRepository.findAll`, the `/api/skills` GET, and
+  the new `ModelRegistry.getModelsForUser` (admins still see
+  everything via the existing `getAllModelsIncludeDisabled`). New
+  endpoints: `POST /api/admin/orgs/:id/{models,skills}` to assign
+  rows to an org, `DELETE` to unassign.
+- **Vault `scope=workspace` on the route.** POST accepts `scope`
+  (`system | user | workspace`) + `workspaceId`; GET accepts
+  `?workspaceId=` and forwards it to `vault.list`. The DEK
+  derivation, encryption, and read path landed in Phase 4
+  follow-up; this is the route surface that exposes them.
+- **SCIM 2.0** at `/api/scim/v2`: List / Get / Create / PATCH /
+  DELETE Users + List Groups, RFC-7643/7644 shapes. Per-org Bearer
+  auth — the token is stored in vault under `scope='system'` and
+  referenced by `org_sso_config.scim_token_vault_ref`. Auth-guard
+  exempts `/api/scim/`; the routes do their own bearer check.
+- **SAML SSO** at `/api/saml/:orgSlug/{metadata,login,acs}`,
+  fully implemented via `samlify`. Migration `0043_org_sso_config`
+  adds the per-org config (entityId, ssoUrl, x509Cert, attributeMap,
+  plus the SCIM token ref). On a successful ACS the handler
+  verifies the assertion signature, maps attributes via the org's
+  `samlAttributeMap` (defaults match Okta/Azure AD/OneLogin),
+  upserts the user, ensures `org_members` membership, and mints
+  the same `session_token` HttpOnly cookie the password-login
+  path uses. RelayState is honored but sanitized to same-origin
+  paths. New `GET/PATCH /api/admin/orgs/:id/sso` endpoint and
+  admin web page at `/admin/orgs/[id]/sso` for IdP paste-in
+  config (entity ID, SSO URL, x509 cert, attribute map, SCIM
+  toggle + vault-ref). Schema validator defaults to a noop;
+  operators wanting strict XSD validation can install
+  `@authenio/samlify-xsd-schema-validator` and set
+  `SAML_SCHEMA_VALIDATOR=strict`.
+- **Billing hooks.** `BillingProvider` interface
+  (`src/services/billing/provider.ts`) with `noop` (default) and
+  `stripe` (stub) implementations, env-gated by `BILLING_PROVIDER`.
+  `CostTracker.logUsage` fires `recordUsage` after every cost-log
+  insert — fire-and-forget so a billing outage never blocks chat.
+  New `GET /api/admin/orgs/:id/usage` aggregates spend per org
+  (joins `cost_log` to `org_members`).
+
+#### TUI
+
+- **Tree-sitter highlighter.** `web-tree-sitter` +
+  `tree-sitter-{typescript,python,rust,go,java}` are dependencies;
+  grammar `.wasm` files load directly from `node_modules/` via
+  `Bun.resolveSync`. `setHighlighter()` is hooked at startup; the
+  buffer-oriented adapter parses on `setSource(lang, text)` (called
+  on every `openFile`) and caches per-line tokens. Falls back to
+  the regex highlighter on grammar-load failure or for languages
+  without a grammar (markdown, yaml, …).
+- **Workspace-switch instant reconnect.** `GatewayAdapter` gained
+  `reconnectWithWorkspace(slug)` — closes the WS, swaps the slug,
+  reuses the exponential-backoff reconnect. New `/workspace
+  <slug>` slash command (or `/workspace -` for the default).
+- **Scrollable messages pane.** PageUp / PageDown move
+  `scrollOffset` in 30-row pages; an `↓ N newer messages`
+  indicator surfaces when the user is reading history. New
+  messages auto-pin to the bottom *only* when the user is
+  already there, so a long agent reply mid-scroll doesn't yank
+  history away.
+- **Vim named registers + IME-aware INSERT.** `VimState.registers`
+  is a `Record<string, string>` keyed by register name. `"x` in
+  NORMAL mode selects the register for the next `y` / `d` / `p`,
+  then resets to the default `"` register. New `VimKey.composing`
+  flag suppresses leader matching during IME composition so a
+  multi-byte CJK / dead-key sequence can't fire `gg` / `dd` /
+  `yy` mid-compose.
+
+#### Migrations
+
+- `0042_org_scoped_models_skills.sql` — adds `org_id` columns + indexes.
+- `0043_org_sso_config.sql` — per-org SAML + SCIM config.
+
+Both are additive and idempotent (`IF NOT EXISTS`); single-user
+installs see no behavior change.
+
 ### Multi-user is the default
 
 Multi-user isolation (`multiuser.enabled`, `enforcePermissions`,

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { AuthProvider } from '@/lib/auth-context';
 import { PermissionProvider } from '@/lib/permission-context';
+import { WorkspaceProvider } from '@/lib/workspace-context';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -21,9 +22,11 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <PermissionProvider>
-          {children}
-        </PermissionProvider>
+        <WorkspaceProvider>
+          <PermissionProvider>
+            {children}
+          </PermissionProvider>
+        </WorkspaceProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

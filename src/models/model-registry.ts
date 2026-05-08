@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { RedisCache } from '@/db/redis';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
+import { getUserOrgIds } from '@/services/org-membership';
 import { modelLogger } from '@/utils/logger';
 
 const CACHE_TTL = 300; // 5 minutes
@@ -183,6 +184,24 @@ export class ModelRegistry {
     return this.db
       .select()
       .from(modelConfig)
+      .orderBy(desc(modelConfig.isEnabled), desc(modelConfig.priority), asc(modelConfig.name));
+  }
+
+  /**
+   * List models visible to a specific user. System-wide rows
+   * (`org_id IS NULL`) are always included; org-scoped rows are
+   * included when the user belongs to that org. Admins see
+   * everything via `getAllModelsIncludeDisabled`.
+   */
+  async getModelsForUser(userId: string): Promise<ModelConfigEntry[]> {
+    const orgIds = await getUserOrgIds(userId);
+    const visibility = orgIds.length > 0
+      ? or(isNull(modelConfig.orgId), inArray(modelConfig.orgId, orgIds))
+      : isNull(modelConfig.orgId);
+    return this.db
+      .select()
+      .from(modelConfig)
+      .where(visibility)
       .orderBy(desc(modelConfig.isEnabled), desc(modelConfig.priority), asc(modelConfig.name));
   }
 

@@ -24,6 +24,8 @@ import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from 
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';
+import { detectLanguage } from './editor/lang';
+import { installTreeSitterHighlighter, setSource as treeSitterSetSource } from './editor/highlight-tree-sitter';
 import { DiffOverlay } from './components/diff-overlay';
 import { FilePicker } from './components/file-picker';
 import { FileTree } from './components/file-tree';
@@ -193,6 +195,11 @@ export class OctipusEditorApp {
   }
 
   async start(): Promise<void> {
+    // Install the tree-sitter highlighter eagerly. The setHighlighter
+    // call is synchronous; grammar loads happen lazily on first
+    // `setSource` and silently fall back to the regex highlighter on
+    // failure, so this never blocks startup.
+    installTreeSitterHighlighter();
     this.tui.start();
     await this.adapter.connect();
   }
@@ -255,6 +262,10 @@ export class OctipusEditorApp {
     if (text === null) return; // bridge-level errors are silent (binary / >5MB / missing)
     const record = this.buffers.openFile(absolutePath, text);
     if (options.activate !== false) this.buffers.setActive(record.id);
+    // Seed the tree-sitter parse for this language. Fire-and-forget;
+    // the highlighter uses the regex fallback until the parse is
+    // ready, and silently no-ops for languages without a grammar.
+    void treeSitterSetSource(detectLanguage(absolutePath), text);
   }
 
   private saveBuffer(record: { id: string; path: string | null; buffer: { text(): string } }): void {

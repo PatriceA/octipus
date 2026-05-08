@@ -40,6 +40,8 @@ import { modelRoutes } from './routes/models';
 import { notificationRoutes } from './routes/notifications';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
+import { samlRoutes } from './routes/saml';
+import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
 import { pluginRoutes } from './routes/plugins';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
@@ -302,6 +304,8 @@ export function createServer() {
         .use(orgAdminRoutes)
         .use(orgMeRoutes)
         .use(workspaceMeRoutes)
+        .use(scimRoutes)
+        .use(samlRoutes)
         .use(agentRoutes)
         .use(sessionRoutes)
         .use(modelRoutes)
@@ -358,9 +362,13 @@ export async function startServer() {
   const config = getConfig();
   const app = createServer();
 
+  // Long-running synchronous routes (Grok reasoning model tests, embedding probes)
+  // can block for minutes. Bun's default idleTimeout (10s) closes the connection
+  // mid-flight. Bump to the max (255s) to avoid spurious timeouts.
   app.listen({
     hostname: config.api.host,
     port: config.api.port,
+    idleTimeout: 255,
   });
 
   apiLogger.info({ host: config.api.host, port: config.api.port }, 'API server started');

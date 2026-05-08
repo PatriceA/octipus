@@ -8,33 +8,20 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-Nothing currently in flight. The multi-user track shipped in May;
-the TUI rewrite onto [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)
-(both chat shell and editor) shipped right after — see
-**Done (recent) → 2026-05 batch** below. New work will land here.
+Nothing currently in flight. The multi-user track and the TUI
+rewrite shipped in May, and the May-carry-over follow-ups
+(workspace pickers, org-shared models/skills, vault workspace
+scope, SCIM, billing hooks, tree-sitter, scrollable history,
+named vim registers, instant workspace reconnect) shipped right
+after — see **Done (recent) → 2026-05 batch (b)** below. New
+work will land here.
 
 ## Next (months)
 
-- **Multi-user follow-ups (carry-overs from the May feature work).**
-  - Web UI workspace + org pickers (REST surface is in place).
-  - Org-shared resources (system models, shared skills) routed
-    through `org_members` — needs `org_id` on `models` and
-    `skills` first.
-  - Vault `scope=workspace` UI / admin surface (the read path
-    landed in Phase 4 follow-up).
-  - SCIM provisioning + SAML SSO.
-  - Per-user billing hooks (token cost accounting already exists).
-
-- **TUI — second iteration.** (Pi-tui-based chat shell + editor are
-  shipped; this is the followup work.)
-  - Tree-sitter (or LSP) implementation of the pluggable
-    highlighter slot for ts/tsx/py/rust/go.
-  - Workspace switch → instant reconnect so the new slug applies
-    without a manual restart.
-  - VIM IME-aware INSERT mode + named registers (`"a` etc.).
-  - Mouse wheel scrolling once pi-tui exposes mouse APIs.
-  - Scrollable messages pane (PageUp / PageDown history) so a long
-    agent reply doesn't push the user's input off the chat pane.
+- **TUI — remaining items.**
+  - Mouse wheel scrolling once pi-tui exposes mouse APIs upstream.
+    The messages pane already exposes `scrollUp/scrollDown`;
+    wiring is a one-line change.
 
 - **Extension SDK — user-authored TypeScript hooks.** `.octipus/extensions/`
   auto-discovery + a narrow `ExtensionAPI` (`registerTool`, `registerCommand`,
@@ -115,6 +102,92 @@ the TUI rewrite onto [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-05 batch (b) — multi-user + TUI follow-ups
+
+- **Web UI workspace + org pickers.** New `WorkspaceProvider`
+  (`web/lib/workspace-context.tsx`) consumes `/api/me/workspaces`
+  + `/api/me/orgs`, persists the active workspace to localStorage
+  (`octipus.activeWorkspace`), and feeds the slug to the API
+  client so every request carries `X-Octipus-Workspace`. Header
+  picker (`web/components/workspace-picker.tsx`) lists workspaces,
+  inline "Create workspace…", admin shortcut to "Manage orgs…".
+  New admin page at `/admin/orgs` with create-org + member
+  inspection.
+
+- **Org-shared resources — `org_id` on models + skills.** Migration
+  `0042_org_scoped_models_skills` adds `org_id` to `model_config`
+  and `skills`. Visibility rule (system OR personal OR shared via
+  org membership) lives in `src/services/org-membership.ts` and is
+  applied by `SkillRepository.findAll`, `ModelRegistry.getModelsForUser`,
+  and the `/api/skills` GET. New admin endpoints
+  `POST/DELETE /api/admin/orgs/:id/{models,skills}` to assign or
+  unassign rows to an org.
+
+- **Vault `scope=workspace` UI / API.** The route accepts
+  `scope` + `workspaceId` on POST and a `?workspaceId=` filter on
+  GET. The web secrets page (`/secrets`) shows a Scope select in
+  the Add modal (User vs Workspace) when a workspace is active
+  and includes the active workspace id on every list fetch so
+  workspace-scoped secrets surface alongside user-scoped ones.
+
+- **SCIM 2.0 + SAML SSO.** Migration `0043_org_sso_config` adds
+  the per-org SSO config table. `/api/scim/v2` ships functional
+  List/Get/Create/PATCH/DELETE Users and List Groups with per-org
+  Bearer auth (token stored in vault, referenced by
+  `scim_token_vault_ref`). `/api/saml/:orgSlug/{metadata,login,acs}`
+  is **fully wired** via `samlify` — SP metadata generation,
+  redirect-binding AuthnRequest, POST-binding ACS with assertion
+  verification, attribute mapping per-org, lazy user upsert + org
+  membership, session cookie minted via the existing session
+  manager. New `GET/PATCH /api/admin/orgs/:id/sso` endpoint and
+  admin web page at `/admin/orgs/[id]/sso` for paste-in IdP config.
+
+- **Per-user billing hooks.** New `BillingProvider` abstraction
+  (`src/services/billing/provider.ts`) — `noop` default, `stripe`
+  stub, env-gated via `BILLING_PROVIDER`. `CostTracker.logUsage`
+  fires `recordUsage` after every cost-log insert (fire-and-forget,
+  errors logged but never block the request). New
+  `GET /api/admin/orgs/:id/usage` aggregates cost per org via
+  `orgMembers` join. Existing `/api/models/usage*` endpoints
+  unchanged.
+
+- **TUI — tree-sitter highlighter.** `web-tree-sitter` +
+  `tree-sitter-{typescript,python,rust,go,java}` installed; grammars
+  loaded directly from `node_modules/` via `Bun.resolveSync` (no
+  vendored copies). Buffer-oriented adapter at
+  `src/tui-editor/editor/highlight-tree-sitter.ts` parses on
+  `setSource(lang, text)`, caches per-line tokens, and falls back
+  to the existing regex highlighter when a grammar is missing or
+  parsing fails. Wired in `app.ts` startup + on every `openFile`.
+  TS / TSX / JS / JSX / Python / Rust / Go / Java covered.
+
+- **TUI — workspace-switch instant reconnect.** `GatewayAdapter`
+  gained `setWorkspace(slug)` + `reconnectWithWorkspace(slug)` —
+  closes the WS, swaps the slug, reuses the existing
+  exponential-backoff reconnect path. New `/workspace <slug>`
+  slash command in the chat shell; `/workspace -` returns to the
+  default workspace.
+
+- **TUI — scrollable messages pane (PageUp / PageDown).**
+  `MessagesPane.scrollUp/scrollDown/scrollToBottom`, an `↓ N
+  newer` indicator when scrolled away from the live tail, and a
+  live-tail-only auto-pin rule so a new agent reply never yanks
+  the user away from history mid-scroll.
+
+- **TUI — vim named registers + IME-aware INSERT.**
+  `VimState.registers` is now a `Record<string, string>` keyed by
+  register name (`"`, `a`-`z`, `+`); `"x` in NORMAL selects the
+  register for the next y/d/p, then resets to `"`. Default
+  register stays as `state.register` for backwards compat. New
+  `VimKey.composing` flag suppresses leader matching during IME
+  composition so a multi-byte CJK / dead-key sequence doesn't
+  fire `gg` / `dd` / `yy`.
+
+- **Verification.** `bun test` — 1580 pass with **15 new tests**
+  added across the batch (3 messages-pane scroll, 3 vim
+  registers/IME, 2 billing, 7 tree-sitter grammars). Full
+  manual checklist in [`docs/QA.md` §8](docs/QA.md#8-multi-user--tui-follow-ups-2026-05b).
 
 ### 2026-05 batch
 

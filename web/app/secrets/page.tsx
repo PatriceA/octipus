@@ -4,6 +4,7 @@ import { KeyRound } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { ALL_VAULT_KEYS, type Credential } from '@/lib/vault-config';
+import { useWorkspace } from '@/lib/workspace-context';
 
 const MANAGED_NAMES = new Set(ALL_VAULT_KEYS.map((k) => k.vaultName));
 
@@ -15,10 +16,14 @@ export default function SecretsPage() {
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [statuses, setStatuses] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const { activeWorkspace } = useWorkspace();
 
   const fetchAll = useCallback(async () => {
     try {
-      const data = await api.get<{ credentials?: Credential[] }>('/vault');
+      const path = activeWorkspace
+        ? `/vault?workspaceId=${encodeURIComponent(activeWorkspace.id)}`
+        : '/vault';
+      const data = await api.get<{ credentials?: Credential[] }>(path);
       const creds = data?.credentials ?? [];
       setCredentials(creds);
 
@@ -32,7 +37,7 @@ export default function SecretsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeWorkspace]);
 
   useEffect(() => {
     fetchAll();
@@ -77,7 +82,12 @@ export default function SecretsPage() {
       <hr className="border-outline-variant/10" />
 
       {/* All Vault Entries */}
-      <VaultTable credentials={credentials.filter((c) => !MANAGED_NAMES.has(c.name))} onRefresh={fetchAll} />
+      <VaultTable
+        credentials={credentials.filter((c) => !MANAGED_NAMES.has(c.name))}
+        onRefresh={fetchAll}
+        workspaceId={activeWorkspace?.id ?? null}
+        workspaceName={activeWorkspace?.name ?? null}
+      />
     </div>
   );
 }

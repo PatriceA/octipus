@@ -18,6 +18,7 @@ export * from './messages';
 export * from './models';
 export * from './notifications';
 export * from './organizations';
+export * from './org-sso';
 export * from './permissions';
 export * from './pipeline-templates';
 export * from './pipelines';

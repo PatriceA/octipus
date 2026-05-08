@@ -94,6 +94,14 @@ function detectProviderAvailability(): ProviderAvailability[] {
     reason: hasGemini ? undefined : 'GEMINI_API_KEY not set',
   });
 
+  // Grok (xAI)
+  const hasGrok = !!process.env.XAI_API_KEY;
+  checks.push({
+    name: 'grok',
+    available: hasGrok,
+    reason: hasGrok ? undefined : 'XAI_API_KEY not set',
+  });
+
   // DeepSeek
   const hasDeepSeek = !!process.env.DEEPSEEK_API_KEY;
   checks.push({

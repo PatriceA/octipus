@@ -147,6 +147,62 @@ describe('vim — edits', () => {
   });
 });
 
+describe('vim — named registers', () => {
+  test('"ayy stores into register a; "ap pastes from a', () => {
+    const b = new Buffer('hello\nworld');
+    let s = newVimState();
+    // "ayy on first line
+    s = step(b, k('"'), s).state;
+    s = step(b, k('a'), s).state;
+    expect(s.activeRegister).toBe('a');
+    s = step(b, k('y'), s).state;
+    s = step(b, k('y'), s).state;
+    expect(s.registers.a).toBe('hello\n');
+    // activeRegister resets to default after yank
+    expect(s.activeRegister).toBe('"');
+
+    // Move down, "ap pastes
+    b.setCursor({ line: 1, col: 0 });
+    s = step(b, k('"'), s).state;
+    s = step(b, k('a'), s).state;
+    s = step(b, k('p'), s).state;
+    expect(b.text()).toContain('hello');
+  });
+
+  test('default register is unaffected by writes to a named register', () => {
+    const b = new Buffer('one\ntwo');
+    let s = newVimState();
+    // Default yy
+    s = step(b, k('y'), s).state;
+    s = step(b, k('y'), s).state;
+    expect(s.register).toBe('one\n');
+    // "byy on second line
+    b.setCursor({ line: 1, col: 0 });
+    s = step(b, k('"'), s).state;
+    s = step(b, k('b'), s).state;
+    s = step(b, k('y'), s).state;
+    s = step(b, k('y'), s).state;
+    expect(s.registers.b).toBe('two\n');
+    // Default register unchanged
+    expect(s.register).toBe('one\n');
+  });
+});
+
+describe('vim — IME composition', () => {
+  test('composing keys are consumed without firing leaders', () => {
+    const b = new Buffer('a\nb\nc');
+    let s = newVimState();
+    // Composing 'g' should not start the gg leader
+    const r = step(b, { char: 'g', composing: true }, s);
+    expect(r.consumed).toBe(true);
+    expect(r.state.pending).toBeNull();
+    s = r.state;
+    // Subsequent committed 'g' should start leader
+    s = step(b, k('g'), s).state;
+    expect(s.pending).toBe('g');
+  });
+});
+
 describe('vim — VISUAL mode', () => {
   test('motion extends selection', () => {
     const b = new Buffer('hello');

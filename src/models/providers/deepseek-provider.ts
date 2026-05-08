@@ -11,8 +11,19 @@ import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
+// Reasoner / R1 / Flash-Preview style models can think for minutes.
+// Mirror the Grok pattern: long timeout for reasoning, shorter for chat.
+const REASONING_TIMEOUT_MS = 1_800_000; // 30 min
+const DEFAULT_TIMEOUT_MS = 120_000;
+
 /** Model names / prefixes supported by the DeepSeek API */
 const SUPPORTED_PREFIXES = ['deepseek-'];
+
+/** Detect DeepSeek reasoning variants by id. Conservative: id-substring match. */
+function isDeepSeekReasoningModel(modelName: string): boolean {
+  const lower = (modelName || '').toLowerCase();
+  return /reasoner|r1|thinking|flash|v4|preview/.test(lower);
+}
 
 /**
  * DeepSeek direct provider -- calls the DeepSeek API (OpenAI-compatible)
@@ -35,7 +46,7 @@ export class DeepSeekProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    const client = await this.createClient();
+    const client = await this.createClient(options.model);
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = {
@@ -128,7 +139,7 @@ export class DeepSeekProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const client = await this.createClient();
+    const client = await this.createClient(options.model);
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
@@ -248,16 +259,20 @@ export class DeepSeekProvider implements ModelProvider {
     }
   }
 
-  private async createClient(): Promise<OpenAI> {
+  private async createClient(modelName?: string): Promise<OpenAI> {
     const apiKey = await this.getApiKey();
     if (!apiKey) {
       throw classifyError(new Error('DeepSeek API key not available. Set DEEPSEEK_API_KEY or store it in the vault.'), 'deepseek');
     }
 
+    const timeout = modelName && isDeepSeekReasoningModel(modelName)
+      ? REASONING_TIMEOUT_MS
+      : DEFAULT_TIMEOUT_MS;
+
     return new OpenAI({
       baseURL: this.baseUrl,
       apiKey,
-      timeout: 120_000,
+      timeout,
       maxRetries: 2,
     });
   }

@@ -3,6 +3,7 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { type Skill, skills } from '@/db/schema/skills';
+import { getUserOrgIds } from '@/services/org-membership';
 import {
   markdownToSkills,
   type PortableSkill,
@@ -23,10 +24,11 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         if (user.id === 'system') {
           return { skills: await db.select().from(skills) };
         }
+        const orgIds = await getUserOrgIds(user.id);
+        const clauses = [eq(skills.isSystem, true), eq(skills.userId, user.id)];
+        if (orgIds.length > 0) clauses.push(inArray(skills.orgId, orgIds));
         return {
-          skills: await db.select().from(skills).where(
-            or(eq(skills.isSystem, true), eq(skills.userId, user.id))
-          ),
+          skills: await db.select().from(skills).where(or(...clauses)),
         };
       }
 

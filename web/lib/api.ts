@@ -24,6 +24,7 @@ export function getApiUrl(): string {
 
 class ApiClient {
   private token: string | null = null;
+  private workspaceSlug: string | null = null;
 
   setToken(token: string | null) {
     this.token = token;
@@ -42,6 +43,14 @@ class ApiClient {
     return this.token;
   }
 
+  setWorkspaceSlug(slug: string | null) {
+    this.workspaceSlug = slug;
+  }
+
+  getWorkspaceSlug(): string | null {
+    return this.workspaceSlug;
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -54,6 +63,10 @@ class ApiClient {
     const token = this.getToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    if (this.workspaceSlug) {
+      headers['X-Octipus-Workspace'] = this.workspaceSlug;
     }
 
     const apiUrl = getApiUrl();

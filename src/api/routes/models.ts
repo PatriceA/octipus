@@ -78,7 +78,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
 
       const registry = getModelRegistry();
-      const models = await registry.getAllModelsIncludeDisabled();
+      const models = user.isAdmin
+        ? await registry.getAllModelsIncludeDisabled()
+        : await registry.getModelsForUser(user.id);
 
       return {
         models: models.map((m) => ({

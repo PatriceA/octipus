@@ -22,6 +22,7 @@ export type Language =
   | 'python'
   | 'go'
   | 'rust'
+  | 'java'
   | 'text';
 
 const EXT_MAP: Record<string, Language> = {
@@ -51,6 +52,7 @@ const EXT_MAP: Record<string, Language> = {
   py: 'python',
   go: 'go',
   rs: 'rust',
+  java: 'java',
 };
 
 export function detectLanguage(path: string): Language {

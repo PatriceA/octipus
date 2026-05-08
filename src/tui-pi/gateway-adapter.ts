@@ -48,11 +48,21 @@ const PERMISSION_DETAIL_MAX = 80;
 export class GatewayAdapter {
   private readonly client: GatewayClient;
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
+  /**
+   * Workspace slug attached to the next connect. The GatewayClient
+   * reads this on every connect via `getWorkspace`, so a runtime
+   * switch is just `setWorkspace(slug)` + a disconnect/reconnect
+   * cycle (see `reconnectWithWorkspace`).
+   */
+  private workspaceSlug: string | null;
+  private readonly externalGetWorkspace?: () => string | null | undefined;
 
   constructor(options: GatewayAdapterOptions = {}) {
+    this.externalGetWorkspace = options.getWorkspace;
+    this.workspaceSlug = options.getWorkspace?.() ?? null;
     const clientOptions: GatewayClientOptions = {
       url: options.url,
-      getWorkspace: options.getWorkspace,
+      getWorkspace: () => this.workspaceSlug ?? this.externalGetWorkspace?.() ?? null,
       onStatusChange: (status) => this.emit({ kind: 'status', status }),
       onResponse: (response) => this.emit({ kind: 'message', role: 'assistant', content: response }),
       onCommandResult: (name, result, error) => this.emit({ kind: 'command.result', name, result, error }),
@@ -60,6 +70,27 @@ export class GatewayAdapter {
       onEvent: (event) => this.decode(event),
     };
     this.client = new GatewayClient(clientOptions);
+  }
+
+  /** Update the workspace slug used on the next connect. */
+  setWorkspace(slug: string | null): void {
+    this.workspaceSlug = slug;
+  }
+
+  getWorkspace(): string | null {
+    return this.workspaceSlug;
+  }
+
+  /**
+   * Switch the active workspace and re-establish the gateway
+   * connection so the new slug takes effect immediately. Reuses the
+   * client's existing reconnect path so backoff + auth retry behave
+   * identically to a normal reconnect.
+   */
+  async reconnectWithWorkspace(slug: string | null): Promise<void> {
+    this.setWorkspace(slug);
+    try { this.client.disconnect(); } catch { /* already disconnected */ }
+    await this.client.connect();
   }
 
   // ── Subscription ────────────────────────────────────────────────

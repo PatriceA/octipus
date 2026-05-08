@@ -225,7 +225,16 @@ export class GrokProvider implements ModelProvider {
     }
 
     // Reasoning models can stream for minutes — bump timeout per vendor guidance.
-    const isReasoning = /reasoning/i.test(modelName) && !/non-reasoning/i.test(modelName);
+    // Per xAI docs, grok-4, grok-code-*, grok-3-mini and *-reasoning all reason.
+    // Only "*-non-reasoning" variants are explicitly non-reasoning.
+    const lower = modelName.toLowerCase();
+    const isExplicitlyNonReasoning = /non-reasoning/.test(lower);
+    const isReasoning = !isExplicitlyNonReasoning && (
+      /reasoning/.test(lower) ||
+      /^grok-4(\b|-)/.test(lower) ||
+      /^grok-code/.test(lower) ||
+      /^grok-3-mini/.test(lower)
+    );
     const timeout = isReasoning ? REASONING_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
 
     return new OpenAI({
