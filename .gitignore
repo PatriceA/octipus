@@ -4,10 +4,12 @@ node_modules/
 .bun/
 *.tsbuildinfo
 
-# Environment
+# Environment — ignore everything env-related except the example template
 .env
+.env.*
 .env.local
 .env.*.local
+!.env.example
 
 # Models (large binaries, downloaded at setup)
 /models/

@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { initializeDb, getDb, closeDb } from '../src/db/postgres';
 import { initializeStorage, closeStorage } from '../src/db/storage';
+import { initializeVault } from '../src/security/vault';
 import { skills } from '../src/db/schema/skills';
 import { getEmbeddingService } from '../src/core/rag/embeddings';
 import { coreLogger } from '../src/utils/logger';
@@ -48,6 +49,12 @@ async function main() {
   const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
   if (mode === 'embedded') initializeStorage({ mode: 'embedded' });
   await initializeDb();
+  // Vault must be initialized before any provider call — system-scoped
+  // credentials (e.g. voyage_api_key) are AES-decrypted with a per-scope DEK
+  // derived from the master key, which is loaded by initializeVault().
+  // Server bootstrap does this for us at runtime; standalone scripts must
+  // do it explicitly. See scripts/rotate-vault-keys.ts for the same pattern.
+  await initializeVault();
 
   const db = getDb();
   const embeddingService = getEmbeddingService();
