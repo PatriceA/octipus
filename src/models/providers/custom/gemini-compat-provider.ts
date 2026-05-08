@@ -124,6 +124,9 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
         || (options.extraBody?.response_mime_type as string | undefined),
       responseSchema: (options.extraBody?.responseSchema as Record<string, unknown> | undefined)
         || (options.extraBody?.response_schema as Record<string, unknown> | undefined),
+      disableThinking: options.extraBody?.think === false
+        || options.extraBody?.disableThinking === true
+        || (options.extraBody?.thinkingConfig as { thinkingBudget?: number } | undefined)?.thinkingBudget === 0,
     };
 
     const body = envelope === 'gemini-blocks-config'
@@ -132,7 +135,7 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
 
     if (options.extraBody && envelope === 'standard') {
       // Allow callers to inject native Gemini fields (safetySettings, etc.)
-      const { responseSchema, response_schema, responseMimeType, response_mime_type, ...rest } = options.extraBody;
+      const { responseSchema, response_schema, responseMimeType, response_mime_type, think, disableThinking, thinkingConfig, ...rest } = options.extraBody;
       Object.assign(body, rest);
     }
 

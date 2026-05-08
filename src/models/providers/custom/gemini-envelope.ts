@@ -34,6 +34,11 @@ export interface GenericGeminiRequest {
   stream: boolean;
   responseSchema?: Record<string, unknown>;
   responseMimeType?: string;
+  /**
+   * When true, sets thinkingConfig.thinkingBudget = 0 so Gemini 3 doesn't
+   * spend output tokens on internal reasoning. Map from extraBody.think:false.
+   */
+  disableThinking?: boolean;
 }
 
 /** Build native Gemini `contents` array from AgentMessage[]. system messages
@@ -115,6 +120,7 @@ export function buildStandardEnvelope(req: GenericGeminiRequest): Record<string,
   if (req.stopSequences?.length) generationConfig.stopSequences = req.stopSequences;
   if (req.responseMimeType) generationConfig.responseMimeType = req.responseMimeType;
   if (req.responseSchema) generationConfig.responseSchema = req.responseSchema;
+  if (req.disableThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
   if (req.tools?.length) body.tools = buildGeminiTools(req.tools);
@@ -160,6 +166,7 @@ export function buildBlocksConfigEnvelope(req: GenericGeminiRequest): Record<str
   if (req.stopSequences?.length) config.stopSequences = req.stopSequences;
   if (req.responseMimeType) config.response_mime_type = req.responseMimeType;
   if (req.responseSchema) config.response_schema = req.responseSchema;
+  if (req.disableThinking) config.thinkingConfig = { thinkingBudget: 0 };
 
   // Tools: bespoke proxies (like TPG) accept Gemini-style under config.tools
   if (req.tools?.length) {

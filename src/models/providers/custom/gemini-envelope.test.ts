@@ -106,6 +106,11 @@ describe('buildStandardEnvelope', () => {
     }]);
   });
 
+  it('emits thinkingConfig.thinkingBudget=0 when disableThinking is true', () => {
+    const body = buildStandardEnvelope({ ...base, disableThinking: true });
+    expect((body.generationConfig as any).thinkingConfig).toEqual({ thinkingBudget: 0 });
+  });
+
   it('passes responseSchema through generationConfig', () => {
     const schema = { type: 'OBJECT', properties: { x: { type: 'STRING' } } };
     const body = buildStandardEnvelope({ ...base, responseSchema: schema, responseMimeType: 'application/json' });
@@ -149,6 +154,11 @@ describe('buildBlocksConfigEnvelope', () => {
       response_schema: { type: 'OBJECT' },
       response_mime_type: 'application/json',
     });
+  });
+
+  it('emits thinkingConfig.thinkingBudget=0 when disableThinking is true', () => {
+    const body = buildBlocksConfigEnvelope({ ...base, disableThinking: true });
+    expect((body.config as any).thinkingConfig).toEqual({ thinkingBudget: 0 });
   });
 
   it('flattens tools into config.tools (Gemini-style schema)', () => {
