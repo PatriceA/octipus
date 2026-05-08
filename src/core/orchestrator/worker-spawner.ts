@@ -263,14 +263,19 @@ export async function spawnWorker(
   // ── Inject topic-assigned active skills (hybrid discovery) ──
   let topicSkillFragment = '';
   try {
-    const { buildPromptFragmentForMessage } = await import('@/skills/discovery');
-    topicSkillFragment = await buildPromptFragmentForMessage({
+    const { discoverSkillIds } = await import('@/skills/discovery');
+    const { getSkillRegistry } = await import('@/skills/registry');
+    const discoveredIds = await discoverSkillIds({
       topic: roleConfig.defaultTopic,
       message: task,
     });
-    if (topicSkillFragment) {
-      coreLogger.debug({ topic: roleConfig.defaultTopic }, 'Injected topic-assigned skills');
+    if (discoveredIds.length > 0) {
+      topicSkillFragment = await getSkillRegistry().buildPromptFragment(discoveredIds);
     }
+    coreLogger.debug(
+      { topic: roleConfig.defaultTopic, discoveredSkillCount: discoveredIds.length },
+      'Injected topic-assigned skills',
+    );
   } catch (err) {
     // Fail loud: topic-skill injection shouldn't throw under normal
     // operation. Previously debug-level — promoted to error so misconfigs

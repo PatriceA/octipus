@@ -858,12 +858,19 @@ export class SwarmSpawner {
       // Topic-assigned skills: skills assigned to the child's role/topic
       // via skill_topic_assignments. No assertion — the user may or may not
       // have assigned any; it's not a bug if none are configured.
-      const { buildPromptFragmentForMessage } = await import('@/skills/discovery');
-      const topicFragment = await buildPromptFragmentForMessage({
+      const { discoverSkillIds } = await import('@/skills/discovery');
+      const discoveredIds = await discoverSkillIds({
         topic: childRole,
         message: childMessage,
       });
+      const topicFragment = discoveredIds.length > 0
+        ? await skillReg.buildPromptFragment(discoveredIds)
+        : '';
       if (topicFragment) skillFragments.push(`# Domain Knowledge (topic)\n${topicFragment}`);
+      coreLogger.debug(
+        { childRole, expertId, discoveredSkillCount: discoveredIds.length },
+        'Swarm child topic-skill discovery complete',
+      );
     } catch (err) {
       coreLogger.error(
         { err, childRole, expertId },

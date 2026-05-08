@@ -161,3 +161,18 @@ To assign a model to a topic, use the **Models** page in the web UI:
 When an Agent spawns a Subagent via `spawn_child`, the child resolves its model through the **child's topic** — not the parent's. A research Agent (`research` topic) spawning a security Subagent (`security` topic) gets the model bound to `security`, independent of what the parent is using. This means configuring each topic once produces consistent behaviour regardless of how deep the swarm tree goes.
 
 Expert `modelPreference` is a fallback and only applies when no topic binding exists.
+
+## Skill Embedding Backfill
+
+`scripts/backfill-skill-embeddings.ts` (re-)computes description embeddings
+for skills missing them or whose `description_hash` no longer matches the
+current `name + description`.
+
+Run manually:
+
+    npm run db:backfill-skill-embeddings
+
+Recommended: cron every 15 minutes. Skill description edits invalidate the
+embedding immediately at write time; the cron refills lazily. With no
+embedding model configured, the script exits cleanly — discovery still
+works via triggers + always_inject + stale-fallback.
