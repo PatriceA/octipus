@@ -1049,7 +1049,8 @@ export default function ChatPage() {
         const onOpen = () => { clearTimeout(timer); ws.removeEventListener('open', onOpen); resolve(true); };
         ws.addEventListener('open', onOpen, { once: true });
       });
-      if (opened && ws.readyState === WebSocket.OPEN) {
+      const state: number = ws.readyState;
+      if (opened && state === WebSocket.OPEN) {
         sendOverWs();
         return;
       }
