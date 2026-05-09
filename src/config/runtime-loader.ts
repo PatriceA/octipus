@@ -123,7 +123,7 @@ export async function loadRuntimeConfig(
 
   const result = configSchema.safeParse(merged);
   if (!result.success) {
-    logger.error({ errors: result.error.errors }, 'Runtime configuration validation failed');
+    logger.error({ errors: result.error.issues }, 'Runtime configuration validation failed');
     throw new Error(`Runtime configuration validation failed: ${result.error.message}`);
   }
 
