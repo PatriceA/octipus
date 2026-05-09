@@ -1,7 +1,7 @@
 'use client';
 
 import { GripVertical, Plus, RotateCcw, Shield, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 
 interface Step {
   name: string;
