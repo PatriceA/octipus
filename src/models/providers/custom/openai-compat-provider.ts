@@ -91,13 +91,18 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       };
 
       if (choice.message.tool_calls?.length) {
-        result.toolCalls = choice.message.tool_calls.map((tc) => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: typeof tc.function.arguments === 'string'
-            ? JSON.parse(tc.function.arguments)
-            : (tc.function.arguments as Record<string, unknown>),
-        }));
+        result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
+          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: typeof tc.function.arguments === 'string'
+              ? JSON.parse(tc.function.arguments)
+              : (tc.function.arguments as Record<string, unknown>),
+          };
+        });
       }
 
       return result;
