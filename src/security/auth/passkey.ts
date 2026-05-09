@@ -1,16 +1,14 @@
 import {
+  type AuthenticationResponseJSON,
+  type AuthenticatorTransportFuture,
   generateAuthenticationOptions,
   generateRegistrationOptions,
+  type RegistrationResponseJSON,
   type VerifiedAuthenticationResponse,
   type VerifiedRegistrationResponse,
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
-import type {
-  AuthenticationResponseJSON,
-  AuthenticatorTransportFuture,
-  RegistrationResponseJSON,
-} from '@simplewebauthn/types';
 import { getConfig } from '@/config';
 import { RedisCache } from '@/db/redis';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -107,9 +105,9 @@ export class PasskeyAuth {
     }
 
     const newCredential: PasskeyCredential = {
-      id: Buffer.from(verification.registrationInfo.credentialID).toString('base64url'),
-      publicKey: Buffer.from(verification.registrationInfo.credentialPublicKey).toString('base64'),
-      counter: verification.registrationInfo.counter,
+      id: verification.registrationInfo.credential.id,
+      publicKey: Buffer.from(verification.registrationInfo.credential.publicKey).toString('base64'),
+      counter: verification.registrationInfo.credential.counter,
       transports: response.response.transports,
       deviceName,
       createdAt: new Date().toISOString(),
@@ -194,9 +192,9 @@ export class PasskeyAuth {
       expectedChallenge: challengeData.challenge,
       expectedOrigin: this.origin,
       expectedRPID: this.rpId,
-      authenticator: {
-        credentialID: new Uint8Array(Buffer.from(credential.id, 'base64url')),
-        credentialPublicKey: new Uint8Array(Buffer.from(credential.publicKey, 'base64')),
+      credential: {
+        id: credential.id,
+        publicKey: new Uint8Array(Buffer.from(credential.publicKey, 'base64')),
         counter: credential.counter,
         transports: credential.transports as AuthenticatorTransportFuture[] | undefined,
       },
