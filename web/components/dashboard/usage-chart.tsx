@@ -66,7 +66,7 @@ export function UsageChart() {
                 axisLine={false}
               />
               <Tooltip
-                formatter={(value: number) => [`${value.toFixed(1)}K tokens`, 'Usage']}
+                formatter={(value) => [`${Number(value).toFixed(1)}K tokens`, 'Usage']}
                 contentStyle={{
                   background: '#1a1a1a',
                   border: '1px solid rgba(72, 72, 71, 0.2)',

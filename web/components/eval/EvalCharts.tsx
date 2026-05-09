@@ -67,7 +67,7 @@ export function PassRateDonut({ passed, failed }: PassRateDonutProps) {
                 ))}
               </Pie>
               <Tooltip
-                formatter={(value: number, name: string) => [`${value} tests`, name]}
+                formatter={(value, name) => [`${value} tests`, name]}
               />
             </PieChart>
           </ResponsiveContainer>
@@ -164,7 +164,7 @@ export function LatencyHistogram({ results }: LatencyHistogramProps) {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="range" tick={{ fontSize: 11 }} />
               <YAxis allowDecimals={false} />
-              <Tooltip formatter={(value: number) => [`${value} tests`, 'Count']} />
+              <Tooltip formatter={(value) => [`${value} tests`, 'Count']} />
               <Bar dataKey="count" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
