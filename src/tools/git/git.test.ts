@@ -1,20 +1,40 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import * as realChildProcess from 'node:child_process';
 import { gitTool } from './index';
 
-// Mock the spawn function to avoid actual git calls
-const mockSpawn = mock(() => ({
-  stdout: { on: mock(() => {}) },
-  stderr: { on: mock(() => {}) },
-  on: mock((event: string, callback: (code: number) => void) => {
-    if (event === 'close') {
-      callback(0);
-    }
-  })
-}));
+// Snapshot the real child_process exports BEFORE mock.module replaces them.
+// Bun's mock.module is process-wide and mutates the module-namespace bindings
+// in place, so reading `realChildProcess.spawn` at call time would resolve
+// back to our mock and cause infinite recursion when we try to delegate.
+const realSpawn = realChildProcess.spawn;
+const realChildProcessSnapshot = { ...realChildProcess };
 
-// Mock child_process module
+// gitTool only spawns the `git` binary. For any other command (e.g.
+// StdioTransport's `cat`/`sh` smoke tests in src/mcp/transports/) fall
+// through to the real spawn so the rest of the suite keeps a working
+// child_process. The mocked `git` handle includes stdin and kill on top of
+// the fields gitTool consumes, again so other tests that share this mocked
+// module don't trip over `undefined.write` / `undefined.kill`.
+const mockSpawn = mock((command: string, args?: readonly string[], options?: object) => {
+  if (command !== 'git') {
+    return realSpawn(command, (args as string[]) ?? [], options ?? {});
+  }
+  return {
+    stdout: { on: mock(() => {}) },
+    stderr: { on: mock(() => {}) },
+    stdin: { write: mock(() => {}), end: mock(() => {}) },
+    kill: mock(() => {}),
+    on: mock((event: string, callback: (code: number) => void) => {
+      if (event === 'close') {
+        callback(0);
+      }
+    }),
+  };
+});
+
 mock.module('child_process', () => ({
-  spawn: mockSpawn
+  ...realChildProcessSnapshot,
+  spawn: mockSpawn,
 }));
 
 describe('GitTool', () => {

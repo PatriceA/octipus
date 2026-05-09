@@ -29,7 +29,13 @@ process.env.DATA_DIR = DATA_DIR;
 
 let currentEmbedding: number[] | null = null;
 
+// Eagerly load the real module so we can spread its real exports into the
+// mock — `mock.module` is process-wide in bun and other test files (notably
+// src/core/rag/embeddings.test.ts) need the real `EmbeddingService` class.
+import * as realEmbeddings from '@/core/rag/embeddings';
+
 mock.module('@/core/rag/embeddings', () => ({
+  ...realEmbeddings,
   getEmbeddingService: () => ({
     generateEmbedding: async (_text: string) => {
       if (!currentEmbedding) return new Array(1024).fill(0).map((_, i) => (i === 0 ? 1 : 0));
