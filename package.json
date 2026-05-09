@@ -61,7 +61,6 @@
     "playwright": "^1.59.1",
     "postgres": "^3.4.9",
     "samlify": "2.12.0",
-    "uuid": "^9.0.1",
     "ws": "^8.20.0",
     "zod": "^4.4.3"
   },
@@ -71,7 +70,6 @@
     "@inquirer/prompts": "8.4.2",
     "@playwright/test": "1.59.1",
     "@types/bun": "^1.3.13",
-    "@types/uuid": "^9.0.8",
     "@types/ws": "^8.5.10",
     "drizzle-kit": "^0.31.10",
     "tree-sitter-go": "0.25.0",
