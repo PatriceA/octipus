@@ -13,17 +13,16 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@db/*": ["src/db/*"],
-      "@core/*": ["src/core/*"],
-      "@models/*": ["src/models/*"],
-      "@security/*": ["src/security/*"],
-      "@skills/*": ["src/skills/*"],
-      "@channels/*": ["src/channels/*"],
-      "@api/*": ["src/api/*"],
-      "@utils/*": ["src/utils/*"]
+      "@/*": ["./src/*"],
+      "@db/*": ["./src/db/*"],
+      "@core/*": ["./src/core/*"],
+      "@models/*": ["./src/models/*"],
+      "@security/*": ["./src/security/*"],
+      "@skills/*": ["./src/skills/*"],
+      "@channels/*": ["./src/channels/*"],
+      "@api/*": ["./src/api/*"],
+      "@utils/*": ["./src/utils/*"]
     }
   },
   "include": ["src/**/*", "scripts/**/*"],

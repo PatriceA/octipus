@@ -69,7 +69,7 @@ export function SessionTabs({ sessions, activeSessionId, onSelect, onCreate, onC
                 if (e.key === 'Enter') commitRename();
                 if (e.key === 'Escape') setEditingId(null);
               }}
-              className="bg-transparent border-none outline-none text-sm w-full min-w-[60px]"
+              className="bg-transparent border-none outline-hidden text-sm w-full min-w-[60px]"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
@@ -80,7 +80,7 @@ export function SessionTabs({ sessions, activeSessionId, onSelect, onCreate, onC
               e.stopPropagation();
               onClose(session.id);
             }}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-surface-container-highest transition-opacity flex-shrink-0"
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-surface-container-highest transition-opacity shrink-0"
           >
             <X className="w-3 h-3" />
           </button>
@@ -88,7 +88,7 @@ export function SessionTabs({ sessions, activeSessionId, onSelect, onCreate, onC
       ))}
       <button
         onClick={onCreate}
-        className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-sm text-on-surface-variant hover:text-white hover:bg-surface-container-high/50 transition-colors flex-shrink-0"
+        className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-sm text-on-surface-variant hover:text-white hover:bg-surface-container-high/50 transition-colors shrink-0"
         title="New session"
       >
         <Plus className="w-4 h-4" />

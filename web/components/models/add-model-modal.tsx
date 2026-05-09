@@ -621,7 +621,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                       orDebounceRef.current = setTimeout(() => searchOpenRouter(val), 300);
                     }}
                     placeholder="Search OpenRouter models (e.g., claude, gpt, llama)..."
-                    className="w-full pl-9 pr-3 py-2.5 bg-surface-container-high text-white text-sm border-b border-outline-variant/10 focus:outline-none focus:border-primary/30"
+                    className="w-full pl-9 pr-3 py-2.5 bg-surface-container-high text-white text-sm border-b border-outline-variant/10 focus:outline-hidden focus:border-primary/30"
                   />
                   {orSearchLoading && (
                     <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-on-surface-variant" />
@@ -948,7 +948,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-1 px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
+                className="flex-1 px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
               >
                 <Plus className="w-4 h-4" />
                 {loading ? 'Adding...' : 'Add Model'}

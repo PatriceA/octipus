@@ -96,7 +96,7 @@ export interface GatewayEvent {
 export const AuthMessageSchema = z.object({
   type: z.literal('auth'),
   method: z.enum(['session_token', 'api_key', 'hmac', 'local']),
-  credentials: z.record(z.unknown()),
+  credentials: z.record(z.string(), z.unknown()),
   clientType: z.enum(['webchat', 'tui', 'channel', 'mobile', 'acp', 'agent']),
   clientVersion: z.string().optional(),
 });
@@ -117,7 +117,7 @@ export const ChatSendSchema = z.object({
 export const CommandSchema = z.object({
   type: z.literal('command'),
   name: z.string().min(1).max(50),
-  args: z.record(z.string()).optional(),
+  args: z.record(z.string(), z.string()).optional(),
 });
 
 export const SubscribeSchema = z.object({
@@ -250,7 +250,7 @@ export function parseClientMessage(raw: string): { ok: true; message: ClientMess
 
   const result = ClientMessageSchema.safeParse(json);
   if (!result.success) {
-    const firstError = result.error.errors[0];
+    const firstError = result.error.issues[0];
     return { ok: false, error: `Invalid message: ${firstError?.path.join('.')} — ${firstError?.message}` };
   }
 

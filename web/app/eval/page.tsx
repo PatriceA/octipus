@@ -245,7 +245,7 @@ export default function EvalPage() {
           {runStatus.running && (
             <div className="bg-yellow-900/20 border border-yellow-800 rounded-xl px-4 py-3 text-yellow-300 text-sm">
               <div className="flex items-center gap-3">
-                <RefreshCw className="w-4 h-4 animate-spin flex-shrink-0" />
+                <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
                 <span className="flex-1">
                   <strong>{runStatus.type === 'red-team' ? 'Red-team' : 'Evaluation'}</strong> running
                   {runStatus.suite && runStatus.suite !== 'all' && <> (suite: {runStatus.suite})</>}
@@ -269,7 +269,7 @@ export default function EvalPage() {
           {!runStatus.running && runStatus.lastRun && runStatus.lastRun.exitCode !== 0 && (
             <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
               <div className="flex items-center gap-3">
-                <XCircle className="w-4 h-4 flex-shrink-0" />
+                <XCircle className="w-4 h-4 shrink-0" />
                 <span className="flex-1">
                   <strong>{runStatus.lastRun.type === 'red-team' ? 'Red-team' : 'Evaluation'}</strong> failed
                   {runStatus.lastRun.exitCode !== null && <> (exit code {runStatus.lastRun.exitCode})</>}

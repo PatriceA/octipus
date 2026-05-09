@@ -1,8 +1,108 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap')
+layer(utilities);
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: #0e0e0e;
+  --color-foreground: #ffffff;
+
+  --color-primary: #73ffe3;
+  --color-primary-dim: #00e8c9;
+  --color-primary-container: #00f5d4;
+  --color-primary-fixed: #12f8d7;
+  --color-primary-fixed-dim: #00e8c9;
+
+  --color-secondary: #e5e2e1;
+  --color-secondary-dim: #d7d4d3;
+  --color-secondary-container: #474646;
+  --color-secondary-fixed: #e5e2e1;
+  --color-secondary-fixed-dim: #d7d4d3;
+
+  --color-tertiary: #9cf3ff;
+  --color-tertiary-dim: #33ddef;
+  --color-tertiary-container: #4aebfd;
+  --color-tertiary-fixed: #4aebfd;
+  --color-tertiary-fixed-dim: #33ddef;
+
+  --color-error: #ff716c;
+  --color-error-dim: #d7383b;
+  --color-error-container: #9f0519;
+
+  --color-surface: #0e0e0e;
+  --color-surface-dim: #0e0e0e;
+  --color-surface-bright: #2c2c2c;
+  --color-surface-variant: #262626;
+  --color-surface-tint: #73ffe3;
+
+  --color-surface-container: #1a1919;
+  --color-surface-container-low: #131313;
+  --color-surface-container-high: #201f1f;
+  --color-surface-container-highest: #262626;
+  --color-surface-container-lowest: #000000;
+
+  --color-outline: #777575;
+  --color-outline-variant: #494847;
+
+  --color-on-surface: #ffffff;
+  --color-on-surface-variant: #adaaaa;
+
+  --color-on-primary: #006152;
+  --color-on-primary-container: #00574a;
+  --color-on-primary-fixed: #00443a;
+  --color-on-primary-fixed-variant: #006455;
+
+  --color-on-secondary: #525151;
+  --color-on-secondary-container: #d3d0cf;
+  --color-on-secondary-fixed: #403f3f;
+  --color-on-secondary-fixed-variant: #5c5b5b;
+
+  --color-on-tertiary: #005d65;
+  --color-on-tertiary-container: #00535b;
+  --color-on-tertiary-fixed: #003f45;
+  --color-on-tertiary-fixed-variant: #005e66;
+
+  --color-on-error: #490006;
+  --color-on-error-container: #ffa8a3;
+
+  --color-inverse-surface: #fcf8f8;
+  --color-inverse-on-surface: #565554;
+  --color-inverse-primary: #006c5c;
+
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-body: Inter, system-ui, sans-serif;
+  --font-headline: Manrope, system-ui, sans-serif;
+  --font-display: Manrope, system-ui, sans-serif;
+  --font-label: Inter, system-ui, sans-serif;
+  --font-mono: JetBrains Mono, Fira Code, monospace;
+
+  --radius: 0.5rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-full: 9999px;
+
+  --backdrop-blur-glass: 20px;
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
 
 :root {
   color-scheme: dark;
@@ -66,7 +166,7 @@ button, a { transition: all 0.15s ease; }
 
 /* ── Focus ring — mint glow ── */
 .focus-ring {
-  @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-1 focus:ring-offset-transparent;
+  @apply focus:outline-hidden focus:ring-2 focus:ring-primary/40 focus:ring-offset-1 focus:ring-offset-transparent;
 }
 
 /* ── "Intelligent Void" signature effects ── */

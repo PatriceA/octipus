@@ -92,14 +92,14 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex flex-col bg-[#000000] border-r border-outline-variant/15 transition-all duration-300 ease-in-out shrink-0 font-body',
+        'flex flex-col bg-surface-container-lowest border-r border-outline-variant/15 transition-all duration-300 ease-in-out shrink-0 font-body',
         collapsed ? 'w-16' : 'w-64'
       )}
     >
       {/* Logo */}
       <div className="h-16 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-2.5 overflow-hidden">
-          <div className="w-8 h-8 bg-gradient-to-br from-primary to-primary-container rounded-sm flex items-center justify-center shrink-0 shadow-[0_0_18px_-4px_rgba(115,255,227,0.5)]">
+          <div className="w-8 h-8 bg-linear-to-br from-primary to-primary-container rounded-xs flex items-center justify-center shrink-0 shadow-[0_0_18px_-4px_rgba(115,255,227,0.5)]">
             <img src="/logo.png" alt="Octipus" className="w-full h-full object-contain" />
           </div>
           {!collapsed && (
@@ -147,7 +147,7 @@ export function Sidebar() {
                       'relative flex items-center gap-4 text-sm font-medium uppercase tracking-[0.08em] transition-all duration-200',
                       collapsed ? 'justify-center px-2 py-2.5 rounded-lg' : 'px-4 py-3',
                       isActive
-                        ? 'text-primary bg-gradient-to-r from-primary/10 to-transparent border-r-2 border-primary translate-x-0.5'
+                        ? 'text-primary bg-linear-to-r from-primary/10 to-transparent border-r-2 border-primary translate-x-0.5'
                         : 'text-outline-variant hover:text-on-surface-variant hover:bg-surface-container-low border-r-2 border-transparent'
                     )}
                   >
@@ -169,7 +169,7 @@ export function Sidebar() {
       {!collapsed && (
         <div className="px-4 py-4 space-y-3">
           <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-container-lowest border border-outline-variant/20">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-tertiary flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-linear-to-br from-primary to-tertiary flex items-center justify-center">
               <Bot className="w-4 h-4 text-on-primary" />
             </div>
             <div className="min-w-0">

@@ -54,7 +54,7 @@ function FormattedResult({ text }: { text: string }) {
       if (inCodeBlock) {
         elements.push(
           <div key={`code-${i}`} className="my-3 rounded-lg bg-black overflow-hidden">
-            {codeLang && <div className="px-4 py-1.5 bg-[#131313] text-xs text-on-surface-variant">{codeLang}</div>}
+            {codeLang && <div className="px-4 py-1.5 bg-surface-container-low text-xs text-on-surface-variant">{codeLang}</div>}
             <pre className="p-4 overflow-x-auto text-sm leading-relaxed text-gray-200"><code>{codeLines.join('\n')}</code></pre>
           </div>
         );
@@ -236,11 +236,11 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
             className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#20201f] text-left cursor-pointer"
           >
             {exec.status === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+              <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
             ) : exec.status === 'error' ? (
-              <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <XCircle className="w-4 h-4 text-red-500 shrink-0" />
             ) : (
-              <Clock className="w-4 h-4 text-yellow-500 flex-shrink-0" />
+              <Clock className="w-4 h-4 text-yellow-500 shrink-0" />
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -267,7 +267,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
                 <p className="text-xs text-red-500 truncate mt-0.5">{exec.error}</p>
               )}
             </div>
-            <span className="text-xs text-on-surface-variant flex-shrink-0">
+            <span className="text-xs text-on-surface-variant shrink-0">
               {new Date(exec.createdAt).toLocaleString()}
             </span>
             {exec.status === 'success' && exec.result && ((exec.result as any)?.response || (exec.result as any)?.data?.response) && (
@@ -277,7 +277,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
                   const name = exec.hookName || String((exec.triggerContext as Record<string, unknown>)?.hookName || '');
                   setViewingResult({ result: exec.result!, hookName: name || undefined });
                 }}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-primary bg-primary/10 rounded-full hover:bg-primary/20 cursor-pointer flex-shrink-0 transition-colors"
+                className="flex items-center gap-1 px-2 py-1 text-xs text-primary bg-primary/10 rounded-full hover:bg-primary/20 cursor-pointer shrink-0 transition-colors"
                 title="View formatted result"
               >
                 <Eye className="w-3 h-3" />
@@ -285,13 +285,13 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
               </button>
             )}
             {expanded === exec.id ? (
-              <ChevronUp className="w-4 h-4 text-on-surface-variant flex-shrink-0" />
+              <ChevronUp className="w-4 h-4 text-on-surface-variant shrink-0" />
             ) : (
-              <ChevronDown className="w-4 h-4 text-on-surface-variant flex-shrink-0" />
+              <ChevronDown className="w-4 h-4 text-on-surface-variant shrink-0" />
             )}
           </button>
           {expanded === exec.id && (
-            <div className="px-3 py-2 border-t border-outline-variant/10 bg-[#131313] space-y-2">
+            <div className="px-3 py-2 border-t border-outline-variant/10 bg-surface-container-low space-y-2">
               {exec.error && (
                 <div>
                   <p className="text-xs font-medium text-error">Error</p>
@@ -1446,7 +1446,7 @@ export default function HooksPage() {
                             </div>
                             <button
                               onClick={() => applySuggestion(s.id)}
-                              className="text-xs px-3 py-1 bg-primary text-[#0e0e0e] rounded-full font-bold hover:bg-primary-container flex-shrink-0 cursor-pointer transition-colors"
+                              className="text-xs px-3 py-1 bg-primary text-[#0e0e0e] rounded-full font-bold hover:bg-primary-container shrink-0 cursor-pointer transition-colors"
                             >
                               Add
                             </button>
@@ -1483,7 +1483,7 @@ export default function HooksPage() {
               </div>
             ) : (
               <table className="w-full text-sm">
-                <thead className="bg-[#131313]">
+                <thead className="bg-surface-container-low">
                   <tr>
                     <th className="text-left px-4 py-2 font-bold text-on-surface-variant uppercase">Name</th>
                     <th className="text-left px-4 py-2 font-bold text-on-surface-variant uppercase">Schedule</th>

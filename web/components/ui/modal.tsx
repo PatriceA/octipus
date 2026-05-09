@@ -39,7 +39,7 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
       />
       <div
         className={cn(
-          'relative w-full mx-4 bg-surface-variant/80 backdrop-blur-[20px] rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] border border-outline-variant/20',
+          'relative w-full mx-4 bg-surface-variant/80 backdrop-blur-glass rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] border border-outline-variant/20',
           'animate-in fade-in zoom-in-95 duration-200',
           maxWidthMap[maxWidth],
           className

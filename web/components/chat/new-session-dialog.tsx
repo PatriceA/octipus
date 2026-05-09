@@ -141,7 +141,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs">
       <div className="bg-surface-container rounded-2xl w-full max-w-md ring-1 ring-outline-variant/20 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-outline-variant/10">

@@ -172,7 +172,7 @@ export class SlackChannel extends BaseChannel {
       options.thread_ts = response.threadId;
     }
 
-    const result = await this.app.client.chat.postMessage(options as Parameters<WebClient['chat']['postMessage']>[0]);
+    const result = await this.app.client.chat.postMessage(options as unknown as Parameters<WebClient['chat']['postMessage']>[0]);
 
     return result.ts || '';
   }

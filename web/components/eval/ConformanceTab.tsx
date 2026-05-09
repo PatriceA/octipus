@@ -39,7 +39,7 @@ function StatusCell({ status, latencyMs, error }: { status: 'passed' | 'failed' 
 
   const icon =
     status === 'passed' ? <CheckCircle className="w-4 h-4 text-green-400" /> :
-    status === 'failed' ? <XCircle className="w-4 h-4 text-[#ff716c]" /> :
+    status === 'failed' ? <XCircle className="w-4 h-4 text-error" /> :
     <Minus className="w-4 h-4 text-on-surface-variant" />;
 
   const hasTooltip = latencyMs != null || error;
@@ -59,7 +59,7 @@ function StatusCell({ status, latencyMs, error }: { status: 'passed' | 'failed' 
               {latencyMs}ms
             </div>
           )}
-          {error && <div className="text-[#ff716c] max-w-[200px] whitespace-normal">{error}</div>}
+          {error && <div className="text-error max-w-[200px] whitespace-normal">{error}</div>}
         </div>
       )}
     </div>
@@ -81,16 +81,16 @@ function RunRow({ run }: { run: ConformanceRun }) {
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-3 px-4 py-3 bg-surface-container hover:bg-surface-container-high transition-colors cursor-pointer"
       >
-        {expanded ? <ChevronDown className="w-4 h-4 text-on-surface-variant flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-on-surface-variant flex-shrink-0" />}
-        <span className="text-xs text-on-surface-variant flex-shrink-0" suppressHydrationWarning>
+        {expanded ? <ChevronDown className="w-4 h-4 text-on-surface-variant shrink-0" /> : <ChevronRight className="w-4 h-4 text-on-surface-variant shrink-0" />}
+        <span className="text-xs text-on-surface-variant shrink-0" suppressHydrationWarning>
           {formatDate(run.createdAt)}
         </span>
-        <span className="text-xs text-on-surface-variant flex-shrink-0">
+        <span className="text-xs text-on-surface-variant shrink-0">
           {run.models.length} model{run.models.length !== 1 ? 's' : ''}
         </span>
         <div className="flex items-center gap-3 ml-auto">
           <span className="text-xs text-green-400">{run.summary.passed} passed</span>
-          {run.summary.failed > 0 && <span className="text-xs text-[#ff716c]">{run.summary.failed} failed</span>}
+          {run.summary.failed > 0 && <span className="text-xs text-error">{run.summary.failed} failed</span>}
           {run.summary.skipped > 0 && <span className="text-xs text-on-surface-variant">{run.summary.skipped} skipped</span>}
           <ScoreBar score={passRate} size="sm" />
         </div>
@@ -303,7 +303,7 @@ export function ConformanceTab() {
                   <span className="text-green-400 flex items-center gap-1">
                     <CheckCircle className="w-3 h-3" /> {latest.summary.passed}
                   </span>
-                  <span className="text-[#ff716c] flex items-center gap-1">
+                  <span className="text-error flex items-center gap-1">
                     <XCircle className="w-3 h-3" /> {latest.summary.failed}
                   </span>
                   {latest.summary.skipped > 0 && (

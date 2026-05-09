@@ -103,6 +103,9 @@ export class DeepSeekProvider implements ModelProvider {
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
+          }
           const rawArgs = tc.function.arguments || '';
           try {
             return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };

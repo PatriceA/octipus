@@ -86,6 +86,9 @@ export class OpenRouterProvider implements ModelProvider {
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
+          }
           try {
             return { id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) as Record<string, unknown> };
           } catch (parseErr) {

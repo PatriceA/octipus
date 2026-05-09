@@ -101,7 +101,7 @@ export default function SetupPage() {
 
       {/* Content */}
       <div className="flex-1 flex items-start justify-center px-4 pt-4">
-        <div className="w-full max-w-lg bg-white dark:bg-gray-800/90 rounded-xl shadow-sm ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8">
+        <div className="w-full max-w-lg bg-white dark:bg-gray-800/90 rounded-xl shadow-xs ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8">
           {error && (
             <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
               <p className="text-sm text-red-600 dark:text-red-400">{error}</p>

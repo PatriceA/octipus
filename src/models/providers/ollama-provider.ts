@@ -129,6 +129,9 @@ export class OllamaProvider implements ModelProvider {
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
+          }
           try {
             return { id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) as Record<string, unknown> };
           } catch (parseErr) {
@@ -226,14 +229,19 @@ export class OllamaProvider implements ModelProvider {
 
     // Add tools in Ollama's native format
     if (options.tools?.length) {
-      body.tools = options.tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: t.function.name,
-          description: t.function.description,
-          parameters: t.function.parameters,
-        },
-      }));
+      body.tools = options.tools.map((t) => {
+        if (t.type !== 'function') {
+          throw new Error(`Unsupported tool type for ${this.name}: ${t.type}`);
+        }
+        return {
+          type: 'function',
+          function: {
+            name: t.function.name,
+            description: t.function.description,
+            parameters: t.function.parameters,
+          },
+        };
+      });
     }
 
     modelLogger.debug(

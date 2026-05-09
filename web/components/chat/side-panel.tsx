@@ -193,7 +193,7 @@ function _AgentCard({ agent }: { agent: TrackedAgent }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
   return (
-    <div className="rounded-md bg-surface-container-highest p-2 shadow-sm">
+    <div className="rounded-md bg-surface-container-highest p-2 shadow-xs">
       <div className="flex items-center gap-1.5">
         <StatusIcon status={agent.status} />
         <span

@@ -78,7 +78,7 @@ export function loadConfig(): Config {
   const result = configSchema.safeParse(merged);
 
   if (!result.success) {
-    logger.error({ errors: result.error.errors }, 'Configuration validation failed');
+    logger.error({ errors: result.error.issues }, 'Configuration validation failed');
     throw new Error(`Configuration validation failed: ${result.error.message}`);
   }
 

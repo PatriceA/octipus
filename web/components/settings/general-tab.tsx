@@ -40,7 +40,7 @@ export function GeneralTab() {
             Object.entries((health as HealthStatus).services || {}).map(([name, svc]) => (
               <div
                 key={name}
-                className="flex items-center justify-between p-2 bg-[#131313] rounded-lg"
+                className="flex items-center justify-between p-2 bg-surface-container-low rounded-lg"
               >
                 <span className="text-sm text-white capitalize">{name}</span>
                 <span

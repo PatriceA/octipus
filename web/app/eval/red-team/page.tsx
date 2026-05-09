@@ -327,7 +327,7 @@ export default function RedTeamPage() {
                             {test.output && (
                               <div>
                                 <p className="text-xs font-medium text-on-surface-variant mb-1">System Response</p>
-                                <pre className="text-sm text-white/80 whitespace-pre-wrap bg-[#131313] rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
+                                <pre className="text-sm text-white/80 whitespace-pre-wrap bg-surface-container-low rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
                                   {test.output}
                                 </pre>
                               </div>

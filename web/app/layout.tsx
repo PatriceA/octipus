@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AppShell } from '@/components/app-shell';
 import { Providers } from './providers';
@@ -16,12 +16,15 @@ export const metadata: Metadata = {
     apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
     shortcut: '/favicon.ico',
   },
-  themeColor: '#73ffe3',
   appleWebApp: {
     capable: true,
     title: 'Octipus',
     statusBarStyle: 'black-translucent',
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#73ffe3',
 };
 
 export default function RootLayout({

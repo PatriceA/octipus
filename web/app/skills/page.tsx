@@ -128,7 +128,7 @@ function ArrayFieldInput({
       {items.length > 0 && (
         <div className="space-y-1">
           {items.map((item, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-[#131313] rounded-lg px-3 py-1.5">
+            <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-surface-container-low rounded-lg px-3 py-1.5">
               <span className="flex-1">{item}</span>
               <button
                 type="button"
@@ -154,7 +154,7 @@ function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onCha
         onClick={() => onChange('markdown')}
         className={cn(
           'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
-          mode === 'markdown' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
+          mode === 'markdown' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
         )}
       >
         <FileText className="w-3.5 h-3.5" /> Markdown
@@ -164,7 +164,7 @@ function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onCha
         onClick={() => onChange('structured')}
         className={cn(
           'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
-          mode === 'structured' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
+          mode === 'structured' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
         )}
       >
         <List className="w-3.5 h-3.5" /> Structured
@@ -239,7 +239,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -527,7 +527,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -672,7 +672,7 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
 
         <div className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -762,7 +762,7 @@ function SkillCard({
                   e.stopPropagation();
                   onDelete(skill);
                 }}
-                className="p-1 text-on-surface-variant hover:text-[#ff716c] cursor-pointer"
+                className="p-1 text-on-surface-variant hover:text-error cursor-pointer"
                 title="Delete skill"
               >
                 <Trash2 className="w-4 h-4" />
@@ -780,7 +780,7 @@ function SkillCard({
                 <FileText className="w-4 h-4 text-primary" />
                 Markdown Content
               </h4>
-              <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
+              <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
                 {skill.content}
               </pre>
             </div>

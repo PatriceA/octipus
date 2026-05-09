@@ -157,7 +157,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
         ) : entry ? (
           <div className="p-4 space-y-4">
             {error && (
-              <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+              <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
                 {error}
               </div>
             )}
@@ -166,7 +166,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
             {entry.abstract && (
               <div>
                 <h4 className="text-sm font-medium text-white/80 mb-1">Abstract</h4>
-                <p className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3">
+                <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
                   {entry.abstract}
                 </p>
               </div>
@@ -175,7 +175,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
             {/* Content */}
             <div>
               <h4 className="text-sm font-medium text-white/80 mb-1">Content</h4>
-              <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
+              <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
                 {entry.content}
               </pre>
             </div>
@@ -183,7 +183,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
             {/* Metadata table */}
             <div>
               <h4 className="text-sm font-medium text-white/80 mb-1">Metadata</h4>
-              <div className="bg-[#131313] rounded-lg overflow-hidden">
+              <div className="bg-surface-container-low rounded-lg overflow-hidden">
                 <table className="w-full text-sm">
                   <tbody>
                     <tr className="border-b border-outline-variant/10">
@@ -320,7 +320,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -349,7 +349,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 onClick={() => setType('file')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  type === 'file' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
+                  type === 'file' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <File className="w-3.5 h-3.5" /> File
@@ -359,7 +359,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 onClick={() => setType('directory')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  type === 'directory' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
+                  type === 'directory' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <FolderOpen className="w-3.5 h-3.5" /> Directory
@@ -375,7 +375,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 onClick={() => setSourceType('document')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  sourceType === 'document' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
+                  sourceType === 'document' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <FileText className="w-3.5 h-3.5" /> Document
@@ -385,7 +385,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 onClick={() => setSourceType('code')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  sourceType === 'code' ? 'bg-[#20201f] text-white shadow-sm' : 'text-on-surface-variant'
+                  sourceType === 'code' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <Code className="w-3.5 h-3.5" /> Code
@@ -570,9 +570,9 @@ export default function KnowledgePage() {
 
       {/* KB readiness / stats error banner — matches existing error-display pattern */}
       {kbNotReadyMessage && (
-        <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2 border border-red-900/40">
+        <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2 border border-red-900/40">
           <div className="font-medium">Knowledge base is not ready</div>
-          <div className="text-xs mt-1 opacity-90 break-words">{kbNotReadyMessage}</div>
+          <div className="text-xs mt-1 opacity-90 wrap-break-word">{kbNotReadyMessage}</div>
           {readiness && (
             <ul className="text-xs mt-2 space-y-0.5 list-disc list-inside opacity-90">
               <li>Database: {readiness.checks.db.ok ? 'OK' : `FAIL — ${readiness.checks.db.detail || 'unknown'}`}</li>
@@ -583,26 +583,26 @@ export default function KnowledgePage() {
         </div>
       )}
       {statsError instanceof Error && !kbNotReadyMessage && (
-        <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+        <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
           Failed to load stats: {statsError.message}
         </div>
       )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-white">{stats?.total ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Total Entries</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-blue-400">{stats?.bySourceType?.document ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Documents</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-green-400">{stats?.bySourceType?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-orange-400">{stats?.bySourceType?.agent_output ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Agent Output</p>
         </div>
@@ -662,7 +662,7 @@ export default function KnowledgePage() {
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors capitalize',
                   searchMode === mode
-                    ? 'bg-primary-800 text-white shadow-sm'
+                    ? 'bg-primary-800 text-white shadow-xs'
                     : 'text-on-surface-variant hover:text-white'
                 )}
               >
@@ -684,7 +684,7 @@ export default function KnowledgePage() {
 
       {/* Search error */}
       {searchError && (
-        <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+        <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
           {searchError}
         </div>
       )}

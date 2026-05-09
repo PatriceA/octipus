@@ -70,7 +70,7 @@ export default function SkillProposalsPage() {
         </p>
 
         {error && (
-          <div className="bg-red-900/20 border border-red-800 text-[#ff716c] rounded-md p-3 mb-4 text-sm">
+          <div className="bg-red-900/20 border border-red-800 text-error rounded-md p-3 mb-4 text-sm">
             {error}
           </div>
         )}

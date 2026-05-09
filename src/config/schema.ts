@@ -163,17 +163,17 @@ export const cliModelsConfigSchema = z.object({
     enabled: z.boolean().default(true),
     binaryPath: z.string().default('claude'),
     timeout: z.number().min(0).default(300000),
-  }).default({}),
+  }).prefault({}),
   geminiCli: z.object({
     enabled: z.boolean().default(true),
     binaryPath: z.string().default('gemini'),
     timeout: z.number().min(0).default(300000),
-  }).default({}),
+  }).prefault({}),
   codexCli: z.object({
     enabled: z.boolean().default(false),
     binaryPath: z.string().default('codex'),
     timeout: z.number().min(0).default(300000),
-  }).default({}),
+  }).prefault({}),
 });
 
 // Orchestrator configuration schema
@@ -199,7 +199,7 @@ export const oauthConfigSchema = z.object({
 // Rate limit configuration schema
 export const rateLimitConfigSchema = z.object({
   /** Per-provider overrides */
-  providers: z.record(z.object({
+  providers: z.record(z.string(), z.object({
     maxConcurrency: z.number().min(1).optional(),
     rpm: z.number().min(0).optional(),
     tpm: z.number().min(0).optional(),
@@ -253,7 +253,7 @@ export const swarmConfigSchema = z.object({
     orchestrator: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 0 }),
     agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 240_000, fanOut: 4, maxPendingDetached: 3 }),
     subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 240_000, fanOut: 0, maxPendingDetached: 0 }),
-  }).default({}),
+  }).prefault({}),
 });
 
 // Multi-user configuration schema
@@ -332,15 +332,15 @@ export const configSchema = z.object({
   n8n: n8nConfigSchema.optional(),
   logging: loggingConfigSchema,
   agent: agentConfigSchema,
-  orchestrator: orchestratorConfigSchema.default({}),
-  cliModels: cliModelsConfigSchema.default({}),
-  workspace: workspaceConfigSchema.default({}),
-  multiuser: multiuserConfigSchema.default({}),
-  compaction: compactionConfigSchema.default({}),
+  orchestrator: orchestratorConfigSchema.prefault({}),
+  cliModels: cliModelsConfigSchema.prefault({}),
+  workspace: workspaceConfigSchema.prefault({}),
+  multiuser: multiuserConfigSchema.prefault({}),
+  compaction: compactionConfigSchema.prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
-  swarm: swarmConfigSchema.default({}),
-  skills: skillsConfigSchema.default({}),
+  swarm: swarmConfigSchema.prefault({}),
+  skills: skillsConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;

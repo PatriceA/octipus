@@ -151,7 +151,7 @@ export default function LinkAccountPage() {
           <h2 className="font-medium text-white text-sm">Linked channels</h2>
           <div className="space-y-2">
             {data.bindings.map((b) => (
-              <div key={b.id} className="flex items-center justify-between p-3 bg-[#131313] rounded-lg">
+              <div key={b.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-white capitalize">{b.channelType}</span>

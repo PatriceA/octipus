@@ -291,6 +291,9 @@ export class LiteLLMClient {
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from litellm: ${tc.type}`);
+          }
           let args: Record<string, unknown> = {};
           const rawArgs = tc.function.arguments || '';
           try {

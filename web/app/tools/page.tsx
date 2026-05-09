@@ -212,7 +212,7 @@ function ToolModuleCard({
                   'flex items-center justify-between py-2 px-3 rounded-lg',
                   isOverride
                     ? 'bg-blue-900/10 ring-1 ring-blue-800'
-                    : 'bg-[#131313]'
+                    : 'bg-surface-container-low'
                 )}
               >
                 <div className="flex-1 min-w-0">
@@ -246,7 +246,7 @@ function ToolModuleCard({
 
           {/* Tools without explicit permissions (shown as info-only) */}
           {unmatchedTools.map((tool) => (
-            <div key={tool.name} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[#131313]">
+            <div key={tool.name} className="flex items-center justify-between py-2 px-3 rounded-lg bg-surface-container-low">
               <div className="flex-1 min-w-0">
                 <span className="text-sm font-mono text-white/90">{tool.name}</span>
                 <p className="text-xs text-on-surface-variant mt-0.5">{tool.description}</p>

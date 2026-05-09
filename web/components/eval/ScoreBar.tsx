@@ -39,7 +39,7 @@ export function ScoreBar({ score, size = 'md', showLabel = true }: ScoreBarProps
           size === 'sm' ? 'text-xs' : 'text-sm',
           pct >= 80 ? 'text-green-400' :
           pct >= 50 ? 'text-yellow-400' :
-          'text-[#ff716c]'
+          'text-error'
         )}>
           {pct}%
         </span>

@@ -96,11 +96,16 @@ function parseToolContent(content: string): unknown {
 /** Translate OpenAI tool schema → Gemini tool schema (`functionDeclarations`) */
 export function buildGeminiTools(tools: ChatCompletionTool[]): Array<Record<string, unknown>> {
   return [{
-    functionDeclarations: tools.map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters,
-    })),
+    functionDeclarations: tools.map((t) => {
+      if (t.type !== 'function') {
+        throw new Error(`Unsupported tool type for Gemini: ${t.type}`);
+      }
+      return {
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      };
+    }),
   }];
 }
 
@@ -170,11 +175,16 @@ export function buildBlocksConfigEnvelope(req: GenericGeminiRequest): Record<str
 
   // Tools: bespoke proxies (like TPG) accept Gemini-style under config.tools
   if (req.tools?.length) {
-    config.tools = req.tools.map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters,
-    }));
+    config.tools = req.tools.map((t) => {
+      if (t.type !== 'function') {
+        throw new Error(`Unsupported tool type for Gemini envelope: ${t.type}`);
+      }
+      return {
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      };
+    });
   }
 
   return {

@@ -40,17 +40,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#000000] text-white overflow-hidden">
+    <div className="flex flex-col h-screen bg-surface-container-lowest text-white overflow-hidden">
       <ImpersonationBanner />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <div className="flex flex-col flex-1 min-w-0 bg-[#000000]">
+        <div className="flex flex-col flex-1 min-w-0 bg-surface-container-lowest">
           <Header />
           <main
             tabIndex={pathname === '/chat' ? undefined : 0}
             aria-label="Page content"
             className={cn(
-              'flex-1 overflow-hidden neural-grid bg-[#000000]',
+              'flex-1 overflow-hidden neural-grid bg-surface-container-lowest',
               pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-8'
             )}
           >

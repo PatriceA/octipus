@@ -159,7 +159,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   }, [code]);
 
   return (
-    <div className="relative my-3 rounded-[1rem] bg-[#000000] text-gray-100 overflow-hidden">
+    <div className="relative my-3 rounded-[1rem] bg-surface-container-lowest text-gray-100 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-1.5 bg-surface-container-low text-xs text-on-surface-variant">
         <span>{language || 'text'}</span>
         <button
@@ -273,7 +273,7 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
     return (
       <div className="flex justify-end py-1.5 group">
         <div className="flex flex-col items-end gap-0.5">
-          <div className="bg-gradient-to-r from-primary to-primary-container text-[#002a6d] px-4 py-2.5 rounded-2xl rounded-br-md shadow-sm">
+          <div className="bg-linear-to-r from-primary to-primary-container text-[#002a6d] px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs">
             <p className="whitespace-pre-wrap text-sm">{content}</p>
           </div>
           <span className="text-[10px] text-on-surface-variant/60 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -287,13 +287,13 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
   // assistant
   return (
     <div className="flex gap-3 py-1.5 group">
-      <div className="flex-shrink-0 mt-1">
-        <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-sm">
+      <div className="shrink-0 mt-1">
+        <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
           <Bot className="h-4 w-4 text-[#002a6d]" />
         </div>
       </div>
       <div className="flex flex-col gap-1 min-w-0 flex-1">
-        <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-sm text-white">
+        <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-white">
           <MessageContent content={content} />
         </div>
 
@@ -416,7 +416,7 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
         <div className="mt-2 space-y-1 pl-5">
           {agent.toolCalls.map((tc) => (
             <div key={tc.id} className="flex items-center gap-2 text-on-surface-variant">
-              <Wrench className="h-2.5 w-2.5 flex-shrink-0" />
+              <Wrench className="h-2.5 w-2.5 shrink-0" />
               <span className="font-mono">{tc.name}</span>
               {tc.argsSummary && (
                 <span className="truncate max-w-xs opacity-60">{tc.argsSummary}</span>
@@ -812,7 +812,7 @@ export default function MessageTimeline({
       {/* Loading indicator */}
       {isLoading && (
         <div className="flex items-center gap-2 py-3 px-2">
-          <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-sm">
+          <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
             <Loader2 className="h-4 w-4 text-[#002a6d] animate-spin" />
           </div>
           <span className="text-sm text-on-surface-variant animate-pulse">
@@ -828,7 +828,7 @@ export default function MessageTimeline({
       {showScrollBtn && (
         <button
           onClick={scrollToBottom}
-          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container/90 border border-outline-variant/10 shadow-lg text-xs text-on-surface-variant hover:text-white transition-colors backdrop-blur-sm"
+          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container/90 border border-outline-variant/10 shadow-lg text-xs text-on-surface-variant hover:text-white transition-colors backdrop-blur-xs"
         >
           <ChevronDown className="h-3.5 w-3.5" />
           Scroll to bottom
