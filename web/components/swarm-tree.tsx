@@ -423,7 +423,7 @@ export default function SwarmTree({
         {detailNode && detailMode === 'brief' && (
           <div className="space-y-3">
             <div className="text-xs text-on-surface-variant">Topic</div>
-            <div className="font-mono text-xs break-words">{detailNode.topicPath}</div>
+            <div className="font-mono text-xs wrap-break-word">{detailNode.topicPath}</div>
             <div className="text-xs text-on-surface-variant mt-3">Brief preview</div>
             <pre className="font-mono text-[11px] whitespace-pre-wrap bg-surface-container-highest/60 rounded p-2 max-h-72 overflow-auto">
               {detailNode.taskBriefPreview || '(not available)'}
@@ -434,7 +434,7 @@ export default function SwarmTree({
           <div className="space-y-3">
             <div className="text-xs text-on-surface-variant">Status: {detailNode.status}</div>
             {detailNode.error && (
-              <div className="text-xs text-[#ff716c]">Error: {detailNode.error}</div>
+              <div className="text-xs text-error">Error: {detailNode.error}</div>
             )}
             <pre className="font-mono text-[11px] whitespace-pre-wrap bg-surface-container-highest/60 rounded p-2 max-h-72 overflow-auto">
               {detailNode.result
@@ -597,7 +597,7 @@ function TreeNode({
           {isRunning && (
             <button
               onClick={() => onCancel(node)}
-              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-[#ff716c] hover:bg-red-900/30 cursor-pointer"
+              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-error hover:bg-red-900/30 cursor-pointer"
               title={isRoot ? 'Cancel swarm (cascades to all children)' : 'Cancel this node + descendants'}
             >
               <StopCircle className="w-2.5 h-2.5" />

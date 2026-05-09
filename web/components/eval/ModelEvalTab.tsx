@@ -58,7 +58,7 @@ function ScoreCell({ value }: { value: { mean: number; passRate: number; count: 
   const textColor =
     pct >= 80 ? 'text-green-400' :
     pct >= 50 ? 'text-yellow-400' :
-    'text-[#ff716c]';
+    'text-error';
   return (
     <td className="py-2 px-3 text-center">
       <span className={`text-sm font-mono font-semibold ${textColor}`}>{pct}%</span>
@@ -87,13 +87,13 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
             onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
             className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#1a1a1a] cursor-pointer text-left"
           >
-            {expandedIdx === i ? <ChevronDown className="w-3 h-3 text-on-surface-variant flex-shrink-0" /> : <ChevronRight className="w-3 h-3 text-on-surface-variant flex-shrink-0" />}
+            {expandedIdx === i ? <ChevronDown className="w-3 h-3 text-on-surface-variant shrink-0" /> : <ChevronRight className="w-3 h-3 text-on-surface-variant shrink-0" />}
             <span className="text-xs text-white/80 truncate flex-1">{r.input}</span>
-            <div className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex items-center gap-1 shrink-0">
               {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                 <span key={s.metric} className={`text-[10px] px-1.5 py-0.5 rounded ${
                   s.status === 'PASS' ? 'bg-green-900/30 text-green-400' :
-                  s.status === 'FAIL' ? 'bg-red-900/30 text-[#ff716c]' :
+                  s.status === 'FAIL' ? 'bg-red-900/30 text-error' :
                   'bg-gray-900/30 text-gray-400'
                 }`}>
                   {s.metric.slice(0, 3)} {Math.round(s.score * 100)}%
@@ -121,8 +121,8 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
                 <span className="text-on-surface-variant font-medium">Scores:</span>
                 {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                   <div key={s.metric} className="flex items-start gap-2 bg-[#0a0a0a] rounded p-2">
-                    <div className="flex items-center gap-2 min-w-[140px] flex-shrink-0">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                    <div className="flex items-center gap-2 min-w-[140px] shrink-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
                         s.status === 'PASS' ? 'bg-green-500' : s.status === 'FAIL' ? 'bg-red-500' : 'bg-gray-500'
                       }`} />
                       <span className="text-white/70">{s.metric}</span>
@@ -169,16 +169,16 @@ function RunHistoryRow({ run }: { run: EvalRun }) {
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-3 px-4 py-3 bg-surface-container hover:bg-surface-container-high transition-colors cursor-pointer"
       >
-        {expanded ? <ChevronDown className="w-4 h-4 text-on-surface-variant flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-on-surface-variant flex-shrink-0" />}
-        <span className="text-xs text-on-surface-variant flex-shrink-0" suppressHydrationWarning>
+        {expanded ? <ChevronDown className="w-4 h-4 text-on-surface-variant shrink-0" /> : <ChevronRight className="w-4 h-4 text-on-surface-variant shrink-0" />}
+        <span className="text-xs text-on-surface-variant shrink-0" suppressHydrationWarning>
           {formatDate(run.createdAt)}
         </span>
         <span className="text-sm text-white/80 font-mono truncate flex-1 text-left">{run.model}</span>
         {run.dataset && (
-          <span className="text-xs text-on-surface-variant flex-shrink-0">{run.dataset}</span>
+          <span className="text-xs text-on-surface-variant shrink-0">{run.dataset}</span>
         )}
         {evaluatorKeys.length > 0 && (
-          <div className="flex items-center gap-2 ml-auto flex-shrink-0">
+          <div className="flex items-center gap-2 ml-auto shrink-0">
             {evaluatorKeys.slice(0, 3).map(k => (
               <ScoreBar key={k} score={scores[k].mean} size="sm" showLabel={false} />
             ))}

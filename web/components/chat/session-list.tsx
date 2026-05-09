@@ -164,7 +164,7 @@ export function SessionList({
               'text-white',
               'placeholder:text-on-surface-variant',
               'ring-1 ring-outline-variant/10',
-              'focus:outline-none focus:ring-2 focus:ring-primary/40',
+              'focus:outline-hidden focus:ring-2 focus:ring-primary/40',
               'transition-shadow'
             )}
           />
@@ -226,7 +226,7 @@ export function SessionList({
                               'bg-surface-container-highest',
                               'text-white',
                               'ring-1 ring-primary/50',
-                              'focus:outline-none focus:ring-2 focus:ring-primary/60'
+                              'focus:outline-hidden focus:ring-2 focus:ring-primary/60'
                             )}
                           />
                         ) : (

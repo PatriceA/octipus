@@ -484,7 +484,7 @@ export default function PromptInput({
           onPaste={handlePaste}
           placeholder={placeholder}
           rows={1}
-          className="flex-1 resize-none bg-transparent text-sm text-white outline-none placeholder:text-on-surface-variant"
+          className="flex-1 resize-none bg-transparent text-sm text-white outline-hidden placeholder:text-on-surface-variant"
           style={{ overflowY: 'hidden' }}
           disabled={disabled}
         />

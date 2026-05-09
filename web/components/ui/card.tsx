@@ -13,9 +13,9 @@ interface CardProps {
 const variantClasses: Record<CardVariant, string> = {
   default: 'bg-surface-container rounded-[1rem] ring-1 ring-outline-variant/10',
   glass:
-    'bg-surface-variant/60 backdrop-blur-[20px] rounded-[1rem] border border-outline-variant/10',
+    'bg-surface-variant/60 backdrop-blur-glass rounded-[1rem] border border-outline-variant/10',
   bento:
-    'bg-surface-variant/60 backdrop-blur-[20px] rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)]',
+    'bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)]',
 };
 
 const hoverClasses: Record<CardVariant, string> = {

@@ -266,7 +266,7 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
   return (
     <div className={cn('space-y-3', className)}>
       {/* Mode tabs */}
-      <div className="flex items-center gap-1 p-1 bg-[#131313] rounded-lg">
+      <div className="flex items-center gap-1 p-1 bg-surface-container-low rounded-lg">
         <button type="button" className={tabCls(mode === 'preset')} onClick={() => setMode('preset')}>
           <Clock className="w-3.5 h-3.5 inline mr-1" />Presets
         </button>
@@ -389,7 +389,7 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
                 className={cn(
                   'w-10 h-10 rounded-lg text-xs font-medium transition-colors cursor-pointer',
                   days.includes(day.value)
-                    ? 'bg-primary text-[#0e0e0e] shadow-sm'
+                    ? 'bg-primary text-[#0e0e0e] shadow-xs'
                     : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]',
                 )}
                 title={day.label}

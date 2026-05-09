@@ -46,7 +46,7 @@ const EVENT_CONFIG: Record<string, {
   thought: { icon: Brain, color: 'text-on-surface-variant', bgColor: 'bg-[#262626]', label: 'Thought' },
   action: { icon: Wrench, color: 'text-blue-400', bgColor: 'bg-blue-900/20', label: 'Action' },
   observation: { icon: Eye, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Result' },
-  error: { icon: AlertCircle, color: 'text-[#ff716c]', bgColor: 'bg-red-900/20', label: 'Error' },
+  error: { icon: AlertCircle, color: 'text-error', bgColor: 'bg-red-900/20', label: 'Error' },
   complete: { icon: CheckCircle, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Complete' },
   status_change: { icon: Loader2, color: 'text-yellow-400', bgColor: 'bg-yellow-900/20', label: 'Status' },
   permission_request: { icon: Shield, color: 'text-orange-400', bgColor: 'bg-orange-900/20', label: 'Permission' },
@@ -80,7 +80,7 @@ function TimelineCard({ event }: TimelineCardProps) {
 
   return (
     <div className={cn('flex gap-3 p-3 rounded-lg', config.bgColor)}>
-      <div className={cn('mt-0.5 flex-shrink-0', config.color)}>
+      <div className={cn('mt-0.5 shrink-0', config.color)}>
         <Icon className="w-4 h-4" />
       </div>
       <div className="flex-1 min-w-0">

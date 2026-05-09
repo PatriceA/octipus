@@ -534,7 +534,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
+              className="flex-1 px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
             >
               {loading ? 'Saving...' : 'Save Changes'}
             </button>

@@ -51,7 +51,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
               {allPassed ? (
                 <CheckCircle className="w-4 h-4 text-green-400" />
               ) : (
-                <XCircle className="w-4 h-4 text-[#ff716c]" />
+                <XCircle className="w-4 h-4 text-error" />
               )}
             </div>
             <div>
@@ -76,7 +76,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
             {summary.totalPassed}
           </span>
           {summary.totalFailed > 0 && (
-            <span className="flex items-center gap-1 text-[#ff716c]">
+            <span className="flex items-center gap-1 text-error">
               <XCircle className="w-3 h-3" />
               {summary.totalFailed}
             </span>

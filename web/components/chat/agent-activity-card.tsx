@@ -64,7 +64,7 @@ export function AgentActivityCard({ agent }: AgentActivityCardProps) {
 
   return (
     <div className="flex gap-3 justify-start">
-      <div className="w-8 h-8 rounded-full bg-indigo-900 flex items-center justify-center flex-shrink-0">
+      <div className="w-8 h-8 rounded-full bg-indigo-900 flex items-center justify-center shrink-0">
         <Wrench className="w-4 h-4 text-indigo-400" />
       </div>
       <div className="max-w-[80%] bg-indigo-900/10 border border-outline-variant/10 px-3 py-2 rounded-lg text-sm">
@@ -124,7 +124,7 @@ export function TeamCard({ teamId, members, status, durationMs }: TeamCardProps)
 
   return (
     <div className="flex gap-3 justify-start">
-      <div className="w-8 h-8 rounded-full bg-violet-900 flex items-center justify-center flex-shrink-0">
+      <div className="w-8 h-8 rounded-full bg-violet-900 flex items-center justify-center shrink-0">
         <Users className="w-4 h-4 text-violet-400" />
       </div>
       <div className="max-w-[85%] bg-violet-900/10 border border-outline-variant/10 px-3 py-2 rounded-lg text-sm">

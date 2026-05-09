@@ -139,7 +139,7 @@ export function ApiTokensTab() {
       </div>
 
       {/* Create form */}
-      <div className="p-4 bg-[#131313] rounded-lg space-y-3">
+      <div className="p-4 bg-surface-container-low rounded-lg space-y-3">
         <h3 className="font-medium text-white text-sm">Generate a new token</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <input
@@ -183,12 +183,12 @@ export function ApiTokensTab() {
         </h3>
         {isLoading && <p className="text-sm text-on-surface-variant">Loading…</p>}
         {!isLoading && active.length === 0 && (
-          <p className="text-sm text-on-surface-variant p-4 bg-[#131313] rounded-lg">
+          <p className="text-sm text-on-surface-variant p-4 bg-surface-container-low rounded-lg">
             No active tokens. Generate one above to authenticate non-browser clients.
           </p>
         )}
         {active.map((t) => (
-          <div key={t.id} className="flex items-center justify-between p-3 bg-[#131313] rounded-lg">
+          <div key={t.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-white truncate">{t.name}</span>
@@ -242,7 +242,7 @@ export function ApiTokensTab() {
             Revoked ({revoked.length})
           </h3>
           {revoked.map((t) => (
-            <div key={t.id} className="flex items-center justify-between p-3 bg-[#131313] rounded-lg opacity-60">
+            <div key={t.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg opacity-60">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-on-surface-variant line-through truncate">{t.name}</span>

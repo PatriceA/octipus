@@ -117,7 +117,7 @@ function OAuthProviderCard({
   };
 
   return (
-    <div className="p-4 bg-[#131313] rounded-[1rem]">
+    <div className="p-4 bg-surface-container-low rounded-[1rem]">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <h4 className="font-medium text-sm text-white">{provider.name}</h4>

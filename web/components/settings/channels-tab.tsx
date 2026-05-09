@@ -122,14 +122,14 @@ export function ChannelsTab() {
         <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-2">Linked Accounts</h3>
         <div className="space-y-2">
           {bindings.length === 0 ? (
-            <p className="text-sm text-on-surface-variant p-4 bg-[#131313] rounded-lg text-center">
+            <p className="text-sm text-on-surface-variant p-4 bg-surface-container-low rounded-lg text-center">
               No channels linked yet. Use /link in Telegram or Slack to get started.
             </p>
           ) : (
             bindings.map((binding, i) => (
               <div
                 key={i}
-                className="flex items-center justify-between p-3 bg-[#131313] rounded-lg"
+                className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg"
               >
                 <div className="flex items-center gap-3">
                   <span className="text-lg">
@@ -211,7 +211,7 @@ function ChannelStatusList() {
         return (
           <div
             key={ch.type}
-            className="flex items-center justify-between p-3 bg-[#131313] rounded-[1rem]"
+            className="flex items-center justify-between p-3 bg-surface-container-low rounded-[1rem]"
           >
             <h4 className="font-medium text-white">{ch.label}</h4>
             <span
@@ -273,7 +273,7 @@ function ChannelConfigSection() {
   const toggle = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   return (
-    <div className="bg-[#131313] rounded-[1rem] overflow-hidden">
+    <div className="bg-surface-container-low rounded-[1rem] overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
         <Settings2 className="w-5 h-5 text-on-surface-variant" />
         <div>

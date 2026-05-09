@@ -28,7 +28,7 @@ export function ApprovalCard({
       className
     )}>
       <div className="flex items-start gap-3">
-        <div className="w-8 h-8 rounded-full bg-orange-900/50 flex items-center justify-center flex-shrink-0">
+        <div className="w-8 h-8 rounded-full bg-orange-900/50 flex items-center justify-center shrink-0">
           <Shield className="w-4 h-4 text-orange-400" />
         </div>
         <div className="flex-1">

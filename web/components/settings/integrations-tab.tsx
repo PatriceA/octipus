@@ -122,7 +122,7 @@ function WorkspaceSection() {
             <p className="text-xs text-on-surface-variant py-2">No additional paths configured.</p>
           )}
           {workspace?.additionalPaths.map((path, i) => (
-            <div key={i} className="flex items-center gap-2 bg-[#131313] rounded-lg py-3 px-4">
+            <div key={i} className="flex items-center gap-2 bg-surface-container-low rounded-lg py-3 px-4">
               <span className="flex-1 text-sm font-mono text-white">{path}</span>
               <button
                 onClick={() => handleRemovePath(i)}
@@ -223,7 +223,7 @@ function CLIIntegrationsSection() {
         {cliTools.map((tool) => (
           <div
             key={tool.name}
-            className="flex items-center justify-between p-3 bg-[#131313] rounded-[1rem]"
+            className="flex items-center justify-between p-3 bg-surface-container-low rounded-[1rem]"
           >
             <div className="flex-1">
               <div className="flex items-center gap-2">
@@ -300,7 +300,7 @@ function IntegrationSettingsSection() {
 
       {/* N8N Settings */}
       {n8nSettings.length > 0 && (
-        <div className="bg-[#131313] rounded-[1rem] overflow-hidden">
+        <div className="bg-surface-container-low rounded-[1rem] overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
             <Workflow className="w-5 h-5 text-on-surface-variant" />
             <div>
@@ -323,7 +323,7 @@ function IntegrationSettingsSection() {
       {/* MCP Servers — managed on the dedicated /mcp page */}
       <a
         href="/mcp"
-        className="flex items-center justify-between p-4 bg-[#131313] rounded-[1rem] hover:bg-[#20201f] transition-colors"
+        className="flex items-center justify-between p-4 bg-surface-container-low rounded-[1rem] hover:bg-[#20201f] transition-colors"
       >
         <div className="flex items-center gap-3">
           <Cable className="w-5 h-5 text-on-surface-variant" />
@@ -337,7 +337,7 @@ function IntegrationSettingsSection() {
 
       {/* OAuth Settings (publicUrl) */}
       {oauthSettings.length > 0 && (
-        <div className="bg-[#131313] rounded-[1rem] overflow-hidden">
+        <div className="bg-surface-container-low rounded-[1rem] overflow-hidden">
           <div className="px-5 py-4 border-b border-outline-variant/10">
             <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">OAuth</h4>
           </div>

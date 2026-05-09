@@ -1117,7 +1117,7 @@ export default function ChatPage() {
       />
 
       {/* Left panel — Session list */}
-      <div className="w-64 border-r border-outline-variant/10 flex-shrink-0 bg-surface-container-low">
+      <div className="w-64 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
         <SessionList
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -1154,7 +1154,7 @@ export default function ChatPage() {
           Session Stats → Swarm Tree. Agent Activity was removed; SwarmTree
           replaces it as the canonical live view. */}
       {showSidePanel && (
-        <div className="w-72 border-l border-outline-variant/10 flex-shrink-0 bg-surface-container flex flex-col overflow-y-auto">
+        <div className="w-72 border-l border-outline-variant/10 shrink-0 bg-surface-container flex flex-col overflow-y-auto">
           <SidePanel
             totalTokens={sessionTotalTokens}
             maxTokenBudget={maxTokenBudget}
@@ -1188,7 +1188,7 @@ export default function ChatPage() {
       {/* Side panel toggle */}
       <button
         onClick={() => setShowSidePanel(!showSidePanel)}
-        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-sm ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-white z-10 cursor-pointer"
+        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-xs ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-white z-10 cursor-pointer"
         title={showSidePanel ? 'Hide panel' : 'Show panel'}
       >
         {showSidePanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}

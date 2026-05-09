@@ -161,7 +161,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
 
         <div className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -195,8 +195,8 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
           {selectedFiles.length > 0 && (
             <div className="space-y-1.5">
               {selectedFiles.map((file, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-[#131313] rounded-lg px-3 py-2">
-                  <FileText className="w-4 h-4 text-on-surface-variant flex-shrink-0" />
+                <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-surface-container-low rounded-lg px-3 py-2">
+                  <FileText className="w-4 h-4 text-on-surface-variant shrink-0" />
                   <span className="flex-1 truncate">{file.name}</span>
                   <span className="text-xs text-on-surface-variant">{formatSize(file.size)}</span>
                   <button
@@ -341,7 +341,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
               {data.summary && (
                 <div>
                   <h4 className="text-sm font-medium text-white/80 mb-2">Summary</h4>
-                  <p className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3">
+                  <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
                     {data.summary}
                   </p>
                 </div>
@@ -350,7 +350,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
               {data.ocrText && (
                 <div>
                   <h4 className="text-sm font-medium text-white/80 mb-2">OCR Text</h4>
-                  <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-64 overflow-y-auto">
+                  <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-64 overflow-y-auto">
                     {data.ocrText}
                   </pre>
                 </div>
@@ -359,7 +359,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
               {data.metadata && Object.keys(data.metadata).length > 0 && (
                 <div>
                   <h4 className="text-sm font-medium text-white/80 mb-2">Metadata</h4>
-                  <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-48 overflow-y-auto">
+                  <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-48 overflow-y-auto">
                     {JSON.stringify(data.metadata, null, 2)}
                   </pre>
                 </div>
@@ -398,7 +398,7 @@ function DocumentCard({
           <div className="text-on-surface-variant">
             {expanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
           </div>
-          <FileText className="w-5 h-5 text-primary flex-shrink-0" />
+          <FileText className="w-5 h-5 text-primary shrink-0" />
           <div className="min-w-0">
             <h3 className="font-medium text-white truncate">{document.originalName}</h3>
             <div className="flex items-center gap-2 text-xs text-on-surface-variant mt-0.5">
@@ -414,7 +414,7 @@ function DocumentCard({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {document.category && (
             <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getCategoryColor(document.category))}>
               {document.category}
@@ -450,7 +450,7 @@ function DocumentCard({
               e.stopPropagation();
               onDelete(document.id);
             }}
-            className="p-1 text-on-surface-variant hover:text-[#ff716c] cursor-pointer"
+            className="p-1 text-on-surface-variant hover:text-error cursor-pointer"
             title="Delete document"
           >
             <Trash2 className="w-4 h-4" />
@@ -466,7 +466,7 @@ function DocumentCard({
                 <Tag className="w-4 h-4 text-primary" />
                 Summary
               </h4>
-              <p className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3">
+              <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
                 {document.summary}
               </p>
             </div>
@@ -478,7 +478,7 @@ function DocumentCard({
                 <FileText className="w-4 h-4 text-primary" />
                 OCR Text
               </h4>
-              <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-48 overflow-y-auto">
+              <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-48 overflow-y-auto">
                 {document.ocrText}
               </pre>
             </div>
@@ -487,7 +487,7 @@ function DocumentCard({
           {document.metadata && Object.keys(document.metadata).length > 0 && (
             <div>
               <h4 className="text-sm font-medium text-white/80 mb-2">Metadata</h4>
-              <pre className="text-sm text-on-surface-variant bg-[#131313] rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-32 overflow-y-auto">
+              <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-32 overflow-y-auto">
                 {JSON.stringify(document.metadata, null, 2)}
               </pre>
             </div>

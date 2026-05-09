@@ -38,7 +38,7 @@ interface ResultsTableProps {
 function ExpandedRow({ result }: { result: EvalResult }) {
   return (
     <tr>
-      <td colSpan={6} className="px-4 py-3 bg-[#131313]">
+      <td colSpan={6} className="px-4 py-3 bg-surface-container-low">
         <div className="space-y-3">
           {/* Input */}
           <div>

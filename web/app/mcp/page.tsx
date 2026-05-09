@@ -163,7 +163,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                     'flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer',
                     transport === t.value
                       ? 'bg-primary-800 text-white border-primary-800'
-                      : 'bg-[#131313] text-on-surface-variant border-outline-variant/10 hover:border-outline-variant/30'
+                      : 'bg-surface-container-low text-on-surface-variant border-outline-variant/10 hover:border-outline-variant/30'
                   )}
                 >
                   {t.label}
@@ -180,7 +180,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-[#131313] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+              className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
               placeholder={transport === 'sse' ? 'e.g., n8n Workflows' : 'e.g., Brave Search'}
             />
           </div>
@@ -194,7 +194,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={serverUrl}
                   onChange={(e) => setServerUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#131313] border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
                   placeholder={transport === 'streamable-http'
                     ? 'https://n8n.example.com/mcp-server/http'
                     : 'http://localhost:5678/mcp/your-path'}
@@ -215,7 +215,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                     type={showAuth ? 'text' : 'password'}
                     value={authHeader}
                     onChange={(e) => setAuthHeader(e.target.value)}
-                    className="w-full px-3 py-2 pr-10 bg-[#131313] border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                    className="w-full px-3 py-2 pr-10 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
                     placeholder="Bearer eyJhbGci..."
                   />
                   <button
@@ -237,7 +237,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#131313] border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
                   placeholder="npx"
                 />
               </div>
@@ -249,7 +249,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   type="text"
                   value={args}
                   onChange={(e) => setArgs(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#131313] border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
                   placeholder="-y @anthropic/brave-search-mcp"
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">Space-separated arguments</p>
@@ -265,7 +265,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   value={envVars}
                   onChange={(e) => setEnvVars(e.target.value)}
                   rows={2}
-                  className="w-full px-3 py-2 bg-[#131313] border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white resize-none"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white resize-none"
                   placeholder={"BRAVE_API_KEY=your-key-here\nANOTHER_VAR=value"}
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">One KEY=VALUE per line</p>
@@ -273,7 +273,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
             </>
           )}
 
-          {error && <p className="text-sm text-[#ff716c]">{error}</p>}
+          {error && <p className="text-sm text-error">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -324,7 +324,7 @@ function ServerToolList({ serverId }: { serverId: string }) {
         Available Tools ({tools.length})
       </p>
       {tools.map((tool) => (
-        <div key={tool.name} className="flex items-start gap-2 px-2.5 py-1.5 bg-[#131313] rounded-lg">
+        <div key={tool.name} className="flex items-start gap-2 px-2.5 py-1.5 bg-surface-container-low rounded-lg">
           <Wrench className="w-3.5 h-3.5 text-on-surface-variant mt-0.5 shrink-0" />
           <div>
             <p className="text-sm font-mono font-medium text-white/80">{tool.name}</p>

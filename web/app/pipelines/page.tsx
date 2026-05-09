@@ -122,7 +122,7 @@ export default function PipelinesPage() {
         </div>
         <button
           onClick={handleCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 text-sm font-medium"
+          className="flex items-center gap-2 px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 text-sm font-medium"
         >
           <Plus className="w-4 h-4" />
           New Template
@@ -139,7 +139,7 @@ export default function PipelinesPage() {
           </p>
           <button
             onClick={handleCreate}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 text-sm font-medium"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
             Create Template
@@ -501,8 +501,8 @@ function TemplateEditor({
                       className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-container-high"
                       onClick={() => setExpandedStep(expandedStep === i ? null : i)}
                     >
-                      <GripVertical className="w-4 h-4 text-on-surface-variant flex-shrink-0" />
-                      <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium flex-shrink-0">
+                      <GripVertical className="w-4 h-4 text-on-surface-variant shrink-0" />
+                      <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium shrink-0">
                         {i + 1}
                       </span>
                       <span className="text-sm font-medium text-white flex-1 truncate">
@@ -510,7 +510,7 @@ function TemplateEditor({
                       </span>
                       <span className="text-xs text-on-surface-variant font-mono">{step.topic}</span>
                       {step.requiresApproval && (
-                        <Shield className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />
+                        <Shield className="w-3.5 h-3.5 text-orange-500 shrink-0" />
                       )}
                       <div className="flex items-center gap-0.5">
                         <button
@@ -664,7 +664,7 @@ function TemplateEditor({
           <button
             onClick={handleSubmit}
             disabled={!name.trim()}
-            className="px-4 py-2 text-sm bg-gradient-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 font-medium"
+            className="px-4 py-2 text-sm bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 disabled:opacity-50 font-medium"
           >
             {template ? 'Save Changes' : 'Create Template'}
           </button>

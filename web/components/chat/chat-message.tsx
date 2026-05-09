@@ -35,7 +35,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
       )}
     >
       {message.role !== 'user' && (
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-primary-container flex items-center justify-center flex-shrink-0">
+        <div className="w-8 h-8 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shrink-0">
           <Bot className="w-5 h-5 text-[#002a6d]" />
         </div>
       )}
@@ -43,7 +43,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
         className={cn(
           'max-w-[70%] px-4 py-2',
           message.role === 'user'
-            ? 'bg-gradient-to-r from-primary to-primary-container text-[#002a6d] rounded-2xl rounded-br-md'
+            ? 'bg-linear-to-r from-primary to-primary-container text-[#002a6d] rounded-2xl rounded-br-md'
             : message.role === 'system'
             ? 'bg-surface-container text-on-surface-variant italic rounded-2xl'
             : 'bg-surface-container border border-outline-variant/10 text-white rounded-2xl rounded-tl-md'
@@ -71,7 +71,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
         </div>
       </div>
       {message.role === 'user' && (
-        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0">
           <User className="w-5 h-5 text-[#002a6d]" />
         </div>
       )}

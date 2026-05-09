@@ -169,7 +169,7 @@ function OAuthGroupCard({
       </div>
 
       {showGuide && guide && (
-        <div className="mt-3 p-3 bg-[#131313] rounded-lg text-xs text-on-surface-variant space-y-1.5">
+        <div className="mt-3 p-3 bg-surface-container-low rounded-lg text-xs text-on-surface-variant space-y-1.5">
           <ol className="list-decimal list-inside space-y-1">
             {guide.steps.map((step, i) => (
               <li key={i}>{step}</li>

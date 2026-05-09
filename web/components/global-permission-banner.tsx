@@ -97,7 +97,7 @@ function PermissionBanner({
     <div className="mx-4 mb-4 rounded-xl border border-yellow-800/40 bg-surface-container shadow-lg shadow-black/30 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
-          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-yellow-600/20 flex items-center justify-center">
+          <div className="shrink-0 w-8 h-8 rounded-lg bg-yellow-600/20 flex items-center justify-center">
             <Shield className="w-4 h-4 text-yellow-400" />
           </div>
           <div className="min-w-0 flex-1">
@@ -117,7 +117,7 @@ function PermissionBanner({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {argsEntries.length > 0 && (
             <button
               onClick={onToggleExpand}
@@ -148,7 +148,7 @@ function PermissionBanner({
           <div className="space-y-1">
             {argsEntries.slice(0, 6).map(([key, value]) => (
               <div key={key} className="flex gap-2 text-xs">
-                <span className="font-mono text-on-surface-variant flex-shrink-0">{key}:</span>
+                <span className="font-mono text-on-surface-variant shrink-0">{key}:</span>
                 <span className="font-mono text-white truncate">{String(value).slice(0, 200)}</span>
               </div>
             ))}
@@ -178,7 +178,7 @@ function ApprovalBanner({
     <div className="mx-4 mb-4 rounded-xl border border-orange-800/40 bg-surface-container shadow-lg shadow-black/30 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
-          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-orange-600/20 flex items-center justify-center">
+          <div className="shrink-0 w-8 h-8 rounded-lg bg-orange-600/20 flex items-center justify-center">
             <Clock className="w-4 h-4 text-orange-400" />
           </div>
           <div className="min-w-0 flex-1">
@@ -194,7 +194,7 @@ function ApprovalBanner({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {approval.question && (
             <button
               onClick={onToggleExpand}

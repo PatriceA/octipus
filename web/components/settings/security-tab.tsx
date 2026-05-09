@@ -64,7 +64,7 @@ export function SecurityTab() {
       <h2 className="text-lg font-extrabold tracking-tighter text-white">Security</h2>
 
       <div className="space-y-4">
-        <div className="flex items-center justify-between p-4 bg-[#131313] rounded-lg">
+        <div className="flex items-center justify-between p-4 bg-surface-container-low rounded-lg">
           <div>
             <h3 className="font-medium text-white">Two-Factor Authentication (TOTP)</h3>
             <p className="text-sm text-on-surface-variant">
@@ -152,7 +152,7 @@ export function SecurityTab() {
 
         {/* Disable 2FA */}
         {profile?.totpEnabled && (
-          <div className="p-4 bg-[#131313] rounded-[1rem]">
+          <div className="p-4 bg-surface-container-low rounded-[1rem]">
             <h4 className="font-medium text-white mb-2">Disable 2FA</h4>
             <div className="flex gap-2">
               <input

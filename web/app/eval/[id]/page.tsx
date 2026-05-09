@@ -188,7 +188,7 @@ export default function EvalDetailPage() {
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-[#ff716c]">{data.summary.totalFailed}</p>
+            <p className="text-2xl font-bold text-error">{data.summary.totalFailed}</p>
             <p className="text-xs text-on-surface-variant">Failed</p>
           </CardContent>
         </Card>
@@ -257,7 +257,7 @@ export default function EvalDetailPage() {
               className={cn(
                 'px-3 py-1.5 text-sm rounded-md transition-colors capitalize cursor-pointer',
                 filter === f
-                  ? 'bg-[#20201f] text-white shadow-sm'
+                  ? 'bg-[#20201f] text-white shadow-xs'
                   : 'text-on-surface-variant hover:text-white'
               )}
             >

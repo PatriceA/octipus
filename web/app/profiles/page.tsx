@@ -157,7 +157,7 @@ function FactEditor({
       )}
 
       {facts.map((fact) => (
-        <div key={fact.key} className="flex items-center gap-2 bg-[#131313] rounded-lg px-3 py-2">
+        <div key={fact.key} className="flex items-center gap-2 bg-surface-container-low rounded-lg px-3 py-2">
           <span className="text-xs font-bold text-on-surface-variant uppercase tracking-wide min-w-[80px]">
             {fact.key}
           </span>
@@ -205,7 +205,7 @@ function FactEditor({
               <button
                 onClick={() => handleRemove(fact.key)}
                 disabled={busy}
-                className="p-1 text-on-surface-variant hover:text-[#ff716c] cursor-pointer"
+                className="p-1 text-on-surface-variant hover:text-error cursor-pointer"
                 title="Remove fact"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -305,7 +305,7 @@ function CreateProfileDialog({
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -545,7 +545,7 @@ function EditProfileDialog({
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                className="p-2 text-on-surface-variant hover:text-[#ff716c] cursor-pointer"
+                className="p-2 text-on-surface-variant hover:text-error cursor-pointer"
                 title="Delete profile"
               >
                 <Trash2 className="w-4 h-4" />
@@ -587,7 +587,7 @@ function EditProfileDialog({
 
         {/* Error */}
         {error && (
-          <div className="mx-4 mt-4 text-sm text-[#ff716c] bg-red-900/20 rounded-lg px-3 py-2">
+          <div className="mx-4 mt-4 text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
             {error}
           </div>
         )}
