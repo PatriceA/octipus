@@ -48,6 +48,10 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
             const vault = getVault();
             const secret = await vault.getSystemSecret(def.vaultName);
             value = secret ? '••••••••' : '';
+          } else if (def.isSecret) {
+            // Settings-table-stored secret: mask in the response.
+            const raw = await svc.get(def.key);
+            value = raw ? '••••••••' : '';
           } else {
             value = await svc.get(def.key);
           }

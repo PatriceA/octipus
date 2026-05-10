@@ -41,6 +41,9 @@ logs/
 # Workspace (user files managed by the agent)
 workspace/
 
+# Live Artifacts: per-version JS bundles (generated at runtime)
+/data/artifacts/
+
 # Playwright
 test-results/
 playwright-report/

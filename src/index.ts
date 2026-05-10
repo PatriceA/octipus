@@ -61,6 +61,22 @@ async function main() {
     // Subscribe to settings changes for hot-reload
     initializeHotReload();
 
+    // Live Artifacts: auto-generate the token secret + populate SDK sha
+    // from disk if the user hasn't set them in the UI. Wrapped so any
+    // failure here cannot abort the rest of the boot sequence.
+    try {
+      const { bootstrapArtifactSettings } = await import('@/core/artifacts/settings');
+      await bootstrapArtifactSettings();
+      const { registerArtifactRefreshHandler } = await import('@/core/artifacts/scheduler');
+      const { registerArtifactCleanupHandler, bootstrapArtifactCleanup } = await import('@/core/artifacts/cleanup');
+      registerArtifactRefreshHandler();
+      registerArtifactCleanupHandler();
+      await bootstrapArtifactCleanup();
+      logger.info('Live artifacts initialized');
+    } catch (err) {
+      logger.error({ err }, 'Live artifacts init failed — feature will be unavailable but server continues');
+    }
+
     // Discover filesystem skills (agentskills.io spec) — additive to DB skills
     const { getSkillRegistry } = await import('@/skills/registry');
     getSkillRegistry().loadExternal();

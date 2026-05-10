@@ -77,6 +77,10 @@ export type GatewayEventType =
   | 'audit'
   // Extensions (user-authored)
   | 'extension.notify'
+  // Live Artifacts (Phase 8)
+  | 'artifact.data_updated'
+  | 'artifact.version_updated'
+  | 'artifact.source_error'
   // Reserved
   | 'test.event'
   | 'error';

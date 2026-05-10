@@ -126,3 +126,42 @@ docker compose up -d ollama litellm searxng
 | Ollama | 11434 | `ollama/ollama:rocm` | No |
 | LiteLLM | 4000 | `ghcr.io/berriai/litellm:main-latest` | No |
 | SearXNG | 8888 | `searxng/searxng:latest` | No |
+
+## Artifacts hosting
+
+Live artifacts (`docs/ARTIFACTS.md`) ship hosted HTML pages. Two modes:
+
+### Recommended: subdomain isolation
+
+1. Add a DNS record (A or CNAME) for `artifacts.<your-host>` pointing to
+   the same origin as your main app. Cloudflare users: orange-cloud is
+   fine; Universal SSL covers it. If you already have `*.<host>` wildcard
+   DNS, no new record is needed.
+2. Set `ARTIFACTS_HOST=artifacts.<your-host>` in your env.
+3. Reverse-proxy any `Host: artifacts.<your-host>` traffic to the same
+   octipus backend; the in-process router matches the host header.
+
+This puts hosted user-influenced HTML on a different origin so it cannot
+read app cookies, ride `localStorage`, or hit `/api/*` directly with
+session credentials.
+
+### No-DNS fallback
+
+Leave `ARTIFACTS_HOST` unset. Artifacts are served at
+`/__artifacts__/a/:slug` on the main host. The iframe still uses
+`sandbox` (no `allow-same-origin`) but a CSP-escape bug becomes a
+same-origin XSS against the app.
+
+Acceptable for single-user / trusted-tenant deploys; **not recommended**
+when untrusted users can author artifacts in your workspace.
+
+### Other env vars
+
+| Var                       | Purpose                                                   |
+|---------------------------|-----------------------------------------------------------|
+| `ARTIFACTS_HOST`          | Subdomain for hosted pages. Empty → path-prefix fallback. |
+| `ARTIFACTS_PROTO`         | `https` (default) or `http` for local dev.                |
+| `ARTIFACTS_GATEWAY_WSS`   | Gateway WS origin baked into the embed CSP `connect-src`. |
+| `ARTIFACT_SDK_SHA256`     | sha256 of `octipus-artifact-client.js` — pinned in CSP.   |
+| `ARTIFACT_TOKEN_SECRET`   | HMAC key for artifact-scoped JWT. Falls back to JWT_SECRET HKDF. |
+| `ARTIFACT_BUNDLES_DIR`    | Filesystem root for custom JS bundles. Default `data/artifacts/`. |
