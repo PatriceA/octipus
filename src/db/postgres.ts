@@ -20,7 +20,17 @@ async function initExternal(config: { url: string; poolSize: number; idleTimeout
   const sql = postgres(config.url, {
     max: config.poolSize,
     idle_timeout: config.idleTimeout / 1000,
+    // Recycle every pooled socket after 30 minutes — avoids zombie slots
+    // when Bun + postgres-js drops a connection silently.
+    max_lifetime: 30 * 60,
     connect_timeout: config.connectionTimeout / 1000,
+    // Disable prepared statements. With Bun + postgres-js, a connection
+    // that fails its initial startup handshake (DB log: "incomplete startup
+    // packet") can stick around in the pool with cached prepares and keep
+    // returning CONNECTION_ENDED for every subsequent query that maps to
+    // the same slot. Disabling prepares forces a fresh exec each time and
+    // lets the pool drop bad slots immediately on first failure.
+    prepare: false,
     onnotice: (notice) => dbLogger.debug({ notice }, 'PostgreSQL notice'),
   });
 

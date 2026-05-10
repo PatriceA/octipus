@@ -1,3 +1,4 @@
+export { ArtifactsRepository, artifactsRepository } from './artifacts-repository';
 export { AuditRepository, auditRepository } from './audit-repository';
 export { MessageRepository, messageRepository } from './message-repository';
 export { SessionRepository, sessionRepository } from './session-repository';

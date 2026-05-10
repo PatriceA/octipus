@@ -22,6 +22,8 @@ import { rateLimitMiddleware } from './middleware/rate-limit';
 import { adminRoutes } from './routes/admin';
 import { agentRoutes } from './routes/agents';
 import { apiTokenRoutes } from './routes/api-tokens';
+import { artifactPageRoutes, artifactPageRoutesFallback } from './routes/artifact-pages';
+import { artifactRoutes } from './routes/artifacts';
 // Import routes
 import { authRoutes } from './routes/auth';
 import { channelBindingRoutes } from './routes/channel-bindings';
@@ -323,6 +325,7 @@ export function createServer() {
         .use(expertRoutes)
         .use(skillTopicAssignmentRoutes)
         .use(skillRoutes)
+        .use(artifactRoutes)
         .use(recurringTaskRoutes)
         .use(evalRoutes)
         .use(evaluationRoutes)
@@ -348,6 +351,12 @@ export function createServer() {
 
   // Incoming webhooks — unauthenticated (uses per-hook webhookSecret for auth)
   app.group('/api', (app) => app.use(webhookIncomingRoutes));
+
+  // Hosted artifact pages — outside /api group so they live at /a/:slug
+  // (subdomain mode) AND /__artifacts__/a/:slug (DNS-less fallback). Both
+  // mounts are always active so a fresh install works without any config.
+  app.use(artifactPageRoutes);
+  app.use(artifactPageRoutesFallback);
 
   // WebSocket setup (includes /ws, /ws/permissions, /ws/browser-bridge)
   setupWebSocket(app as any);

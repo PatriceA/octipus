@@ -228,9 +228,20 @@ kill_port_users() {
       fi
     done
   else
-    # Unix: use lsof
-    local pids
-    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    # Unix: try lsof → ss → fuser, in that order. lsof is missing on
+    # some minimal installs (Manjaro, Alpine), so always fall through.
+    local pids=""
+    if command -v lsof >/dev/null 2>&1; then
+      pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    fi
+    if [[ -z "$pids" ]] && command -v ss >/dev/null 2>&1; then
+      # ss output: "users:(("bun",pid=110914,fd=34))" — extract pid=NNN
+      pids=$(ss -tlnpH "( sport = :$port )" 2>/dev/null \
+        | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)
+    fi
+    if [[ -z "$pids" ]] && command -v fuser >/dev/null 2>&1; then
+      pids=$(fuser -n tcp "$port" 2>/dev/null || true)
+    fi
     if [[ -n "$pids" ]]; then
       for pid in $pids; do
         kill "$pid" 2>/dev/null || true

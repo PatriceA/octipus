@@ -70,6 +70,17 @@ export function initializeHotReload(): void {
           logger.info({ key }, 'Telephony provider cache reset');
           break;
 
+        case 'artifacts': {
+          // Invalidate the resolved settings + token signing key so the next
+          // embed render/sign uses the new value without a process restart.
+          const { resetArtifactSettingsCache } = await import('@/core/artifacts/settings');
+          const { _resetArtifactTokenKey } = await import('@/core/artifacts/token');
+          resetArtifactSettingsCache();
+          _resetArtifactTokenKey();
+          logger.info({ key }, 'Artifact settings cache reset');
+          break;
+        }
+
         // agent, orchestrator, workspace, integrations —
         // these are read per-request from getConfig(), so no active reload needed.
         // The cached config was already updated by refreshConfigKey() above.

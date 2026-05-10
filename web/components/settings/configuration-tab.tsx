@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Bot, Cpu, GitBranch, Loader2, Server } from 'lucide-react';
+import { Bot, Cpu, GitBranch, Globe, Loader2, Server } from 'lucide-react';
 import { api } from '@/lib/api';
 import {
   SecretsRedirectBanner,
@@ -20,6 +20,7 @@ const SERVER_CATEGORIES = new Set([
   'api',
   'logging',
   'security',
+  'artifacts',
   // 'voice' — has its own dedicated tab in Settings > Voice & Calls
 ]);
 
@@ -64,6 +65,15 @@ const SECTIONS = [
       { category: 'logging', label: 'Logging' },
       { category: 'voice', label: 'Voice' },
       { category: 'security', label: 'Security' },
+    ],
+  },
+  {
+    id: 'artifacts',
+    title: 'Live Artifacts',
+    description: 'Hosted dashboards / news feeds. Set "host" to your artifacts subdomain (e.g. artifacts.octipus.cc) after pointing DNS at this server. Token secret is auto-generated.',
+    icon: Globe,
+    subsections: [
+      { category: 'artifacts', label: 'Artifacts' },
     ],
   },
 ];

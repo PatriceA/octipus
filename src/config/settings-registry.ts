@@ -836,6 +836,62 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'MULTIUSER_ORG_WORKSPACES',
   },
+
+  // ── Live Artifacts ──
+  {
+    key: 'artifacts.host',
+    category: 'artifacts',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Subdomain that serves hosted artifact pages (e.g. "artifacts.octipus.cc"). Empty → fall back to /__artifacts__/* on the main host with weaker isolation. Add the DNS record in your provider before setting this.',
+    isSecret: false,
+    envVar: 'ARTIFACTS_HOST',
+  },
+  {
+    key: 'artifacts.proto',
+    category: 'artifacts',
+    valueType: 'string',
+    defaultValue: 'https',
+    description: 'Protocol for artifact embed URLs ("https" or "http"). Use "http" only for local dev.',
+    isSecret: false,
+    envVar: 'ARTIFACTS_PROTO',
+  },
+  {
+    key: 'artifacts.gatewayWss',
+    category: 'artifacts',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Gateway WebSocket origin baked into embed CSP connect-src (e.g. "wss://octipus.cc/gateway"). Leave empty to skip the connect-src pin (live updates may be blocked).',
+    isSecret: false,
+    envVar: 'ARTIFACTS_GATEWAY_WSS',
+  },
+  {
+    key: 'artifacts.tokenSecret',
+    category: 'artifacts',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'HMAC key for artifact-scoped JWTs. Auto-generated on first boot — you don\'t need to set this. Rotate (clear + save to regenerate on next boot) to invalidate all in-flight embed tokens.',
+    isSecret: true,
+    envVar: 'ARTIFACT_TOKEN_SECRET',
+  },
+  {
+    key: 'artifacts.sdkSha256',
+    category: 'artifacts',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Sha256 of /octipus-artifact-client.js — auto-loaded from web/public/octipus-artifact-client.sha256.txt at boot. Override only if hosting the SDK from a different path.',
+    isSecret: false,
+    envVar: 'ARTIFACT_SDK_SHA256',
+  },
+  {
+    key: 'artifacts.bundlesDir',
+    category: 'artifacts',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Filesystem root for custom JS bundles. Empty → defaults to ./data/artifacts under the project root.',
+    isSecret: false,
+    envVar: 'ARTIFACT_BUNDLES_DIR',
+  },
 ];
 
 /** Get a setting definition by key */

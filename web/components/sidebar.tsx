@@ -7,6 +7,7 @@ import {
   Cable,
   Cpu,
   FileText,
+  Globe,
   FlaskConical,
   GitBranch,
   KeyRound,
@@ -56,6 +57,7 @@ const navGroups: NavGroup[] = [
       { name: 'Skills', href: '/skills', icon: BookOpen },
       { name: 'Knowledge', href: '/knowledge', icon: Brain },
       { name: 'Evaluations', href: '/eval', icon: FlaskConical },
+      { name: 'Live Artifacts', href: '/artifacts', icon: Globe },
     ],
   },
   {
