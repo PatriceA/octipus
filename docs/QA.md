@@ -60,16 +60,25 @@ convention, without editing a registry.
 
    ```ts
    import { BaseChannel } from '@/channels/interface';
+   import type { ChannelResponse } from '@/core/types';
 
-   export default class QaDemoChannel extends BaseChannel {
+   export class QaDemoChannel extends BaseChannel {
      readonly type = 'qa-demo' as const;
      readonly name = 'QA Demo Channel';
-     isEnabled() { return false; }
+     override isEnabled() { return false; }
      async connect() { /* dormant */ }
      async disconnect() { /* dormant */ }
-     async send() { /* dormant */ }
+     async send(_channelId: string, _response: ChannelResponse): Promise<string> {
+       return '';
+     }
    }
+
+   export const qaDemoChannel = new QaDemoChannel();
    ```
+
+   Discovery accepts either an exported instance (preferred) or a class
+   constructor — both work since the discovery loader will instantiate a
+   class if no instance is exported.
 
 2. Restart. Look for the log `Channel discovered { type: 'qa-demo', enabled: false }`.
 3. **Expect:** discovery picks it up but skips `connect()` because

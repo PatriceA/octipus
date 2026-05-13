@@ -131,12 +131,44 @@ Examples:
 
 // ── Main ─────────────────────────────────────────────────────────────
 
+/**
+ * Close the DB (releases the PGlite postmaster.pid lock) and exit. Bare
+ * `process.exit()` on an open PGlite connection leaves a stale lock that
+ * blocks the next gateway startup with `RuntimeError: Aborted()`.
+ */
+async function exitClean(code: number): Promise<never> {
+  try {
+    const { closeDb } = await import('@/db/postgres');
+    await closeDb();
+  } catch {
+    /* close failure is non-fatal */
+  }
+  process.exit(code);
+}
+
 async function main() {
   const { options, detailed, jsonOnly, noSave, evalDir, help } = parseArgs(process.argv);
 
   if (help) {
     printHelp();
     process.exit(0);
+  }
+
+  // The model registry + provider router need a live DB connection. When
+  // spawned by the running gateway, the child Bun process has a fresh
+  // module graph so we re-init here. Without this, getDb() throws and
+  // getDefaultModel() swallows the error, surfacing a misleading
+  // "No enabled models configured" message.
+  let dbInitialized = false;
+  if (!options.integration) {
+    try {
+      const { initializeDb } = await import('@/db/postgres');
+      await initializeDb();
+      dbInitialized = true;
+    } catch (err) {
+      console.error(`Database init failed: ${(err as Error).message}`);
+      process.exit(2);
+    }
   }
 
   const dir = evalDir ? resolve(evalDir) : resolve(process.cwd(), 'eval');
@@ -155,6 +187,7 @@ async function main() {
   const suites = await loadSuites(dir, options.suite);
   if (suites.length === 0) {
     console.error('No eval suites found. Create .yaml files in the eval/ directory.');
+    if (dbInitialized) await exitClean(1);
     process.exit(1);
   }
 
@@ -185,10 +218,15 @@ async function main() {
 
   // Exit code: 0 if all passed, 1 if any failed
   const anyFailed = results.some(r => r.failed > 0);
+  if (dbInitialized) await exitClean(anyFailed ? 1 : 0);
   process.exit(anyFailed ? 1 : 0);
 }
 
-main().catch(err => {
+main().catch(async err => {
   console.error('Eval runner failed:', err);
+  try {
+    const { closeDb } = await import('@/db/postgres');
+    await closeDb();
+  } catch { /* non-fatal */ }
   process.exit(2);
 });

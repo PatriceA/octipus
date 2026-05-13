@@ -15,6 +15,44 @@ import { parseArgs } from 'util';
 import { generateRedTeamSuite, redTeamPlugins, runRedTeam } from './index';
 import type { RedTeamTest, Severity } from './types';
 
+/**
+ * Ensure the database is initialized so the model registry + provider router
+ * can be queried. When the CLI is spawned by the running gateway the env is
+ * inherited but the child Bun process has a fresh module graph, so the db
+ * singleton starts empty and must be re-initialized explicitly.
+ */
+async function bootstrapDb(): Promise<void> {
+  try {
+    const { initializeDb } = await import('@/db/postgres');
+    await initializeDb();
+  } catch (err) {
+    console.error(`\n  \x1b[31mDatabase init failed:\x1b[0m ${(err as Error).message}\n`);
+    process.exit(2);
+  }
+}
+
+/**
+ * Close the DB connection so PGlite releases its postmaster.pid lock file.
+ * Without this, a stale lock can persist in the data dir and block the next
+ * gateway startup with `RuntimeError: Aborted()`.
+ */
+async function shutdownDb(): Promise<void> {
+  try {
+    const { closeDb } = await import('@/db/postgres');
+    await closeDb();
+  } catch {
+    /* close failure is non-fatal */
+  }
+}
+
+/**
+ * Exit cleanly: tear down the DB, then exit with the given code.
+ */
+async function exitClean(code: number): Promise<never> {
+  await shutdownDb();
+  process.exit(code);
+}
+
 const PLUGIN_ALIASES: Record<string, string> = {
   injection: 'prompt-injection',
   confusion: 'role-confusion',
@@ -36,8 +74,8 @@ async function main() {
       'dry-run': { type: 'boolean', default: false },
       list: { type: 'boolean', short: 'l', default: false },
       output: { type: 'string', short: 'o' },
-      'api-url': { type: 'string', default: 'http://localhost:3005' },
-      token: { type: 'string', short: 't' },
+      model: { type: 'string', short: 'm' },
+      'system-prompt': { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
     strict: true,
@@ -57,8 +95,8 @@ Options:
   -l, --list               List all test cases without running
       --dry-run            Generate tests but skip execution
   -o, --output <file>      Save results to JSON file
-      --api-url <url>      Backend URL (default: http://localhost:3005)
-  -t, --token <token>      Auth token for the backend
+  -m, --model <id>         Model to test (defaults to the registry's default)
+      --system-prompt <s>  Override the default safety-guardrails system prompt
   -h, --help               Show this help
 
 Available plugins:
@@ -103,26 +141,41 @@ ${redTeamPlugins.map((p) => `  ${p.name.padEnd(20)} ${p.description}`).join('\n'
   console.log('\n  Red-Team Evaluation\n');
   console.log('  ' + '='.repeat(60));
 
+  // Only init the DB for real runs — dry-run doesn't touch the registry.
+  if (!values['dry-run']) {
+    await bootstrapDb();
+  }
+
   if (values['dry-run']) {
     console.log('  Mode: DRY RUN (tests generated but not executed)\n');
   }
 
-  const evalResult = await runRedTeam({
-    severity: severityFilter,
-    plugins: pluginFilter,
-    dryRun: values['dry-run'],
-    apiUrl: values['api-url'],
-    token: values.token,
-  });
+  let evalResult;
+  try {
+    evalResult = await runRedTeam({
+      severity: severityFilter,
+      plugins: pluginFilter,
+      dryRun: values['dry-run'],
+      model: values.model,
+      systemPrompt: values['system-prompt'],
+    });
+  } catch (err) {
+    // Fail loud — surface the actual reason (e.g. "no model resolved") so
+    // the user can fix it instead of seeing 49 silent FAILs.
+    console.error(`\n  \x1b[31mRed-team runner failed:\x1b[0m ${(err as Error).message}\n`);
+    await exitClean(2);
+  }
 
   // Display results
   for (const result of evalResult.results) {
     const isSkipped = !!(result.metadata?.skipped);
-    const status = isSkipped ? 'skipped' : result.passed ? 'passed' : 'failed';
+    const isError = !!(result.metadata?.error);
+    const status = isSkipped ? 'skipped' : isError ? 'error' : result.passed ? 'passed' : 'failed';
     const statusIcon = {
       passed: '\x1b[32mPASS\x1b[0m',
       failed: '\x1b[31mFAIL\x1b[0m',
       skipped: '\x1b[90mSKIP\x1b[0m',
+      error:  '\x1b[35mERR \x1b[0m',
     }[status];
 
     console.log(`  ${statusIcon}  ${result.testId.padEnd(20)} (${result.latencyMs}ms)`);
@@ -133,6 +186,8 @@ ${redTeamPlugins.map((p) => `  ${p.name.padEnd(20)} ${p.description}`).join('\n'
           console.log(`         \x1b[31m-> ${ar.message}\x1b[0m`);
         }
       }
+    } else if (status === 'error') {
+      console.log(`         \x1b[35m-> ${result.metadata?.error}\x1b[0m`);
     }
   }
 
@@ -151,11 +206,12 @@ ${redTeamPlugins.map((p) => `  ${p.name.padEnd(20)} ${p.description}`).join('\n'
 
   // Exit with failure code if any tests failed
   if (summary.failed > 0 || summary.errors > 0) {
-    process.exit(1);
+    await exitClean(1);
   }
+  await exitClean(0);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error('Red-team CLI error:', error);
-  process.exit(1);
+  await exitClean(1);
 });

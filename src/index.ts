@@ -201,7 +201,15 @@ async function main() {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
   } catch (error) {
-    logger.error({ error }, 'Failed to start Octipus');
+    logger.error(
+      {
+        error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        errorName: error instanceof Error ? error.name : undefined,
+      },
+      'Failed to start Octipus',
+    );
     process.exit(1);
   }
 }

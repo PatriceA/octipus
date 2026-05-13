@@ -103,8 +103,23 @@ export async function loadExtension(
   eventBus: GatewayEventBus,
 ): Promise<LoadedExtension | undefined> {
   try {
-    const mod = await import(entry.entryPath);
-    const factory = (mod.default ?? mod) as ExtensionFactory;
+    // Cache-bust the dynamic import so an in-place edit + /reload actually
+    // re-evaluates the file body. Bun keeps a per-resolved-path cache that
+    // ignores query strings on disk paths, so we use a file:// URL with a
+    // mtime/now-stamped query. If this still doesn't bust the cache, the
+    // restart is still needed — but for the common case it gives users the
+    // hot-reload they expect.
+    const cacheBuster = `?v=${Date.now()}`;
+    const importTarget = `${entry.entryPath}${cacheBuster}`;
+    let mod: unknown;
+    try {
+      mod = await import(importTarget);
+    } catch {
+      // Fall back to the bare path — some loaders reject query strings on
+      // local paths even though Bun usually tolerates them.
+      mod = await import(entry.entryPath);
+    }
+    const factory = ((mod as { default?: unknown }).default ?? mod) as ExtensionFactory;
     if (typeof factory !== 'function') {
       coreLogger.warn({ entry }, `extension "${entry.name}" has no default-exported function`);
       return undefined;

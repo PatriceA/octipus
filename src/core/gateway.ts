@@ -96,7 +96,15 @@ export class Gateway {
       coreLogger.info('Gateway started successfully');
     } catch (error) {
       this.state = 'stopped';
-      coreLogger.error({ error }, 'Failed to start gateway');
+      coreLogger.error(
+        {
+          error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          errorName: error instanceof Error ? error.name : undefined,
+        },
+        'Failed to start gateway',
+      );
       throw error;
     }
   }

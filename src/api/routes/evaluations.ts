@@ -115,7 +115,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
           const providerMap = new Map(allProviders.map((p) => [p.name, p]));
 
           const report = await runConformanceTests(client, modelsToTest, providerMap, {
-            tests, timeout,
+            tests, timeout, userId: user.id,
           });
 
           const saved = await evaluationRepository.saveConformanceRun(user.id, report);
@@ -249,6 +249,7 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                   temperature: 0.3,
                   maxTokens: 1024,
                   extraBody: { ...modelConfig?.metadata?.extraBody, think: true },
+                  userId: user.id,
                 };
                 // Direct provider or LiteLLM fallback — bypass circuit breaker
                 // Route based on DB-configured provider — not heuristic
@@ -263,8 +264,18 @@ export const evaluationRoutes = new Elysia({ prefix: '/evaluations' })
                   const tc = completion.toolCalls[0];
                   actualToolCall = { name: tc.name, args: tc.arguments as Record<string, unknown> };
                 }
-              } catch {
-                output = '';
+              } catch (err) {
+                // Fail-loud: log per-datapoint failure with reason so we know WHY the output is empty
+                // (e.g. vault key resolution failure, provider unreachable). Stamp the error onto
+                // the output so evaluators downstream can distinguish "no output" from "ran but empty".
+                apiLogger.error(
+                  {
+                    jobId, userId: user.id, model: modelId, datapointInput: dp.input.slice(0, 120),
+                    err: (err as Error).message,
+                  },
+                  'Eval datapoint completion failed',
+                );
+                output = `[Error: ${(err as Error).message}]`;
               }
             }
             stampedDataset.push({

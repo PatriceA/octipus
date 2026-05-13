@@ -371,6 +371,8 @@ export interface RunConformanceOptions {
   timeout?: number;
   /** Skip these provider names */
   skipProviders?: string[];
+  /** Calling user — threaded through to providers for user-scoped vault lookups */
+  userId?: string;
 }
 
 /**
@@ -453,7 +455,7 @@ export async function runConformanceTests(
     // Models with direct API keys have provider='openai'/'anthropic'/etc. → call directly.
     const isLiteLLMRouted = model.provider === 'litellm';
     const complete: TestContext['complete'] = async (opts) => {
-      const fullOpts = { ...opts, model: model.modelId, extraBody };
+      const fullOpts = { ...opts, model: model.modelId, extraBody, userId: options?.userId };
       if (isLiteLLMRouted) {
         return client.completeViaProxy(fullOpts);
       }

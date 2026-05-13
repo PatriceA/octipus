@@ -110,7 +110,7 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       return { error: 'Not authenticated' };
     }
 
-    const { suite, type = 'eval' } = body as { suite?: string; type?: 'eval' | 'red-team' };
+    const { suite, type = 'eval', model } = body as { suite?: string; type?: 'eval' | 'red-team'; model?: string };
 
     // Prevent multiple simultaneous runs
     if (runningEvals.size > 0) {
@@ -118,14 +118,33 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       return { error: `An eval is already running (started ${running.startedAt.toISOString()})`, running: true };
     }
 
+    // Fail loud if no model is selected AND no DB default exists, instead of crashing
+    // mid-run inside the CLI runner.
+    if (!model) {
+      const { getModelRegistry } = await import('@/models');
+      const registry = getModelRegistry();
+      const defaultModel = await registry.getDefaultModel().catch(() => null);
+      if (!defaultModel?.modelId) {
+        const models = await registry.getAllModels().catch(() => []);
+        if (models.length === 0) {
+          set.status = 400;
+          return {
+            error: 'No model selected and no enabled models configured. Register a model (and set one as default), or pass `model` in the request body.',
+          };
+        }
+      }
+    }
+
     const runId = `run-${Date.now()}`;
     const args: string[] = [];
 
     if (type === 'red-team') {
       args.push('run', 'src/eval/red-team/cli.ts');
+      if (model) args.push('--model', model);
     } else {
       args.push('run', 'src/eval/cli.ts');
       if (suite) args.push('--suite', suite);
+      if (model) args.push('--model', model);
     }
 
     const proc = Bun.spawn(['bun', ...args], {

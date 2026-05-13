@@ -61,6 +61,8 @@ export class OllamaProvider implements ModelProvider {
    * do not overlap with cloud API model identifiers.
    */
   supportsModel(modelName: string): boolean {
+    // If Ollama is not configured, don't claim to support any model
+    if (!this.fixedEndpoint && !getConfig().ollama.url) return false;
     const lower = modelName.toLowerCase();
     if (CLOUD_PREFIXES.some((prefix) => lower.startsWith(prefix))) return false;
     if (looksLikeOpenRouterSlug(lower)) return false;
@@ -161,31 +163,17 @@ export class OllamaProvider implements ModelProvider {
 
       return result;
     } catch (error) {
-      modelLogger.error({ error, model: params.model, provider: this.name }, 'Ollama completion failed');
-      // Ollama's Go-side chat parser sometimes returns 400 with a body like
-      // `{"error":"Value looks like object, but can't find closing '}' symbol"}`
-      // when a smaller model (qwen3.6, etc.) emits malformed tool-call JSON
-      // mid-stream. Treat it like a malformed-tool-call: classify as
-      // TOOL_CALL_INVALID + RETRY_NOW so the agent-worker re-runs the turn
-      // instead of bubbling the failure to the user.
-      const msg = (error as { message?: string }).message || '';
-      // Ollama's tool-call parsers (Go side) reject malformed model output
-      // with a few stable signatures. Smaller models (qwen3.6, etc.) emit
-      // unbalanced JSON, mixed-format XML tags, or interleaved think/tool
-      // markers. Treat any of these as recoverable — the agent-worker retries.
-      if (
-        /Value looks like object|find closing '\}' symbol/.test(msg) ||
-        /XML syntax error.*element|<parameter>.*<\/function>/.test(msg)
-      ) {
-        throw new ClassifiedError({
-          reason: FailoverReason.TOOL_CALL_INVALID,
-          recovery: RecoveryAction.RETRY_NOW,
-          message: `Ollama rejected request as malformed model output: ${msg}`,
-          providerHint: this.name,
-          metadata: { model: params.model, raw: msg.slice(0, 300) },
-          cause: error,
-        });
-      }
+      modelLogger.error(
+        {
+          error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStatus: (error as { status?: unknown })?.status,
+          errorCode: (error as { code?: unknown })?.code,
+          model: params.model,
+          provider: this.name,
+        },
+        'Ollama completion failed'
+      );
       throw classifyError(error, this.name);
     }
   }
@@ -376,8 +364,8 @@ export class OllamaProvider implements ModelProvider {
     }
   }
 
-  async embed(texts: string[], model: string): Promise<number[][]> {
-    const client = this.createClient();
+  async embed(texts: string[], model: string, endpoint?: string): Promise<number[][]> {
+    const client = this.createClient(endpoint);
 
     modelLogger.debug(
       { model, inputCount: texts.length, provider: this.name },

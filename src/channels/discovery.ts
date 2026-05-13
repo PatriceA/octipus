@@ -57,6 +57,16 @@ export async function discoverChannels(): Promise<DiscoveredChannel[]> {
 function pickChannel(mod: Record<string, unknown>): BaseChannel | null {
   for (const value of Object.values(mod)) {
     if (value instanceof BaseChannel) return value;
+    if (typeof value === 'function') {
+      const ctor = value as { prototype?: unknown };
+      if (ctor.prototype instanceof BaseChannel) {
+        try {
+          return new (value as new () => BaseChannel)();
+        } catch (err) {
+          channelLogger.warn({ err }, 'channel discovery: constructor threw — skipping');
+        }
+      }
+    }
   }
   return null;
 }

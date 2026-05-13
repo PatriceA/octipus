@@ -32,8 +32,19 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
 
     const config = getConfig();
     const maxSize = config.workspace.maxUploadSize || 52428800;
-    const documentsPath = resolve(config.workspace.documentsPath || './workspace/documents');
-    const uncategorizedDir = join(documentsPath, 'uncategorized');
+    const documentsRoot = resolve(config.workspace.documentsPath || './workspace/documents');
+    // Scope storage on disk by principal so document uploads land in the
+    // active workspace's folder, matching the per-user nested layout used by
+    // WorkspaceFS. Without this, every user shares a single
+    // `./workspace/documents/uncategorized` tree and the upload appears to
+    // "go to the main workspace" — which is what the QA run flagged.
+    const workspaceSegment = principal.workspaceId ?? 'default';
+    const uncategorizedDir = join(
+      documentsRoot,
+      'users', principal.userId,
+      'workspaces', workspaceSegment,
+      'uncategorized',
+    );
 
     // Ensure upload directory exists
     if (!existsSync(uncategorizedDir)) {
@@ -163,6 +174,40 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     };
   }, {
     params: t.Object({ id: t.String() }),
+    detail: { tags: ['documents'] },
+  })
+
+  // Stream the original uploaded file (for in-browser preview / download).
+  // Uses scopedRepos so cross-tenant access surfaces as 404, matching the
+  // rest of this route file.
+  .get('/:id/raw', async ({ user, principal, params, query, set }) => {
+    if (!user || !isAuthenticated(principal)) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+
+    const doc = await scopedRepos(principal).documents.findById(params.id);
+    if (!doc) {
+      set.status = 404;
+      return { error: 'Document not found' };
+    }
+
+    if (!doc.storagePath || !existsSync(doc.storagePath)) {
+      set.status = 410;
+      return { error: 'File no longer available on disk' };
+    }
+
+    const file = Bun.file(doc.storagePath);
+    const disposition = query.download === '1' ? 'attachment' : 'inline';
+    // Filename* uses RFC 5987 encoding so non-ASCII filenames survive
+    const encoded = encodeURIComponent(doc.originalName);
+    set.headers['Content-Type'] = doc.mimeType || 'application/octet-stream';
+    set.headers['Content-Disposition'] = `${disposition}; filename="${encoded}"; filename*=UTF-8''${encoded}`;
+    set.headers['Cache-Control'] = 'private, max-age=60';
+    return file;
+  }, {
+    params: t.Object({ id: t.String() }),
+    query: t.Object({ download: t.Optional(t.String()) }),
     detail: { tags: ['documents'] },
   })
 

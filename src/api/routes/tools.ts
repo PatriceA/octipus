@@ -1,8 +1,10 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { getExtensionRegistry } from '@/extensions/registry';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getPermissionManager } from '@/security/permissions';
 import { getToolRegistry } from '@/tools/registry';
+import { apiLogger } from '@/utils/logger';
 
 export const toolRoutes = new Elysia({ prefix: '/tools' })
   .use(apiContext)
@@ -42,6 +44,30 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       });
 
       return { tools };
+    },
+    { detail: { tags: ['tools'] } }
+  )
+
+  // Reload user extensions from disk. Equivalent to the TUI's `/reload`
+  // command but reachable from the WebUI Tools page. Only reloads extensions
+  // (commands in .octipus/extensions/); built-in tools remain frozen at
+  // startup and plugins reload via /plugins/:name/reload.
+  .post(
+    '/reload',
+    async ({ user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      try {
+        const result = await getExtensionRegistry().reload();
+        apiLogger.info({ userId: user.id, count: result.count }, 'Extensions reloaded via WebUI');
+        return { reloaded: true, extensionCount: result.count };
+      } catch (err) {
+        apiLogger.error({ err, userId: user.id }, 'Extension reload failed');
+        set.status = 500;
+        return { error: `Reload failed: ${(err as Error).message}` };
+      }
     },
     { detail: { tags: ['tools'] } }
   )
