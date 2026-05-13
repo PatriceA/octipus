@@ -6,11 +6,19 @@
  * - Otherwise → creates a test user via register/login
  */
 
+// A *stable* test username is used by default so the e2e suite can re-run
+// against a long-lived server without tripping the registration rate-limit.
+// On first run it registers; subsequent runs just login. Override via
+// `E2E_USERNAME` if you want a fresh user per run.
+const DEFAULT_E2E_USERNAME = 'e2e_test_persistent';
+
 export const fixtures = {
   authToken: (process.env.MASTER_KEY || null) as string | null,
   testUserId: process.env.MASTER_KEY ? 'system' : null as string | null,
-  testUsername: process.env.MASTER_KEY ? 'system' : `e2e_test_${Date.now()}`,
-  testPassword: 'TestP@ssw0rd!2024',
+  testUsername: process.env.MASTER_KEY
+    ? 'system'
+    : (process.env.E2E_USERNAME || DEFAULT_E2E_USERNAME),
+  testPassword: process.env.E2E_PASSWORD || 'TestP@ssw0rd!2024',
   chatSessionId: null as string | null,
   testExpertId: null as string | null,
   testRecurringTaskId: null as string | null,

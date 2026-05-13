@@ -209,10 +209,10 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that consume output tokens. The system handles this at multiple levels:
 
 - **Model-level:** "Disable Thinking" checkbox in the model Add/Edit dialog sets `extraBody: { think: false }` — prevents the model from generating reasoning tokens entirely (Ollama)
-- **Agent workers:** Override `think: true` even when the model has thinking disabled — agent workers benefit from reasoning for complex tool-use tasks
+- **Agent workers (orchestrator AND experts):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools, not just experts.
 - **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, so users never see raw reasoning output
 
-**Strategy:** Disable thinking for fast orchestrator responses (classification, casual chat). Enable thinking for agent workers that need to reason about multi-step tool execution.
+**Strategy:** Keep thinking enabled for any agent that emits tool calls (orchestrator, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for casual chat (`direct-response.ts`), where there are no tool calls to corrupt.
 
 ## Steering Messages
 

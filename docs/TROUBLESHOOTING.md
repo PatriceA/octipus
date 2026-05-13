@@ -160,3 +160,33 @@ If failures continue after reset, the breaker will trip again — diagnose the s
 2. Bind a model to the `embedding` topic (see "No model bound to topic X" above).
 3. Ensure `pgvector` extension is installed and the embedding migration ran.
 4. Re-hit `/api/knowledge/readiness` — it re-runs the self-check on demand.
+
+## Orchestrator Fails with "Value looks like object, but can't find closing '}'"
+
+**Problem**: Chat fails after a few seconds with logs like:
+```
+ERROR: Orchestrator agent failed
+  error: { reason: "tool_call_invalid", message: "{\"error\":\"Value looks like object, but can't find closing '}' symbol\"}", providerHint: "ollama" }
+```
+
+**Cause**: The orchestrator is the only role in the swarm that *must* emit valid tool-call JSON every turn (it routes work via `spawn_child` / `create_pipeline`). Some local models produce JSON that Ollama's strict Go-side parser rejects — the body text quoted above is verbatim from Ollama, not Octipus. Octipus already classifies this as retryable, but retries don't help when the problem is structural to the model.
+
+**Local-model orchestrator compatibility (observed 2026-05-12 QA run)**:
+
+| Model | As orchestrator | Notes |
+|---|---|---|
+| `glm-4.7-flash:latest` | ✅ Works | Tested end-to-end; recommended baseline for local orchestrator. |
+| `qwen2.5:32b+` | ✅ Generally works | Proven tool-calling track record at 32B+. |
+| `qwen3:*`, `qwen3.6:*` (any size up to 35B observed) | ❌ Fails | All Qwen3 family sizes tested fail with the unbalanced-JSON parser error. Not recommended at any local size below ~35B; even 35B Qwen3 has been observed to fail. The `known-bad-orchestrators` list auto-swaps these to a working alternative if one is configured. |
+| `qwen3-vl:*` | (vision-only, not for orchestrator) | Distinct family, not on the bad list — but a VL model shouldn't be the orchestrator anyway. |
+
+**Recommended setup**:
+- **Local-only**: install `glm-4.7-flash:latest` in Ollama and bind it as default. Use Qwen models for *workers* (writing, coding, etc.) where their output is plain text, not tool-call JSON.
+- **Hybrid**: keep a cloud model (Deepseek, OpenAI, Anthropic, Gemini) as the orchestrator default; auto-swap will fall back to it if a Qwen model is somehow assigned.
+
+**Solution**:
+1. In **Models → add model**, pull `glm-4.7-flash:latest` (or any cloud model) and set it as the default for the orchestrator topic.
+2. Restart the backend or trigger a model reload — the next chat turn will pick the new default.
+3. If you keep Qwen as default, the auto-swap logic in `src/core/orchestrator/model-selector.ts` will warn and swap to another tool-capable model in the registry. If no swap candidate exists, the chat still fails — that's why the manual recommendation above matters.
+
+To add new known-good or known-bad orchestrator models, edit `src/core/orchestrator/known-bad-orchestrators.ts`. The pattern is a regex matched case-insensitively against the model id.

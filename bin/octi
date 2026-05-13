@@ -69,7 +69,7 @@ init_state_dir() {
 print_banner() {
   echo -e "${CYAN}${BOLD}"
   echo "  ╔═══════════════════════════════════╗"
-  echo "  ║          O C T I P U S            ║"
+  echo "  ║           O C T I P U S           ║"
   echo "  ╚═══════════════════════════════════╝"
   echo -e "${NC}"
 }
@@ -825,9 +825,15 @@ cmd_tui() {
     return 1
   fi
 
+  # Capture the invocation cwd before we cd into the project dir, so the
+  # dev session opens pinned to the folder the user ran `octi tui` from
+  # (claude-style). An explicit `--project /other` in "$@" still wins
+  # because the entry-point parser uses the last `--project`.
+  local user_cwd="$PWD"
   log_info "Connecting TUI to gateway at localhost:$API_PORT..."
+  log_hint "Project: $user_cwd"
   cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts
+  API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts --project "$user_cwd" "$@"
 }
 
 cmd_edit() {
@@ -837,9 +843,13 @@ cmd_edit() {
     return 1
   fi
 
+  # Default project = invocation cwd; user-supplied `--project /path` in
+  # "$@" overrides because the parser keeps the last match.
+  local user_cwd="$PWD"
   log_info "Launching TUI editor (gateway at localhost:$API_PORT)..."
+  log_hint "Project: $user_cwd"
   cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec bun run src/tui-editor/index.ts "$@"
+  API_PORT="$API_PORT" exec bun run src/tui-editor/index.ts --project "$user_cwd" "$@"
 }
 
 cmd_help() {
@@ -850,8 +860,8 @@ cmd_help() {
   echo -e "    start [options]  Start backend + web UI (or TUI)"
   echo -e "    stop             Stop all Octipus processes"
   echo -e "    restart [options] Restart everything"
-  echo -e "    tui              Launch terminal chat (backend must be running)"
-  echo -e "    edit             Launch TUI editor (backend must be running)"
+  echo -e "    tui              Launch terminal chat — pins to current directory as project"
+  echo -e "    edit             Launch TUI editor — pins to current directory as project"
   echo -e "    status           Show running state and service health"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
@@ -878,7 +888,7 @@ main() {
     start)   cmd_start "$@" ;;
     stop)    cmd_stop ;;
     restart) cmd_restart "$@" ;;
-    tui)     cmd_tui ;;
+    tui)     cmd_tui "$@" ;;
     edit)    cmd_edit "$@" ;;
     status)  cmd_status ;;
     logs)    cmd_logs "$@" ;;

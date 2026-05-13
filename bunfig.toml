@@ -10,3 +10,11 @@ sourcemaps = true
 # Test configuration
 coverage = true
 coverageDir = "coverage"
+# tests/web/ uses @playwright/test (browser E2E). Run those via
+# `bun run test:web` (which invokes `playwright test tests/web`), not
+# `bun test`. Importing them under bun's unit runner throws "Playwright
+# Test did not expect test.describe() to be called here." because
+# Playwright's describe expects its own runner context. The npm script
+# `bun test src scripts` filters by positional path; this CLI-flag
+# mirror keeps a bare `bun test` invocation clean too.
+pathIgnorePatterns = ["tests/web/**"]

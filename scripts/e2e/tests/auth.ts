@@ -1,7 +1,40 @@
 import type { TestRunner } from '../runner';
 import { assert, assertStatus } from '../runner';
 import type { APIClient } from '../client';
-import { fixtures } from '../fixtures';
+import { fixtures, BASE_URL } from '../fixtures';
+
+/**
+ * Register/login through a raw fetch so we can read the Set-Cookie header.
+ * The server hands out a `session_token` cookie; the same string works as
+ * a Bearer token (see auth code in src/api/server.ts which accepts either
+ * `Authorization: Bearer <token>` or the cookie).
+ */
+async function authenticateAsUser(username: string, password: string): Promise<{ token: string; userId: string } | null> {
+  // Try login first — the persistent test user usually already exists, and
+  // hammering /auth/register on every run trips the registration rate-limit.
+  for (const endpoint of ['/auth/login', '/auth/register']) {
+    const res = await fetch(`${BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) continue;
+
+    // Token may be in the body (legacy) OR in the session_token cookie (current).
+    const body = await res.json().catch(() => ({} as Record<string, unknown>));
+    let token = (body as { token?: string }).token || null;
+    if (!token) {
+      const setCookie = res.headers.get('set-cookie') || '';
+      const match = setCookie.match(/session_token=([^;]+)/);
+      if (match) token = match[1];
+    }
+    const userId = (body as { user?: { id?: string }; id?: string }).user?.id
+      || (body as { id?: string }).id
+      || '';
+    if (token) return { token, userId };
+  }
+  return null;
+}
 
 export async function testAuth(runner: TestRunner, client: APIClient) {
   console.log('\n\x1b[1mAuthentication\x1b[0m');
@@ -25,33 +58,16 @@ export async function testAuth(runner: TestRunner, client: APIClient) {
   }
 
   await runner.test('POST /auth/register creates test user', async () => {
-    const { status, data } = await client.request<{ token: string; user: { id: string } }>(
-      'POST', '/auth/register', { username: fixtures.testUsername, password: fixtures.testPassword }, '',
-    );
-    if (status === 200) {
-      assert(!!data.token, 'No token returned');
-      assert(!!data.user?.id, 'No user ID returned');
-      fixtures.authToken = data.token;
-      fixtures.testUserId = data.user.id;
-    } else {
-      // User already exists from a parallel runner — login instead
-      const login = await client.request<{ token: string; user: { id: string } }>(
-        'POST', '/auth/login', { username: fixtures.testUsername, password: fixtures.testPassword }, '',
-      );
-      assertStatus(login.status, 200);
-      assert(!!login.data.token, 'No token returned from login fallback');
-      fixtures.authToken = login.data.token;
-      fixtures.testUserId = login.data.user?.id || '';
-    }
+    const result = await authenticateAsUser(fixtures.testUsername, fixtures.testPassword);
+    assert(!!result, 'register/login failed — no token in body or session_token cookie');
+    fixtures.authToken = result!.token;
+    fixtures.testUserId = result!.userId;
   });
 
   await runner.test('POST /auth/login with correct credentials', async () => {
-    const { status, data } = await client.request<{ token: string }>(
-      'POST', '/auth/login', { username: fixtures.testUsername, password: fixtures.testPassword }, '',
-    );
-    assertStatus(status, 200);
-    assert(!!data.token, 'No token returned');
-    fixtures.authToken = data.token;
+    const result = await authenticateAsUser(fixtures.testUsername, fixtures.testPassword);
+    assert(!!result, 'login failed — no token in body or session_token cookie');
+    fixtures.authToken = result!.token;
   });
 
   await runner.test('POST /auth/login with wrong password fails', async () => {

@@ -65,6 +65,8 @@ if "%COMMAND%"=="restart" goto :cmd_restart
 if "%COMMAND%"=="status" goto :cmd_status
 if "%COMMAND%"=="logs" goto :cmd_logs
 if "%COMMAND%"=="open" goto :cmd_open
+if "%COMMAND%"=="tui" goto :cmd_tui
+if "%COMMAND%"=="edit" goto :cmd_edit
 if "%COMMAND%"=="help" goto :cmd_help
 if "%COMMAND%"=="--help" goto :cmd_help
 if "%COMMAND%"=="-h" goto :cmd_help
@@ -464,6 +466,42 @@ start "" "http://localhost:%WEB_PORT%"
 echo   %GREEN%v%NC% Opening %CYAN%http://localhost:%WEB_PORT%%NC%
 exit /b 0
 
+:: ─── TUI (terminal chat) ────────────────────────────────────────────────────
+:cmd_tui
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
+if errorlevel 1 (
+    echo   %RED%x%NC% Backend is not running on port %API_PORT%
+    echo     %DIM%Start it first: octi start%NC%
+    exit /b 1
+)
+:: Capture the invocation cwd before we cd into the project dir, so the
+:: dev session opens pinned to the folder the user ran `octi tui` from
+:: (claude-style). An explicit `--project /other` in the forwarded args
+:: still wins because the entry-point parser uses the last `--project`.
+set "USER_CWD=%CD%"
+echo   %GREEN%v%NC% Connecting TUI to gateway at localhost:%API_PORT%...
+echo     %DIM%Project: %USER_CWD%%NC%
+cd /d "%PROJECT_DIR%"
+bun run src/tui-pi/index.ts --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
+exit /b %errorlevel%
+
+:: ─── Edit (TUI editor) ──────────────────────────────────────────────────────
+:cmd_edit
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
+if errorlevel 1 (
+    echo   %RED%x%NC% Backend is not running on port %API_PORT%
+    echo     %DIM%Start it first: octi start%NC%
+    exit /b 1
+)
+set "USER_CWD=%CD%"
+echo   %GREEN%v%NC% Launching TUI editor (gateway at localhost:%API_PORT%)...
+echo     %DIM%Project: %USER_CWD%%NC%
+cd /d "%PROJECT_DIR%"
+:: Default project = invocation cwd; user-supplied `--project /path`
+:: in the forwarded args overrides it.
+bun run src/tui-editor/index.ts --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
+exit /b %errorlevel%
+
 :: ─── Help ───────────────────────────────────────────────────────────────────
 :cmd_help
 call :print_banner
@@ -473,6 +511,8 @@ echo   %BOLD%Commands:%NC%
 echo     start [--dev]    Start backend and web UI
 echo     stop             Stop all Octipus processes
 echo     restart [--dev]  Restart everything
+echo     tui              Launch terminal chat — pins to current directory as project
+echo     edit             Launch TUI editor — pins to current directory as project
 echo     status           Show running state and service health
 echo     logs [--web]     Tail backend logs (--web for web UI)
 echo     open             Open web UI in browser
