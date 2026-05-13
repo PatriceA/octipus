@@ -150,8 +150,19 @@ export async function directResponse(
         cached: false,
       },
     };
-  } catch (error) {
-    coreLogger.error({ error, model: modelName }, 'Direct response failed');
+  } catch (err) {
+    // Use the `err` key — Pino's Error serializer is keyed on that name.
+    // Logging under any other key falls through to JSON.stringify, which
+    // drops non-enumerable Error fields and produces a useless `{}`.
+    // Also log message/stack/name explicitly so even a stripped-down log
+    // formatter shows what actually went wrong.
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    const name = err instanceof Error ? err.name : 'Error';
+    coreLogger.error(
+      { err, message, stack, name, model: modelName },
+      'Direct response failed',
+    );
     const errorMsg = `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
     await messageRepository.create({ sessionId, role: 'assistant', content: errorMsg });
     await sessionRepository.incrementMessageCount(sessionId);

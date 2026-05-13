@@ -1,5 +1,6 @@
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { checkOrchestratorCapability } from './known-bad-orchestrators';
 
 interface ModelRouting {
   model: string;
@@ -39,6 +40,37 @@ export class ModelSelector {
             'Default model unsuitable for orchestration, using alternative',
           );
         }
+      }
+    }
+
+    // Capability check — if the chosen model is on the known-bad list, try
+    // to swap to a working alternative before the agent burns 3 retries on
+    // malformed tool-call JSON. The agent-worker already classifies the
+    // failure as retryable, but with structural model limits retries just
+    // fail the same way, so a pre-emptive swap saves ~30s per turn and
+    // gives the user a usable result instead of "Orchestrator agent failed".
+    const capWarning = checkOrchestratorCapability(modelName);
+    if (capWarning) {
+      const allModels = await registry.getAllModels();
+      const swap = allModels.find(m =>
+        m.supportsTools &&
+        m.provider !== 'cli' &&
+        !m.modelId.includes('reasoner') &&
+        !m.modelId.includes('thinking') &&
+        !checkOrchestratorCapability(m.modelId) &&
+        m.modelId !== modelName,
+      );
+      if (swap) {
+        coreLogger.warn(
+          { from: modelName, to: swap.modelId, reason: capWarning.reason },
+          'Orchestrator model is on the known-unreliable list — swapping to a working alternative',
+        );
+        modelName = swap.modelId;
+      } else {
+        coreLogger.warn(
+          { model: modelName, reason: capWarning.reason },
+          'Orchestrator model is on the known-unreliable list, but no working alternative is configured — attempting anyway',
+        );
       }
     }
 

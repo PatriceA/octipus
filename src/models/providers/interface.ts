@@ -18,7 +18,7 @@ export interface ModelProvider {
   stream(options: CompletionOptions): AsyncGenerator<StreamChunk>;
 
   /** Generate embeddings (optional — not all providers support it) */
-  embed?(texts: string[], model: string): Promise<number[][]>;
+  embed?(texts: string[], model: string, endpoint?: string): Promise<number[][]>;
 
   /** Check provider health */
   checkHealth(): Promise<ProviderHealthStatus>;

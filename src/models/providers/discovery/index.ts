@@ -3,6 +3,7 @@ import { RedisCache } from '@/db/redis';
 import { modelLogger } from '@/utils/logger';
 import { AnthropicDiscovery } from './anthropic';
 import { curate } from './curation';
+import { DeepSeekDiscovery } from './deepseek';
 import { GeminiDiscovery } from './gemini';
 import { GrokDiscovery } from './grok';
 import { OllamaDiscovery } from './ollama';
@@ -17,6 +18,7 @@ const TTL_SECONDS = 6 * 60 * 60; // 6h
 const CLIENTS: Record<string, ProviderDiscovery> = {
   openai: new OpenAIDiscovery(),
   anthropic: new AnthropicDiscovery(),
+  deepseek: new DeepSeekDiscovery(),
   gemini: new GeminiDiscovery(),
   google: new GeminiDiscovery(),
   grok: new GrokDiscovery(),
@@ -35,6 +37,8 @@ export interface DiscoveryOptions {
   includeNonChat?: boolean;
   /** Cap shortlist size. Default unlimited. */
   limit?: number;
+  /** User ID for resolving user-scoped vault secrets. */
+  userId?: string;
 }
 
 interface CacheEntry {
@@ -47,11 +51,12 @@ function credHash(creds: DiscoveryCreds): string {
   return createHash('sha256').update(fp).digest('hex').slice(0, 12);
 }
 
-/** Resolve API key for a provider from env first, then vault. */
-async function resolveCreds(provider: string): Promise<DiscoveryCreds> {
+/** Resolve API key for a provider from env first, then vault (user-scoped → system). */
+async function resolveCreds(provider: string, userId?: string): Promise<DiscoveryCreds> {
   const envMap: Record<string, string> = {
     openai: 'OPENAI_API_KEY',
     anthropic: 'ANTHROPIC_API_KEY',
+    deepseek: 'DEEPSEEK_API_KEY',
     gemini: 'GEMINI_API_KEY',
     google: 'GEMINI_API_KEY',
     grok: 'XAI_API_KEY',
@@ -60,6 +65,7 @@ async function resolveCreds(provider: string): Promise<DiscoveryCreds> {
   const vaultKeyMap: Record<string, string> = {
     openai: 'openai_api_key',
     anthropic: 'anthropic_api_key',
+    deepseek: 'deepseek_api_key',
     gemini: 'gemini_api_key',
     google: 'gemini_api_key',
     grok: 'xai_api_key',
@@ -79,8 +85,16 @@ async function resolveCreds(provider: string): Promise<DiscoveryCreds> {
   try {
     const { getVault } = await import('@/security/vault');
     const vault = getVault();
-    const value = await vault.getByName('system', vaultKeyMap[provider]);
-    if (value) return { apiKey: value };
+    const vaultKey = vaultKeyMap[provider];
+    if (vaultKey) {
+      // Try user-scoped secret first, then fall back to system
+      if (userId && userId !== 'system') {
+        const userValue = await vault.getByName(userId, vaultKey);
+        if (userValue) return { apiKey: userValue };
+      }
+      const value = await vault.getByName('system', vaultKey);
+      if (value) return { apiKey: value };
+    }
   } catch (err) {
     modelLogger.debug({ err, provider }, 'discovery: vault lookup failed');
   }
@@ -103,10 +117,16 @@ export async function discover(
     return { shortlist: [], hiddenCount: 0, lastFetched: 0, source: 'unconfigured', error: `Unknown provider: ${provider}` };
   }
 
-  const creds = credsOverride ?? await resolveCreds(provider);
+  const creds = credsOverride ?? await resolveCreds(provider, opts.userId);
   if (!creds.apiKey && provider !== 'ollama') {
     return { shortlist: [], hiddenCount: 0, lastFetched: 0, source: 'unconfigured', error: `${provider} not configured (missing API key)` };
   }
+
+  // Self-hosted catalogs (Ollama): every model is one the user intentionally
+  // pulled. Don't strip OCR/whisper/embedding variants — surface them all.
+  const curateOpts = provider === 'ollama'
+    ? { ...opts, includeNonChat: true }
+    : opts;
 
   const key = `models:discovery:${provider}:${credHash(creds)}`;
 
@@ -114,7 +134,7 @@ export async function discover(
   if (!opts.bypassCache) {
     const cached = await cache.get<CacheEntry>(key);
     if (cached && Date.now() - cached.fetchedAt < TTL_SECONDS * 1000) {
-      return curate(cached.models, 'cache', cached.fetchedAt, opts);
+      return curate(cached.models, 'cache', cached.fetchedAt, curateOpts);
     }
   }
 
@@ -122,13 +142,20 @@ export async function discover(
   try {
     const models = await client.listAll(creds);
     await cache.set(key, { models, fetchedAt: Date.now() } satisfies CacheEntry, TTL_SECONDS);
-    return curate(models, 'live', Date.now(), opts);
+    return curate(models, 'live', Date.now(), curateOpts);
   } catch (err) {
     const errMsg = (err as Error).message;
-    modelLogger.warn({ err: errMsg, provider }, 'discovery: live fetch failed, attempting stale cache');
+    // Include error name + status so operators can tell timeout from
+    // connection-refused from 4xx response without bisecting code paths.
+    const errName = (err as Error).name;
+    const errStatus = (err as { status?: number }).status;
+    modelLogger.warn(
+      { err: errMsg, errName, errStatus, provider },
+      'discovery: live fetch failed, attempting stale cache',
+    );
     const stale = await cache.get<CacheEntry>(key);
     if (stale) {
-      const curated = curate(stale.models, 'cache', stale.fetchedAt, opts);
+      const curated = curate(stale.models, 'cache', stale.fetchedAt, curateOpts);
       curated.error = errMsg;
       return curated;
     }

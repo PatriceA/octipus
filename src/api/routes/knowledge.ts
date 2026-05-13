@@ -111,24 +111,29 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const notReady = ensureKBReady(set);
     if (notReady) return notReady;
 
-    const { query, mode = 'hybrid', limit = 10, sourceType } = body;
+    const { query, mode = 'hybrid', limit = 10, sourceType, minSimilarity } = body;
     const service = getEmbeddingService();
+    // Apply the same defaults as the MCP tool so REST callers get useful
+    // results instead of "everything in the KB at ~0.01 similarity".
+    const threshold = typeof minSimilarity === 'number'
+      ? minSimilarity
+      : mode === 'semantic' ? 0.35 : mode === 'keyword' ? 0 : 0.3;
 
     try {
       let results;
       switch (mode) {
         case 'semantic':
-          results = await service.search(query, limit, sourceType);
+          results = await service.search(query, limit, sourceType, threshold);
           break;
         case 'keyword':
           results = await service.ftsSearch(query, limit, sourceType);
           break;
         case 'hybrid':
         default:
-          results = await service.hybridSearch(query, limit, sourceType);
+          results = await service.hybridSearch(query, limit, sourceType, undefined, threshold);
           break;
       }
-      return { results, mode, query };
+      return { results, mode, query, minSimilarity: threshold };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, message, mode, query, userId: user.id }, 'Knowledge search failed');
@@ -141,6 +146,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       mode: t.Optional(t.Union([t.Literal('hybrid'), t.Literal('semantic'), t.Literal('keyword')])),
       limit: t.Optional(t.Number()),
       sourceType: t.Optional(t.String()),
+      minSimilarity: t.Optional(t.Number()),
     }),
     detail: { tags: ['knowledge'] },
   })

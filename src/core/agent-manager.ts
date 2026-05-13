@@ -43,6 +43,11 @@ export interface AgentInfo {
   role: string;
   status: AgentStatus;
   createdAt: Date;
+  /** Set once the agent reached a terminal state. Undefined while running. */
+  completedAt?: Date;
+  /** Frozen at terminal-state transition; for running agents this is the live elapsed time. */
+  durationMs?: number;
+  totalTokens?: number;
   iteration: number;
 }
 
@@ -239,16 +244,26 @@ export class AgentManager {
       routedTopic
     );
 
-    // Persist agent snapshot to DB
-    agentRepository.create({
-      id: agentId,
-      sessionId: options.sessionId,
-      userId: options.userId,
-      role: options.role || 'general',
-      model: routedModel,
-      topic: routedTopic,
-      status: 'running',
-    }).catch(err => agentLogger.error({ err, agentId }, 'Failed to persist agent record'));
+    // Persist agent snapshot to DB. Pass the in-memory context.createdAt
+    // explicitly — the column default (NOW()) fires at *insert* time, which
+    // for a fire-and-forget call can land seconds after the agent actually
+    // started, and it has historically disagreed with the JS clock by one
+    // hour (timezone interpretation). Awaiting also makes ordering vs. the
+    // user-message insert deterministic.
+    try {
+      await agentRepository.create({
+        id: agentId,
+        sessionId: options.sessionId,
+        userId: options.userId,
+        role: options.role || 'general',
+        model: routedModel,
+        topic: routedTopic,
+        status: 'running',
+        createdAt: context.createdAt,
+      });
+    } catch (err) {
+      agentLogger.error({ err, agentId }, 'Failed to persist agent record');
+    }
 
     agentLogger.info(
       { agentId, sessionId: options.sessionId, model: routedModel, topic: routedTopic },
@@ -440,6 +455,13 @@ export class AgentManager {
   list(): AgentInfo[] {
     return Array.from(this.agents.values()).map((worker) => {
       const context = worker.getContext();
+      // For finished agents still in memory, freeze duration to completedAt-createdAt.
+      // For running agents, fall back to the worker's live elapsed time so the UI
+      // ticks. Without this, finished-but-not-yet-cleaned agents reported `0ms`
+      // because the route only had createdAt to work with.
+      const durationMs = context.completedAt
+        ? context.completedAt.getTime() - context.createdAt.getTime()
+        : worker.getElapsedMs();
       return {
         id: context.id,
         sessionId: context.sessionId,
@@ -449,6 +471,9 @@ export class AgentManager {
         role: context.role,
         status: context.status,
         createdAt: context.createdAt,
+        completedAt: context.completedAt,
+        durationMs,
+        totalTokens: worker.getTotalTokens(),
         iteration: worker.getIteration(),
       };
     }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

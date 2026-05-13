@@ -258,6 +258,18 @@ const PATTERNS: Array<{
     recovery: RecoveryAction.RETRY_NOW,
   },
 
+  // Ollama Go-side parser rejections for malformed model output. Smaller
+  // models (qwen3.6, etc.) emit unbalanced JSON, mixed XML tags, or
+  // interleaved think/tool markers, which surface as a 400 with one of
+  // these stable signatures. Treat as recoverable tool-call corruption.
+  {
+    test: (m) =>
+      /Value looks like object|find closing '\}' symbol/.test(m) ||
+      /XML syntax error.*element|<parameter>.*<\/function>/.test(m),
+    reason: FailoverReason.TOOL_CALL_INVALID,
+    recovery: RecoveryAction.RETRY_NOW,
+  },
+
   // Internal timeouts / cancellations — must precede the generic network/timeout
   // rule, whose regex (aborted|timed out) would otherwise shadow these.
   {

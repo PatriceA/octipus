@@ -172,8 +172,15 @@ export class EmbeddingService {
 
   // ── Search methods ────────────────────────────────────────────────
 
-  /** Original vector-only search (kept as fallback) */
-  async search(query: string, limit = 5, sourceType?: string): Promise<SearchResult[]> {
+  /**
+   * Vector-only semantic search.
+   *
+   * `minSimilarity` filters out results whose cosine similarity is below the
+   * threshold. Without this, search always returns the top-N entries even when
+   * nothing is actually relevant — useless for small knowledge bases where
+   * every entry ranks "in the top N" by default.
+   */
+  async search(query: string, limit = 5, sourceType?: string, minSimilarity = 0): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
@@ -206,15 +213,17 @@ export class EmbeddingService {
       .orderBy(desc(similarityExpr))
       .limit(limit);
 
-    return results.map(r => ({
-      id: r.id,
-      content: r.content,
-      abstract: r.abstract,
-      sourceType: r.sourceType,
-      sourceId: r.sourceId,
-      similarity: Number(r.similarity) || 0,
-      metadata: (r.metadata || {}) as EmbeddingMetadata,
-    }));
+    return results
+      .map(r => ({
+        id: r.id,
+        content: r.content,
+        abstract: r.abstract,
+        sourceType: r.sourceType,
+        sourceId: r.sourceId,
+        similarity: Number(r.similarity) || 0,
+        metadata: (r.metadata || {}) as EmbeddingMetadata,
+      }))
+      .filter(r => r.similarity >= minSimilarity);
   }
 
   /** Full-text search only (no embedding needed) */
@@ -248,18 +257,30 @@ export class EmbeddingService {
    * Uses Reciprocal Rank Fusion (RRF) — simple, robust, no normalization needed.
    * alpha controls semantic weight: 0.6 = lean toward semantic, 0.4 = lean toward keyword.
    */
+  /**
+   * Hybrid search combining BM25 (FTS) and vector cosine similarity via RRF.
+   *
+   * Returns the raw cosine similarity as `similarity` (not the RRF score) so
+   * callers can reason about relevance with a meaningful 0–1 number. The RRF
+   * score is only used internally for ranking when both signals fire.
+   *
+   * `minSimilarity` filters by raw cosine similarity — entries below the
+   * threshold are dropped UNLESS they have a strong FTS match (kept since the
+   * keyword is literally present). For small KBs, this prevents the search
+   * from returning every entry just because each one happens to be in the
+   * top-N vector ranking.
+   */
   async hybridSearch(
     query: string,
     limit = 5,
     sourceType?: string,
     alpha = 0.6,
+    minSimilarity = 0,
   ): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
     } catch (err) {
-      // Fall back to FTS-only if embedding unavailable — but log loudly so
-      // users see WHY hybrid search degraded to keyword-only.
       coreLogger.warn(
         { err, queryLength: query.length },
         'Hybrid search: embedding failed, falling back to keyword-only (FTS)',
@@ -283,7 +304,8 @@ export class EmbeddingService {
       ),
       vec AS (
         SELECT id,
-               row_number() OVER (ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector) AS rank_vec
+               row_number() OVER (ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector) AS rank_vec,
+               1 - (embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector) AS cosine_sim
         FROM embeddings
         WHERE 1=1 ${sourceFilter}
         ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector
@@ -293,26 +315,45 @@ export class EmbeddingService {
         SELECT
           COALESCE(f.id, v.id) AS id,
           COALESCE(1.0 / (${k} + f.rank_fts), 0) * ${1 - alpha} +
-          COALESCE(1.0 / (${k} + v.rank_vec), 0) * ${alpha} AS rrf_score
+          COALESCE(1.0 / (${k} + v.rank_vec), 0) * ${alpha} AS rrf_score,
+          COALESCE(v.cosine_sim, 0) AS cosine_sim,
+          f.rank_fts IS NOT NULL AS has_fts_match
         FROM fts f
         FULL OUTER JOIN vec v ON f.id = v.id
       )
-      SELECT c.rrf_score AS similarity, e.id, e.content, e.abstract, e.source_type, e.source_id, e.metadata
+      SELECT c.cosine_sim AS similarity, c.rrf_score, c.has_fts_match,
+             e.id, e.content, e.abstract, e.source_type, e.source_id, e.metadata
       FROM combined c
       JOIN embeddings e ON e.id = c.id
       ORDER BY c.rrf_score DESC
       LIMIT ${limit}
     `);
 
-    return rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown }>(results).map(r => ({
-      id: r.id,
-      content: r.content,
-      abstract: r.abstract,
-      sourceType: r.source_type,
-      sourceId: r.source_id,
-      similarity: Number(r.similarity) || 0,
-      metadata: (r.metadata || {}) as EmbeddingMetadata,
-    }));
+    return rows<{
+      id: string;
+      content: string;
+      abstract: string | null;
+      source_type: string;
+      source_id: string;
+      similarity: number | string;
+      rrf_score: number | string;
+      has_fts_match: boolean;
+      metadata: unknown;
+    }>(results)
+      .map(r => ({
+        id: r.id,
+        content: r.content,
+        abstract: r.abstract,
+        sourceType: r.source_type,
+        sourceId: r.source_id,
+        similarity: Number(r.similarity) || 0,
+        hasFtsMatch: Boolean(r.has_fts_match),
+        metadata: (r.metadata || {}) as EmbeddingMetadata,
+      }))
+      // Keep when raw cosine similarity passes the bar, or when an exact
+      // keyword (FTS) hit makes the entry relevant on lexical grounds alone.
+      .filter(r => r.similarity >= minSimilarity || r.hasFtsMatch)
+      .map(({ hasFtsMatch: _hasFtsMatch, ...rest }) => rest);
   }
 
   // ── Read by ID ────────────────────────────────────────────────────

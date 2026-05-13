@@ -135,6 +135,12 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         if (!user.isAdmin && context.userId !== user.id) {
           return { error: 'Agent not found' };
         }
+        // Same duration logic as `list()` — freeze at completedAt for finished
+        // agents, live elapsed otherwise. Keeps inline cards accurate even
+        // while the worker sits in memory awaiting cleanup.
+        const durationMs = context.completedAt
+          ? context.completedAt.getTime() - context.createdAt.getTime()
+          : agent.getElapsedMs();
         return {
           id: context.id,
           sessionId: context.sessionId,
@@ -144,6 +150,9 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
           status: agent.getStatus(),
           iteration: agent.getIteration(),
           createdAt: context.createdAt,
+          completedAt: context.completedAt,
+          durationMs,
+          totalTokens: agent.getTotalTokens(),
           metadata: context.metadata,
         };
       }

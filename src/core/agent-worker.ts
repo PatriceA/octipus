@@ -355,6 +355,7 @@ export class AgentWorker extends BaseAgentWorker {
       }
 
       this.context.status = 'completed';
+      this.context.completedAt = new Date();
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result: finalResult });
 
@@ -405,6 +406,7 @@ export class AgentWorker extends BaseAgentWorker {
       return finalResult;
     } catch (error) {
       this.context.status = 'failed';
+      this.context.completedAt = new Date();
       this.emit('status_change', { status: 'failed' });
       this.emit('error', { error: (error as Error).message });
 
@@ -1044,17 +1046,22 @@ export class AgentWorker extends BaseAgentWorker {
 
     const metadata = model.metadata as import('@/db/schema/models').ModelMetadata | null;
 
-    // Respect the model's configured extraBody (e.g. think:false).
-    // The user controls thinking via the model configuration — we never override it
-    // for the orchestrator. For expert workers only, remove think:false so the model
-    // can reason before acting (prevents tool-call loops on smaller models).
+    // Respect the model's configured extraBody (e.g. think:false) — except when
+    // we're an agent worker emitting tool calls. Empirically (2026-05-12 QA),
+    // Ollama models with `think:false` produce malformed tool-call JSON that
+    // Ollama's Go-side parser rejects ("Value looks like object, but can't find
+    // closing '}'"). With thinking ON, the same models emit valid tool calls.
+    // Thinking output is stripped by the LLM client before delivery (see
+    // litellm-client.ts), so users never see the reasoning tokens — the only
+    // observable effect is reliable tool calls.
+    //
+    // Casual chat (direct-response.ts) preserves the model's think setting
+    // because there are no tool calls to corrupt.
     let extraBody = metadata?.extraBody && Object.keys(metadata.extraBody).length > 0
       ? { ...metadata.extraBody }
       : undefined;
 
-    const isExpertWorker = this.context.metadata?.isExpert === true;
-    const isOrchestrator = this.context.role === 'orchestrator';
-    if (isExpertWorker && !isOrchestrator && extraBody && 'think' in extraBody) {
+    if (extraBody && 'think' in extraBody) {
       delete extraBody.think;
       if (Object.keys(extraBody).length === 0) extraBody = undefined;
     }
@@ -1159,6 +1166,7 @@ export class AgentWorker extends BaseAgentWorker {
       this.parentSignalCleanup = null;
     }
     this.context.status = 'stopped';
+    this.context.completedAt = new Date();
     this.emit('status_change', { status: 'stopped' });
     agentLogger.info({ agentId: this.context.id }, 'Agent stopped');
   }

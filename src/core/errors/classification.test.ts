@@ -170,6 +170,27 @@ describe('classifyError — tool calls', () => {
     const err = classifyError(new Error('Could not parse tool call arguments'));
     expect(err.reason).toBe(FailoverReason.TOOL_CALL_INVALID);
   });
+
+  test('Ollama 400 "Value looks like object" body is TOOL_CALL_INVALID + RETRY_NOW', () => {
+    // This is the raw body Ollama's Go parser returns when a smaller model
+    // (e.g. qwen3.6) emits unbalanced JSON. Must not fall through to the
+    // generic 4xx → ABORT_FATAL rule.
+    const err = classifyError({
+      status: 400,
+      message: `{"error":"Value looks like object, but can't find closing '}' symbol"}`,
+    }, 'ollama');
+    expect(err.reason).toBe(FailoverReason.TOOL_CALL_INVALID);
+    expect(err.recovery).toBe(RecoveryAction.RETRY_NOW);
+  });
+
+  test('Ollama XML-syntax tool-call rejection is TOOL_CALL_INVALID + RETRY_NOW', () => {
+    const err = classifyError({
+      status: 400,
+      message: 'XML syntax error on line 3: unexpected element <parameter>',
+    }, 'ollama');
+    expect(err.reason).toBe(FailoverReason.TOOL_CALL_INVALID);
+    expect(err.recovery).toBe(RecoveryAction.RETRY_NOW);
+  });
 });
 
 describe('classifyError — invalid / empty response', () => {

@@ -15,7 +15,7 @@
  */
 
 import { appendFileSync, mkdirSync, statSync } from 'fs';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { getConfig } from '@/config';
 import { filterPII } from '@/core/orchestrator/pii-filter';
 import type { MessageClassification } from '@/core/orchestrator/types';
@@ -313,8 +313,10 @@ export function writeJsonlLine(
   rootOverride?: string,
 ): { path: string; line: number } {
   const path = trajectoryFilePathForDate(new Date(), rootOverride);
-  const dir = path.substring(0, path.lastIndexOf('/'));
-  mkdirSync(dir, { recursive: true });
+  // Use path.dirname so this works on Windows (\\) as well as POSIX (/).
+  // The previous `substring(0, lastIndexOf('/'))` returned '' on Windows
+  // paths, which made mkdirSync fail with ENOENT.
+  mkdirSync(dirname(path), { recursive: true });
 
   // Count existing lines so we can report back the new line number. We use
   // stat-based size + a single newline-count pass only when the file exists.

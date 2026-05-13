@@ -64,33 +64,43 @@ export class KnowledgeTool extends BaseTool {
 
     this.registerTool(
       'search_knowledge',
-      'Search the knowledge base using hybrid search (combines semantic similarity with keyword matching). Returns abstracts — use read_knowledge to get full content.',
+      'Search the knowledge base using hybrid search (combines semantic similarity with keyword matching). Returns abstracts — use read_knowledge to get full content. Results are filtered to those with meaningful relevance; an empty list means no relevant knowledge exists.',
       createParameterSchema({
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results to return (default: 5)', default: 5 },
         source_type: { type: 'string', description: 'Filter by source type: document, code, agent_output, or all' },
         mode: { type: 'string', description: 'Search mode: hybrid (default), semantic (vector only), or keyword (full-text only)' },
+        min_similarity: { type: 'number', description: 'Minimum cosine similarity (0–1) to keep a result. Defaults: 0.35 semantic, 0.3 hybrid, 0 keyword.' },
       }),
       async (args) => {
         const service = getEmbeddingService();
         const limit = (args.limit as number) || 5;
         const sourceType = args.source_type as string | undefined;
         const mode = (args.mode as string) || 'hybrid';
+        const userMin = typeof args.min_similarity === 'number' ? (args.min_similarity as number) : undefined;
+
+        // Defaults chosen so that for a typical embedding model, "0.35" is the
+        // boundary between "actually relevant" and "nearest of an unrelated
+        // bunch". Tune per-deployment via min_similarity if needed.
+        const minSimilarity = userMin ?? (mode === 'semantic' ? 0.35 : mode === 'keyword' ? 0 : 0.3);
 
         let results;
         switch (mode) {
           case 'semantic':
-            results = await service.search(args.query as string, limit, sourceType);
+            results = await service.search(args.query as string, limit, sourceType, minSimilarity);
             break;
           case 'keyword':
             results = await service.ftsSearch(args.query as string, limit, sourceType);
             break;
           default:
-            results = await service.hybridSearch(args.query as string, limit, sourceType);
+            results = await service.hybridSearch(args.query as string, limit, sourceType, undefined, minSimilarity);
         }
 
         if (results.length === 0) {
-          return { results: [], message: 'No relevant knowledge found.' };
+          return {
+            results: [],
+            message: `No knowledge above similarity ${minSimilarity.toFixed(2)} matches "${args.query}". The knowledge base may not contain information on this topic — do NOT fabricate an answer.`,
+          };
         }
 
         return {
@@ -101,7 +111,7 @@ export class KnowledgeTool extends BaseTool {
             sourceType: r.sourceType,
             filePath: r.metadata.filePath,
           })),
-          hint: 'Use read_knowledge with an entry ID to get the full content.',
+          hint: 'Use read_knowledge with an entry ID to get the full content. Similarity is cosine (0–1); below 0.3 means the match is weak.',
         };
       },
       { requiresPermission: false },

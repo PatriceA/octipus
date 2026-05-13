@@ -220,11 +220,52 @@ export class LiteLLMClient {
       return this.completeViaProxy({ ...options, model: resolvedModel });
     }
 
+    // Per-model endpoint + apiKey overrides. Direct providers (e.g. Ollama
+    // pointed at a second host) only see these if the caller passes them.
+    // Most callers don't — they look up the model from the registry for
+    // routing and forget that the endpoint travels with the row. Resolve
+    // here so every caller benefits; explicit options still win.
+    const enriched = await this.applyModelOverrides({ ...options, model: resolvedModel });
+
     modelLogger.debug(
-      { model: resolvedModel, provider: provider.name },
+      { model: resolvedModel, provider: provider.name, endpoint: enriched.endpoint },
       'Routing completion through direct provider',
     );
-    return provider.complete({ ...options, model: resolvedModel });
+    return provider.complete(enriched);
+  }
+
+  /**
+   * Merge per-model `endpoint` and `apiKey` from the registry into the
+   * caller's options. Caller-supplied values win. Returns options unchanged
+   * if the model isn't in the registry, or already has both fields set.
+   */
+  private async applyModelOverrides(options: CompletionOptions): Promise<CompletionOptions> {
+    if (options.endpoint && options.apiKey) return options;
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const entry = await getModelRegistry().getModelByModelId(options.model);
+      if (!entry) return options;
+
+      const next: CompletionOptions = { ...options };
+      if (!next.endpoint && entry.endpoint) next.endpoint = entry.endpoint;
+
+      if (!next.apiKey && entry.apiKeyRef) {
+        const { getVault } = await import('@/security/vault');
+        const vault = getVault();
+        // Prefer the user's vault namespace when a userId is in scope, then
+        // fall back to the system namespace. This matches the resolution
+        // order used by the vision path.
+        const key = (options.userId
+          ? await vault.getByName(options.userId, entry.apiKeyRef).catch(() => null)
+          : null)
+          || await vault.getByName('system', entry.apiKeyRef).catch(() => null);
+        if (key) next.apiKey = key;
+      }
+      return next;
+    } catch (err) {
+      modelLogger.warn({ err, model: options.model }, 'Failed to resolve per-model overrides; using caller options as-is');
+      return options;
+    }
   }
 
   /**
@@ -502,11 +543,19 @@ export class LiteLLMClient {
       );
     }
 
+    // Resolve per-model endpoint from DB (e.g. Ollama on a custom URL)
+    let modelEndpoint: string | undefined;
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const dbModel = await getModelRegistry().getModelByModelId(embeddingModel);
+      modelEndpoint = dbModel?.endpoint || undefined;
+    } catch { /* non-fatal */ }
+
     modelLogger.debug(
-      { model: embeddingModel, provider: provider.name, inputCount: input.length },
+      { model: embeddingModel, provider: provider.name, inputCount: input.length, endpoint: modelEndpoint },
       'Routing embed through direct provider',
     );
-    return provider.embed(input, embeddingModel);
+    return provider.embed(input, embeddingModel, modelEndpoint);
   }
 
   /** Internal: call embeddings against the LiteLLM proxy. */
@@ -593,6 +642,7 @@ export class LiteLLMClient {
           anthropic: { baseURL: 'https://api.anthropic.com/v1/', vaultName: 'anthropic_api_key', envVar: 'ANTHROPIC_API_KEY' },
           gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', vaultName: 'gemini_api_key', envVar: 'GEMINI_API_KEY' },
           deepseek: { baseURL: 'https://api.deepseek.com/v1', vaultName: 'deepseek_api_key', envVar: 'DEEPSEEK_API_KEY' },
+          openrouter: { baseURL: 'https://openrouter.ai/api/v1', vaultName: 'openrouter_api_key', envVar: 'OPENROUTER_API_KEY' },
         };
 
         const pe = providerEndpoints[provider.name];
@@ -614,6 +664,9 @@ export class LiteLLMClient {
           apiKey,
           timeout: 120_000,
           maxRetries: 2,
+          ...(provider.name === 'openrouter' && {
+            defaultHeaders: { 'HTTP-Referer': 'https://octipus.cc', 'X-Title': 'Octipus' },
+          }),
         });
 
         const response = await client.chat.completions.create({

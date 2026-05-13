@@ -1,5 +1,6 @@
 import { existsSync } from 'fs';
-import { mkdir, readFile, rename } from 'fs/promises';
+import { mkdir, readFile, rename, rmdir, unlink } from 'fs/promises';
+import { tmpdir } from 'os';
 import { basename, dirname, extname, join } from 'path';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
@@ -66,6 +67,66 @@ const CATEGORIES = [
   'receipts', 'legal', 'medical', 'financial', 'other',
 ] as const;
 
+/**
+ * Run ImageMagick safely across platforms.
+ *
+ * IM v7 ships as `magick`; v6 as `convert`. On Windows, `convert.exe` ALSO names
+ * the built-in FAT→NTFS converter — calling it blindly is a footgun. We probe
+ * `magick -version` first, then `convert -version` (and verify the output mentions
+ * ImageMagick) before invoking it on user files.
+ */
+let imageMagickBinary: string | null | undefined;
+async function resolveImageMagick(): Promise<string | null> {
+  if (imageMagickBinary !== undefined) return imageMagickBinary;
+  const { spawnSync } = await import('child_process');
+  for (const bin of ['magick', 'convert']) {
+    try {
+      const res = spawnSync(bin, ['-version'], { timeout: 3000, encoding: 'utf-8' });
+      if (res.status === 0 && /ImageMagick/i.test(res.stdout || '')) {
+        imageMagickBinary = bin;
+        return bin;
+      }
+    } catch { /* not found / not executable */ }
+  }
+  imageMagickBinary = null;
+  return null;
+}
+
+async function runImageMagick(args: string[], timeoutMs = 15000): Promise<boolean> {
+  const bin = await resolveImageMagick();
+  if (!bin) return false;
+  const { spawnSync } = await import('child_process');
+  const res = spawnSync(bin, args, { timeout: timeoutMs });
+  return res.status === 0;
+}
+
+let pdftoppmAvailable: boolean | undefined;
+async function hasPdftoppm(): Promise<boolean> {
+  if (pdftoppmAvailable !== undefined) return pdftoppmAvailable;
+  try {
+    const { spawnSync } = await import('child_process');
+    const res = spawnSync('pdftoppm', ['-v'], { timeout: 3000, encoding: 'utf-8' });
+    // pdftoppm prints version on stderr and exits 0 or 99 depending on build
+    pdftoppmAvailable = /pdftoppm/i.test(res.stderr || res.stdout || '');
+  } catch {
+    pdftoppmAvailable = false;
+  }
+  return pdftoppmAvailable;
+}
+
+/**
+ * Heuristic: does OCR output look like real document text (not garbage / one-word output)?
+ * Used to decide whether the follow-up vision description call is worth the cost.
+ */
+function isSubstantiveText(text: string): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length < 80) return false;
+  const letters = (trimmed.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+  const wordCount = trimmed.split(/\s+/).length;
+  return letters / trimmed.length > 0.5 && wordCount >= 15;
+}
+
 /** Strip OCR model grounding/reference tokens from output */
 function cleanOcrOutput(text: string): string {
   return text
@@ -117,20 +178,26 @@ export class DocumentProcessor {
       }
 
       if (!extractedText || extractedText.trim().length === 0) {
-        extractedText = `[No text content extracted from ${doc.originalName}]`;
+        throw new Error(
+          `No text could be extracted from ${doc.originalName}. ` +
+            (strategy === 'ocr'
+              ? 'For images/PDFs, configure a model with topic "ocr" or "vision" on the Models page; for scanned PDFs, install poppler (pdftoppm) so pages can be rendered for OCR.'
+              : 'The file appears empty or unreadable.'),
+        );
       }
 
       // Step 3: Categorize
       const category = await this.categorize(extractedText, doc.originalName, doc.userId);
 
-      // Step 4: Move file to category folder
-      const newPath = await this.moveToCategory(doc.storagePath, category);
-
-      // Step 5: Summarize
+      // Step 4: Summarize
       const summary = await this.summarize(extractedText, doc.originalName, doc.userId);
 
-      // Step 6: Index into knowledge base
+      // Step 5: Index into knowledge base — must succeed before we file the document away,
+      // otherwise a failed doc ends up in the wrong category folder with no knowledge entry.
       await this.indexDocument(documentId, extractedText, doc.originalName, category);
+
+      // Step 6: Move file to category folder (after indexing succeeded)
+      const newPath = await this.moveToCategory(doc.storagePath, category);
 
       // Step 7: Update DB
       await documentRepository.updateProcessed(documentId, {
@@ -164,17 +231,20 @@ export class DocumentProcessor {
     // Convert non-PNG/JPEG formats to PNG for universal vision model compatibility
     const nativeExts = new Set(['.png', '.jpg', '.jpeg']);
     if (!nativeExts.has(ext)) {
-      try {
-        const { spawnSync } = await import('child_process');
-        const { unlinkSync } = await import('fs');
-        const tmpOut = `/tmp/ocr-convert-${Date.now()}.png`;
-        spawnSync('convert', [filePath, tmpOut], { timeout: 15000 });
-        fileBuffer = await readFile(tmpOut);
-        mimeType = 'image/png';
-        try { unlinkSync(tmpOut); } catch (err) { coreLogger.warn({ err, tmpOut }, 'Failed to unlink temp OCR file (non-fatal)'); }
-        this.logger.info({ from: ext, filePath }, 'Converted image to PNG');
-      } catch (convErr) {
-        this.logger.warn({ err: convErr, ext }, 'Image conversion failed, sending original format');
+      const tmpOut = join(tmpdir(), `ocr-convert-${Date.now()}.png`);
+      const converted = await runImageMagick([filePath, tmpOut]);
+      if (converted) {
+        try {
+          fileBuffer = await readFile(tmpOut);
+          mimeType = 'image/png';
+          this.logger.info({ from: ext, filePath }, 'Converted image to PNG');
+        } catch (err) {
+          this.logger.warn({ err, ext, tmpOut }, 'Image conversion produced no output, sending original format');
+        } finally {
+          await unlink(tmpOut).catch(() => undefined);
+        }
+      } else {
+        this.logger.warn({ ext, filePath }, 'No ImageMagick available — sending original image format to vision model');
       }
     }
 
@@ -191,6 +261,7 @@ export class DocumentProcessor {
     const registry = getModelRegistry();
     const client = getLiteLLMClient();
     const parts: string[] = [];
+    let ocrYieldedText = false;
 
     // 1. Try OCR (text extraction) with 'ocr' topic model
     const ocrModel = await registry.getModelForTopic('ocr');
@@ -204,7 +275,11 @@ export class DocumentProcessor {
           mimeType,
         });
         const ocrText = cleanOcrOutput(ocrResult.content || '');
-        if (ocrText && ocrText.length > 5) {
+        if (isSubstantiveText(ocrText)) {
+          parts.push(`[Extracted Text]\n${ocrText}`);
+          ocrYieldedText = true;
+        } else if (ocrText && ocrText.length > 5) {
+          // Keep partial OCR output but still run vision to compensate
           parts.push(`[Extracted Text]\n${ocrText}`);
         }
       } catch (err) {
@@ -212,9 +287,10 @@ export class DocumentProcessor {
       }
     }
 
-    // 2. Vision analysis (image description) with 'vision' topic model
+    // 2. Vision analysis (image description) with 'vision' topic model.
+    // Skip when OCR already produced substantive text — running both doubles cost for documents.
     const visionModel = await registry.getModelForTopic('vision');
-    if (visionModel) {
+    if (visionModel && !ocrYieldedText) {
       try {
         this.logger.info({ model: visionModel.modelId, filePath }, 'Vision image analysis');
         const visionResult = await client.completeVision({
@@ -230,6 +306,8 @@ export class DocumentProcessor {
       } catch (err) {
         this.logger.warn({ err, model: visionModel.modelId }, 'Vision analysis failed');
       }
+    } else if (visionModel && ocrYieldedText) {
+      this.logger.info({ model: visionModel.modelId, filePath }, 'Skipping vision analysis — OCR already yielded substantive text');
     }
 
     // 3. If neither model is configured, try a single call with whatever is available
@@ -245,29 +323,33 @@ export class DocumentProcessor {
         return result.content || '';
       }
 
-      // Last resort: direct Ollama API
+      // Last resort: direct Ollama API — only if explicitly configured
       const config = getConfig();
-      const ocrEndpoint = config.workspace.ocrEndpoint || 'http://localhost:11435';
-      const fallback = config.workspace.ocrModel || 'glm-ocr';
-      this.logger.warn({ model: fallback, ocrEndpoint }, 'No ocr/vision model in registry, falling back to direct Ollama endpoint');
+      const ocrEndpoint = config.workspace.ocrEndpoint;
+      const ocrFallback = config.workspace.ocrModel;
+      if (ocrEndpoint && ocrFallback) {
+        this.logger.warn({ model: ocrFallback, ocrEndpoint }, 'No ocr/vision model in registry, falling back to direct OCR endpoint');
 
-      const response = await fetch(`${ocrEndpoint}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: fallback,
-          prompt: '<|grounding|>Convert the document to markdown.',
-          images: [base64],
-          stream: false,
-        }),
-      });
+        const response = await fetch(`${ocrEndpoint}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: ocrFallback,
+            prompt: '<|grounding|>Convert the document to markdown.',
+            images: [base64],
+            stream: false,
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error(`OCR request failed: ${response.status} ${response.statusText}`);
+        if (!response.ok) {
+          throw new Error(`OCR request failed: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json() as { response: string };
+        return data.response || '';
       }
 
-      const data = await response.json() as { response: string };
-      return data.response || '';
+      throw new Error('No vision or OCR model configured. Assign a model with the "ocr" or "vision" topic in the Models page.');
     }
 
     return parts.join('\n\n');
@@ -318,94 +400,99 @@ export class DocumentProcessor {
       this.logger.warn({ err, filePath }, 'pdftotext also failed');
     }
 
-    // 3. Image-based PDF — OCR via vision model (no pdftoppm needed, uses pdfjs canvas rendering)
+    // 3. Image-based PDF — render each page to PNG via pdftoppm, send to vision model
     const registry = getModelRegistry();
     const ocrModel = await registry.getModelForTopic('ocr');
     const visionModel = !ocrModel ? await registry.getModelForTopic('vision') : null;
     const model = ocrModel || visionModel;
 
     if (!model) {
-      return '[PDF contains image-based content but no OCR/vision model is configured]';
+      throw new Error(
+        'Scanned/image-only PDF detected, but no OCR/vision model is configured. ' +
+          'Assign a model to topic "ocr" or "vision" on the Models page.',
+      );
     }
 
-    // Render PDF pages to images using pdfjs + simple bitmap encoding
+    if (!(await hasPdftoppm())) {
+      throw new Error(
+        'Scanned/image-only PDF detected, but pdftoppm is not installed. ' +
+          'Install poppler (e.g. `choco install poppler` on Windows, `brew install poppler` on macOS, ' +
+          '`apt-get install poppler-utils` on Linux) so pages can be rendered for OCR.',
+      );
+    }
+
+    return this.ocrPdfWithPdftoppm(filePath, model.modelId, ocrModel ? 'ocr' : 'vision');
+  }
+
+  /**
+   * Render PDF pages to PNGs with pdftoppm, then OCR each via the vision model.
+   * Capped at 20 pages to avoid runaway costs on long scanned PDFs.
+   */
+  private async ocrPdfWithPdftoppm(filePath: string, modelId: string, topic: 'ocr' | 'vision'): Promise<string> {
+    const { spawnSync } = await import('child_process');
+    const { readdir } = await import('fs/promises');
+    const workDir = join(tmpdir(), `pdf-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    await mkdir(workDir, { recursive: true });
+    const prefix = join(workDir, 'page');
+
+    const MAX_PAGES = 20;
     try {
-      const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-      const pdf = await pdfjsLib.getDocument(filePath).promise;
-      const _client = getLiteLLMClient();
+      const render = spawnSync(
+        'pdftoppm',
+        ['-png', '-r', '200', '-l', String(MAX_PAGES), filePath, prefix],
+        { timeout: 120_000 },
+      );
+      if (render.status !== 0) {
+        throw new Error(`pdftoppm failed with status ${render.status}: ${render.stderr?.toString() || 'unknown'}`);
+      }
+
+      const files = (await readdir(workDir))
+        .filter(f => f.startsWith('page') && f.endsWith('.png'))
+        .sort();
+
+      if (files.length === 0) {
+        throw new Error('pdftoppm produced no output files');
+      }
+
+      this.logger.info({ filePath, pages: files.length, model: modelId, topic }, 'OCR-ing PDF pages via pdftoppm');
+
+      const client = getLiteLLMClient();
       const pageTexts: string[] = [];
-      const maxPages = Math.min(pdf.numPages, 20); // Cap OCR at 20 pages
+      const prompt = topic === 'ocr'
+        ? '<|grounding|>Convert the document to markdown.'
+        : 'Transcribe all text from this document page. Preserve layout where reasonable.';
 
-      this.logger.info({ filePath, pages: maxPages, model: model.modelId }, 'OCR-ing PDF pages via pdfjs');
-
-      for (let i = 1; i <= maxPages; i++) {
+      for (let i = 0; i < files.length; i++) {
         try {
-          const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: 2.0 }); // 2x for better OCR
-
-          // Create a minimal canvas-like object for pdfjs rendering
-          const width = Math.floor(viewport.width);
-          const height = Math.floor(viewport.height);
-          const data = new Uint8ClampedArray(width * height * 4);
-
-          // Use pdfjs NodeCanvasFactory pattern
-          const _canvasAndContext = {
-            canvas: { width, height },
-            context: {
-              _data: data,
-              _width: width,
-              putImageData(imgData: any) { data.set(imgData.data); },
-              drawImage() {},
-              beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, rect() {},
-              stroke() {}, fill() {}, clip() {}, save() {}, restore() {},
-              transform() {}, setTransform() {}, resetTransform() {},
-              translate() {}, rotate() {}, scale() {},
-              clearRect() { data.fill(255); }, // White background
-              fillRect() {},
-              createLinearGradient() { return { addColorStop() {} }; },
-              createRadialGradient() { return { addColorStop() {} }; },
-              createPattern() { return null; },
-              set fillStyle(_: any) {},
-              set strokeStyle(_: any) {},
-              set globalAlpha(_: any) {},
-              set globalCompositeOperation(_: any) {},
-              set lineWidth(_: any) {},
-              set lineCap(_: any) {},
-              set lineJoin(_: any) {},
-              set miterLimit(_: any) {},
-              set font(_: any) {},
-              set textAlign(_: any) {},
-              set textBaseline(_: any) {},
-              measureText() { return { width: 0 }; },
-              fillText() {}, strokeText() {},
-              setLineDash() {}, getLineDash() { return []; },
-              set lineDashOffset(_: any) {},
-              getImageData() { return { data, width, height }; },
-              createImageData(w: number, h: number) { return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h }; },
-            },
-          };
-
-          // pdfjs text extraction is sufficient — skip image rendering for OCR
-          // Just send the page text to vision model for better understanding
-          const content = await page.getTextContent();
-          const pageText = content.items.map((item: any) => item.str).join(' ').trim();
-
-          if (pageText.length > 10) {
-            pageTexts.push(`--- Page ${i} ---\n${pageText}`);
+          const pngPath = join(workDir, files[i]);
+          const pngBuffer = await readFile(pngPath);
+          const result = await client.completeVision({
+            model: modelId,
+            prompt,
+            imageBase64: pngBuffer.toString('base64'),
+            mimeType: 'image/png',
+          });
+          const pageText = cleanOcrOutput(result.content || '').trim();
+          if (pageText.length > 5) {
+            pageTexts.push(`--- Page ${i + 1} ---\n${pageText}`);
           }
         } catch (pageErr) {
-          this.logger.warn({ err: pageErr, page: i }, 'Failed to process PDF page');
+          this.logger.warn({ err: pageErr, page: i + 1 }, 'OCR failed for PDF page');
         }
       }
 
-      if (pageTexts.length > 0) {
-        return pageTexts.join('\n\n');
+      if (pageTexts.length === 0) {
+        throw new Error(`Vision model "${modelId}" returned no text for any of the ${files.length} rendered page(s)`);
       }
-    } catch (err) {
-      this.logger.warn({ err, filePath }, 'pdfjs page rendering failed');
+      return pageTexts.join('\n\n');
+    } finally {
+      // Best-effort cleanup
+      try {
+        const files = await readdir(workDir);
+        await Promise.all(files.map(f => unlink(join(workDir, f)).catch(() => undefined)));
+        await rmdir(workDir).catch(() => undefined);
+      } catch { /* ignore */ }
     }
-
-    return '[No text content could be extracted from PDF]';
   }
 
   /**
@@ -593,6 +680,7 @@ export class DocumentProcessor {
     try {
       const client = getLiteLLMClient();
       const model = await this.getModel();
+      this.logger.info({ model, filename }, 'Categorizing document');
       const truncatedText = text.slice(0, 3000);
 
       const messages: AgentMessage[] = [
@@ -665,6 +753,7 @@ export class DocumentProcessor {
     try {
       const client = getLiteLLMClient();
       const model = await this.getModel();
+      this.logger.info({ model, filename }, 'Summarizing document');
       const truncatedText = text.slice(0, 6000);
 
       const messages: AgentMessage[] = [
@@ -706,11 +795,13 @@ export class DocumentProcessor {
    */
   private async indexDocument(documentId: string, text: string, filename: string, _category: string): Promise<void> {
     const service = getEmbeddingService();
+    const embeddingModel = (await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? null;
+    this.logger.info({ documentId, filename, model: embeddingModel }, 'Indexing document into knowledge base');
     try {
       const stored = await service.indexText('document', `doc:${documentId}`, text, {
         filePath: filename,
       });
-      this.logger.info({ documentId, filename, chunksStored: stored }, 'Document indexed into knowledge base');
+      this.logger.info({ documentId, filename, model: embeddingModel, chunksStored: stored }, 'Document indexed into knowledge base');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;

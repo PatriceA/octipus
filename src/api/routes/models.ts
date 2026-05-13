@@ -834,7 +834,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       if (!getDiscoverableProviders().includes(params.provider)) {
         return { models: [] };
       }
-      const result = await discover(params.provider);
+      const result = await discover(params.provider, { userId: user?.id });
       return { models: result.shortlist.map(m => m.id) };
     },
     {
@@ -870,6 +870,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           includePreview: query.preview === 'true',
           includeNonChat: query.embeddings === 'true',
           bypassCache: query.refresh === 'true',
+          userId: user?.id,
         },
         credsOverride,
       );

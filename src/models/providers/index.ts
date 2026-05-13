@@ -279,7 +279,7 @@ export class ProviderRouter {
   }
 
   /** Generate embeddings via the appropriate provider */
-  async embed(texts: string[], model: string): Promise<number[][]> {
+  async embed(texts: string[], model: string, endpoint?: string): Promise<number[][]> {
     const provider = this.getProvider(model);
 
     if (provider.embed) {
@@ -287,7 +287,7 @@ export class ProviderRouter {
         { model, provider: provider.name },
         'Routing embed request'
       );
-      return provider.embed(texts, model);
+      return provider.embed(texts, model, endpoint);
     }
 
     throw new Error(`Provider ${provider.name} does not support embeddings`);

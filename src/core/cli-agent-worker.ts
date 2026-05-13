@@ -119,6 +119,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // Don't mark as completed if we were stopped mid-execution
       if (this.aborted) {
         this.context.status = 'stopped';
+        this.context.completedAt = new Date();
         this.emit('status_change', { status: 'stopped' });
         const durationMs = Date.now() - this.context.createdAt.getTime();
         agentRepository.updateStatus(this.context.id, {
@@ -130,6 +131,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
 
       this.context.status = 'completed';
+      this.context.completedAt = new Date();
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result });
 
@@ -158,6 +160,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       return result;
     } catch (error) {
       this.context.status = 'failed';
+      this.context.completedAt = new Date();
       this.emit('status_change', { status: 'failed' });
       this.emit('error', { error: (error as Error).message });
 
@@ -211,6 +214,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
     this.context.status = 'stopped';
+    this.context.completedAt = new Date();
     this.emit('status_change', { status: 'stopped' });
     agentLogger.info({ agentId: this.context.id }, 'CLI agent stopped');
   }

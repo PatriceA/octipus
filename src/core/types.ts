@@ -13,6 +13,11 @@ export interface AgentContext {
   status: AgentStatus;
   createdAt: Date;
   updatedAt: Date;
+  /** Set when status transitions to a terminal state (completed/failed/stopped).
+   *  Lets `AgentManager.list()` surface an accurate duration for agents that
+   *  have finished but are still in-memory (waiting for cleanup), so the chat
+   *  UI doesn't render "0ms" before the agent is moved to the historical bucket. */
+  completedAt?: Date;
   metadata: Record<string, unknown>;
 }
 
@@ -109,7 +114,7 @@ export interface ModelUsage {
 }
 
 // Channel Types
-export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat' | 'api';
+export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat' | 'api' | 'qa-demo';
 
 export interface UnifiedMessage {
   id: string;

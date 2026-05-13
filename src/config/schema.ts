@@ -22,7 +22,7 @@ export const redisConfigSchema = z.object({
 
 // LiteLLM configuration schema
 export const litellmConfigSchema = z.object({
-  proxyUrl: z.string().url().default('http://localhost:4000'),
+  proxyUrl: z.union([z.string().url(), z.literal('')]).default(''),
   apiKey: z.string().optional(),
   timeout: z.number().min(0).default(120000),
   maxRetries: z.number().min(0).default(3),

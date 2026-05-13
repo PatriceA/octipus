@@ -32,7 +32,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'litellm.proxyUrl',
     category: 'litellm',
     valueType: 'string',
-    defaultValue: 'http://localhost:4000',
+    defaultValue: '',
     description: 'LiteLLM proxy URL',
     isSecret: false,
     envVar: 'LITELLM_URL',
