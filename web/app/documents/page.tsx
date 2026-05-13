@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Download,
   Eye,
   FileText,
   HardDrive,
@@ -17,7 +18,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -242,6 +243,137 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+// --- Document Preview ---
+// Fetches the raw file as a blob with auth, then renders inline based on mime type.
+// We do this via fetch + ObjectURL because <img>/<iframe> can't carry the Bearer
+// header. The ObjectURL is revoked on unmount/change to avoid leaks.
+function DocumentPreview({ documentId, mimeType, originalName }: { documentId: string; mimeType: string; originalName: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const isImage = mimeType.startsWith('image/');
+  const isPdf = mimeType === 'application/pdf';
+  const isText =
+    mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'application/xml' ||
+    /\.(md|csv|json|xml|yaml|yml|log|ini|conf|toml|html|htm|css|js|ts|py|sh|sql)$/i.test(originalName);
+  const previewable = isImage || isPdf || isText;
+
+  useEffect(() => {
+    if (!previewable) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    let createdUrl: string | null = null;
+
+    (async () => {
+      setLoading(true);
+      setError(null);
+      setBlobUrl(null);
+      setTextContent(null);
+      try {
+        const token = api.getToken();
+        const res = await fetch(`${getApiUrl()}/documents/${documentId}/raw`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: 'include',
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        if (isText) {
+          const txt = await res.text();
+          if (!cancelled) setTextContent(txt);
+        } else {
+          const blob = await res.blob();
+          createdUrl = URL.createObjectURL(blob);
+          if (!cancelled) setBlobUrl(createdUrl);
+          else URL.revokeObjectURL(createdUrl);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [documentId, isImage, isPdf, isText, previewable]);
+
+  const handleDownload = async () => {
+    try {
+      const token = api.getToken();
+      const res = await fetch(`${getApiUrl()}/documents/${documentId}/raw?download=1`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = originalName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-sm font-medium text-white/80 flex items-center gap-1.5">
+          <Eye className="w-4 h-4 text-primary" />
+          Preview
+        </h4>
+        <button
+          onClick={handleDownload}
+          className="text-xs text-on-surface-variant hover:text-white flex items-center gap-1 cursor-pointer"
+          title="Download original file"
+        >
+          <Download className="w-3.5 h-3.5" />
+          Download
+        </button>
+      </div>
+
+      <div className="bg-surface-container-low rounded-lg overflow-hidden">
+        {loading ? (
+          <div className="p-8 text-center text-on-surface-variant text-sm">
+            <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+            Loading preview…
+          </div>
+        ) : error ? (
+          <div className="p-4 text-sm text-error">Preview failed: {error}</div>
+        ) : !previewable ? (
+          <div className="p-6 text-center text-sm text-on-surface-variant">
+            Preview is not available for this file type ({mimeType || 'unknown'}). Use Download to view the original.
+          </div>
+        ) : isImage && blobUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={blobUrl} alt={originalName} className="max-w-full max-h-[60vh] mx-auto block" />
+        ) : isPdf && blobUrl ? (
+          <iframe src={blobUrl} title={originalName} className="w-full h-[60vh] bg-white" />
+        ) : isText && textContent !== null ? (
+          <pre className="text-xs text-on-surface-variant whitespace-pre-wrap font-mono p-3 max-h-[60vh] overflow-auto">
+            {textContent}
+          </pre>
+        ) : (
+          <div className="p-4 text-sm text-on-surface-variant">No preview available.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // --- Detail Dialog ---
 function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId: string; onClose: () => void; onDelete: (id: string) => void; onCancel: (id: string) => void }) {
   const { data, isLoading } = useQuery({
@@ -254,7 +386,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
@@ -337,6 +469,12 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
                   </div>
                 )}
               </div>
+
+              <DocumentPreview
+                documentId={data.id}
+                mimeType={data.mimeType}
+                originalName={data.originalName}
+              />
 
               {data.summary && (
                 <div>

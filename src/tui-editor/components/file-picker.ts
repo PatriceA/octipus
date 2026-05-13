@@ -122,7 +122,10 @@ export class FilePicker implements Component, Focusable {
 }
 
 function fileItem(root: string, absolutePath: string): SelectItem {
-  const rel = relative(root, absolutePath);
+  // Normalize to forward slashes for display so the same label renders
+  // identically across Windows (\) and POSIX (/). `value` keeps the
+  // platform-native absolute path so the open callback works either way.
+  const rel = relative(root, absolutePath).replace(/\\/g, '/');
   return {
     value: absolutePath,
     label: rel || absolutePath,

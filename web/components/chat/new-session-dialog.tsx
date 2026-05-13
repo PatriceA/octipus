@@ -51,27 +51,29 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
     try {
       const ws = await api.get<{ rootPath: string; additionalPaths: string[] }>('/workspace');
       if (ws?.rootPath) {
-        // List directories under workspace root
-        const result = await api.post<{ result: { entries: Array<{ name: string; isDirectory: boolean }> } }>(
-          '/tools/filesystem/tools/list_directory/execute',
-          { args: { path: ws.rootPath, recursive: false } },
-        );
-        const entries = result?.result?.entries || [];
-        const dirs = entries
-          .filter((e: any) => e.isDirectory && !e.name.startsWith('.'))
-          .map((e: any) => ({
-            name: e.name,
-            path: `${ws.rootPath}/${e.name}`.replace(/\\/g, '/'),
-            hasGit: false,
-            hasSummary: false,
-          }));
+        const dirs: ProjectEntry[] = [];
 
-        // Also add additional paths
+        const listChildren = async (basePath: string) => {
+          try {
+            const result = await api.post<{ result: { entries: Array<{ name: string; isDirectory: boolean }> } }>(
+              '/tools/filesystem/tools/list_directory/execute',
+              { args: { path: basePath, recursive: false } },
+            );
+            const entries = result?.result?.entries || [];
+            for (const e of entries) {
+              if (!e.isDirectory || e.name.startsWith('.')) continue;
+              const childPath = `${basePath}/${e.name}`.replace(/\\/g, '/');
+              if (dirs.find(d => d.path === childPath)) continue;
+              dirs.push({ name: e.name, path: childPath, hasGit: false, hasSummary: false });
+            }
+          } catch {}
+        };
+
+        await listChildren(ws.rootPath);
+        // Each additional path is a *parent* folder (e.g. ~/Github Reps);
+        // surface its repo children rather than the path itself.
         for (const p of ws.additionalPaths || []) {
-          const name = p.split(/[/\\]/).pop() || p;
-          if (!dirs.find((d: ProjectEntry) => d.path === p)) {
-            dirs.push({ name, path: p, hasGit: false, hasSummary: false });
-          }
+          await listChildren(p);
         }
 
         setProjects(dirs);
@@ -190,6 +192,10 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
           {devMode && (
             <div>
               <p className="text-xs uppercase tracking-widest font-bold text-on-surface-variant mb-2">Project</p>
+              <p className="text-xs text-on-surface-variant mb-2">
+                Projects are subfolders of your workspace root and any additional paths
+                configured in Settings → Integrations.
+              </p>
               <div className="relative">
                 <div className="flex gap-2">
                   <div className="flex-1 relative">
@@ -199,7 +205,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                       value={projectPath}
                       onChange={(e) => setProjectPath(e.target.value)}
                       onFocus={() => setShowDropdown(true)}
-                      placeholder="Select or enter project path..."
+                      placeholder={projects.length > 0 ? 'Select a project…' : 'No projects found — add a path in Settings → Integrations'}
                       className="w-full pl-10 pr-8 py-2.5 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm text-white placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
                     />
                     {projects.length > 0 && (

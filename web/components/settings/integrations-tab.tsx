@@ -96,10 +96,16 @@ function WorkspaceSection() {
     <div>
       <div className="flex items-center gap-2 mb-3">
         <FolderOpen className="w-4 h-4 text-on-surface-variant" />
-        <h3 className="text-xs font-bold text-on-surface-variant uppercase">Workspace Paths</h3>
+        <h3 className="text-xs font-bold text-on-surface-variant uppercase">Workspace Folders</h3>
       </div>
       <p className="text-xs text-on-surface-variant mb-3">
-        Directories the agent can access. The root path is set via environment variable.
+        Filesystem directories the agent can read and write. These are separate from the
+        organization workspace selector in the top-right header (which scopes data, not files).
+        The root path is set via the <code className="px-1 py-0.5 bg-[#262626] rounded text-[10px]">OCTIPUS_WORKSPACE_ROOT</code> environment variable.
+      </p>
+      <p className="text-xs text-on-surface-variant mb-3">
+        Add a parent folder (e.g. your repos directory) and its subdirectories will appear in the
+        dev-session project picker.
       </p>
 
       {/* Root path (read-only) */}

@@ -131,23 +131,25 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         configured.add('custom-openai');
         configured.add('custom-gemini');
         try {
-          const settings = await api.get<{ settings: Record<string, Array<{ key: string; value: unknown }>> }>('/settings');
-          const all = Object.values(settings?.settings || {}).flat();
-          for (const s of all) {
-            if (s.key === 'litellm.proxyUrl' && s.value && String(s.value).trim()) configured.add('litellm');
-            if (s.key === 'openrouter.apiKey' && s.value && String(s.value) !== '' && String(s.value) !== '••••••••') configured.add('openrouter');
-          }
-          // Check vault-based providers by testing their health
+          // Check vault-based providers by testing their availability
           const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'grok', 'openrouter'] as const;
-          const healthResults = await Promise.allSettled(
-            providerChecks.map(p => api.get<{ configured?: boolean }>(`/models/providers/${p}/available`))
-          );
+          const [healthResults, healthDetailed] = await Promise.all([
+            Promise.allSettled(
+              providerChecks.map(p => api.get<{ configured?: boolean }>(`/models/providers/${p}/available`))
+            ),
+            api.get<{ health?: { litellm?: { status?: string } } }>('/health/detailed').catch(() => null),
+          ]);
           providerChecks.forEach((p, i) => {
             const result = healthResults[i];
             if (result.status === 'fulfilled' && result.value?.configured) {
               configured.add(p);
             }
           });
+          // Only show LiteLLM if the proxy is actually reachable
+          const litellmStatus = healthDetailed?.health?.litellm?.status;
+          if (litellmStatus === 'healthy' || litellmStatus === 'degraded') {
+            configured.add('litellm');
+          }
         } catch { /* ignore — show all providers as fallback */ }
         setConfiguredProviders(configured);
       })();
