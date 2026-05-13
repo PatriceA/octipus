@@ -24,6 +24,7 @@ export async function launchOctipusTui(options: LaunchOptions = {}): Promise<voi
   const app = new OctipusTuiApp(runtime.tui, {
     gatewayUrl: runtime.gatewayUrl,
     projectPath: options.projectPath,
+    onShutdown: runtime.shutdown,
   });
   await app.start();
 }

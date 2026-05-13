@@ -24,6 +24,7 @@ export async function launchOctipusEditor(options: LaunchEditorOptions = {}): Pr
   const app = new OctipusEditorApp(runtime.tui, {
     gatewayUrl: runtime.gatewayUrl,
     projectPath: options.projectPath,
+    onShutdown: runtime.shutdown,
   });
   await app.start();
 }

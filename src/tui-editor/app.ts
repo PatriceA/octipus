@@ -18,7 +18,7 @@
  * (Ctrl+W). Vim mode and the diff overlay come in Phase 5.x once
  * this scaffold proves out.
  */
-import { randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';
@@ -53,11 +53,16 @@ import { chalk } from '@/tui-pi/theme/defaults';
 export interface OctipusEditorAppOptions {
   gatewayUrl?: string;
   projectPath?: string;
+  /**
+   * Optional shutdown hook for /exit, /quit, and Ctrl+Q. Without it, the
+   * editor calls process.exit() directly without tearing down the alt-screen,
+   * leaving the shell prompt drawn on top of the editor's bottom border.
+   */
+  onShutdown?: () => Promise<void>;
 }
 
 function newSessionId(): string {
-  const hex = randomBytes(16).toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return randomUUID();
 }
 
 export class OctipusEditorApp {
@@ -89,6 +94,7 @@ export class OctipusEditorApp {
   private mcpHandle: OverlayHandle | null = null;
   private hotkeysHandle: OverlayHandle | null = null;
   private apiClient: ApiClient;
+  private readonly onShutdown?: () => Promise<void>;
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
@@ -97,6 +103,7 @@ export class OctipusEditorApp {
       getWorkspace: () => this.workspace.get().activeSlug,
     });
     this.projectPath = options.projectPath ? resolve(options.projectPath) : process.cwd();
+    this.onShutdown = options.onShutdown;
     this.overlays = createOverlayController(tui);
     // The API base URL mirrors the gateway URL but on HTTP. Best-effort —
     // fetches return null on failure and the overlays cope.
@@ -403,7 +410,8 @@ export class OctipusEditorApp {
       const value = parts.slice(1).join(' ').trim();
       // TUI-local commands intercepted before going to the gateway.
       if (name === 'quit' || name === 'exit' || name === 'q') {
-        process.exit(0);
+        void this.shutdownAndExit();
+        return;
       }
       if (name === 'keys' || name === 'hotkeys' || name === 'help-keys') {
         this.openHotkeys();
@@ -444,8 +452,16 @@ export class OctipusEditorApp {
     if (kb.matches(data, 'app.mcp.list'))      { void this.openMCPServerList(); return { consume: true }; }
     if (kb.matches(data, 'app.palette.open'))  { this.openCommandPalette(); return { consume: true }; }
     if (kb.matches(data, 'app.help.open'))     { this.openHotkeys(); return { consume: true }; }
-    if (kb.matches(data, 'app.quit'))          { process.exit(0); }
+    if (kb.matches(data, 'app.quit'))          { void this.shutdownAndExit(); return { consume: true }; }
     return undefined;
+  }
+
+  private async shutdownAndExit(): Promise<void> {
+    // Tear down alt-screen + drain stdin before the process dies so the
+    // shell's next prompt starts on a clean line instead of overlapping
+    // the editor's bottom border.
+    try { if (this.onShutdown) await this.onShutdown(); } catch { /* non-fatal */ }
+    process.exit(0);
   }
 
   private openCommandPalette(): void {

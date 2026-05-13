@@ -11,7 +11,7 @@
  * pending permissions) lives in plain fields here for now. Phase 4
  * will hoist it into proper stores when the UI grows beyond chat.
  */
-import { randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
@@ -23,11 +23,17 @@ import { createOverlayController, type OverlayController } from './overlays/regi
 export interface OctipusTuiAppOptions {
   gatewayUrl?: string;
   projectPath?: string;
+  /**
+   * Optional shutdown hook. When set, /exit and /quit call this BEFORE
+   * exiting the process so the runtime can tear down the alt-screen and
+   * drain stdin. Without it, the PowerShell prompt redraws inside the
+   * TUI's bottom border.
+   */
+  onShutdown?: () => Promise<void>;
 }
 
 function newSessionId(): string {
-  const hex = randomBytes(16).toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return randomUUID();
 }
 
 function sanitize(text: string): string {
@@ -48,11 +54,13 @@ export class OctipusTuiApp {
   private permissionHandle: OverlayHandle | null = null;
   private paletteHandle: OverlayHandle | null = null;
   private exiting = false;
+  private readonly onShutdown?: () => Promise<void>;
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
     this.adapter = new GatewayAdapter({ url: options.gatewayUrl });
     this.projectPath = options.projectPath;
+    this.onShutdown = options.onShutdown;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
@@ -102,6 +110,12 @@ export class OctipusTuiApp {
     this.exiting = true;
     this.activity.dispose();
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
+    // Hand off to the runtime so the alt-screen is properly torn down and
+    // stdin is drained. Without this the shell's next prompt redraws on top
+    // of the TUI border instead of starting on a fresh line.
+    if (this.onShutdown) {
+      try { await this.onShutdown(); } catch { /* shutdown failure is non-fatal */ }
+    }
   }
 
   // ── UI plumbing ────────────────────────────────────────────────
