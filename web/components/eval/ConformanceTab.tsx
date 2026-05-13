@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckCircle, ChevronDown, ChevronRight, Clock, Minus, Play, RefreshCw, XCircle } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -145,6 +145,21 @@ export function ConformanceTab() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
+
+  // Close the model picker when the user clicks outside it. Without this
+  // the dropdown sticks open until the toggle button is clicked again,
+  // which the user flagged during QA.
+  useEffect(() => {
+    if (!showModelPicker) return;
+    function onClick(e: MouseEvent) {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setShowModelPicker(false);
+      }
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [showModelPicker]);
 
   const fetchRuns = useCallback(async () => {
     try {
@@ -228,7 +243,7 @@ export function ConformanceTab() {
     <div className="space-y-6">
       {/* Controls */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative">
+        <div className="relative" ref={modelPickerRef}>
           <button
             onClick={() => setShowModelPicker(!showModelPicker)}
             className="px-4 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] text-sm flex items-center gap-2 cursor-pointer"

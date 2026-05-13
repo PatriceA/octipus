@@ -15,6 +15,7 @@ import SidePanel from '@/components/chat/side-panel';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { api, createWebSocket } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
+import { useWorkspace } from '@/lib/workspace-context';
 
 interface ToolCallInfo {
   id: string;
@@ -68,6 +69,16 @@ function newSessionState(): SessionState {
   };
 }
 
+/** Timestamp (ms) of the most recent user message in a session, or 0. */
+function latestUserMessageTime(messages: ChatMessageData[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      return new Date(messages[i].timestamp).getTime();
+    }
+  }
+  return 0;
+}
+
 interface Preset {
   id: string;
   name: string;
@@ -77,6 +88,7 @@ interface Preset {
 
 export default function ChatPage() {
   const { pushPermission, pushApproval } = usePermissions();
+  const { activeWorkspace } = useWorkspace();
   const [mounted, setMounted] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const deletedSessionsRef = useRef<Set<string>>(new Set());
@@ -187,27 +199,14 @@ export default function ChatPage() {
                     name: tc.name,
                     argsSummary: tc.argsSummary,
                   })));
-                  // Detect file changes from filesystem tool calls
-                  const FS_TOOLS: Record<string, string> = {
-                    'filesystem__write_file': 'write', 'filesystem__append_file': 'append',
-                    'filesystem__delete_file': 'delete', 'filesystem__copy_file': 'copy',
-                    'filesystem__move_file': 'move', 'filesystem__create_directory': 'create_dir',
-                  };
-                  for (const tc of ev.data.toolCalls) {
-                    const action = FS_TOOLS[tc.name];
-                    if (action && tc.argsSummary) {
-                      const pathMatch = tc.argsSummary.match(/(?:path|destination|source):\s*([^\s,]+)/);
-                      if (pathMatch) {
-                        restoredFileChanges.push({
-                          path: pathMatch[1],
-                          action,
-                          agentId: a.id,
-                          agentRole: a.role,
-                          timestamp: a.createdAt,
-                        });
-                      }
-                    }
-                  }
+                  // File changes come from explicit `file_change` events
+                  // emitted by tool-executor.ts after a successful write — see
+                  // the branch below. Don't try to parse paths out of
+                  // `argsSummary` here: the summary is truncated to 120 chars
+                  // and uses ", " as the field separator, so paths containing
+                  // spaces (e.g. "C:/Users/patri/Github Reps/...") get cut off
+                  // at the first space and we end up with a fake duplicate
+                  // entry like "C:/Users/patri/Github" alongside the real one.
                 }
                 // CLI agent tool use (single tool format from cli_tool_use events)
                 else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
@@ -307,6 +306,22 @@ export default function ChatPage() {
   useEffect(() => {
     if (activeSessionId) localStorage.setItem(STORAGE_KEY_ACTIVE, activeSessionId);
   }, [activeSessionId]);
+
+  // Refresh sessions when the active workspace changes.
+  // Sessions are workspace-scoped via the X-Octipus-Workspace header; without
+  // re-loading here the user has to navigate away and back to see the list
+  // for the newly selected workspace.
+  useEffect(() => {
+    if (!mounted) return;
+    loadSessions().then((items) => {
+      // Clear the active session if it no longer belongs to this workspace
+      if (activeSessionId && !items.find(s => s.id === activeSessionId)) {
+        setActiveSessionId(items[0]?.id ?? null);
+        if (items[0]?.id) loadSessionMessages(items[0].id);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspace?.id]);
 
   // Check connection + load models
   const checkConnection = useCallback(async () => {
@@ -549,19 +564,26 @@ export default function ChatPage() {
             usedTokens?: number;
             durationMs?: number;
           };
-          const serverTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
+          // Use client-receipt time (Date.now()) — not the server-stamped
+          // `data.timestamp` — for agent `startTime`. User messages are
+          // stamped with the client clock, so mixing in a server clock
+          // (even with small skew) lets agents sort *before* the message
+          // that triggered them. Clamping to the latest user message
+          // timestamp adds a belt-and-suspenders guarantee.
+          const clientNow = Date.now();
 
           if (data.event === 'swarm.node_spawned' && eventSessionId && p.kind !== 'orchestrator') {
             updateSessionState(eventSessionId, (prev) => {
               const next = new Map(prev.trackedAgents);
               const existing = next.get(p.nodeId);
+              const minStart = latestUserMessageTime(prev.messages) + 1;
               next.set(p.nodeId, {
                 id: p.nodeId,
                 role: p.role || existing?.role || 'unknown',
                 model: p.model || existing?.model || '',
                 status: 'running',
                 toolCalls: existing?.toolCalls ?? [],
-                startTime: existing?.startTime ?? serverTime,
+                startTime: existing?.startTime ?? Math.max(clientNow, minStart),
                 parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
               });
               return { ...prev, trackedAgents: next };
@@ -584,7 +606,9 @@ export default function ChatPage() {
                     : p.status === 'cancelled' || p.status === 'stopped'
                       ? 'stopped'
                       : 'failed';
-                const startTime = existing?.startTime ?? serverTime - duration;
+                const minStart = latestUserMessageTime(prev.messages) + 1;
+                const fallbackStart = Math.max(clientNow - duration, minStart);
+                const startTime = existing?.startTime ?? fallbackStart;
                 nextAgents.set(p.nodeId, {
                   id: p.nodeId,
                   role: p.role || existing?.role || 'unknown',
@@ -599,11 +623,17 @@ export default function ChatPage() {
                   parentAgentId: p.parentNodeId ?? existing?.parentAgentId,
                 });
               }
+              // Swarm duration represents wall-clock time of each swarm
+              // (the orchestrator's runtime). Sub-agent durations should NOT
+              // be added — those are nested inside the orchestrator's time.
+              // Total across multiple swarms in a session = sum of each
+              // orchestrator's duration.
+              const swarmDurationDelta = p.kind === 'orchestrator' ? duration : 0;
               return {
                 ...prev,
                 trackedAgents: nextAgents,
                 totalTokens: (prev.totalTokens || 0) + tokens,
-                swarmDurationMs: (prev.swarmDurationMs || 0) + duration,
+                swarmDurationMs: (prev.swarmDurationMs || 0) + swarmDurationDelta,
               };
             });
           }
@@ -665,16 +695,20 @@ export default function ChatPage() {
       case 'worker_spawned': {
         const d = data.data as any;
         const agentId = d.workerId || d.agentId;
-        const serverTime = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
+        // Use client-receipt time, clamped to be after the latest user
+        // message, so the worker indicator can't sort before the message
+        // that triggered it due to clock skew.
+        const clientNow = Date.now();
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
+          const minStart = latestUserMessageTime(prev.messages) + 1;
           next.set(agentId, {
             id: agentId,
             role: d.role,
             model: d.model,
             status: 'running',
             toolCalls: [],
-            startTime: serverTime,
+            startTime: Math.max(clientNow, minStart),
             parentAgentId: d.parentAgentId,
             stageName: d.stageName,
           });
@@ -707,16 +741,21 @@ export default function ChatPage() {
             });
           } else {
             // Agent wasn't tracked via worker_spawned (race condition or missed event)
-            // Create a completed entry so the duration is still visible
-            const now = data.timestamp ? new Date(data.timestamp).getTime() : Date.now();
+            // Create a completed entry so the duration is still visible.
+            // Use client time clamped to last user message to keep ordering sane.
+            const now = Date.now();
+            const minStart = latestUserMessageTime(prev.messages) + 1;
+            const startTime = d.durationMs
+              ? Math.max(now - d.durationMs, minStart)
+              : Math.max(now, minStart);
             next.set(agentId, {
               id: agentId,
               role: d.role || 'unknown',
               model: d.model || '',
               status: workerStatus,
               toolCalls: [],
-              startTime: d.durationMs ? now - d.durationMs : now,
-              endTime: now,
+              startTime,
+              endTime: Math.max(now, startTime),
               durationMs: d.durationMs ?? 0,
               totalTokens: d.totalTokens,
               iterations: d.iterations,
@@ -769,32 +808,13 @@ export default function ChatPage() {
           name: tc.name,
           argsSummary: tc.argsSummary,
         }));
-        // Detect file changes from filesystem tool calls (non-CLI agents)
-        const FILESYSTEM_FILE_TOOLS: Record<string, string> = {
-          'filesystem__write_file': 'write',
-          'filesystem__append_file': 'append',
-          'filesystem__delete_file': 'delete',
-          'filesystem__copy_file': 'copy',
-          'filesystem__move_file': 'move',
-          'filesystem__create_directory': 'create_dir',
-        };
-        const newFileChanges: FileChange[] = [];
-        for (const tc of d.toolCalls) {
-          const action = FILESYSTEM_FILE_TOOLS[tc.name];
-          if (action && tc.argsSummary) {
-            // Extract path from argsSummary (format: "path: /some/path, content: ...")
-            const pathMatch = tc.argsSummary.match(/(?:path|destination|source):\s*([^\s,]+)/);
-            if (pathMatch) {
-              newFileChanges.push({
-                path: pathMatch[1],
-                action,
-                agentId: data.agentId,
-                agentRole: 'unknown',
-                timestamp: new Date().toISOString(),
-              });
-            }
-          }
-        }
+        // File-change entries come from the dedicated `file_change` event
+        // emitted by `tool-executor.ts` after a successful filesystem write.
+        // Don't try to derive them from `argsSummary` here — the summary is
+        // truncated to 120 chars with ", "-separated fields, so paths
+        // containing spaces (e.g. "C:/Users/patri/Github Reps/…") get cut
+        // off at the first space, which produced a phantom duplicate entry
+        // like "C:/Users/patri/Github" sitting next to the real path.
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
@@ -804,13 +824,7 @@ export default function ChatPage() {
               toolCalls: [...existing.toolCalls, ...toolCalls],
             });
           }
-          return {
-            ...prev,
-            trackedAgents: next,
-            fileChanges: newFileChanges.length > 0
-              ? [...prev.fileChanges, ...newFileChanges]
-              : prev.fileChanges,
-          };
+          return { ...prev, trackedAgents: next };
         });
       }
       // CLI agent tool use (single tool format from cli_tool_use events)
@@ -1017,8 +1031,9 @@ export default function ChatPage() {
     updateSessionState(sid, (prev) => ({
       ...prev,
       messages: [...prev.messages, userMessage],
-      trackedAgents: new Map(),
-      teams: new Map(),
+      // Keep trackedAgents/teams from prior turns visible — they're part of
+      // this session's history. Clearing them here caused a vanish/restore
+      // flicker when the 10s poll later re-hydrated them from the DB.
     }));
 
     setIsLoading(true);
@@ -1043,9 +1058,15 @@ export default function ChatPage() {
         sendOverWs();
         return;
       }
-      // CONNECTING — wait for open (bounded).
+      // CONNECTING — wait for open (bounded). Bumped from 5s to 10s after
+      // observing race conditions where WS reconnect took 6–8s on a slow
+      // network, the wait timed out, REST took over, and a transient
+      // "Request failed" appeared while the real answer streamed in via the
+      // WS that finally opened. The post-REST WS-alive check below
+      // additionally suppresses the toast if WS came back during the REST
+      // request itself.
       const opened = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), 5_000);
+        const timer = setTimeout(() => resolve(false), 10_000);
         const onOpen = () => { clearTimeout(timer); ws.removeEventListener('open', onOpen); resolve(true); };
         ws.addEventListener('open', onOpen, { once: true });
       });
@@ -1091,7 +1112,15 @@ export default function ChatPage() {
         }
       }
     } catch (error) {
-      if (sid) {
+      // The REST `/chat` request often races a reconnecting WebSocket. If the
+      // WS came back online between our `sendMessage()` entry and the REST
+      // failure, the agent is already running and will deliver its answer via
+      // WS — surfacing a scary "backend is running?" toast in that case just
+      // confuses the user. Only show the error when we're truly offline at
+      // the time the REST attempt failed.
+      const wsNow = wsRef.current;
+      const wsAlive = wsNow && wsNow.readyState === WebSocket.OPEN;
+      if (sid && !wsAlive) {
         updateSessionState(sid, (prev) => ({
           ...prev,
           messages: [...prev.messages, {

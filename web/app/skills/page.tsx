@@ -188,6 +188,14 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   const [bestPractices, setBestPractices] = useState<string[]>([]);
   const [antiPatterns, setAntiPatterns] = useState<string[]>([]);
   const [frameworks, setFrameworks] = useState<string[]>([]);
+  // Topics drive runtime injection — independent from `category`, which is
+  // just the UI grouping. Allow users to attach topics on create so they
+  // don't have to open the edit dialog as a second step.
+  const [topics, setTopics] = useState<string[]>([]);
+
+  const toggleTopic = (t: string) => {
+    setTopics((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,7 +210,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
     setError('');
     setSubmitting(true);
     try {
-      await api.post('/skills', {
+      const created = await api.post<{ id: string }>('/skills', {
         name: name.trim(),
         category,
         description: description.trim() || (mode === 'markdown' ? content.trim().split('\n')[0].replace(/^#\s*/, '').slice(0, 200) : ''),
@@ -212,6 +220,15 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
         antiPatterns: mode === 'structured' ? antiPatterns : [],
         frameworks: mode === 'structured' ? frameworks : [],
       });
+      // Attach selected topics. Failures here don't roll back skill creation —
+      // the user can still adjust topics from the edit dialog.
+      if (created?.id && topics.length > 0) {
+        await Promise.all(
+          topics.map((topic) =>
+            api.post('/skills/topics', { skillId: created.id, topic, isActive: true }).catch(() => null),
+          ),
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ['skills'] });
       onClose();
     } catch (err: unknown) {
@@ -266,6 +283,36 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
+              <p className="text-xs text-on-surface-variant mt-1">UI grouping — does not affect agent discovery.</p>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-white/80 mb-1">
+              Topics
+              <span className="ml-2 text-xs font-normal text-on-surface-variant">
+                Controls when this skill is injected into an agent prompt
+              </span>
+            </label>
+            <div className="grid grid-cols-3 gap-1.5 p-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg max-h-40 overflow-y-auto">
+              {CATEGORIES.map((t) => {
+                const selected = topics.includes(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => toggleTopic(t)}
+                    className={cn(
+                      'px-2 py-1 text-xs rounded-md text-left cursor-pointer transition-colors',
+                      selected
+                        ? 'bg-primary-800 text-white'
+                        : 'bg-[#262626] text-white/70 hover:bg-[#20201f]',
+                    )}
+                  >
+                    {selected ? '✓ ' : ''}{t}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

@@ -138,9 +138,11 @@ function kindEmoji(kind: SwarmTreeNode['kind']): string {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+  // Guard against clock skew / out-of-order events producing negative durations.
+  const safe = Math.max(0, ms);
+  if (safe < 1000) return `${Math.round(safe)}ms`;
+  if (safe < 60_000) return `${(safe / 1000).toFixed(1)}s`;
+  return `${Math.floor(safe / 60_000)}m ${Math.round((safe % 60_000) / 1000)}s`;
 }
 
 // ── Rehydration fetch ───────────────────────────────────────────────────
@@ -224,7 +226,10 @@ export default function SwarmTree({
             const node = apiNodeToTreeNode(n);
             next.set(n.id, node);
             if (typeof n.tokensUsed === 'number') tokens += n.tokensUsed;
-            if (node.durationMs) durationMs += node.durationMs;
+            // Sum only orchestrator runtimes — sub-agent durations are
+            // already encompassed by their orchestrator's wall-clock time.
+            // Summing every node double-counts and inflates the metric.
+            if (node.durationMs && node.kind === 'orchestrator') durationMs += node.durationMs;
           }
           setNodes(next);
           onHydratedTotals?.({ tokens, durationMs });
@@ -484,8 +489,8 @@ function TreeNode({
   const isRoot = node.kind === 'orchestrator';
 
   const elapsed = node.completedAt
-    ? node.durationMs ?? 0
-    : Date.now() - node.startedAt;
+    ? Math.max(0, node.durationMs ?? 0)
+    : Math.max(0, Date.now() - node.startedAt);
   // elapsedTick intentionally referenced so the memo refreshes each tick.
   void elapsedTick;
 

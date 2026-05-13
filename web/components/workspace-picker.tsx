@@ -72,6 +72,10 @@ export function WorkspacePicker() {
               <div className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant px-3 pt-3 pb-1">
                 Workspaces
               </div>
+              <div className="text-[11px] text-on-surface-variant px-3 pb-2 leading-snug">
+                Org-level data scope. Filesystem folders the agent can access live in
+                Settings → Integrations.
+              </div>
               <div className="max-h-72 overflow-y-auto">
                 {workspaces.length === 0 ? (
                   <div className="px-4 py-6 text-sm text-on-surface-variant text-center">
@@ -90,7 +94,10 @@ export function WorkspacePicker() {
                       <Briefcase className="w-4 h-4 text-on-surface-variant shrink-0" />
                       <div className="min-w-0 flex-1">
                         <p className="text-sm text-white truncate">{w.name}</p>
-                        <p className="text-xs text-on-surface-variant truncate">/{w.slug}{w.isDefault ? ' · default' : ''}</p>
+                        <p className="text-xs text-on-surface-variant truncate">
+                          <span className="font-mono">{w.slug}</span>
+                          {w.isDefault ? <span className="ml-1 text-[10px] uppercase tracking-widest">default</span> : null}
+                        </p>
                       </div>
                       {w.id === activeWorkspace?.id && (
                         <Check className="w-4 h-4 text-primary shrink-0" />

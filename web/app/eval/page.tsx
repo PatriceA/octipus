@@ -60,6 +60,8 @@ export default function EvalPage() {
   }>({ running: false });
   const [showRunMenu, setShowRunMenu] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
+  const [models, setModels] = useState<Array<{ id: string; name?: string; modelId?: string }>>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
 
   const fetchResults = useCallback(async () => {
     try {
@@ -102,7 +104,9 @@ export default function EvalPage() {
   const startEval = useCallback(async (type: 'eval' | 'red-team') => {
     try {
       setShowRunMenu(false);
-      const data = await api.post<{ runId: string; started: boolean; error?: string; running?: boolean }>('/eval/run', { type });
+      const body: { type: string; model?: string } = { type };
+      if (selectedModel) body.model = selectedModel;
+      const data = await api.post<{ runId: string; started: boolean; error?: string; running?: boolean }>('/eval/run', body);
       if (data.error) {
         setError(data.error);
         return;
@@ -111,6 +115,19 @@ export default function EvalPage() {
     } catch (err) {
       setError((err as Error).message);
     }
+  }, [selectedModel]);
+
+  // Fetch available models for the picker
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await api.get<{ models: Array<{ id: string; name?: string; modelId?: string }> } | Array<{ id: string; name?: string; modelId?: string }>>('/models/');
+        const list = Array.isArray(data) ? data : (data as { models: Array<{ id: string; name?: string; modelId?: string }> }).models ?? [];
+        setModels(list);
+      } catch {
+        // Picker stays empty; the runner will fall back to the DB default or fail loud.
+      }
+    })();
   }, []);
 
   // Poll status while an eval is running
@@ -163,6 +180,21 @@ export default function EvalPage() {
           >
             <RefreshCw className="w-4 h-4" />
           </button>
+          {models.length > 0 && (
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              disabled={runStatus.running}
+              className="px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 text-white/80 rounded-lg text-sm cursor-pointer focus:outline-none focus:border-primary"
+              title="Model to run evaluations against (defaults to the DB-configured default)"
+            >
+              <option value="">Default model</option>
+              {models.map((m) => {
+                const value = m.name || m.modelId || m.id;
+                return <option key={m.id} value={value}>{m.name || m.modelId || m.id}</option>;
+              })}
+            </select>
+          )}
           <div className="relative">
             <button
               onClick={() => runStatus.running ? null : setShowRunMenu(!showRunMenu)}

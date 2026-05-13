@@ -262,7 +262,29 @@ function ToolModuleCard({
 
 export default function ToolsPage() {
   const [searchQuery, setSearchQuery] = useState('');
+  const [reloading, setReloading] = useState(false);
+  const [reloadMessage, setReloadMessage] = useState('');
   const queryClient = useQueryClient();
+
+  const handleReload = useCallback(async () => {
+    setReloading(true);
+    setReloadMessage('');
+    try {
+      const result = await api.post<{ reloaded: boolean; extensionCount: number; error?: string }>('/tools/reload', {});
+      if (result.error) {
+        setReloadMessage(`Reload failed: ${result.error}`);
+      } else {
+        setReloadMessage(`Reloaded ${result.extensionCount} extension(s).`);
+        queryClient.invalidateQueries({ queryKey: ['tools'] });
+        queryClient.invalidateQueries({ queryKey: ['mcp-tools'] });
+      }
+    } catch (err) {
+      setReloadMessage(`Reload failed: ${(err as Error).message}`);
+    } finally {
+      setReloading(false);
+      setTimeout(() => setReloadMessage(''), 4000);
+    }
+  }, [queryClient]);
 
   const { data: toolsData, isLoading } = useQuery({
     queryKey: ['tools'],
@@ -351,11 +373,11 @@ export default function ToolsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
           <Wrench className="w-5 h-5 text-primary" />
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Tools & Permissions</h1>
           <p className="text-on-surface-variant">
             Executable capabilities available to agents — filesystem, shell, git, browser, email, and more. Each tool has configurable permissions.
@@ -363,8 +385,18 @@ export default function ToolsPage() {
           <p className="text-sm text-on-surface-variant mt-1">
             {toolModules.length} tool modules, {totalCapabilities} capabilities
             {userPermissions.length > 0 && ` · ${userPermissions.length} custom overrides`}
+            {reloadMessage && <span className="ml-2 text-primary">{reloadMessage}</span>}
           </p>
         </div>
+        <button
+          onClick={handleReload}
+          disabled={reloading}
+          className="flex items-center gap-2 px-3 py-2 text-sm bg-[#1a1a1a] border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#20201f] disabled:opacity-50 cursor-pointer"
+          title="Re-discover extensions from ~/.octipus/extensions and .octipus/extensions"
+        >
+          {reloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+          Reload extensions
+        </button>
       </div>
 
       {/* Permission legend */}
