@@ -164,6 +164,7 @@ ${redTeamPlugins.map((p) => `  ${p.name.padEnd(20)} ${p.description}`).join('\n'
     // the user can fix it instead of seeing 49 silent FAILs.
     console.error(`\n  \x1b[31mRed-team runner failed:\x1b[0m ${(err as Error).message}\n`);
     await exitClean(2);
+    return;
   }
 
   // Display results
