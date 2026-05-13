@@ -20,8 +20,8 @@ export const pipelineTemplates = pgTable('pipeline_templates', {
   description: text('description'),
   isPreset: boolean('is_preset').default(false).notNull(),
   steps: jsonb('steps').$type<PipelineStepConfig[]>().default([]).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type PipelineTemplate = typeof pipelineTemplates.$inferSelect;

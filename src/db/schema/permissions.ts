@@ -14,9 +14,9 @@ export const toolPermissions = pgTable('skill_permissions', {
   // Metadata
   grantedBy: uuid('granted_by').references(() => users.id),
   reason: text('reason'),
-  expiresAt: timestamp('expires_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userToolActionUnique: unique('user_skill_action_unique').on(table.userId, table.toolId, table.action),
   userIdIdx: index('skill_permissions_user_id_idx').on(table.userId),
@@ -51,10 +51,10 @@ export const permissionRequests = pgTable('permission_requests', {
   context: jsonb('context').$type<PermissionRequestContext>().notNull(),
   status: text('status').notNull().default('pending'), // pending, approved, denied, expired
   resolvedBy: uuid('resolved_by').references(() => users.id),
-  resolvedAt: timestamp('resolved_at'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
   resolution: text('resolution'), // User's response or reason
-  expiresAt: timestamp('expires_at').notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('permission_requests_user_id_idx').on(table.userId),
   statusIdx: index('permission_requests_status_idx').on(table.status),

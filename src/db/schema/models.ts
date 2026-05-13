@@ -31,8 +31,8 @@ export const modelConfig = pgTable('model_config', {
   isEnabled: boolean('is_enabled').default(true).notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
   metadata: jsonb('metadata').$type<ModelMetadata>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   providerIdx: index('model_config_provider_idx').on(table.provider),
   topicsIdx: index('model_config_topics_idx').on(table.topics),
@@ -106,7 +106,7 @@ export const costLog = pgTable('cost_log', {
   totalCost: real('total_cost').notNull(),
   requestType: text('request_type'), // chat, completion, embedding
   metadata: jsonb('metadata').$type<CostLogMetadata>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('cost_log_user_id_idx').on(table.userId),
   sessionIdIdx: index('cost_log_session_id_idx').on(table.sessionId),

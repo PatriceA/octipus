@@ -13,7 +13,7 @@ export const artifactDataSnapshots = pgTable(
       .notNull()
       .references(() => artifactDataSources.id, { onDelete: 'cascade' }),
     payloadJson: jsonb('payload_json').$type<unknown>().notNull(),
-    capturedAt: timestamp('captured_at').defaultNow().notNull(),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).defaultNow().notNull(),
     /** Optional advisory TTL (seconds) for downstream caches; 0 = no hint. */
     ttlSeconds: integer('ttl_seconds').notNull().default(0),
   },

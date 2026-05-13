@@ -10,8 +10,8 @@ export const settings = pgTable('settings', {
   defaultValue: text('default_value'),
   isSecret: boolean('is_secret').notNull().default(false),
   updatedBy: text('updated_by'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   categoryIdx: index('settings_category_idx').on(table.category),
 }));

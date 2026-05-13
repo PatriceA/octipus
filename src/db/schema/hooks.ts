@@ -43,14 +43,14 @@ export const hooks = pgTable('hooks', {
   maxExecutions: integer('max_executions'), // null = unlimited
   executionCount: integer('execution_count').default(0).notNull(),
   cooldownMs: integer('cooldown_ms').default(0), // Minimum time between executions
-  lastExecutedAt: timestamp('last_executed_at'),
+  lastExecutedAt: timestamp('last_executed_at', { withTimezone: true }),
   // Schedule-specific (for schedule trigger)
-  nextRunAt: timestamp('next_run_at'),
+  nextRunAt: timestamp('next_run_at', { withTimezone: true }),
   lastError: text('last_error'),
   // Metadata
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('hooks_user_id_idx').on(table.userId),
   triggerIdx: index('hooks_trigger_idx').on(table.trigger),

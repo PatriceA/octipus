@@ -27,8 +27,8 @@ export const agents = pgTable('agents', {
   parentAgentId: text('parent_agent_id'),
   /** 1:1 link to `swarm_nodes.id` (nullable — only set when the agent is part of a swarm). */
   swarmNodeId: text('swarm_node_id'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 }, (table) => ({
   sessionIdx: index('agents_session_id_idx').on(table.sessionId),
   userIdx: index('agents_user_id_idx').on(table.userId),

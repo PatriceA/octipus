@@ -34,7 +34,7 @@ export const hookExecutions = pgTable('hook_executions', {
   durationMs: integer('duration_ms'),
   // Context snapshot — what triggered the execution
   triggerContext: jsonb('trigger_context').$type<Record<string, unknown>>(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   hookIdIdx: index('hook_executions_hook_id_idx').on(table.hookId),
   recurringTaskIdIdx: index('hook_executions_recurring_task_id_idx').on(table.recurringTaskId),

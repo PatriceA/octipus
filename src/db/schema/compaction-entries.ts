@@ -48,7 +48,7 @@ export const compactionEntries = pgTable('compaction_entries', {
    * hard-ceiling, no-prior-stall). Useful for analytics.
    */
   triggerReason: text('trigger_reason'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   sessionIdx: index('compaction_entries_session_idx').on(t.sessionId),
   sessionCreatedIdx: index('compaction_entries_session_created_idx').on(t.sessionId, t.createdAt),

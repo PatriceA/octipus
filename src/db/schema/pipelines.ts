@@ -24,9 +24,9 @@ export const pipelines = pgTable('pipelines', {
   currentStageIndex: integer('current_stage_index').default(0).notNull(),
   summary: text('summary'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 });
 
 export const pipelineStages = pgTable('pipeline_stages', {
@@ -42,12 +42,12 @@ export const pipelineStages = pgTable('pipeline_stages', {
   workerAgentId: text('worker_agent_id'),
   status: stageStatusEnum('status').default('pending').notNull(),
   requiresApproval: boolean('requires_approval').default(false).notNull(),
-  approvedAt: timestamp('approved_at'),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
   approvedBy: uuid('approved_by').references(() => users.id),
   stageIndex: integer('stage_index').notNull(),
   error: text('error'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 });
 
 export type Pipeline = typeof pipelines.$inferSelect;

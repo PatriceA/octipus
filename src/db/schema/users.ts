@@ -18,9 +18,9 @@ export const users = pgTable('users', {
   passkeyCredentials: jsonb('passkey_credentials').$type<PasskeyCredential[]>().default([]),
   channelBindings: jsonb('channel_bindings').$type<ChannelBinding[]>().default([]),
   preferences: jsonb('preferences').$type<UserPreferences>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  lastLoginAt: timestamp('last_login_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
 });
 
 export interface PasskeyCredential {

@@ -7,8 +7,8 @@ export const roles = pgTable('roles', {
   defaultTopic: text('default_topic').notNull().default('general'),
   systemPromptTemplate: text('system_prompt_template').notNull(),
   isSystem: boolean('is_system').default(true).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type Role = typeof roles.$inferSelect;

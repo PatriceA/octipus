@@ -13,7 +13,7 @@ export const messages = pgTable('messages', {
   toolName: text('tool_name'),
   agentId: text('agent_id'),
   metadata: jsonb('metadata').$type<MessageMetadata>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   sessionIdIdx: index('messages_session_id_idx').on(table.sessionId),
   createdAtIdx: index('messages_created_at_idx').on(table.createdAt),

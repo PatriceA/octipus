@@ -98,9 +98,9 @@ export const swarmNodes = pgTable('swarm_nodes', {
    *  detached child's result. NULL while pending; non-null after pickup.
    *  Used by orphan-reaper to find detached children whose parent
    *  terminated without collecting. */
-  collectedAt: timestamp('collected_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  completedAt: timestamp('completed_at'),
+  collectedAt: timestamp('collected_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 }, (t) => ({
   rootIdx: index('swarm_nodes_root_idx').on(t.rootSessionId),
   parentIdx: index('swarm_nodes_parent_idx').on(t.parentNodeId),

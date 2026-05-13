@@ -7,7 +7,7 @@ import { customType, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzl
 // Custom type for pgvector's vector column
 export const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
-    return 'vector(1024)';
+    return 'vector';
   },
   toDriver(value: number[]): string {
     return `[${value.join(',')}]`;
@@ -47,7 +47,7 @@ export const embeddings = pgTable('embeddings', {
   abstract: text('abstract'),   // L0: ~1-2 sentences, ~100 tokens
   overview: text('overview'),   // L1: ~1 paragraph, ~500 tokens
   metadata: jsonb('metadata').$type<EmbeddingMetadata>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   sourceTypeIdx: index('embeddings_source_type_idx').on(table.sourceType),
   sourceIdIdx: index('embeddings_source_id_idx').on(table.sourceId),

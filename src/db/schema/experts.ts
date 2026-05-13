@@ -17,8 +17,8 @@ export const experts = pgTable('presets', {
   deliverableTemplate: text('deliverable_template'),
   successMetrics: jsonb('success_metrics').$type<string[]>().default([]),
   isSystem: boolean('is_system').default(false).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export interface ExpertParameters {

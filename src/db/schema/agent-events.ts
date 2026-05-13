@@ -15,7 +15,7 @@ export const agentEvents = pgTable('agent_events', {
   workspaceId: uuid('workspace_id'),
   type: text('type').notNull(), // thought, action, observation, error, complete, status_change, permission_request
   data: jsonb('data').$type<unknown>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   agentIdIdx: index('agent_events_agent_id_idx').on(table.agentId),
   sessionIdIdx: index('agent_events_session_id_idx').on(table.sessionId),

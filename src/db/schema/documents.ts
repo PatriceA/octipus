@@ -26,8 +26,8 @@ export const documents = pgTable('documents', {
   status: documentStatusEnum('status').notNull().default('queued'),
   storagePath: text('storage_path').notNull(),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  processedAt: timestamp('processed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
 }, (table) => ({
   userIdx: index('documents_user_id_idx').on(table.userId),
   statusIdx: index('documents_status_idx').on(table.status),

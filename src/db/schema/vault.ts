@@ -78,11 +78,11 @@ export const vault = pgTable('vault', {
   allowedAgents: text('allowed_agents').array().default([]), // Empty = all agents
   // Lifecycle
   isActive: boolean('is_active').default(true).notNull(),
-  expiresAt: timestamp('expires_at'),
-  lastAccessedAt: timestamp('last_accessed_at'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
   accessCount: text('access_count').default('0'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('vault_user_id_idx').on(table.userId),
   nameIdx: index('vault_name_idx').on(table.name),

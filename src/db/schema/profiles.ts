@@ -15,8 +15,8 @@ export const profiles = pgTable('profiles', {
   facts: jsonb('facts').$type<ProfileFact[]>().default([]),
   userId: uuid('user_id').notNull(),               // owner of this profile
   isUserProfile: boolean('is_user_profile').default(false), // true for the user's own profile
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('profiles_user_id_idx').on(table.userId),
   nameIdx: index('profiles_name_idx').on(table.name),

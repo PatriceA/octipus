@@ -48,7 +48,7 @@ export const auditLog = pgTable('audit_log', {
   userAgent: text('user_agent'),
   channelType: text('channel_type'),
   sessionId: uuid('session_id'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('audit_log_user_id_idx').on(table.userId),
   actionIdx: index('audit_log_action_idx').on(table.action),

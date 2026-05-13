@@ -33,8 +33,8 @@ export const userQuotas = pgTable('user_quotas', {
   maxTokensPerDay: integer('max_tokens_per_day'),
   /** Max API requests per minute (sliding window). NULL = inherit. */
   maxApiCallsPerMinute: integer('max_api_calls_per_minute'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type UserQuota = typeof userQuotas.$inferSelect;

@@ -27,8 +27,8 @@ export const channelIdentities = pgTable('channel_identities', {
   /** Optional human-readable handle (telegram @username, slack display name). */
   externalHandle: text('external_handle'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
-  verifiedAt: timestamp('verified_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   channelExternalUnique: unique('channel_identities_channel_external_unique')
     .on(table.channelType, table.externalId),
@@ -60,10 +60,10 @@ export const channelLinkCodes = pgTable('channel_link_codes', {
   channelType: text('channel_type').notNull(),
   externalId: text('external_id').notNull(),
   externalHandle: text('external_handle'),
-  expiresAt: timestamp('expires_at').notNull(),
-  redeemedAt: timestamp('redeemed_at'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  redeemedAt: timestamp('redeemed_at', { withTimezone: true }),
   redeemedByUserId: uuid('redeemed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   codeIdx: index('channel_link_codes_code_idx').on(table.code),
   expiresAtIdx: index('channel_link_codes_expires_at_idx').on(table.expiresAt),

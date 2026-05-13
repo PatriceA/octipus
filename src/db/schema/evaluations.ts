@@ -14,7 +14,7 @@ export const conformanceRuns = pgTable(
     summary: jsonb('summary')
       .$type<{ passed: number; failed: number; skipped: number; totalMs: number }>()
       .notNull(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     userIdIdx: index('conformance_runs_user_id_idx').on(table.userId),
@@ -37,7 +37,7 @@ export const evalRuns = pgTable(
     summary: jsonb('summary')
       .$type<Record<string, { mean: number; passRate: number; count: number }>>()
       .notNull(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     userIdIdx: index('eval_runs_user_id_idx').on(table.userId),

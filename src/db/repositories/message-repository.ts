@@ -100,13 +100,22 @@ export class MessageRepository {
   }
 
   async create(data: NewMessage): Promise<Message> {
-    const result = await this.db.insert(messages).values(data).returning();
+    // Default createdAt from the JS clock so it agrees with other JS-clock
+    // timestamps in the same request (e.g. agent context.createdAt). The
+    // Postgres NOW() default would otherwise come from the DB-server clock,
+    // which can disagree with the API process by minutes — or by the local
+    // TZ offset when one side runs on a `timestamp without time zone`
+    // column. Callers that pass an explicit createdAt win.
+    const row = data.createdAt ? data : { ...data, createdAt: new Date() };
+    const result = await this.db.insert(messages).values(row).returning();
     return result[0];
   }
 
   async createMany(data: NewMessage[]): Promise<Message[]> {
     if (data.length === 0) return [];
-    const result = await this.db.insert(messages).values(data).returning();
+    const now = new Date();
+    const rows = data.map(d => (d.createdAt ? d : { ...d, createdAt: now }));
+    const result = await this.db.insert(messages).values(rows).returning();
     dbLogger.debug({ count: result.length }, 'Messages created');
     return result;
   }

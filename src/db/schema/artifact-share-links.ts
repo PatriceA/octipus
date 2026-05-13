@@ -16,12 +16,12 @@ export const artifactShareLinks = pgTable(
       .references(() => artifacts.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull(),
     scopeJson: jsonb('scope_json').$type<Record<string, unknown>>().notNull().default({}),
-    expiresAt: timestamp('expires_at').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdByUserId: uuid('created_by_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    revokedAt: timestamp('revoked_at'),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     tokenHashIdx: index('artifact_share_links_token_hash_idx').on(table.tokenHash),

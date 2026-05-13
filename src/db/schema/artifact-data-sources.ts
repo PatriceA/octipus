@@ -33,11 +33,11 @@ export const artifactDataSources = pgTable(
     refreshSeconds: integer('refresh_seconds').notNull().default(300),
     /** Principal whose credentials/ACLs are used at refresh time. Required. */
     principalId: text('principal_id').notNull(),
-    lastRunAt: timestamp('last_run_at'),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     lastStatus: artifactSourceStatusEnum('last_status').notNull().default('pending'),
     lastError: text('last_error'),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     artifactIdx: index('artifact_data_sources_artifact_id_idx').on(table.artifactId),

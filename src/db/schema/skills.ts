@@ -28,8 +28,8 @@ export const skills = pgTable(
     descriptionHash: text('description_hash'),
     /** Bypass discovery — when true, skill is always injected for its topic regardless of message content. */
     alwaysInject: boolean('always_inject').notNull().default(false),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     orgIdIdx: index('skills_org_id_idx').on(table.orgId),

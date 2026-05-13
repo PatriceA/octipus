@@ -11,13 +11,13 @@ export const recurringTasks = pgTable('recurring_tasks', {
   actionType: text('action_type').notNull(), // spawn_agent, execute_tool, webhook
   actionConfig: jsonb('action_config').$type<RecurringTaskConfig>().notNull(),
   isEnabled: boolean('is_enabled').default(true).notNull(),
-  lastRunAt: timestamp('last_run_at'),
-  nextRunAt: timestamp('next_run_at'),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+  nextRunAt: timestamp('next_run_at', { withTimezone: true }),
   runCount: integer('run_count').default(0).notNull(),
   lastError: text('last_error'),
   status: text('status').default('active').notNull(), // active, paused, error, stopped
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('recurring_tasks_user_id_idx').on(table.userId),
   nextRunIdx: index('recurring_tasks_next_run_idx').on(table.nextRunAt),

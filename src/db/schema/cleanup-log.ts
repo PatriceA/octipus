@@ -14,7 +14,7 @@ export const cleanupAuditLog = pgTable('cleanup_audit_log', {
   totalBefore: integer('total_before'),
   totalAfter: integer('total_after'),
   durationMs: integer('duration_ms'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   createdAtIdx: index('cleanup_audit_log_created_at_idx').on(table.createdAt),
 }));

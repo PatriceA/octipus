@@ -51,9 +51,9 @@ export const artifacts = pgTable(
     /** Per-artifact iframe allow-list (Phase 3 — `allowed_embed_origins`). */
     allowedEmbedOrigins: jsonb('allowed_embed_origins').$type<string[]>().notNull().default([]),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
-    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => ({
     workspaceIdx: index('artifacts_workspace_id_idx').on(table.workspaceId),

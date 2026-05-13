@@ -39,12 +39,12 @@ export const impersonationSessions = pgTable('impersonation_sessions', {
    *  table for an active row. */
   actorSessionHash: text('actor_session_hash').notNull(),
   /** When the session was started + when it auto-expires. */
-  startedAt: timestamp('started_at').defaultNow().notNull(),
-  expiresAt: timestamp('expires_at').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   /** Set when the session is stopped (explicit POST /stop, replaced
    *  by a new impersonation, or expired by the cleanup job). NULL
    *  means active. */
-  endedAt: timestamp('ended_at'),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
   /** Why it ended: 'explicit' / 'replaced' / 'expired'. */
   endedReason: text('ended_reason'),
   /** Optional reason the admin gave for the action (free text). */

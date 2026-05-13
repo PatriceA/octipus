@@ -21,7 +21,7 @@ export const artifactVersions = pgTable(
     schemaJson: text('schema_json').notNull().default('{}'),
     changeSummary: text('change_summary').notNull().default(''),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     artifactIdx: index('artifact_versions_artifact_id_idx').on(table.artifactId),

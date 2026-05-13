@@ -12,7 +12,7 @@ export const notifications = pgTable('notifications', {
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   read: boolean('read').default(false).notNull(),
   deliveredChannels: text('delivered_channels').array().default([]),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type Notification = typeof notifications.$inferSelect;

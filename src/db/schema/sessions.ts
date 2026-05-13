@@ -23,9 +23,9 @@ export const sessions = pgTable('sessions', {
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   messageCount: integer('message_count').default(0).notNull(),
   tokenCount: integer('token_count').default(0).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
 });
 
 export interface PlanningState {

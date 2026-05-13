@@ -23,8 +23,8 @@ export const orgSsoConfig = pgTable(
     scimEnabled: boolean('scim_enabled').notNull().default(false),
     scimTokenVaultRef: text('scim_token_vault_ref'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     samlEnabledIdx: index('org_sso_config_saml_enabled_idx').on(table.samlEnabled),

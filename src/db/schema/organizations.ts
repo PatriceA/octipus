@@ -35,8 +35,8 @@ export const organizations = pgTable('organizations', {
   /** User who created the org. NULL after that user is deleted. */
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   slugIdx: index('organizations_slug_idx').on(table.slug),
   createdByIdx: index('organizations_created_by_idx').on(table.createdBy),
@@ -57,7 +57,7 @@ export const orgMembers = pgTable('org_members', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').default('member').notNull(),
-  joinedAt: timestamp('joined_at').defaultNow().notNull(),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.orgId, table.userId] }),
   userIdIdx: index('org_members_user_id_idx').on(table.userId),
@@ -80,8 +80,8 @@ export const workspaces = pgTable('workspaces', {
   name: text('name').notNull(),
   isDefault: boolean('is_default').default(false).notNull(),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('workspaces_user_id_idx').on(table.userId),
   userSlugUq: uniqueIndex('workspaces_user_id_slug_uq').on(table.userId, table.slug),

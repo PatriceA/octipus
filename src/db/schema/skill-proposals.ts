@@ -11,10 +11,10 @@ export const skillProposals = pgTable('skill_proposals', {
   description: text('description').notNull(),
   draftPromptTemplate: text('draft_prompt_template').notNull(),
   exemplarCount: integer('exemplar_count').notNull().default(0),
-  lastExemplarAt: timestamp('last_exemplar_at').notNull(),
+  lastExemplarAt: timestamp('last_exemplar_at', { withTimezone: true }).notNull(),
   status: skillProposalStatusEnum('status').notNull().default('pending'),
-  rejectedUntil: timestamp('rejected_until'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  rejectedUntil: timestamp('rejected_until', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   userIdx: index('skill_proposals_user_idx').on(t.userId),
   fingerprintIdx: index('skill_proposals_fingerprint_idx').on(t.fingerprint),
