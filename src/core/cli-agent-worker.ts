@@ -281,7 +281,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const prompt = this.buildPrompt();
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args, stdinPrompt } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt);
+    const { binary, args, stdinPrompt, useShell } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt);
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
@@ -391,6 +391,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     // On Windows: shell: true is required for .cmd wrappers, and prompts are piped
     // via stdin (set up by CLIArgumentBuilder) to avoid shell argument mangling.
+    //
+    // useShell:false override — when the adapter has already wrapped the call in a
+    // shell of its own (e.g. Gemini-on-Windows uses powershell.exe with a generated
+    // .ps1 to dodge cmd.exe argv re-tokenization), we MUST NOT double-wrap or
+    // Node's shell:true escaping mangles the prompt all over again.
+    const useShellForSpawn = useShell !== false && process.platform === 'win32';
     return new Promise<string>((resolve, reject) => {
       const env = { ...process.env };
       delete env.CLAUDECODE;
@@ -400,7 +406,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         cwd: workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: this.config.timeout,
-        shell: process.platform === 'win32',
+        shell: useShellForSpawn,
       });
 
       // Pipe prompt via stdin on Windows (avoids shell mangling of long args)

@@ -201,6 +201,9 @@ export async function spawnWorker(
   // Auto-select a matching expert for this role
   let expertPrompt: string | undefined;
   let expertModel: string | undefined;
+  // Hoisted so the topic-skill dedupe below can read whichever skillIds
+  // the matched expert advertised. Closed over by the topic-skill block.
+  let expertSkillIdsOuter: string[] = [];
   if (!overrides?.systemPrompt) {
     try {
       const { getDb } = await import('@/db/postgres');
@@ -232,6 +235,7 @@ export async function spawnWorker(
         }
 
         const skillIds = (matchingExpert.skillIds as string[]) || [];
+        expertSkillIdsOuter = skillIds;
         if (skillIds.length > 0) {
           const { getSkillRegistry } = await import('@/skills/registry');
           const skillReg = getSkillRegistry();
@@ -244,9 +248,15 @@ export async function spawnWorker(
               'Expert lists skillIds missing from registry — worker runs with partial domain knowledge',
             );
           }
-          const fragment = await skillReg.buildPromptFragment(skillIds);
-          if (fragment) {
-            expertPrompt = `${expertPrompt || ''}\n\n# Domain Knowledge\n${fragment}`;
+          // Index-only mode: dump skill name + 1-line description, not
+          // the whole body. The agent loads specific skill content via
+          // the `octipus_get_skill` MCP tool when it needs to. A typical
+          // role with 30+ skills was previously dumping ~50–80k tokens
+          // of skill bodies into every worker prompt; now it's a few
+          // hundred and the agent pays only for what it pulls.
+          const summary = await skillReg.buildPromptSummary(skillIds);
+          if (summary) {
+            expertPrompt = `${expertPrompt || ''}\n\n# Domain Knowledge (index)\n${summary}`;
           }
         }
 
@@ -261,6 +271,10 @@ export async function spawnWorker(
   }
 
   // ── Inject topic-assigned active skills (hybrid discovery) ──
+  // Same index-only treatment as expert skills above. Dedupe against
+  // the expert's skillIds so an overlap doesn't list the same skill
+  // twice — previously the prompt carried two copies of every shared
+  // skill, doubling that part of the token cost for no benefit.
   let topicSkillFragment = '';
   try {
     const { discoverSkillIds } = await import('@/skills/discovery');
@@ -269,11 +283,17 @@ export async function spawnWorker(
       topic: roleConfig.defaultTopic,
       message: task,
     });
-    if (discoveredIds.length > 0) {
-      topicSkillFragment = await getSkillRegistry().buildPromptFragment(discoveredIds);
+    const expertSkillIds = new Set<string>(expertSkillIdsOuter);
+    const noveltopicIds = discoveredIds.filter((id) => !expertSkillIds.has(id));
+    if (noveltopicIds.length > 0) {
+      topicSkillFragment = await getSkillRegistry().buildPromptSummary(noveltopicIds);
     }
     coreLogger.debug(
-      { topic: roleConfig.defaultTopic, discoveredSkillCount: discoveredIds.length },
+      {
+        topic: roleConfig.defaultTopic,
+        discoveredSkillCount: discoveredIds.length,
+        afterDedupe: noveltopicIds.length,
+      },
       'Injected topic-assigned skills',
     );
   } catch (err) {

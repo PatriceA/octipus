@@ -53,12 +53,20 @@ export class OctipusTuiApp {
   private cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   private permissionHandle: OverlayHandle | null = null;
   private paletteHandle: OverlayHandle | null = null;
+  /** Most-recent role seen on agent.start — used to label `iter N` ticks. */
+  private activeAgentRole: string | null = null;
   private exiting = false;
   private readonly onShutdown?: () => Promise<void>;
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
-    this.adapter = new GatewayAdapter({ url: options.gatewayUrl });
+    // Scope incoming gateway events to this TUI's own session so we don't
+    // surface swarm/agent activity from concurrent web-chat or other-TUI
+    // sessions that share the WS connection.
+    this.adapter = new GatewayAdapter({
+      url: options.gatewayUrl,
+      getSessionId: () => this.sessionId,
+    });
     this.projectPath = options.projectPath;
     this.onShutdown = options.onShutdown;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
@@ -152,6 +160,19 @@ export class OctipusTuiApp {
       case 'permission':
         this.openPermissionPrompt(event.requestId, event.toolName, event.detail);
         return;
+      case 'agent.start':
+        // Start with iteration 0 so a long-running agent isn't silent
+        // between spawn and its first iteration tick (the worker emits
+        // iteration_update at the TOP of each loop iteration).
+        this.activeAgentRole = event.role;
+        this.activity.setThinking({ role: event.role, iter: 0 });
+        return;
+      case 'agent.iteration':
+        this.activity.setThinking({
+          role: this.activeAgentRole ?? 'agent',
+          iter: event.iteration,
+        });
+        return;
       case 'agent.end':
         this.cumulative = {
           tokens: this.cumulative.tokens + event.stats.tokens,
@@ -160,6 +181,8 @@ export class OctipusTuiApp {
         };
         this.status.setStats(this.cumulative);
         this.activity.setTool(null);
+        this.activity.setThinking(null);
+        this.activeAgentRole = null;
         this.tui.requestRender();
         return;
       case 'tool':
@@ -185,8 +208,6 @@ export class OctipusTuiApp {
         this.status.setExpert(event.expertId);
         this.tui.requestRender();
         return;
-      // agent.start / agent.write are decoded but not yet surfaced in this phase.
-      case 'agent.start':
       case 'agent.write':
         return;
     }

@@ -213,8 +213,17 @@ Run each path and check the footer renders.
 
 ### 4e. Off-switch
 
-1. In **Settings → Session**, toggle **Show sources** off (or set
-   `session.metadata.showSources = false` via the API).
+There is no UI toggle for this yet — the off-switch lives on the
+session row (`session.metadata.showSources`) and is consumed by the
+orchestrator in `src/core/orchestrator/service.ts`. Flip it via the
+API:
+
+1. ```bash
+   curl -X PATCH http://localhost:3005/api/sessions/<id> \
+     -H 'Authorization: Bearer <token>' \
+     -H 'Content-Type: application/json' \
+     -d '{"metadata":{"showSources":false}}'
+   ```
 2. Repeat any of the above.
 3. **Expect:** no `_Sources: …_` footer in the rendered reply, but
    the metadata still carries it for instrumentation.
@@ -504,7 +513,9 @@ The remainder of this section uses `curl` against
      -H 'content-type: application/json' \
      -d '{"slug":"acme","name":"Acme"}' | jq .
    ```
-2. Add alice as a member:
+2. Add alice as a member. Either through the UI
+   (Admin → Organizations → expand the org → **Add member**) or via
+   the API:
    ```bash
    curl -s -X POST -H "Authorization: Bearer $ADMIN" \
      http://localhost:3015/api/admin/orgs/<org-id>/members \
@@ -709,6 +720,13 @@ Multi-user → Org/Workspaces). At least one admin user available.
 
 ### 8.5 SAML SSO
 
+> **What it does:** SAML lets users in the org sign in through your
+> existing identity provider (Okta, Azure AD, Google Workspace, …)
+> instead of managing a separate Octipus password. Use it when the
+> company already has SSO — it removes one credential to manage and
+> lets you offboard users centrally. The admin SSO page now carries
+> the same explainer at the top of each section.
+
 1. As admin, navigate to `/admin/orgs`, expand an org, click
    "SSO + SCIM".
 2. Toggle SAML on. Paste the IdP entity ID, SSO URL, and x509
@@ -743,6 +761,13 @@ Multi-user → Org/Workspaces). At least one admin user available.
    now rejected at the schema layer.
 
 ### 8.6 SCIM provisioning
+
+> **What it does:** SCIM lets your IdP push user create / update /
+> delete events into Octipus automatically — when HR adds someone in
+> Okta or Azure AD they appear here within minutes (and disappear
+> when removed). Pair with SAML SSO above to fully outsource user
+> lifecycle. Without SCIM you'd add and remove people by hand
+> through Admin → Organizations.
 
 1. As admin, open SQL shell:
    ```sql

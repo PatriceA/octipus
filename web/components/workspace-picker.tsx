@@ -1,15 +1,16 @@
 'use client';
 
-import { Briefcase, Check, ChevronDown, Plus, Users } from 'lucide-react';
+import { Briefcase, Check, ChevronDown, Plus, Send, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useWorkspace } from '@/lib/workspace-context';
 
 export function WorkspacePicker() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
-  const { workspaces, activeWorkspace, switchWorkspace, disabled, isLoading, createWorkspace } =
+  const { workspaces, activeWorkspace, switchWorkspace, disabled, isLoading, createWorkspace, refresh } =
     useWorkspace();
   const [isOpen, setIsOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -17,6 +18,12 @@ export function WorkspacePicker() {
   const [draftName, setDraftName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Transfer-ownership state: which workspace is being transferred, who
+  // it goes to, and the last error if any.
+  const [transferTarget, setTransferTarget] = useState<{ id: string; slug: string; name: string } | null>(null);
+  const [transferUsername, setTransferUsername] = useState('');
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [transferring, setTransferring] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,17 +31,44 @@ export function WorkspacePicker() {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setIsOpen(false);
         setShowCreate(false);
+        setTransferTarget(null);
+        setTransferError(null);
       }
     }
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
+  const handleTransfer = async () => {
+    if (!transferTarget || !transferUsername.trim()) return;
+    setTransferring(true);
+    setTransferError(null);
+    try {
+      await api.post(`/me/workspaces/${transferTarget.id}/transfer`, {
+        recipientUsername: transferUsername.trim(),
+      });
+      await refresh();
+      setTransferTarget(null);
+      setTransferUsername('');
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : 'Transfer failed');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   if (!isAuthenticated || disabled) return null;
 
+  // For the default workspace show the slug — it corresponds to the main
+  // workspace path and is more informative than the generic "Default"
+  // label. Non-default workspaces show their friendly name.
   const label = isLoading
     ? 'Loading…'
-    : activeWorkspace?.name ?? 'No workspace';
+    : activeWorkspace
+      ? activeWorkspace.isDefault
+        ? activeWorkspace.slug
+        : activeWorkspace.name
+      : 'No workspace';
 
   const handleCreate = async () => {
     if (!draftSlug.trim() || !draftName.trim()) return;
@@ -67,7 +101,45 @@ export function WorkspacePicker() {
 
       {isOpen && (
         <div className="absolute right-0 mt-2 w-72 bg-[#1a1a1a] rounded-2xl shadow-2xl ring-1 ring-outline-variant/20 z-50 overflow-hidden">
-          {!showCreate ? (
+          {transferTarget ? (
+            <div className="p-4 space-y-3">
+              <div className="text-sm font-bold text-white">Transfer workspace</div>
+              <p className="text-xs text-on-surface-variant leading-snug">
+                Hand <span className="font-mono text-white">{transferTarget.slug}</span> to another
+                user. Their sessions, documents, hooks, and workspace-scoped secrets will move with
+                it. Artifacts stay in the workspace under the new owner.
+              </p>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+                  Recipient username
+                </label>
+                <input
+                  type="text"
+                  value={transferUsername}
+                  onChange={(e) => setTransferUsername(e.target.value)}
+                  placeholder="alice"
+                  autoFocus
+                  className="w-full px-3 py-1.5 bg-surface-container-low border border-outline-variant/20 rounded-lg text-sm text-white placeholder-on-surface-variant focus:ring-1 focus:ring-primary/40 focus:border-primary/40"
+                />
+              </div>
+              {transferError && <p className="text-xs text-error">{transferError}</p>}
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  onClick={() => { setTransferTarget(null); setTransferError(null); setTransferUsername(''); }}
+                  className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleTransfer}
+                  disabled={transferring || !transferUsername.trim()}
+                  className="px-3 py-1.5 text-sm bg-primary text-on-primary font-bold rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {transferring ? 'Transferring…' : 'Transfer'}
+                </button>
+              </div>
+            </div>
+          ) : !showCreate ? (
             <>
               <div className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant px-3 pt-3 pb-1">
                 Workspaces
@@ -83,26 +155,42 @@ export function WorkspacePicker() {
                   </div>
                 ) : (
                   workspaces.map((w) => (
-                    <button
+                    <div
                       key={w.id}
-                      onClick={() => {
-                        switchWorkspace(w.id);
-                        setIsOpen(false);
-                      }}
-                      className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#20201f] cursor-pointer transition-colors text-left"
+                      className="group w-full flex items-center gap-3 px-3 py-2 hover:bg-[#20201f] transition-colors"
                     >
-                      <Briefcase className="w-4 h-4 text-on-surface-variant shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm text-white truncate">{w.name}</p>
-                        <p className="text-xs text-on-surface-variant truncate">
-                          <span className="font-mono">{w.slug}</span>
-                          {w.isDefault ? <span className="ml-1 text-[10px] uppercase tracking-widest">default</span> : null}
-                        </p>
-                      </div>
-                      {w.id === activeWorkspace?.id && (
-                        <Check className="w-4 h-4 text-primary shrink-0" />
-                      )}
-                    </button>
+                      <button
+                        onClick={() => {
+                          switchWorkspace(w.id);
+                          setIsOpen(false);
+                        }}
+                        className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer text-left"
+                      >
+                        <Briefcase className="w-4 h-4 text-on-surface-variant shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-white truncate">{w.name}</p>
+                          <p className="text-xs text-on-surface-variant truncate">
+                            <span className="font-mono">{w.slug}</span>
+                            {w.isDefault ? <span className="ml-1 text-[10px] uppercase tracking-widest">default</span> : null}
+                          </p>
+                        </div>
+                        {w.id === activeWorkspace?.id && (
+                          <Check className="w-4 h-4 text-primary shrink-0" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTransferTarget({ id: w.id, slug: w.slug, name: w.name });
+                          setTransferError(null);
+                          setTransferUsername('');
+                        }}
+                        title="Transfer ownership"
+                        className="p-1 rounded text-on-surface-variant/40 hover:text-primary opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   ))
                 )}
               </div>

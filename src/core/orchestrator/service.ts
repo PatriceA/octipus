@@ -523,7 +523,17 @@ export class OrchestratorService {
       // Seed the user's raw request so the spawner can forward it verbatim
       // to every child. Without this, children only see the orchestrator's
       // paraphrased taskBrief and drift into hallucinations.
-      contextMetadata: { originalRequest: message },
+      //
+      // projectPath: pass through so the orchestrator's own shell/read tools
+      // run in the dev-session project, not the default workspace. The
+      // worker-spawner sets the same field on child agents
+      // (worker-spawner.ts:333); without it here, the orchestrator's own
+      // ls/read commands resolve to `<workspaceRoot>/workspace` — the
+      // user-reported TUI bug where `--project` was effectively ignored.
+      contextMetadata: {
+        originalRequest: message,
+        ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
+      },
     });
 
     const agentId = worker.getContext().id;

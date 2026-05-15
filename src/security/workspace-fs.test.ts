@@ -101,31 +101,43 @@ describe('WorkspaceFS.resolve — escape attempts', () => {
 
 describe('WorkspaceFS.resolve — symlink escape', () => {
   test('symlink pointing outside the root is rejected', () => {
-    // Create alice/files/escape -> /etc
+    // Pick an out-of-root anchor that actually exists on the host so the
+    // symlink resolves on every platform. The previous version hard-coded
+    // `/etc`, which doesn't exist on Windows — the symlink got created
+    // anyway (Node defaults to a file-typed link) but failed to follow on
+    // resolve, so the test passed through without exercising the escape
+    // path it was meant to check. tmpdir() is always present and is
+    // guaranteed to live outside aliceFs.root.
+    const outsideTarget = tmpdir();
     const linkPath = join(aliceFs.root, 'escape');
     try {
-      symlinkSync('/etc', linkPath);
+      symlinkSync(outsideTarget, linkPath, 'dir');
     } catch (err) {
-      // Some sandboxes disallow symlink creation; skip.
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') return;
+      // Some sandboxes (and Windows without Developer Mode + admin) disallow
+      // symlink creation; skip in that case.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') return;
       throw err;
     }
 
-    expect(() => aliceFs.resolve('escape/passwd')).toThrow(WorkspaceFsError);
+    expect(() => aliceFs.resolve('escape/anything')).toThrow(WorkspaceFsError);
   });
 
   test('symlink within the workspace is allowed', () => {
     mkdirSync(join(aliceFs.root, 'real'), { recursive: true });
     writeFileSync(join(aliceFs.root, 'real', 'data.txt'), 'hi');
     const linkPath = join(aliceFs.root, 'lnk');
-    try { symlinkSync(join(aliceFs.root, 'real'), linkPath); }
+    try { symlinkSync(join(aliceFs.root, 'real'), linkPath, 'dir'); }
     catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') return;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') return;
       throw err;
     }
 
     const out = aliceFs.resolve('lnk/data.txt');
-    expect(out).toContain('real/data.txt');
+    // Compare via `join` so the assertion works on both Windows
+    // (`real\data.txt`) and POSIX (`real/data.txt`).
+    expect(out).toContain(join('real', 'data.txt'));
   });
 });
 

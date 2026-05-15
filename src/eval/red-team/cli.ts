@@ -29,6 +29,19 @@ async function bootstrapDb(): Promise<void> {
     console.error(`\n  \x1b[31mDatabase init failed:\x1b[0m ${(err as Error).message}\n`);
     process.exit(2);
   }
+  // Vault must be initialized so direct-provider API key lookups
+  // (DeepSeek, OpenAI, Anthropic, Grok, …) can read from the user
+  // vault instead of dying with "Vault not initialized." and falling
+  // back to env vars that won't exist in CI/headless eval runs.
+  // Mirrors src/eval/cli.ts.
+  try {
+    const { initializeVault } = await import('@/security/vault');
+    await initializeVault();
+  } catch (err) {
+    console.error(`\n  \x1b[31mVault init failed:\x1b[0m ${(err as Error).message}\n`);
+    await shutdownDb();
+    process.exit(2);
+  }
 }
 
 /**

@@ -3,15 +3,6 @@
 import { AlertCircle, CheckCircle, Cpu, Pencil, Star, Terminal, Trash2, XCircle } from 'lucide-react';
 import type { Model } from '@/lib/types/models';
 
-function isLocalProvider(provider: string): boolean {
-  return provider === 'ollama' || provider === 'local' || provider === 'lmstudio';
-}
-
-function hasThinkingDisabled(model: Model): boolean {
-  const extra = model.metadata?.extraBody;
-  return extra?.think === false;
-}
-
 export interface ModelCardProps {
   model: Model;
   onSetDefault: (name: string) => void;
@@ -114,11 +105,6 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
           {model.isDefault && (
             <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full flex items-center gap-1 shrink-0">
               <Star className="w-3 h-3" /> Default
-            </span>
-          )}
-          {model.isDefault && isLocalProvider(model.provider) && !hasThinkingDisabled(model) && (
-            <span className="px-2 py-0.5 bg-yellow-500/10 text-yellow-400 text-xs rounded-full flex items-center gap-1 shrink-0" title="Local models used as default (orchestrator) should have thinking disabled for faster responses. Edit the model and set Extra Body to {&quot;think&quot;: false}.">
-              <AlertCircle className="w-3 h-3" /> Tip: disable thinking
             </span>
           )}
         </div>

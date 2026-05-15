@@ -252,6 +252,43 @@ export default function SwarmTree({
     return () => clearInterval(interval);
   }, []);
 
+  // Self-heal poll: while any node is `running`, refetch the DB-authoritative
+  // status every 4s. The WS stream is the fast path, but it can drop events
+  // when React 18 batches multiple rapid setLatestSwarmEvent calls into a
+  // single render (only the most recent payload survives the batch). That
+  // showed up as a child whose `running` row in the tree never flipped to
+  // `completed` even though chat already saw the agent finish. Polling is a
+  // cheap safety net — it stops the moment everything is terminal.
+  useEffect(() => {
+    if (!sessionId) return;
+    const anyRunning = Array.from(nodes.values()).some((n) => n.status === 'running');
+    if (!anyRunning) return;
+    const interval = setInterval(async () => {
+      try {
+        const data = await api.get<{ nodes?: ApiSwarmNode[] }>(`/swarm/nodes?rootSessionId=${sessionId}`);
+        if (!data?.nodes) return;
+        setNodes((prev) => {
+          const next = new Map(prev);
+          for (const n of data.nodes!) {
+            const existing = next.get(n.id);
+            // Only patch when the DB row reports a TERMINAL status the
+            // local map doesn't already know — avoids stomping fresh WS
+            // updates that the poll might have raced.
+            if (n.status !== 'running' && existing?.status === 'running') {
+              next.set(n.id, apiNodeToTreeNode(n));
+            } else if (!existing) {
+              next.set(n.id, apiNodeToTreeNode(n));
+            }
+          }
+          return next;
+        });
+      } catch {
+        // Non-fatal — try again next tick.
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [sessionId, nodes]);
+
   // Ingest incoming WS events — incremental, no refetch.
   useEffect(() => {
     if (!latestEvent || !sessionId) return;
@@ -343,14 +380,34 @@ export default function SwarmTree({
   };
 
   const handleCancel = async (node: SwarmTreeNode) => {
-    if (!confirm(`Cancel ${node.kind} "${node.role}" (and descendants)?`)) return;
+    // Always cancel from the orchestrator (root). User mental model is
+    // "cancel the swarm" — cancelling a single child leaf with the
+    // orchestrator still running was confusing: the orchestrator would
+    // finalize its task even though the user thought they'd stopped
+    // everything. Walk up the parent chain to find the root, then
+    // cascade from there. Per-node granular cancel was technically
+    // working but UX-wrong; if granularity is needed later we can
+    // surface it as a separate menu action.
+    let target = node;
+    const guard = new Set<string>();
+    while (target.parentNodeId && !guard.has(target.nodeId)) {
+      guard.add(target.nodeId);
+      const parent = nodes.get(target.parentNodeId);
+      if (!parent) break;
+      target = parent;
+    }
+    if (!confirm(
+      target.nodeId === node.nodeId
+        ? `Cancel ${target.kind} "${target.role}" (and descendants)?`
+        : `Cancel the whole swarm (root ${target.kind} "${target.role}" and all descendants)?`,
+    )) {
+      return;
+    }
     try {
-      await api.post(`/swarm/nodes/${node.nodeId}/cancel`);
+      await api.post(`/swarm/nodes/${target.nodeId}/cancel`);
       // Optimistic: the backend will emit a `swarm.node_completed` that
       // flips status → 'cancelled' shortly. Nothing else to do here.
     } catch (err) {
-      // Surface errors via the browser so the user knows — avoids silent
-      // failure when permission is missing.
       console.error('Swarm cancel failed', err);
       alert('Failed to cancel swarm node');
     }

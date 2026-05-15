@@ -38,7 +38,7 @@ import { SplitPane } from './components/split-pane';
 import { TabStrip } from './components/tab-strip';
 import { TextEditor } from './components/text-editor';
 import { WorkspacePicker } from './components/workspace-picker';
-import { loadPersistedState, savePersistedState } from './persist';
+import { loadPersistedState, pathForProject, savePersistedState } from './persist';
 import { AgentStore } from './stores/agent-store';
 import { BufferStore } from './stores/buffer-store';
 import { LayoutStore } from './stores/layout-store';
@@ -214,7 +214,7 @@ export class OctipusEditorApp {
   // ── Persistence ────────────────────────────────────────────────
 
   private hydrate(): void {
-    const persisted = loadPersistedState();
+    const persisted = loadPersistedState(pathForProject(this.projectPath));
     if (persisted.treeVisible !== undefined && persisted.treeVisible !== this.layout.get().treeVisible) this.layout.toggleTree();
     if (persisted.chatVisible !== undefined && persisted.chatVisible !== this.layout.get().chatVisible) this.layout.toggleChat();
     if (persisted.editorMode) this.layout.setEditorMode(persisted.editorMode);
@@ -259,7 +259,7 @@ export class OctipusEditorApp {
       theme: 'dark',
       editorMode: layout.editorMode,
       cursorByPath,
-    });
+    }, pathForProject(this.projectPath));
   }
 
   // ── Files ──────────────────────────────────────────────────────

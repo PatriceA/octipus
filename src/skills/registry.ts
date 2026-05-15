@@ -34,6 +34,20 @@ function buildPromptFragment(skill: Skill): string {
 }
 
 /**
+ * One-line summary for a skill, used in the worker prompt index. Full
+ * content stays out of the prompt — the worker pulls it on demand via
+ * the `octipus_get_skill` MCP tool. This cuts a typical expert prompt
+ * from 40–80k tokens of skill dumps down to a few hundred, and the
+ * agent only loads what it actually needs.
+ */
+function buildPromptSummary(skill: Skill): string {
+  const desc = (skill.description || '').replace(/\s+/g, ' ').trim();
+  // Cap each entry so a runaway description can't blow up the index.
+  const capped = desc.length > 200 ? desc.slice(0, 197) + '…' : desc;
+  return `- \`${skill.id}\` **${skill.name}** — ${capped || '(no description)'}`;
+}
+
+/**
  * High-level skill operations. Goes through `skillRepository` for DB rows
  * and `external-loader` for filesystem skills (agentskills.io spec).
  *
@@ -107,6 +121,24 @@ export class SkillRegistry {
     const found = await this.getByIds(skillIds);
     if (found.length === 0) return '';
     return found.map(buildPromptFragment).join('\n\n');
+  }
+
+  /**
+   * Index-style listing: one bullet per skill (name + short
+   * description). Use this in worker system prompts to keep token
+   * cost flat regardless of how many skills the role inherits; the
+   * agent loads full content for a specific skill via the
+   * `octipus_get_skill` MCP tool when it actually needs it.
+   */
+  async buildPromptSummary(skillIds: string[]): Promise<string> {
+    if (skillIds.length === 0) return '';
+    const found = await this.getByIds(skillIds);
+    if (found.length === 0) return '';
+    const lines = [
+      'Available skills (call `octipus_get_skill` with the id to load the full spec):',
+      ...found.map(buildPromptSummary),
+    ];
+    return lines.join('\n');
   }
 
   async getActiveSkillsForTopic(topic: string): Promise<Skill[]> {

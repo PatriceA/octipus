@@ -39,6 +39,8 @@
 import { and, eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { documents } from '@/db/schema/documents';
+import { hooks } from '@/db/schema/hooks';
 import {
   type NewWorkspace,
   type Organization,
@@ -48,6 +50,9 @@ import {
   type Workspace,
   workspaces,
 } from '@/db/schema/organizations';
+import { sessions } from '@/db/schema/sessions';
+import { users } from '@/db/schema/users';
+import { vault } from '@/db/schema/vault';
 import { securityLogger } from '@/utils/logger';
 
 /**
@@ -67,7 +72,9 @@ export class OrgWorkspaceError extends Error {
       | 'user_not_found'
       | 'slug_conflict'
       | 'workspace_not_found'
-      | 'cannot_delete_default',
+      | 'cannot_delete_default'
+      | 'recipient_not_found'
+      | 'cannot_transfer_to_self',
     message: string,
   ) {
     super(message);
@@ -249,7 +256,16 @@ export class OrgWorkspaceManager {
     return true;
   }
 
-  async listMembers(actor: ActorLike, orgId: string): Promise<OrgMember[]> {
+  /**
+   * List members of an org, enriched with the user's username so admin
+   * UIs can render a recognizable list without a separate roundtrip to
+   * the users endpoint. Cross-tenant safe: non-admins must be members
+   * themselves or the call returns an empty list.
+   */
+  async listMembers(
+    actor: ActorLike,
+    orgId: string,
+  ): Promise<(OrgMember & { username: string })[]> {
     // Admins see everyone. Members can see their own org's members.
     if (!actor.isAdmin) {
       const [self] = await this.db
@@ -259,7 +275,24 @@ export class OrgWorkspaceManager {
         .limit(1);
       if (!self) return [];
     }
-    return this.db.select().from(orgMembers).where(eq(orgMembers.orgId, orgId));
+    const rows = await this.db
+      .select({
+        orgId: orgMembers.orgId,
+        userId: orgMembers.userId,
+        role: orgMembers.role,
+        joinedAt: orgMembers.joinedAt,
+        username: users.username,
+      })
+      .from(orgMembers)
+      .leftJoin(users, eq(users.id, orgMembers.userId))
+      .where(eq(orgMembers.orgId, orgId));
+    return rows.map((r) => ({
+      orgId: r.orgId,
+      userId: r.userId,
+      role: r.role,
+      joinedAt: r.joinedAt,
+      username: r.username ?? `(unknown:${r.userId.slice(0, 8)})`,
+    }));
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -435,6 +468,145 @@ export class OrgWorkspaceManager {
         .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
         .returning();
       return updated;
+    });
+  }
+
+  /**
+   * Transfer workspace ownership from the caller (current owner) to
+   * `recipientUserId`. Atomic — runs in a single transaction so any
+   * partial failure rolls back.
+   *
+   * What follows the workspace:
+   *   - `sessions`, `documents`, `hooks` rows scoped to this
+   *     workspace_id have their `user_id` reassigned to the recipient.
+   *     These ARE the working state of the workspace; moving the
+   *     workspace without them would orphan the history.
+   *   - `vault` rows with `scope='workspace'` AND `workspace_id` =
+   *     this workspace follow too. Workspace-scoped secrets are part
+   *     of the workspace, not the user.
+   *
+   * What stays put:
+   *   - `vault` rows with `scope='user'` (user's personal secrets) —
+   *     those are the user's, not the workspace's, regardless of
+   *     where they happened to be created.
+   *   - Artifacts on this workspace stay where they are; the new owner
+   *     simply inherits them via the new ownership.
+   *
+   * Edge cases handled:
+   *   - Transferring a default workspace clears its `isDefault` flag
+   *     before the move so the recipient's existing default isn't
+   *     displaced. The recipient can promote it later via setDefault.
+   *   - Slug collision: if the recipient already has a workspace with
+   *     this slug, we suffix `-from-<old-owner-username-or-id>` to the
+   *     transferring slug. Cheap, deterministic, avoids the partial
+   *     unique index conflict; the recipient can rename afterwards.
+   */
+  async transfer(
+    actorUserId: string,
+    workspaceId: string,
+    recipientUserId: string,
+  ): Promise<Workspace> {
+    if (actorUserId === recipientUserId) {
+      throw new OrgWorkspaceError('cannot_transfer_to_self', 'cannot transfer a workspace to yourself');
+    }
+    const owned = await this.findOwnedById(actorUserId, workspaceId);
+    if (!owned) {
+      throw new OrgWorkspaceError('workspace_not_found', 'workspace not found or not owned by caller');
+    }
+
+    const [recipient] = await this.db
+      .select({ id: users.id, username: users.username, isActive: users.isActive })
+      .from(users)
+      .where(eq(users.id, recipientUserId))
+      .limit(1);
+    if (!recipient || !recipient.isActive) {
+      throw new OrgWorkspaceError('recipient_not_found', 'recipient user not found or inactive');
+    }
+
+    const [actor] = await this.db
+      .select({ username: users.username })
+      .from(users)
+      .where(eq(users.id, actorUserId))
+      .limit(1);
+    const actorTag = (actor?.username || actorUserId).replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 16) || 'prev';
+
+    // Find a non-colliding slug for the recipient. The partial unique
+    // index is on (user_id, slug); collision is recoverable by suffixing.
+    let finalSlug = owned.slug;
+    const [slugCollision] = await this.db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(and(eq(workspaces.userId, recipientUserId), eq(workspaces.slug, owned.slug)))
+      .limit(1);
+    if (slugCollision) {
+      const candidate = `${owned.slug}-from-${actorTag}`.slice(0, 32);
+      finalSlug = candidate || `${owned.slug.slice(0, 24)}-rcv`;
+    }
+
+    return this.db.transaction(async (tx) => {
+      // Strip the default flag so we never end up with two defaults
+      // on the recipient (partial unique index would reject it).
+      const [updated] = await tx
+        .update(workspaces)
+        .set({
+          userId: recipientUserId,
+          slug: finalSlug,
+          isDefault: false,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, actorUserId)))
+        .returning();
+      if (!updated) {
+        // Defensive: another writer raced us. Roll back.
+        throw new OrgWorkspaceError('workspace_not_found', 'workspace disappeared mid-transfer');
+      }
+
+      // Reassign workspace-scoped working state to the recipient.
+      const updatedAt = new Date();
+      await tx
+        .update(sessions)
+        .set({ userId: recipientUserId, updatedAt })
+        .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.userId, actorUserId)));
+      // documents has no updatedAt column — only createdAt.
+      await tx
+        .update(documents)
+        .set({ userId: recipientUserId })
+        .where(and(eq(documents.workspaceId, workspaceId), eq(documents.userId, actorUserId)));
+      await tx
+        .update(hooks)
+        .set({ userId: recipientUserId, updatedAt })
+        .where(and(eq(hooks.workspaceId, workspaceId), eq(hooks.userId, actorUserId)));
+      // Workspace-scoped vault rows follow. User-scoped rows stay
+      // with their owner (they're not part of the workspace).
+      await tx
+        .update(vault)
+        .set({ userId: recipientUserId, updatedAt })
+        .where(and(
+          eq(vault.workspaceId, workspaceId),
+          eq(vault.scope, 'workspace'),
+          eq(vault.userId, actorUserId),
+        ));
+
+      return updated;
+    }).then(async (result) => {
+      await auditRepository.log({
+        userId: actorUserId,
+        action: 'settings_changed',
+        resourceType: 'workspace',
+        resourceId: workspaceId,
+        details: {
+          event: 'workspace_transferred',
+          from: actorUserId,
+          to: recipientUserId,
+          originalSlug: owned.slug,
+          finalSlug,
+        },
+      });
+      securityLogger.info(
+        { workspaceId, from: actorUserId, to: recipientUserId, slug: finalSlug },
+        'Workspace ownership transferred',
+      );
+      return result;
     });
   }
 }

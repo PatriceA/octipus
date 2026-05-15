@@ -25,8 +25,29 @@ export class ActivityLine implements Component {
   private frame = 0;
   private interval?: ReturnType<typeof setInterval>;
   private clearTimer?: ReturnType<typeof setTimeout>;
+  /** Live agent thinking indicator: { role, iter } when a worker's reasoning
+   *  loop is mid-iteration but hasn't fired a tool call yet. Cleared on
+   *  agent.end / tool. */
+  private thinking: { role: string; iter: number } | null = null;
 
   constructor(private readonly tui: TUI) {}
+
+  /**
+   * Show or update the "thinking …" indicator. Called from app on
+   * `agent.iteration` events. Pass `null` to clear (used when the agent
+   * completes or when a tool call takes over the activity line).
+   */
+  setThinking(state: { role: string; iter: number } | null): void {
+    this.thinking = state;
+    // A tool call always wins visually — when both are active, the tool
+    // line shows. Only animate when there's no tool to display.
+    if (state && !this.current) {
+      this.startSpinner();
+    } else if (!state && !this.current) {
+      this.stopSpinner();
+    }
+    this.tui.requestRender();
+  }
 
   invalidate(): void { /* no cached state */ }
 
@@ -60,15 +81,24 @@ export class ActivityLine implements Component {
   }
 
   render(width: number): string[] {
-    const tool = this.current;
-    if (!tool) return [];
     const palette = getPalette();
-    const symbol = symbolFor(tool.state, this.frame);
-    const colour = colourFor(tool.state, palette);
-    const badge = tool.mcpServer ? chalk.hex(palette.accent)(`[mcp:${tool.mcpServer}] `) : '';
-    const preview = tool.preview ? chalk.hex(palette.dim)(` — ${tool.preview}`) : '';
-    const line = `${colour(symbol)} ${badge}${tool.name}${preview}`;
-    return [truncateToWidth(line, width)];
+    const tool = this.current;
+    if (tool) {
+      const symbol = symbolFor(tool.state, this.frame);
+      const colour = colourFor(tool.state, palette);
+      const badge = tool.mcpServer ? chalk.hex(palette.accent)(`[mcp:${tool.mcpServer}] `) : '';
+      const preview = tool.preview ? chalk.hex(palette.dim)(` — ${tool.preview}`) : '';
+      const line = `${colour(symbol)} ${badge}${tool.name}${preview}`;
+      return [truncateToWidth(line, width)];
+    }
+    if (this.thinking) {
+      const symbol = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length];
+      const line =
+        `${chalk.hex(palette.accent)(symbol)} ` +
+        `${chalk.hex(palette.dim)(`thinking · ${this.thinking.role} · iter ${this.thinking.iter}`)}`;
+      return [truncateToWidth(line, width)];
+    }
+    return [];
   }
 
   private startSpinner(): void {

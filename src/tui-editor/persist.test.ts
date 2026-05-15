@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_PERSISTED_STATE, loadPersistedState, savePersistedState } from './persist';
+import { DEFAULT_PERSISTED_STATE, loadPersistedState, pathForProject, savePersistedState } from './persist';
 
 const tmps: string[] = [];
 function tmp(): string {
@@ -67,5 +67,20 @@ describe('persist', () => {
     const fs = require('node:fs');
     expect(fs.existsSync(path)).toBe(true);
     expect(fs.existsSync(`${path}.tmp`)).toBe(false);
+  });
+
+  test('pathForProject scopes per absolute project path', () => {
+    const a = pathForProject('/repo-a');
+    const b = pathForProject('/repo-b');
+    expect(a).not.toEqual(b);
+    expect(a).toMatch(/projects[\\/][0-9a-f]+[\\/]tui-editor\.json$/);
+    // Same input → same output (deterministic).
+    expect(pathForProject('/repo-a')).toEqual(a);
+  });
+
+  test('pathForProject falls back to legacy location when omitted', () => {
+    const legacy = pathForProject();
+    expect(legacy).toMatch(/tui-editor\.json$/);
+    expect(legacy).not.toContain('projects');
   });
 });

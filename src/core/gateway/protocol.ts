@@ -43,6 +43,10 @@ export type GatewayEventType =
   | 'agent.completed'
   | 'agent.stopped'
   | 'agent.event'
+  // Per-iteration tick during a worker's reasoning loop. Surfaces so
+  // chat/TUI UIs can show a "thinking …" indicator with a progress
+  // count instead of a frozen spinner.
+  | 'agent.iteration'
   // Worker (orchestrator-spawned) lifecycle
   | 'worker_spawned'
   | 'worker_completed'

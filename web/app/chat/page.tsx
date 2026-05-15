@@ -452,6 +452,30 @@ export default function ChatPage() {
         } : undefined;
 
         const sid = data.sessionId || activeSessionId;
+        // `/clear` returns the literal "[clear]" sentinel for webchat clients.
+        // Wipe the visible message list and tracked agents/teams instead of
+        // appending "[clear]" as an assistant message. The orchestrator side
+        // has already recorded clearedAt on the session so future replies
+        // ignore pre-clear history.
+        if (sid && typeof data.response === 'string' && data.response.trim() === '[clear]') {
+          updateSessionState(sid, () => ({
+            messages: [
+              welcomeMessage(),
+              {
+                id: Date.now().toString(),
+                role: 'system',
+                content: 'Session context cleared. Send a new message to start fresh.',
+                timestamp: new Date(),
+              },
+            ],
+            trackedAgents: new Map(),
+            teams: new Map(),
+            totalTokens: 0,
+            swarmDurationMs: 0,
+            fileChanges: [],
+          }));
+          break;
+        }
         if (sid) {
           updateSessionState(sid, (prev) => {
             // Finalize any agents still marked as 'running'.
@@ -549,6 +573,13 @@ export default function ChatPage() {
           typeof data.event === 'string' &&
           (data.event === 'swarm.node_spawned' || data.event === 'swarm.node_completed')
         ) {
+          // First spawn often arrives BEFORE chat_response, when activeSessionId
+          // is still null. SwarmTree keys off activeSessionId — without
+          // adopting the event's session id now, the live tree stays empty
+          // until the user reloads the page. Adopt it eagerly here.
+          if (eventSessionId && !activeSessionId) {
+            setActiveSessionId(eventSessionId);
+          }
           setLatestSwarmEvent({
             type: data.event,
             payload: data.payload,
@@ -1116,10 +1147,24 @@ export default function ChatPage() {
       // WS came back online between our `sendMessage()` entry and the REST
       // failure, the agent is already running and will deliver its answer via
       // WS — surfacing a scary "backend is running?" toast in that case just
-      // confuses the user. Only show the error when we're truly offline at
-      // the time the REST attempt failed.
-      const wsNow = wsRef.current;
-      const wsAlive = wsNow && wsNow.readyState === WebSocket.OPEN;
+      // confuses the user.
+      //
+      // Give the WS a short grace window (500ms) after the REST failure
+      // before deciding the backend is unreachable. Previously the check
+      // ran the moment REST rejected, before the reconnect handshake
+      // finished — so a user with a flaky WS would see a transient error
+      // pop in seconds before the real answer arrived from the WS that
+      // came alive right after.
+      const wsAlive = await new Promise<boolean>((resolve) => {
+        const startedAt = Date.now();
+        const tick = () => {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN) return resolve(true);
+          if (Date.now() - startedAt >= 500) return resolve(false);
+          setTimeout(tick, 50);
+        };
+        tick();
+      });
       if (sid && !wsAlive) {
         updateSessionState(sid, (prev) => ({
           ...prev,

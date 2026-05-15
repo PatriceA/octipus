@@ -12,7 +12,8 @@
  * spot for CJK input methods.
  */
 import { type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
-import { highlightLine, type TokenKind } from '../editor/highlight';
+import { highlight, type TokenKind } from '../editor/highlight';
+import { hintLineIndex } from '../editor/highlight-tree-sitter';
 import type { BufferRecord, BufferStore } from '../stores/buffer-store';
 import type { LayoutStore } from '../stores/layout-store';
 import { newVimState, step as vimStep, type VimKey, type VimState } from '../editor/vim';
@@ -123,6 +124,14 @@ export class TextEditor implements Component, Focusable {
       const lineText = buf.getLine(i).replace(/\t/g, ' '.repeat(TAB_WIDTH));
       const isCursorLine = i === cursor.line;
       const gutter = formatGutter(i + 1, gutterW, palette, isCursorLine);
+      // Tell the tree-sitter highlighter which row we're about to paint so
+      // its per-line cache lookup hits. Without this, every line falls
+      // through to the regex fallback — for grammars like TypeScript that
+      // emit lots of styled tokens, the regex output produces ANSI escapes
+      // that interact badly with truncateToWidth's mid-sequence clipping
+      // and the resulting broken codes bleed across the split-pane
+      // boundary, corrupting the tree and chat panels.
+      hintLineIndex(i);
       const styled = renderLineTokens(lineText, active.language, palette);
       const truncated = truncateToWidth(styled, innerW, '');
       let body: string;
@@ -172,7 +181,16 @@ const TOKEN_COLORS: Record<TokenKind, keyof ReturnType<typeof getPalette> | null
 
 function renderLineTokens(line: string, language: string, palette: ReturnType<typeof getPalette>): string {
   if (line.length === 0) return '';
-  const tokens = highlightLine(line, language as never);
+  // Route through the pluggable `highlight()` API rather than calling the
+  // regex highlighter directly. This is the surface that
+  // `installTreeSitterHighlighter()` swaps — calling `highlightLine`
+  // directly bypassed tree-sitter entirely and forced the regex fallback
+  // on every render. The regex fallback paints many tiny ANSI-wrapped
+  // tokens; when `truncateToWidth` clips a wide line mid-escape, the
+  // dangling sequence bleeds into the next split-pane pane and corrupts
+  // the tree/chat panels — which is what the user saw opening
+  // `.ts` and `.gradle.kts` files.
+  const tokens = highlight(line, language as never);
   let out = '';
   for (const tok of tokens) {
     const colorKey = TOKEN_COLORS[tok.kind];

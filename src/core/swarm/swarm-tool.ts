@@ -41,6 +41,51 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
 ];
 
 /**
+ * Topic-name → role aliases. Orchestrator LLMs frequently pick natural
+ * topic phrases ("database", "frontend", "machine-learning") that aren't
+ * actual roles. Auto-mapping the obvious synonyms beats rejecting the
+ * whole spawn and forcing a retry — the parent gets the work done in one
+ * turn and saves a round-trip. Genuinely ambiguous topics still fall
+ * through to the strict rejection so the LLM picks deliberately.
+ */
+const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
+  database: 'data',
+  db: 'data',
+  sql: 'data',
+  analytics: 'data',
+  etl: 'data',
+  ml: 'ai',
+  'machine-learning': 'ai',
+  llm: 'ai',
+  nlp: 'ai',
+  frontend: 'coding',
+  backend: 'coding',
+  fullstack: 'coding',
+  api: 'coding',
+  ux: 'design',
+  ui: 'design',
+  infra: 'devops',
+  infrastructure: 'devops',
+  deployment: 'devops',
+  ci: 'devops',
+  cd: 'devops',
+  testing: 'qa',
+  test: 'qa',
+  docs: 'writing',
+  documentation: 'writing',
+  copy: 'writing',
+  auth: 'security',
+  authentication: 'security',
+  authorization: 'security',
+  pentest: 'security',
+  appsec: 'security',
+  product: 'pm',
+  project: 'pm',
+  scheduling: 'automation',
+  workflow: 'automation',
+};
+
+/**
  * Factory: produce a `spawn_child` tool handler bound to a specific parent
  * node (usually the current Orchestrator). The returned handler is what the
  * parent agent's LLM will see + invoke.
@@ -240,17 +285,24 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   const maxTokensNum =
     typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 2000;
 
-  // Role is required to route the child to the right model. If the LLM
-  // omits `role` but `topic` happens to be a valid role enum, reuse topic
-  // as the role — this matches the common case where the LLM thinks of
-  // topic/role as the same concept. Otherwise reject: silent defaulting
-  // to 'general' routes specialist work to the wrong model.
+  // Role is required to route the child to the right model. Resolution order:
+  //   1. explicit `role` arg if valid
+  //   2. `topic` itself if it happens to be a role enum
+  //   3. `TOPIC_TO_ROLE_ALIAS` lookup — auto-maps common synonyms like
+  //      'database' → 'data', 'frontend' → 'coding'. Avoids burning a
+  //      whole orchestrator turn on a topic the LLM phrased naturally.
+  //   4. reject — silent defaulting to 'general' would route specialist
+  //      work to the wrong model.
   const roleRaw = typeof args.role === 'string' ? args.role : undefined;
   let role: AgentRole | undefined;
   if (roleRaw && CHILD_ROLES_ENUM.includes(roleRaw as AgentRole)) {
     role = roleRaw as AgentRole;
   } else if (CHILD_ROLES_ENUM.includes(topic as AgentRole)) {
     role = topic as AgentRole;
+  } else if (roleRaw && TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()]) {
+    role = TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()];
+  } else if (TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()]) {
+    role = TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()];
   } else {
     return {
       error:

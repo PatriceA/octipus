@@ -19,6 +19,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -182,72 +184,85 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 // MessageContent
 // ---------------------------------------------------------------------------
 
-const CODE_FENCE_RE = /```(\w*)\n([\s\S]*?)```/g;
-const INLINE_CODE_RE = /`([^`]+)`/g;
-
-function renderInlineCode(text: string): React.ReactNode[] {
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  const re = new RegExp(INLINE_CODE_RE.source, 'g');
-
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-    parts.push(
-      <code
-        key={match.index}
-        className="bg-surface-container-highest px-1 py-0.5 rounded font-mono text-sm"
-      >
-        {match[1]}
-      </code>
-    );
-    lastIndex = re.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return parts;
-}
-
+// Markdown rendering via react-markdown + remark-gfm. GFM adds tables,
+// task lists, strikethrough, and autolinks — without it the orchestrator's
+// pipe-delimited tables (which it produces freely) render as literal `|`
+// characters. Code fences route through the existing CodeBlock so the
+// copy-button stays consistent with the rest of the timeline.
 function MessageContent({ content }: { content: string }) {
-  const segments: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  const re = new RegExp(CODE_FENCE_RE.source, 'g');
-
-  while ((match = re.exec(content)) !== null) {
-    if (match.index > lastIndex) {
-      const textPart = content.slice(lastIndex, match.index);
-      if (textPart.trim()) {
-        segments.push(
-          <p key={`t-${lastIndex}`} className="whitespace-pre-wrap">
-            {renderInlineCode(textPart)}
-          </p>
-        );
-      }
-    }
-    segments.push(
-      <CodeBlock key={`c-${match.index}`} language={match[1]} code={match[2]} />
-    );
-    lastIndex = re.lastIndex;
-  }
-
-  if (lastIndex < content.length) {
-    const remaining = content.slice(lastIndex);
-    if (remaining.trim()) {
-      segments.push(
-        <p key={`t-${lastIndex}`} className="whitespace-pre-wrap">
-          {renderInlineCode(remaining)}
-        </p>
-      );
-    }
-  }
-
-  return <div className="space-y-2">{segments}</div>;
+  return (
+    <div className="space-y-2 text-sm leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({ inline, className, children, ...props }: {
+            inline?: boolean;
+            className?: string;
+            children?: React.ReactNode;
+          } & React.HTMLAttributes<HTMLElement>) {
+            const text = String(children ?? '').replace(/\n$/, '');
+            if (inline) {
+              return (
+                <code
+                  className="bg-surface-container-highest px-1 py-0.5 rounded font-mono text-sm"
+                  {...props}
+                >
+                  {text}
+                </code>
+              );
+            }
+            const match = /language-(\w+)/.exec(className || '');
+            return <CodeBlock language={match?.[1] || 'text'} code={text} />;
+          },
+          p({ children }) {
+            return <p className="whitespace-pre-wrap">{children}</p>;
+          },
+          // GFM tables — overflow-x so wide tables scroll instead of bleeding
+          // out of the message bubble. The bubble caps width via the parent.
+          table({ children }) {
+            return (
+              <div className="overflow-x-auto my-2">
+                <table className="border-collapse text-sm">{children}</table>
+              </div>
+            );
+          },
+          thead({ children }) {
+            return <thead className="bg-surface-container-high">{children}</thead>;
+          },
+          th({ children }) {
+            return (
+              <th className="border border-outline-variant/20 px-2 py-1 text-left font-semibold">
+                {children}
+              </th>
+            );
+          },
+          td({ children }) {
+            return <td className="border border-outline-variant/20 px-2 py-1 align-top">{children}</td>;
+          },
+          a({ href, children }) {
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline hover:opacity-80"
+              >
+                {children}
+              </a>
+            );
+          },
+          ul({ children }) {
+            return <ul className="list-disc pl-5 space-y-0.5">{children}</ul>;
+          },
+          ol({ children }) {
+            return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

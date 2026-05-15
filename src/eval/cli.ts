@@ -169,6 +169,19 @@ async function main() {
       console.error(`Database init failed: ${(err as Error).message}`);
       process.exit(2);
     }
+
+    // Vault must be initialized for direct-provider API key lookups (DeepSeek,
+    // OpenAI, Anthropic, …). Without this, every vault.getByName/getForAgent
+    // call throws "Vault not initialized" and the provider falls back to env
+    // vars only — breaking any model whose key lives in the vault. Mirrors
+    // the boot sequence in src/index.ts.
+    try {
+      const { initializeVault } = await import('@/security/vault');
+      await initializeVault();
+    } catch (err) {
+      console.error(`Vault init failed: ${(err as Error).message}`);
+      await exitClean(2);
+    }
   }
 
   const dir = evalDir ? resolve(evalDir) : resolve(process.cwd(), 'eval');

@@ -69,28 +69,6 @@ export function PipelineGraph({
   // While dragging: { from, targetIdx } in array indices.
   const [drag, setDrag] = useState<{ from: number; targetIdx: number } | null>(null);
 
-  if (steps.length === 0) {
-    if (editable && onInsertAfter) {
-      return (
-        <div className="flex items-center justify-center py-8">
-          <button
-            type="button"
-            onClick={() => onInsertAfter(-1)}
-            className="flex items-center gap-2 px-4 py-2 rounded-full text-sm bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Add first stage
-          </button>
-        </div>
-      );
-    }
-    return (
-      <div className="text-sm text-on-surface-variant italic px-2 py-4">
-        No stages yet — add stages to see the graph.
-      </div>
-    );
-  }
-
   const BOX_W = 280;
   const BOX_H = 64;
   const GAP = 32;
@@ -127,6 +105,12 @@ export function PipelineGraph({
 
   // Pointer-drag wiring. `pointermove`/`pointerup` listen on `window` so a
   // drag that exits the SVG bounds still resolves cleanly.
+  //
+  // IMPORTANT: this useEffect MUST run on every render of this component,
+  // including the empty-state branch below. Putting it after the early
+  // return would call hooks conditionally and trigger React error #300
+  // ("rendered fewer/more hooks than the previous render") any time
+  // the user adds the first stage or deletes the last one.
   useEffect(() => {
     if (!drag || !onReorder) return;
     const onMove = (e: PointerEvent) => {
@@ -152,6 +136,29 @@ export function PipelineGraph({
     // cheap and avoids a ref dance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag?.from, onReorder, steps.length]);
+
+  // Empty state — must come AFTER all hooks so render-count stays stable.
+  if (steps.length === 0) {
+    if (editable && onInsertAfter) {
+      return (
+        <div className="flex items-center justify-center py-8">
+          <button
+            type="button"
+            onClick={() => onInsertAfter(-1)}
+            className="flex items-center gap-2 px-4 py-2 rounded-full text-sm bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add first stage
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="text-sm text-on-surface-variant italic px-2 py-4">
+        No stages yet — add stages to see the graph.
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-x-auto">

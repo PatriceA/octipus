@@ -70,7 +70,21 @@ async function handleChatSend(
     // Track the session on the connection for /status command
     context.sessionId = message.sessionId;
 
-    // Set project context on the session if provided (enables dev mode)
+    // Resolve the principal up front — we need userId both for the optional
+    // session pre-create below AND for the orchestrator call.
+    const userId = await resolveUserId(context.userId);
+
+    // Set project context on the session if provided (enables dev mode).
+    //
+    // The TUI generates a fresh sessionId per launch — so when the very
+    // first message arrives, `findById` returns null, the previous version
+    // of this block silently skipped the projectPath write, and by the
+    // time the orchestrator created the row inside `resolveSession`,
+    // devMode/projectPath had been lost. The orchestrator then fell back
+    // to the generic workspace path and child workers operated against
+    // the wrong repo. Pre-create the session row here when projectPath
+    // is supplied so the dev-mode context is in place before the
+    // orchestrator reads it.
     if (message.projectPath) {
       const { sessionRepository } = await import('@/db/repositories/session-repository');
       const session = await sessionRepository.findById(message.sessionId);
@@ -87,11 +101,41 @@ async function handleChatSend(
           });
           coreLogger.info({ sessionId: message.sessionId, projectPath: message.projectPath }, 'Set project context on session');
         }
+      } else {
+        // Pre-create with dev-mode context baked in. resolveSession will
+        // see the row exists and skip its own create. Also tag with the
+        // user's default workspace_id so the session shows up only in
+        // that workspace's session list — TUI sessions were previously
+        // created with workspace_id=NULL which made them visible from
+        // every workspace via the legacy "NULL = visible everywhere"
+        // fallback in scopedRepos.workspaceFilter.
+        let workspaceId: string | null = null;
+        try {
+          const { getOrgWorkspaceManager } = await import('@/security/orgs');
+          const def = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
+          workspaceId = def?.id ?? null;
+        } catch (err) {
+          coreLogger.debug({ err, userId }, 'No default workspace available for session tagging');
+        }
+        await sessionRepository.create({
+          id: message.sessionId,
+          userId,
+          workspaceId: workspaceId ?? undefined,
+          channelType: context.clientType,
+          channelId: message.sessionId,
+          title: `${context.clientType} conversation`,
+          status: 'active',
+          context: {
+            devMode: true,
+            projectPath: message.projectPath,
+            projectName: message.projectPath.split(/[/\\]/).pop() || 'project',
+          },
+        });
+        coreLogger.info({ sessionId: message.sessionId, projectPath: message.projectPath, workspaceId }, 'Pre-created session with dev-mode project context');
       }
     }
 
     // Route through orchestrator
-    const userId = await resolveUserId(context.userId);
     // Use expert from message, connection metadata, or session DB (set via /expert command)
     let expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);
     if (!expertId && message.sessionId) {

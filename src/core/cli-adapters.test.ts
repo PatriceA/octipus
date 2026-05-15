@@ -30,25 +30,30 @@ describe('CLIArgumentBuilder model override', () => {
     expect(out.args.includes('--model')).toBe(false);
   });
 
+  // For Gemini we inspect `geminiArgs` (the underlying gemini.cmd argv)
+  // instead of `args` — on Windows the spawn target is powershell.exe
+  // wrapping a generated .ps1, so `args` carries only the PS shim. The
+  // flag construction we care about (-m / -p / --approval-mode) lives
+  // in `geminiArgs` on both platforms.
   it('Gemini CLI: passes -m when settings.model is set', () => {
     delete process.env.GEMINI_MODEL;
     const out = builder.build('Gemini CLI', 'hi', { model: 'gemini-2.5-flash' }, []);
-    const i = out.args.indexOf('-m');
+    const i = (out.geminiArgs ?? []).indexOf('-m');
     expect(i).toBeGreaterThanOrEqual(0);
-    expect(out.args[i + 1]).toBe('gemini-2.5-flash');
+    expect((out.geminiArgs ?? [])[i + 1]).toBe('gemini-2.5-flash');
   });
 
   it('Gemini CLI: env GEMINI_MODEL beats settings.model', () => {
     process.env.GEMINI_MODEL = 'gemini-2.5-pro';
     const out = builder.build('Gemini CLI', 'hi', { model: 'gemini-2.5-flash' }, []);
-    const i = out.args.indexOf('-m');
-    expect(out.args[i + 1]).toBe('gemini-2.5-pro');
+    const i = (out.geminiArgs ?? []).indexOf('-m');
+    expect((out.geminiArgs ?? [])[i + 1]).toBe('gemini-2.5-pro');
   });
 
   it('Gemini CLI: omits -m entirely when neither set', () => {
     delete process.env.GEMINI_MODEL;
     const out = builder.build('Gemini CLI', 'hi', {}, []);
-    expect(out.args.includes('-m')).toBe(false);
+    expect((out.geminiArgs ?? []).includes('-m')).toBe(false);
   });
 
   it('Codex CLI: settings.model overrides default', () => {

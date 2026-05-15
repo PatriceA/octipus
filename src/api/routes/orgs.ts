@@ -72,6 +72,7 @@ function errorStatus(err: OrgWorkspaceError): number {
     case 'invalid_slug':
     case 'invalid_name':
     case 'cannot_delete_default':
+    case 'cannot_transfer_to_self':
       return 400;
     case 'slug_conflict':
       return 409;
@@ -80,6 +81,7 @@ function errorStatus(err: OrgWorkspaceError): number {
     case 'org_not_found':
     case 'user_not_found':
     case 'workspace_not_found':
+    case 'recipient_not_found':
       return 404;
     default:
       return 500;
@@ -217,6 +219,69 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
     },
     {
       params: t.Object({ id: t.String() }),
+      detail: { tags: ['workspaces'] },
+    },
+  )
+
+  /**
+   * Transfer workspace ownership to another user. The caller must
+   * own the workspace; the recipient must exist and be active.
+   * Sessions, documents, hooks, and workspace-scoped vault entries
+   * follow the workspace to the new owner. See
+   * `OrgWorkspaceManager.transfer` for the full data-movement
+   * contract.
+   */
+  .post(
+    '/:id/transfer',
+    async (ctx) => {
+      const flag = requireFlag(ctx);
+      if (!flag.ok) return flag.body;
+      const auth = requireAuth(ctx);
+      if (!auth.ok) return auth.body;
+      try {
+        // Accept either an explicit UUID or a username so non-admin
+        // users don't need to know recipient IDs. Username lookup
+        // returns only id+username — no leak of email/role/etc.
+        let recipientId = ctx.body.recipientUserId;
+        if (!recipientId && ctx.body.recipientUsername) {
+          const { getDb } = await import('@/db/postgres');
+          const { eq } = await import('drizzle-orm');
+          const { users } = await import('@/db/schema/users');
+          const [u] = await getDb()
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.username, ctx.body.recipientUsername))
+            .limit(1);
+          if (!u) {
+            ctx.set.status = 404;
+            return { error: 'recipient user not found', code: 'recipient_not_found' };
+          }
+          recipientId = u.id;
+        }
+        if (!recipientId) {
+          ctx.set.status = 400;
+          return { error: 'recipientUserId or recipientUsername required' };
+        }
+        const transferred = await getOrgWorkspaceManager().transfer(
+          ctx.principal.userId,
+          ctx.params.id,
+          recipientId,
+        );
+        return transferred;
+      } catch (err) {
+        if (err instanceof OrgWorkspaceError) {
+          ctx.set.status = errorStatus(err);
+          return { error: err.message, code: err.code };
+        }
+        throw err;
+      }
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        recipientUserId: t.Optional(t.String()),
+        recipientUsername: t.Optional(t.String()),
+      }),
       detail: { tags: ['workspaces'] },
     },
   );

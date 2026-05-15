@@ -100,7 +100,7 @@ export class CLIArgumentBuilder {
     settings: CLIAgentConfig,
     systemMessages: string[],
     systemPrompt?: string | null,
-  ): { binary: string; args: string[]; stdinPrompt?: string } {
+  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; geminiArgs?: string[] } {
     switch (toolName) {
       case 'Claude Code':
         return this.buildClaudeArgs(prompt, settings, systemMessages);
@@ -181,21 +181,33 @@ export class CLIArgumentBuilder {
     prompt: string,
     settings: CLIAgentConfig,
     systemPrompt?: string | null,
-  ): { binary: string; args: string[]; stdinPrompt?: string } {
-    // Gemini CLI: -p is "Appended to input on stdin (if any)".
-    // So stdin runs FIRST as context, then -p is the user prompt.
-    // This lets us pipe the system/expert prompt via stdin so Gemini treats
-    // it as authoritative context, not just part of the user message.
-    const args = ['-o', 'stream-json'];
+  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; geminiArgs?: string[] } {
+    // Gemini CLI: -p switches to headless (non-interactive) mode.
+    //
+    // Windows pain: Node's spawn() requires shell:true to run a .cmd
+    // wrapper, but shell:true means cmd.exe re-tokenizes our argv. Long
+    // -p values that include backslashes, quotes, or even ordinary
+    // whitespace get split at delimiters, and gemini-cli reports it as
+    // "Cannot use both a positional prompt and the --prompt (-p) flag
+    // together" — what was a single -p argument becomes ((mangled
+    // positional fragments) + a partial -p).
+    //
+    // Fix: on Windows, write the prompt to a temp file and drive the
+    // call through PowerShell, which (a) hands the file contents to
+    // gemini as a single argv element via $prompt expansion, and (b)
+    // can execute .cmd files without re-parsing. The non-Windows path
+    // still uses -p directly — Linux/macOS spawn argv goes through
+    // execve and has no shell layer to mangle it.
+    const flagArgs: string[] = ['-o', 'stream-json'];
 
     const approvalMode = settings.permissionMode || 'yolo';
-    args.push('--approval-mode', approvalMode);
+    flagArgs.push('--approval-mode', approvalMode);
 
     // Model override: env var > settings. Vendor uses gemini-2.5-flash by default.
     // https://github.com/google-gemini/gemini-cli (Quickstart, `-m` flag)
     const geminiModel = process.env.GEMINI_MODEL || settings.model;
     if (geminiModel) {
-      args.push('-m', geminiModel);
+      flagArgs.push('-m', geminiModel);
     }
 
     // Note: Gemini CLI does NOT support --mcp-config or --system-instruction flags.
@@ -203,32 +215,49 @@ export class CLIArgumentBuilder {
     // The octipus MCP server must be added via: gemini mcp add octipus
 
     if (settings.extraArgs?.length) {
-      args.push(...settings.extraArgs);
+      flagArgs.push(...settings.extraArgs);
     }
 
-    // Pass system prompt via stdin (Gemini appends -p after stdin content).
-    if (systemPrompt) {
-      args.push('-p', prompt);
-      return { binary: 'gemini', args, stdinPrompt: systemPrompt };
-    }
+    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+    // `geminiArgs` is the underlying gemini.cmd argv regardless of how
+    // we end up invoking it — exposed on the return so unit tests can
+    // assert on flags like `-m` without caring about platform wrapping.
+    const geminiArgs = [...flagArgs, '-p', fullPrompt];
 
     if (IS_WIN) {
-      args.push('--prompt=.');
-      return { binary: 'gemini', args, stdinPrompt: prompt };
+      const promptFile = this.writeTempFile('gemini-prompt-', fullPrompt);
+      // PowerShell here: $p reads the prompt from disk in one shot (no
+      // newline-trimming), then `&` invokes gemini.cmd with $p as a
+      // single bound argument. `--%` stop-parsing token isn't used
+      // because we WANT PowerShell to treat $p as one argv element.
+      const psBody = [
+        '$ErrorActionPreference = "Stop";',
+        `$p = Get-Content -Raw -LiteralPath '${promptFile.replace(/'/g, "''")}';`,
+        // Flatten the flag args into the PowerShell call. They are all
+        // safe (no spaces, no quotes) — `-o stream-json --approval-mode yolo`
+        // style.
+        `& gemini.cmd ${flagArgs.join(' ')} -p $p`,
+      ].join(' ');
+      const scriptFile = this.writeTempFile('gemini-call-', psBody, '.ps1');
+      return {
+        binary: 'powershell.exe',
+        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile],
+        useShell: false,
+        geminiArgs,
+      };
     }
 
-    args.push('-p', prompt);
-    return { binary: 'gemini', args };
+    return { binary: 'gemini', args: geminiArgs, geminiArgs };
   }
 
   /**
    * Write content to a temp file, returning the path.
    * Used on Windows to bypass the ~8191-char command-line limit.
    */
-  private writeTempFile(prefix: string, content: string): string {
+  private writeTempFile(prefix: string, content: string, ext: string = '.txt'): string {
     const dir = join(tmpdir(), 'octipus-cli');
     mkdirSync(dir, { recursive: true });
-    const filePath = join(dir, `${prefix}${randomBytes(6).toString('hex')}.txt`);
+    const filePath = join(dir, `${prefix}${randomBytes(6).toString('hex')}${ext}`);
     writeFileSync(filePath, content, 'utf-8');
     return filePath;
   }

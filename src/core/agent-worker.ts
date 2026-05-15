@@ -405,10 +405,24 @@ export class AgentWorker extends BaseAgentWorker {
 
       return finalResult;
     } catch (error) {
-      this.context.status = 'failed';
+      // Distinguish clean cancellation from a real failure. Both the
+      // user-initiated stop() and parent-cascade abort flip
+      // `abortController.signal.aborted` before the loop unwinds, and any
+      // cascaded cancellation surfaces as CascadedCancellationError.
+      // Either way the agent should land in 'stopped', not 'failed', so the
+      // UI doesn't show a red "failed" after a deliberate cancel.
+      const wasStopped =
+        error instanceof CascadedCancellationError ||
+        this.abortController.signal.aborted;
+      const terminalStatus: 'stopped' | 'failed' = wasStopped ? 'stopped' : 'failed';
+
+      this.context.status = terminalStatus;
       this.context.completedAt = new Date();
-      this.emit('status_change', { status: 'failed' });
-      this.emit('error', { error: (error as Error).message });
+      // stop() already emitted status_change:stopped; don't double-fire.
+      if (!wasStopped) {
+        this.emit('status_change', { status: 'failed' });
+        this.emit('error', { error: (error as Error).message });
+      }
 
       // Cancel-cascade: detached children never see a collect, and their
       // parent AbortSignal is already aborted (this.abortController). We
@@ -418,30 +432,31 @@ export class AgentWorker extends BaseAgentWorker {
       this.cancelAllDetached((error as Error).message || 'parent failed');
 
       const failDurationMs = Date.now() - this.startTime;
-      agentLogger.error({
+      const logFn = wasStopped ? agentLogger.info : agentLogger.error;
+      logFn.call(agentLogger, {
         agentId: this.context.id, sessionId: this.context.sessionId,
         iteration: this.iteration, elapsedMs: failDurationMs,
         totalTokensUsed: this.totalTokensUsed,
         model: this.context.model, role: this.context.role,
         error: (error as Error).message,
-      }, 'Agent failed');
+      }, wasStopped ? 'Agent stopped' : 'Agent failed');
 
-      // Never let an audit-log write failure mask the real error — if the
-      // DB is unreachable, we still want the caller to see the original
-      // cause (e.g. BudgetExceededError), not a Postgres ECONNREFUSED.
-      auditRepository.logAgentFailed(
-        this.context.userId, this.context.sessionId, this.context.id,
-        { error: (error as Error).message, iteration: this.iteration, elapsedMs: failDurationMs, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
-      ).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure audit'));
+      // Audit log only for real failures — a stop is not a failure.
+      if (!wasStopped) {
+        auditRepository.logAgentFailed(
+          this.context.userId, this.context.sessionId, this.context.id,
+          { error: (error as Error).message, iteration: this.iteration, elapsedMs: failDurationMs, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
+        ).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure audit'));
+      }
 
       // Persist final state to DB
       agentRepository.updateStatus(this.context.id, {
-        status: 'failed',
+        status: terminalStatus,
         iterations: this.iteration,
         totalTokens: this.totalTokensUsed,
         durationMs: failDurationMs,
-        error: (error as Error).message,
-      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure'));
+        error: wasStopped ? undefined : (error as Error).message,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent terminal status'));
 
       // Close any browser tabs the agent opened via browser-ext.new_tab
       import('@/tools/browser-ext').then(({ closeAgentTabs }) => {

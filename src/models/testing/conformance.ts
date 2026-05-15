@@ -264,11 +264,20 @@ const testCases: ConformanceTestCase[] = [
 
       const tc = step1.toolCalls[0];
 
-      // Step 2: Send the tool result back and get the final text answer
+      // Step 2: Send the tool result back and get the final text answer.
+      // Echo any reasoning_content that step 1 returned — DeepSeek's
+      // thinking-mode models reject the request with 400 ("The
+      // reasoning_content in the thinking mode must be passed back to
+      // the API") if the prior assistant turn was a thinking turn and
+      // the next turn doesn't carry its reasoning back. Harmless for
+      // other providers; they just ignore the field.
       const result = await ctx.complete({
         messages: [
           msg('user', 'What is 5 + 3? Use the add_numbers tool.'),
-          msg('assistant', step1.content || '', { toolCalls: step1.toolCalls }),
+          msg('assistant', step1.content || '', {
+            toolCalls: step1.toolCalls,
+            ...(step1.reasoningContent ? { reasoningContent: step1.reasoningContent } : {}),
+          }),
           msg('tool', JSON.stringify({ result: 8 }), { toolCallId: tc.id }),
         ],
         tools: [ADD_NUMBERS_TOOL],

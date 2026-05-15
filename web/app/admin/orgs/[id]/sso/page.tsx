@@ -99,6 +99,15 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
           </label>
         </div>
 
+        <p className="text-xs text-on-surface-variant leading-relaxed">
+          <strong className="text-white">What this is:</strong> SAML lets users in this org sign in
+          through your existing identity provider (Okta, Azure AD, Google Workspace, …) instead of
+          managing a separate Octipus password. Users land on the IdP's login page, get
+          redirected back to Octipus already authenticated. Use this if your company already has
+          SSO — it removes one more credential to manage and lets you offboard users centrally.
+          Leave disabled if you only have a handful of users.
+        </p>
+
         <div className="text-xs text-on-surface-variant space-y-1">
           <p>SP metadata URL — give this to the IdP:</p>
           <code className="block px-2 py-1 bg-[#0e0e0e] rounded text-white">{metadataUrl}</code>
@@ -152,6 +161,15 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
             Enabled
           </label>
         </div>
+
+        <p className="text-xs text-on-surface-variant leading-relaxed">
+          <strong className="text-white">What this is:</strong> SCIM lets your IdP push user
+          create/update/delete events into Octipus automatically — so when HR adds someone in Okta
+          or Azure AD, they appear here within minutes (and disappear when removed). Pair it with
+          SAML above to fully outsource user lifecycle. Without SCIM you'd add and remove people
+          here by hand. Configure the bearer token on the IdP side and store its value in the
+          system vault, then reference it by name below.
+        </p>
 
         <div className="text-xs text-on-surface-variant">
           <p>SCIM endpoint:</p>

@@ -217,8 +217,12 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
             // LiteLLM unreachable, fall through to direct Ollama test
           }
 
-          // Test Ollama directly — check if model exists
-          const ollamaBase = endpoint || 'http://localhost:11434';
+          // Test Ollama directly — check if model exists. Fall back order:
+          //   1. endpoint from the Add Model dialog (per-model override)
+          //   2. global ollama.url from Settings (so the user doesn't have
+          //      to re-type the URL in every model dialog)
+          //   3. localhost default
+          const ollamaBase = endpoint || config.ollama.url || 'http://localhost:11434';
           const tagsRes = await fetch(`${ollamaBase}/api/tags`);
           if (!tagsRes.ok) {
             return { success: false, error: `Cannot reach Ollama at ${ollamaBase}` };

@@ -37,6 +37,24 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const agentManager = getAgentManager();
 
     const unsubAgent = agentManager.onEvent((event: any) => {
+      // Filter `thought` events down to the iteration-update sub-shape so
+      // chats and TUIs can show a "iter N/M" tick while the agent is
+      // still reasoning. The other `thought` payloads (free-form chain-
+      // of-thought) stay internal — surfacing them as gateway events
+      // would explode bandwidth and leak reasoning.
+      if (event.type === 'thought') {
+        const data = event.data as { type?: string; iteration?: number } | undefined;
+        if (data?.type === 'iteration_update' && typeof data.iteration === 'number') {
+          hub.publishEvent({
+            type: 'agent.iteration',
+            source: `agent:${event.agentId || 'unknown'}`,
+            userId: event.userId,
+            sessionId: event.sessionId,
+            payload: { agentId: event.agentId, iteration: data.iteration },
+          });
+        }
+        return;
+      }
       const subtype = event.type === 'spawned' ? 'agent.spawned'
         : event.type === 'completed' ? 'agent.completed'
         : event.type === 'stopped' ? 'agent.stopped'

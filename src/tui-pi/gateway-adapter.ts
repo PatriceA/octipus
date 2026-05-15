@@ -24,14 +24,16 @@ export interface AgentEndStats {
   tokens: number;
   cost: number;
   durationMs?: number;
+  iterations?: number;
 }
 
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
   | { kind: 'message';        role: Role; content: string }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
-  | { kind: 'agent.start';    role: string; model: string }
-  | { kind: 'agent.end';      stats: AgentEndStats }
+  | { kind: 'agent.start';    role: string; model: string; nodeId?: string }
+  | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
+  | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'tool';           tool: ToolEventState }
   | { kind: 'command.result'; name: string; result: unknown; error?: string }
   | { kind: 'agent.write';    path: string; newText: string }
@@ -41,6 +43,17 @@ export type AgentSessionEvent =
 export interface GatewayAdapterOptions {
   url?: string;
   getWorkspace?: () => string | null | undefined;
+  /**
+   * Optional session-scope filter. When set, events whose envelope
+   * `sessionId` (or payload `rootSessionId` for swarm events) does
+   * NOT match this id are dropped before decoding. Without it the
+   * TUI surfaces agent + swarm events from every concurrent session
+   * on the same WS connection — e.g. someone running a webchat
+   * session in another tab leaks "Subagent spawned" lines into the
+   * TUI. Permission requests still flow through unconditionally
+   * because their event envelope doesn't always carry a sessionId.
+   */
+  getSessionId?: () => string | null | undefined;
 }
 
 const PERMISSION_DETAIL_MAX = 80;
@@ -56,10 +69,12 @@ export class GatewayAdapter {
    */
   private workspaceSlug: string | null;
   private readonly externalGetWorkspace?: () => string | null | undefined;
+  private readonly getSessionId?: () => string | null | undefined;
 
   constructor(options: GatewayAdapterOptions = {}) {
     this.externalGetWorkspace = options.getWorkspace;
     this.workspaceSlug = options.getWorkspace?.() ?? null;
+    this.getSessionId = options.getSessionId;
     const clientOptions: GatewayClientOptions = {
       url: options.url,
       getWorkspace: () => this.workspaceSlug ?? this.externalGetWorkspace?.() ?? null,
@@ -126,9 +141,38 @@ export class GatewayAdapter {
     for (const listener of this.listeners) listener(event);
   }
 
-  private decode(event: { type: string; payload?: unknown }): void {
+  private decode(event: { type: string; payload?: unknown; sessionId?: string }): void {
+    const myId = this.getSessionId?.();
+    if (myId && !eventBelongsToSession(event, myId)) return;
     for (const decoded of decodeGatewayEvent(event)) this.emit(decoded);
   }
+}
+
+/**
+ * Drop events that belong to a different session. Returns true when:
+ *   - the event carries no sessionId (e.g. permission requests, status
+ *     pings) — let them through; the rest of the app filters by id
+ *     where it matters,
+ *   - the envelope sessionId matches, or
+ *   - the payload rootSessionId matches (swarm events).
+ */
+function eventBelongsToSession(
+  event: { type: string; payload?: unknown; sessionId?: string },
+  mySessionId: string,
+): boolean {
+  if (event.sessionId && event.sessionId !== mySessionId) {
+    const payload = asRecord(event.payload);
+    const root = payload ? pickString(payload, 'rootSessionId') : undefined;
+    if (!root) return false;
+    return root === mySessionId;
+  }
+  // No envelope sessionId — keep (permission/status flow).
+  if (!event.sessionId) {
+    const payload = asRecord(event.payload);
+    const root = payload ? pickString(payload, 'rootSessionId') : undefined;
+    if (root && root !== mySessionId) return false;
+  }
+  return true;
 }
 
 /**
@@ -169,7 +213,9 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const model = pickString(payload, 'model')
         ?? pickString(asRecord(payload.data), 'model')
         ?? '';
-      out.push({ kind: 'agent.start', role, model });
+      const nodeId = pickString(payload, 'agentId')
+        ?? pickString(asRecord(payload.data), 'agentId');
+      out.push({ kind: 'agent.start', role, model, nodeId });
       out.push({
         kind: 'message', role: 'system',
         content: `Agent spawned: ${role}${model ? ` (${model})` : ''}`,
@@ -182,8 +228,66 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const tokens = pickNumber(stats, 'totalTokens') ?? pickNumber(stats, 'total_tokens') ?? 0;
       const cost = pickNumber(stats, 'totalCostUsd') ?? pickNumber(stats, 'total_cost_usd') ?? 0;
       const durationMs = pickNumber(stats, 'durationMs') ?? pickNumber(stats, 'duration_ms');
-      out.push({ kind: 'agent.end', stats: { tokens, cost, durationMs } });
-      out.push({ kind: 'message', role: 'system', content: 'Agent completed.' });
+      const iterations = pickNumber(stats, 'iterations') ?? pickNumber(asRecord(payload.data), 'iterations');
+      const role = pickString(payload, 'role') ?? pickString(asRecord(payload.data), 'role');
+      const nodeId = pickString(payload, 'agentId') ?? pickString(asRecord(payload.data), 'agentId');
+      out.push({ kind: 'agent.end', stats: { tokens, cost, durationMs, iterations }, nodeId, role });
+      // Show runtime + iteration count for parity with the web chat sidepanel.
+      const parts: string[] = ['Agent completed'];
+      if (role) parts.push(role);
+      if (durationMs != null) parts.push(formatDurationMs(durationMs));
+      if (iterations != null) parts.push(`${iterations} iter`);
+      if (tokens > 0) parts.push(`${tokens} tok`);
+      out.push({ kind: 'message', role: 'system', content: `${parts[0]}: ${parts.slice(1).join(' · ') || '—'}` });
+      return out;
+    }
+
+    // Swarm-level spawn/complete events — these fire for orchestrator AND
+    // every nested agent/subagent. The TUI previously only listened to the
+    // worker-spawner-flavoured `agent.spawned` event, so swarm-routed
+    // subagents were invisible. Mirror them into the same agent.start /
+    // agent.end shapes so the rest of the UI doesn't have to care which
+    // path spawned the worker.
+    case 'swarm.node_spawned': {
+      const kind = pickString(payload, 'kind') ?? 'agent';
+      // Orchestrator already gets a separate agent.spawned event from the
+      // worker spawner; skip the duplicate so we don't show it twice.
+      if (kind === 'orchestrator') return out;
+      const role = pickString(payload, 'role') ?? 'worker';
+      const model = pickString(payload, 'model') ?? '';
+      const nodeId = pickString(payload, 'nodeId');
+      const topicPath = pickString(payload, 'topicPath');
+      out.push({ kind: 'agent.start', role, model, nodeId });
+      const label = topicPath && topicPath !== 'root' ? `${role} → ${topicPath}` : role;
+      out.push({
+        kind: 'message', role: 'system',
+        content: `Subagent spawned: ${label}${model ? ` (${model})` : ''}`,
+      });
+      return out;
+    }
+
+    case 'swarm.node_completed': {
+      const kind = pickString(payload, 'kind') ?? 'agent';
+      if (kind === 'orchestrator') return out; // dedupe with agent.completed
+      const role = pickString(payload, 'role') ?? 'worker';
+      const tokens = pickNumber(payload, 'usedTokens') ?? 0;
+      const durationMs = pickNumber(payload, 'durationMs');
+      const status = pickString(payload, 'status') ?? 'completed';
+      const nodeId = pickString(payload, 'nodeId');
+      out.push({ kind: 'agent.end', stats: { tokens, cost: 0, durationMs }, nodeId, role });
+      const parts: string[] = [`Subagent ${status}`, role];
+      if (durationMs != null) parts.push(formatDurationMs(durationMs));
+      if (tokens > 0) parts.push(`${tokens} tok`);
+      out.push({ kind: 'message', role: 'system', content: parts.join(' · ') });
+      return out;
+    }
+
+    case 'agent.iteration': {
+      const agentId = pickString(payload, 'agentId') ?? '';
+      const iteration = pickNumber(payload, 'iteration');
+      if (iteration != null) {
+        out.push({ kind: 'agent.iteration', agentId, iteration });
+      }
       return out;
     }
 
@@ -255,4 +359,13 @@ function pickNumber(record: Record<string, unknown> | undefined, key: string): n
   if (!record) return undefined;
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Compact human duration for the activity/message line. */
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return `${mins}m ${secs}s`;
 }

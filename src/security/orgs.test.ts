@@ -268,3 +268,73 @@ describe('workspaces — per-user CRUD', () => {
     expect(await getOrgWorkspaceManager().findOwnedById(aliceId, aliceWS!.id)).toBeNull();
   });
 });
+
+describe('workspace transfer', () => {
+  test('rejects self-transfer', async () => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const ws = await getOrgWorkspaceManager().createWorkspace(aliceId, {
+      slug: 'transfer-self',
+      name: 'Transfer Self',
+    });
+    await expect(
+      getOrgWorkspaceManager().transfer(aliceId, ws.id, aliceId),
+    ).rejects.toMatchObject({ code: 'cannot_transfer_to_self' });
+  });
+
+  test('rejects when caller does not own the workspace', async () => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const ws = await getOrgWorkspaceManager().createWorkspace(aliceId, {
+      slug: 'not-yours',
+      name: 'Not Yours',
+    });
+    await expect(
+      getOrgWorkspaceManager().transfer(bobId, ws.id, aliceId),
+    ).rejects.toMatchObject({ code: 'workspace_not_found' });
+  });
+
+  test('rejects when recipient does not exist', async () => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const ws = await getOrgWorkspaceManager().createWorkspace(aliceId, {
+      slug: 'no-recipient',
+      name: 'No Recipient',
+    });
+    await expect(
+      getOrgWorkspaceManager().transfer(aliceId, ws.id, '99999999-9999-9999-9999-999999999999'),
+    ).rejects.toMatchObject({ code: 'recipient_not_found' });
+  });
+
+  test('happy path moves ownership and clears default flag', async () => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const ws = await getOrgWorkspaceManager().createWorkspace(aliceId, {
+      slug: 'transfer-happy',
+      name: 'Transfer Happy',
+      isDefault: true,
+    });
+    expect(ws.isDefault).toBe(true);
+
+    const moved = await getOrgWorkspaceManager().transfer(aliceId, ws.id, bobId);
+    expect(moved.userId).toBe(bobId);
+    expect(moved.isDefault).toBe(false);
+    expect(moved.slug).toBe('transfer-happy');
+
+    // Alice no longer sees it.
+    expect(await getOrgWorkspaceManager().findOwnedById(aliceId, ws.id)).toBeNull();
+    // Bob does.
+    expect(await getOrgWorkspaceManager().findOwnedById(bobId, ws.id)).not.toBeNull();
+  });
+
+  test('slug collision on recipient appends -from-<actor>', async () => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    await getOrgWorkspaceManager().createWorkspace(bobId, {
+      slug: 'shared-name',
+      name: 'Bob already has this',
+    });
+    const ws = await getOrgWorkspaceManager().createWorkspace(aliceId, {
+      slug: 'shared-name',
+      name: 'Alice has it too',
+    });
+    const moved = await getOrgWorkspaceManager().transfer(aliceId, ws.id, bobId);
+    expect(moved.userId).toBe(bobId);
+    expect(moved.slug).toBe('shared-name-from-alice');
+  });
+});
