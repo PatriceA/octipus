@@ -148,9 +148,9 @@ describe('PermissionManager.getPendingRequests', () => {
 });
 
 describe('multiuser.enforcePermissions flag', () => {
-  test('default is false (preserves single-user behavior)', async () => {
+  test('default is true (multi-user isolation enforced; legacy single-user opts out via MULTIUSER=false)', async () => {
     const { getConfig, resetConfig } = await import('@/config');
     resetConfig();
-    expect(getConfig().multiuser.enforcePermissions).toBe(false);
+    expect(getConfig().multiuser.enforcePermissions).toBe(true);
   });
 });
