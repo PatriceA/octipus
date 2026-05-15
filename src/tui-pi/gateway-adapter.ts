@@ -297,8 +297,10 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const mcpServer = pickString(data, 'mcpServer');
       if (type === 'tool_call' || type === 'cli_tool_use') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
-        out.push({ kind: 'tool', tool: { state: 'pending', name, mcpServer } });
-        const write = extractAgentWrite(name, asRecord(data.args));
+        const args = asRecord(data.args) ?? asRecord(data.input);
+        const preview = summarizeToolArgs(name, args);
+        out.push({ kind: 'tool', tool: { state: 'pending', name, preview, mcpServer } });
+        const write = extractAgentWrite(name, args);
         if (write) out.push({ kind: 'agent.write', path: write.path, newText: write.newText });
       } else if (type === 'cli_tool_result' || type === 'tool_result') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
@@ -347,6 +349,28 @@ function extractAgentWrite(toolName: string, args: Record<string, unknown> | und
     ?? pickString(args, 'replacement');
   if (newText === undefined) return null;
   return { path, newText };
+}
+
+const ARG_PREVIEW_MAX = 80;
+
+/**
+ * Human-friendly one-line summary of a tool call's arguments. Used so the
+ * streamed activity log can show "Bash → ls -la" instead of just "Bash".
+ * Conservative: returns undefined when nothing useful can be extracted.
+ */
+function summarizeToolArgs(toolName: string, args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  const path =
+    pickString(args, 'path') ??
+    pickString(args, 'file_path') ??
+    pickString(args, 'filename') ??
+    pickString(args, 'filepath');
+  const command = pickString(args, 'command') ?? pickString(args, 'cmd');
+  const pattern = pickString(args, 'pattern') ?? pickString(args, 'query') ?? pickString(args, 'q');
+  const url = pickString(args, 'url');
+  const raw = path ?? command ?? pattern ?? url;
+  if (!raw) return undefined;
+  return raw.length > ARG_PREVIEW_MAX ? `${raw.slice(0, ARG_PREVIEW_MAX - 1)}…` : raw;
 }
 
 function pickString(record: Record<string, unknown> | undefined, key: string): string | undefined {

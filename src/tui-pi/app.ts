@@ -55,6 +55,8 @@ export class OctipusTuiApp {
   private paletteHandle: OverlayHandle | null = null;
   /** Most-recent role seen on agent.start — used to label `iter N` ticks. */
   private activeAgentRole: string | null = null;
+  /** Last pending tool line streamed to messages pane (for completion dedupe). */
+  private lastStreamedTool: string | null = null;
   private exiting = false;
   private readonly onShutdown?: () => Promise<void>;
 
@@ -146,6 +148,29 @@ export class OctipusTuiApp {
     this.tui.requestRender();
   }
 
+  /**
+   * Stream tool calls into the messages pane so the user can follow the
+   * agent live. The activity line stays the ephemeral spinner; this adds a
+   * permanent transcript entry per call. Dedupes by tool name so a pending
+   * + completed pair only writes one combined line.
+   */
+  private streamToolEvent(tool: { state: string; name: string; preview?: string; mcpServer?: string }): void {
+    const mcp = tool.mcpServer ? `[mcp:${tool.mcpServer}] ` : '';
+    const preview = tool.preview ? ` → ${tool.preview}` : '';
+    if (tool.state === 'pending' || tool.state === 'executing') {
+      this.lastStreamedTool = `${tool.name}${preview}`;
+      this.pushMessage('system', `→ ${mcp}${this.lastStreamedTool}`);
+    } else if (tool.state === 'error') {
+      this.pushMessage('system', `✗ ${mcp}${tool.name}${preview}`);
+      this.lastStreamedTool = null;
+    } else if (tool.state === 'completed') {
+      // Only echo a completion line when there's an output preview worth
+      // showing; the pending line already named the call.
+      if (tool.preview) this.pushMessage('system', `✓ ${mcp}${tool.name} ${tool.preview}`);
+      this.lastStreamedTool = null;
+    }
+  }
+
   // ── Event handling ─────────────────────────────────────────────
 
   private handleEvent(event: AgentSessionEvent): void {
@@ -187,6 +212,7 @@ export class OctipusTuiApp {
         return;
       case 'tool':
         this.activity.setTool(event.tool);
+        this.streamToolEvent(event.tool);
         return;
       case 'command.result': {
         if (event.name === 'clear' && !event.error) {
