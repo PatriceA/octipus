@@ -14,7 +14,7 @@
     "tui:edit": "bun run src/tui-editor/index.ts",
     "start:all": "bin/octi start",
     "stop:all": "bin/octi stop",
-    "build": "bun build src/index.ts --outdir dist --target bun",
+    "build": "bun build src/index.ts --outdir dist --target bun --external playwright --external playwright-core --external chromium-bidi --external electron",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
