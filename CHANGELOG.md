@@ -348,11 +348,11 @@ New feature flags (all default off):
 
 | Flag | Env | Default | Effect |
 |------|-----|---------|--------|
-| `multiuser.enabled` | `MULTIUSER` | `false` | Master switch. Turning it on enables strict scoped reads, audit logging, and rejects MASTER_KEY bypass. |
+| `multiuser.enabled` | `MULTIUSER` | `true` | Master switch. Strict scoped reads, audit logging, and MASTER_KEY bypass disabled. Opt out with `MULTIUSER=false` for the legacy single-user / MASTER_KEY path. |
 | `multiuser.auditShadow` | `MULTIUSER_AUDIT_SHADOW` | `true` | Writes one `audit_log` row per state-changing API request (no behavioral effect). |
-| `multiuser.enforcePermissions` | `MULTIUSER_ENFORCE_PERMISSIONS` | `false` | Orchestrator gate: every tool call goes through `checkToolCall`. |
-| `multiuser.rlsEnabled` | `MULTIUSER_RLS` | `false` | Sets the RLS GUC on every authenticated query. PGlite ignores. |
-| `multiuser.orgWorkspaces` | `MULTIUSER_ORG_WORKSPACES` | `false` | Enables `/api/me/workspaces`, `/api/me/orgs`, `/api/admin/orgs`, the workspace resolver, and scopedRepo workspace filtering. |
+| `multiuser.enforcePermissions` | `MULTIUSER_ENFORCE_PERMISSIONS` | `true` | Orchestrator gate: every tool call goes through `checkToolCall`. The legacy `isSystemUser` bypass is honored only when this is `false`. |
+| `multiuser.rlsEnabled` | `MULTIUSER_RLS` | `false` | Sets the RLS GUC on every authenticated query. PGlite ignores. Requires a non-superuser app role; opt-in. |
+| `multiuser.orgWorkspaces` | `MULTIUSER_ORG_WORKSPACES` | `true` | Enables `/api/me/workspaces`, `/api/me/orgs`, `/api/admin/orgs`, the workspace resolver, and scopedRepo workspace filtering. |
 | `security.shellSandbox` | `SHELL_SANDBOX` | `off` | `off` / `auto` / `required` — wraps shell-tool spawns in bubblewrap/firejail. |
 | `security.dockerIsolation` | `DOCKER_ISOLATION` | `off` | `off` / `enforce` — Docker tool per-user labels + networks. |
 

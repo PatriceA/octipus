@@ -270,7 +270,10 @@ export const swarmConfigSchema = z.object({
 export const multiuserConfigSchema = z.object({
   enabled: z.boolean().default(false),
   auditShadow: z.boolean().default(true),
-  enforcePermissions: z.boolean().default(false),
+  // Default-on since May-5 multi-user flip; aligns with defaults.ts +
+  // settings-registry + the loader. Single-user installs opt out via
+  // MULTIUSER_ENFORCE_PERMISSIONS=false.
+  enforcePermissions: z.boolean().default(true),
   /**
    * Postgres Row-Level Security — Phase 3b. When true, the connection
    * wrapper opens authenticated queries in a transaction and sets

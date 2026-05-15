@@ -18,7 +18,10 @@
 
 - `multiuser.{enabled,auditShadow,enforcePermissions}` config flags
   (env: `MULTIUSER`, `MULTIUSER_AUDIT_SHADOW`,
-  `MULTIUSER_ENFORCE_PERMISSIONS`). Defaults: `false`, `true`, `false`.
+  `MULTIUSER_ENFORCE_PERMISSIONS`). Defaults since May-5 flip:
+  `true`, `true`, `true`. Legacy single-user installs opt out via
+  `MULTIUSER=false` (and `MULTIUSER_ENFORCE_PERMISSIONS=false` if
+  the system-user bypass on MCP-bridge calls is still needed).
 - `src/security/principal.ts` — `Principal` type + helpers
   (`principalFromUser`, `principalFromMasterKey`, `ANONYMOUS_PRINCIPAL`,
   `SYSTEM_PRINCIPAL`, `canActOnUser`).

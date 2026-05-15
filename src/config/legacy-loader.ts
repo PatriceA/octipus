@@ -121,7 +121,17 @@ export function loadFromEnvLegacy(): Partial<Config> {
     multiuser: {
       enabled: process.env.MULTIUSER === 'true',
       auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
-      enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS === 'true',
+      // Secure-by-default since the May-5 multi-user flip
+      // (defaults.ts + settings-registry already use true). The legacy
+      // env loader was left as `=== 'true'` which forced false in
+      // env-only tests and made the upstream `permissions.isolation`
+      // expectation fail. Single-user installs that need the legacy
+      // permissive behavior opt out with MULTIUSER_ENFORCE_PERMISSIONS
+      // =false. Blast radius is narrow: the only call site that
+      // depended on the system-user bypass is the MCP-bridge route
+      // (api/routes/tools.ts), so unrelated single-user e2e tests
+      // are unaffected.
+      enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
       orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
     },
