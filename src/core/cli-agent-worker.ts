@@ -15,6 +15,7 @@ import { agentLogger, coreLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser } from './cli-adapters';
+import { BudgetExceededError } from './swarm/errors';
 import { getCLIToolConfig } from './cli-agent-factory';
 import type { AgentContext, AgentMessage } from './types';
 
@@ -34,6 +35,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * returns 0 for `getTotalTokens()`.
    */
   private totalTokens = 0;
+  /**
+   * Set by the token-usage callback when the CLI subprocess crosses its
+   * `maxTokenBudget`. The base `AgentWorker` does this synchronously before
+   * each LLM call; CLI workers can't intercept inter-turn calls, so the next
+   * best gate is the token-usage report — when it crosses the cap, we kill
+   * the subprocess and surface `BudgetExceededError` from `executeCLI()`.
+   */
+  private budgetExceeded = false;
   /**
    * Cleanup for the parent AbortSignal listener. Symmetric with `AgentWorker`
    * (Swarm Phase 2): when an ancestor aborts, the cascade reaches the CLI
@@ -303,6 +312,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       },
       (tokens) => {
         this.totalTokens += tokens.total;
+        const cap = this.config.maxTokenBudget;
+        if (!this.budgetExceeded && cap > 0 && this.totalTokens >= cap) {
+          this.budgetExceeded = true;
+          agentLogger.warn(
+            { agentId: this.context.id, used: this.totalTokens, cap },
+            'CLI sub-agent exceeded token budget — killing subprocess',
+          );
+          this.stop();
+        }
       },
     );
 
@@ -482,6 +500,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
               accumulatedText = lineBuffer.trim();
             }
           }
+        }
+
+        if (this.budgetExceeded) {
+          reject(new BudgetExceededError({
+            agentId: this.context.id,
+            used: this.totalTokens,
+            cap: this.config.maxTokenBudget,
+          }));
+          return;
         }
 
         if (this.aborted) {
