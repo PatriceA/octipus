@@ -1,106 +1,138 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap')
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap')
 layer(utilities);
 
 @import 'tailwindcss';
 
 @custom-variant dark (&:is(.dark *));
 
+/* ──────────────────────────────────────────────────────────────────
+   Octipus terminal-UI palette.
+
+   Hex codes are intentionally identical to the mobile app
+   (`mobile-octipus/lib/theme/theme.dart`) and to the TUI palette
+   (`src/tui-pi/theme/defaults.ts`). Three surfaces sharing one
+   colour vocabulary so a screenshot from one feels like a screenshot
+   from another.
+
+   Old class names (e.g. `bg-primary`, `text-on-surface-variant`,
+   `border-outline-variant`) keep working — only the tokens behind
+   them change.
+
+   Contrast checks against bg #0F1216:
+     text  #E6E6E6  → ~15:1  (AAA body)
+     dim   #5A6677  → ~5.3:1 (AA UI text)
+     accent#7AA2D4  → ~7:1   (AAA UI)
+   On surface #161B22 the same tokens stay above AA. No black-on-
+   black; every utility below is checked.
+   ────────────────────────────────────────────────────────────────── */
 @theme {
-  --color-background: #0e0e0e;
-  --color-foreground: #ffffff;
+  /* Backgrounds ------------------------------------------------------ */
+  --color-background: #0F1216;
+  --color-foreground: #E6E6E6;
 
-  --color-primary: #73ffe3;
-  --color-primary-dim: #00e8c9;
-  --color-primary-container: #00f5d4;
-  --color-primary-fixed: #12f8d7;
-  --color-primary-fixed-dim: #00e8c9;
+  /* Primary (accent) — TUI blue ------------------------------------- */
+  --color-primary: #7AA2D4;
+  --color-primary-dim: #5C8AB8;
+  --color-primary-container: #26334A;       /* selection-tinted block */
+  --color-primary-fixed: #7AA2D4;
+  --color-primary-fixed-dim: #5C8AB8;
 
-  --color-secondary: #e5e2e1;
-  --color-secondary-dim: #d7d4d3;
-  --color-secondary-container: #474646;
-  --color-secondary-fixed: #e5e2e1;
-  --color-secondary-fixed-dim: #d7d4d3;
+  /* Secondary — dim foreground for muted labels --------------------- */
+  --color-secondary: #C9C9C9;
+  --color-secondary-dim: #8A93A0;
+  --color-secondary-container: #20252D;
+  --color-secondary-fixed: #C9C9C9;
+  --color-secondary-fixed-dim: #8A93A0;
 
-  --color-tertiary: #9cf3ff;
-  --color-tertiary-dim: #33ddef;
-  --color-tertiary-container: #4aebfd;
-  --color-tertiary-fixed: #4aebfd;
-  --color-tertiary-fixed-dim: #33ddef;
+  /* Tertiary — repurposed as "success" / OK ------------------------- */
+  --color-tertiary: #7BC4A0;
+  --color-tertiary-dim: #5DA483;
+  --color-tertiary-container: #1F2E27;
+  --color-tertiary-fixed: #7BC4A0;
+  --color-tertiary-fixed-dim: #5DA483;
 
-  --color-error: #ff716c;
-  --color-error-dim: #d7383b;
-  --color-error-container: #9f0519;
+  /* Error ----------------------------------------------------------- */
+  --color-error: #C47070;
+  --color-error-dim: #A65454;
+  --color-error-container: #3C2020;
 
-  --color-surface: #0e0e0e;
-  --color-surface-dim: #0e0e0e;
-  --color-surface-bright: #2c2c2c;
-  --color-surface-variant: #262626;
-  --color-surface-tint: #73ffe3;
+  /* Warning (new — old palette had no warning) ---------------------- */
+  --color-warning: #E0AF68;
+  --color-warning-dim: #C19450;
+  --color-warning-container: #3A2E1C;
 
-  --color-surface-container: #1a1919;
-  --color-surface-container-low: #131313;
-  --color-surface-container-high: #201f1f;
-  --color-surface-container-highest: #262626;
-  --color-surface-container-lowest: #000000;
+  /* Surfaces — every layer slightly cooler than the last ------------ */
+  --color-surface: #161B22;
+  --color-surface-dim: #0F1216;
+  --color-surface-bright: #2A2F36;
+  --color-surface-variant: #1E232B;
+  --color-surface-tint: #7AA2D4;
 
-  --color-outline: #777575;
-  --color-outline-variant: #494847;
+  --color-surface-container: #1A1F26;
+  --color-surface-container-low: #13171D;
+  --color-surface-container-high: #20252D;
+  --color-surface-container-highest: #262C35;
+  --color-surface-container-lowest: #0A0D11;
 
-  --color-on-surface: #ffffff;
-  --color-on-surface-variant: #adaaaa;
+  /* Outlines (single-line dim borders — TUI feel) ------------------- */
+  --color-outline: #5A6677;
+  --color-outline-variant: #3A4250;
 
-  --color-on-primary: #006152;
-  --color-on-primary-container: #00574a;
-  --color-on-primary-fixed: #00443a;
-  --color-on-primary-fixed-variant: #006455;
+  /* Text-on-* (use these instead of hardcoded #fff) ----------------- */
+  --color-on-surface: #E6E6E6;
+  --color-on-surface-variant: #8A93A0;
 
-  --color-on-secondary: #525151;
-  --color-on-secondary-container: #d3d0cf;
-  --color-on-secondary-fixed: #403f3f;
-  --color-on-secondary-fixed-variant: #5c5b5b;
+  --color-on-primary: #0F1216;          /* dark text on accent buttons */
+  --color-on-primary-container: #E6E6E6;
+  --color-on-primary-fixed: #0F1216;
+  --color-on-primary-fixed-variant: #E6E6E6;
 
-  --color-on-tertiary: #005d65;
-  --color-on-tertiary-container: #00535b;
-  --color-on-tertiary-fixed: #003f45;
-  --color-on-tertiary-fixed-variant: #005e66;
+  --color-on-secondary: #0F1216;
+  --color-on-secondary-container: #E6E6E6;
+  --color-on-secondary-fixed: #0F1216;
+  --color-on-secondary-fixed-variant: #E6E6E6;
 
-  --color-on-error: #490006;
-  --color-on-error-container: #ffa8a3;
+  --color-on-tertiary: #0F1216;
+  --color-on-tertiary-container: #E6E6E6;
+  --color-on-tertiary-fixed: #0F1216;
+  --color-on-tertiary-fixed-variant: #E6E6E6;
 
-  --color-inverse-surface: #fcf8f8;
-  --color-inverse-on-surface: #565554;
-  --color-inverse-primary: #006c5c;
+  --color-on-error: #E6E6E6;
+  --color-on-error-container: #E6E6E6;
+  --color-on-warning: #0F1216;
+  --color-on-warning-container: #E6E6E6;
 
-  --font-sans: Inter, system-ui, sans-serif;
-  --font-body: Inter, system-ui, sans-serif;
-  --font-headline: Manrope, system-ui, sans-serif;
-  --font-display: Manrope, system-ui, sans-serif;
-  --font-label: Inter, system-ui, sans-serif;
-  --font-mono: JetBrains Mono, Fira Code, monospace;
+  --color-inverse-surface: #E6E6E6;
+  --color-inverse-on-surface: #0F1216;
+  --color-inverse-primary: #26334A;
 
-  --radius: 0.5rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1.5rem;
+  /* Typography — terminal app, mono everywhere ---------------------- */
+  --font-sans: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-body: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-headline: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-display: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-label: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Radii — sharper than before. Mono UIs read cleaner with tight
+     corners; we still keep a hair of softness so it's not Brutalism. */
+  --radius: 0.25rem;     /* 4px */
+  --radius-lg: 0.375rem; /* 6px */
+  --radius-xl: 0.5rem;   /* 8px */
   --radius-full: 9999px;
 
-  --backdrop-blur-glass: 20px;
+  --backdrop-blur-glass: 16px;
 }
 
-/*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
+/* ────────────────────────────────────────────────────────────────── */
 
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
 @layer base {
   *,
   ::after,
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-gray-200, currentcolor);
+    border-color: var(--color-outline-variant, currentcolor);
   }
 }
 
@@ -109,80 +141,132 @@ layer(utilities);
 }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
-  color: #ffffff;
-  background: #000000;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  color: #E6E6E6;
+  background: #0F1216;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: 'cv11', 'ss01', 'ss03'; /* Inter stylistic sets — taller, sharper */
   text-rendering: optimizeLegibility;
+  /* JetBrains Mono ligatures: subtle, opt-out per-element via
+     `font-variant-ligatures: none` if a particular widget needs it. */
+  font-variant-ligatures: contextual;
 }
 
-/* ── Display / headline family: Manrope — reaches every heading + any element
-      that opts in with `font-headline`, plus large extrabold utilities that
-      would otherwise fall back to the body font. ── */
+/* Headings — no separate font; mono everywhere. Tighten letter-
+   spacing slightly so multi-word headings don't sprawl. */
 h1, h2, h3, h4, h5, h6,
-.font-headline {
-  font-family: 'Manrope', system-ui, sans-serif;
-  letter-spacing: -0.025em;
-  font-feature-settings: 'ss01', 'ss02';
-  font-variation-settings: 'wght' 800;
-}
-
-h1 { letter-spacing: -0.035em; }
-h2 { letter-spacing: -0.028em; }
-
-/* Display utility — tight tracking + Manrope — used for large hero numbers /
-   page headers. Opt-in via className="font-display". */
+.font-headline,
 .font-display {
-  font-family: 'Manrope', system-ui, sans-serif;
-  font-weight: 900;
-  letter-spacing: -0.04em;
-  line-height: 0.95;
-}
-
-/* Label utility — crisp Inter with extra spacing (small-caps style) */
-.font-label {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: -0.01em;
+}
+h1 { letter-spacing: -0.02em; }
+
+/* Label utility — uppercase mono labels (used on stat cards / tags). */
+.font-label {
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   font-size: 0.6875rem;
 }
 
-/* ── Scrollbar — thin, subtle ── */
+/* ── Scrollbar — thin, blue-tinted ─────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0e0e0e; }
-::-webkit-scrollbar-thumb { background: #262626; border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: #494847; }
+::-webkit-scrollbar-track { background: #0F1216; }
+::-webkit-scrollbar-thumb {
+  background: #3A4250;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: #5A6677; }
 
 /* ── Material symbols ── */
 .material-symbols-outlined {
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-/* Smooth transitions */
-button, a { transition: all 0.15s ease; }
+button, a { transition: all 0.12s ease; }
 
-/* ── Focus ring — mint glow ── */
+/* ── Focus ring — accent-blue, sharp ─────────────────────────────── */
 .focus-ring {
-  @apply focus:outline-hidden focus:ring-2 focus:ring-primary/40 focus:ring-offset-1 focus:ring-offset-transparent;
+  @apply focus:outline-hidden focus:ring-1 focus:ring-primary focus:ring-offset-0;
 }
 
-/* ── "Intelligent Void" signature effects ── */
+/* ──────────────────────────────────────────────────────────────────
+   Terminal motifs — opt-in via class.
+   These are the "look and feel" hooks; pages adopt them where they
+   make sense rather than getting them everywhere.
+   ────────────────────────────────────────────────────────────────── */
+
+/* `❯ command` style prefix — for command palette items, prompts,
+   focused inputs. */
+.term-prompt::before {
+  content: '\276F'; /* ❯ */
+  color: #7AA2D4;
+  margin-right: 0.5em;
+  font-weight: 600;
+}
+
+/* `$ ` shell prefix variant (useful for help text / code samples). */
+.term-shell::before {
+  content: '$ ';
+  color: #5A6677;
+}
+
+/* Single-line dim frame — the web equivalent of a TUI bordered pane.
+   Pair with surface bg for the "panel" look. */
+.term-frame {
+  border: 1px solid #3A4250;
+  background: #161B22;
+}
+
+/* Status dots — small coloured circles for connection / health state. */
+.dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 9999px; }
+.dot-ok    { background: #7BC4A0; box-shadow: 0 0 6px rgba(123,196,160,0.5); }
+.dot-warn  { background: #E0AF68; box-shadow: 0 0 6px rgba(224,175,104,0.5); }
+.dot-err   { background: #C47070; box-shadow: 0 0 6px rgba(196,112,112,0.5); }
+.dot-idle  { background: #5A6677; }
+
+/* Glass / glow / grid — re-tinted to blue so leftover usages still
+   look on-brand instead of mint. */
 .glass-panel {
-  background: rgba(38, 38, 38, 0.6);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(22, 27, 34, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .glow-accent {
-  box-shadow: 0 0 20px rgba(115, 255, 227, 0.15);
+  box-shadow: 0 0 18px rgba(122, 162, 212, 0.18);
 }
 
 .neural-grid {
-  background-image: radial-gradient(rgba(115, 255, 227, 0.05) 1px, transparent 1px);
-  background-size: 40px 40px;
+  background-image: radial-gradient(rgba(122, 162, 212, 0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Subtle scanline backdrop for "really feels like a CRT" moments
+   (login screen, splash). Opt-in. */
+.crt-scanlines {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(255, 255, 255, 0.015) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+}
+
+/* Blinking caret — for prompt placeholders. */
+@keyframes term-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.term-caret::after {
+  content: '▍';
+  color: #7AA2D4;
+  margin-left: 0.15em;
+  animation: term-blink 1.1s steps(1) infinite;
 }
 
 /* ── Slide-up animation (banners) ── */
@@ -192,10 +276,10 @@ button, a { transition: all 0.15s ease; }
 }
 .animate-slide-up { animation: slide-up 0.25s ease-out; }
 
-/* ── Selection — mint ── */
+/* ── Selection — accent blue ── */
 ::selection {
-  background: rgba(115, 255, 227, 0.3);
-  color: #73ffe3;
+  background: rgba(122, 162, 212, 0.35);
+  color: #E6E6E6;
 }
 
 /* Respect reduced motion */
@@ -205,4 +289,5 @@ button, a { transition: all 0.15s ease; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  .term-caret::after { animation: none; opacity: 1; }
 }

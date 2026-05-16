@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { cn } from '@/lib/utils';
 import { WorkspacePicker } from './workspace-picker';
 
 interface Notification {
@@ -25,12 +26,12 @@ interface SearchResult {
 }
 
 const SEARCH_TYPE_META: Record<SearchResult['type'], { label: string; icon: typeof MessageSquare }> = {
-  session: { label: 'Sessions', icon: MessageSquare },
-  hook: { label: 'Hooks', icon: Webhook },
-  model: { label: 'Models', icon: Cpu },
-  skill: { label: 'Skills', icon: BookOpen },
-  knowledge: { label: 'Knowledge', icon: Brain },
-  tool: { label: 'Tools', icon: Wrench },
+  session: { label: 'sessions', icon: MessageSquare },
+  hook: { label: 'hooks', icon: Webhook },
+  model: { label: 'models', icon: Cpu },
+  skill: { label: 'skills', icon: BookOpen },
+  knowledge: { label: 'knowledge', icon: Brain },
+  tool: { label: 'tools', icon: Wrench },
 };
 
 export function Header() {
@@ -104,7 +105,6 @@ export function Header() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Debounced search
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
@@ -135,7 +135,6 @@ export function Header() {
     };
   }, [searchQuery]);
 
-  // Cmd+K / Ctrl+K to focus search
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -158,7 +157,6 @@ export function Header() {
     router.push(result.href);
   };
 
-  // Group results by type
   const groupedResults = searchResults.reduce<Record<string, SearchResult[]>>((acc, result) => {
     if (!acc[result.type]) acc[result.type] = [];
     acc[result.type].push(result);
@@ -192,30 +190,41 @@ export function Header() {
   };
 
   return (
-    <header className="h-16 sticky top-0 z-40 bg-surface-container-lowest/85 backdrop-blur-md border-b border-outline-variant/10 px-6 shrink-0 flex items-center justify-between">
-      {/* Search */}
-      <div className="flex-1 max-w-md" ref={searchRef}>
+    <header className="h-12 sticky top-0 z-40 bg-surface-container-lowest/95 backdrop-blur-sm border-b border-outline-variant/40 px-3 shrink-0 flex items-center gap-3 font-mono">
+      {/* Command-line style search. The leading `❯` doubles as the
+          focus indicator: blue when something's typed, dim otherwise.
+          The bar is a single-line frame — no rounded pill. */}
+      <div className="flex-1 max-w-xl" ref={searchRef}>
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
+          <span
+            aria-hidden
+            className={cn(
+              'absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-bold transition-colors',
+              searchQuery ? 'text-primary' : 'text-outline-variant'
+            )}
+          >
+            ❯
+          </span>
           <input
             ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
-            placeholder="Search systems...  (Ctrl+K)"
-            className="w-full pl-10 pr-4 py-1.5 bg-surface-container-low border border-outline-variant/10 rounded-full text-sm text-white placeholder-on-surface-variant focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all"
+            placeholder="search sessions, hooks, models…    (ctrl+k)"
+            className="w-full h-8 pl-7 pr-9 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[13px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary focus:ring-0 transition-colors"
           />
-          {isSearching && (
-            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant animate-spin" />
+          {isSearching ? (
+            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-on-surface-variant animate-spin" />
+          ) : (
+            <Search className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-outline-variant" />
           )}
 
-          {/* Search results dropdown */}
           {showResults && (
-            <div className="absolute top-full mt-2 w-full max-h-96 overflow-y-auto bg-[#1a1a1a] rounded-2xl shadow-2xl ring-1 ring-outline-variant/20 z-50">
+            <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50">
               {searchResults.length === 0 && !isSearching ? (
-                <div className="px-4 py-8 text-center text-sm text-on-surface-variant">
-                  No results found
+                <div className="px-3 py-6 text-center text-[12px] text-on-surface-variant">
+                  -- no matches --
                 </div>
               ) : (
                 Object.entries(groupedResults).map(([type, items]) => {
@@ -224,19 +233,21 @@ export function Header() {
                   const Icon = meta.icon;
                   return (
                     <div key={type}>
-                      <div className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant px-3 py-2">
-                        {meta.label}
+                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-outline-variant px-3 py-1.5 border-b border-outline-variant/30 bg-surface-container-low">
+                        <span>▸</span>
+                        <span>{meta.label}</span>
+                        <span className="ml-auto">{items.length}</span>
                       </div>
                       {items.map((result) => (
                         <button
                           key={result.id}
                           onClick={() => handleResultClick(result)}
-                          className="w-full px-3 py-2 hover:bg-[#20201f] cursor-pointer transition-colors flex items-center gap-3 text-left"
+                          className="w-full px-3 py-1.5 hover:bg-surface-container-high cursor-pointer transition-colors flex items-center gap-2.5 text-left border-l-2 border-transparent hover:border-primary"
                         >
-                          <Icon className="w-4 h-4 text-on-surface-variant shrink-0" />
+                          <Icon className="w-3.5 h-3.5 text-on-surface-variant shrink-0" />
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm text-white truncate">{result.title}</p>
-                            <p className="text-xs text-on-surface-variant truncate">{result.subtitle}</p>
+                            <p className="text-[13px] text-on-surface truncate">{result.title}</p>
+                            <p className="text-[11px] text-on-surface-variant truncate">{result.subtitle}</p>
                           </div>
                         </button>
                       ))}
@@ -249,62 +260,69 @@ export function Header() {
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-4">
+      {/* Right side — workspace picker, notifications, profile. */}
+      <div className="flex items-center gap-1.5">
         <WorkspacePicker />
 
-        {/* Notification bell */}
         <div className="relative" ref={notifRef}>
           <button
             onClick={() => { setIsNotifOpen(!isNotifOpen); if (!isNotifOpen) fetchNotifications(); }}
             aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
-            className="p-2 text-on-surface-variant hover:bg-[#1a1a1a] rounded-full transition-colors cursor-pointer relative"
+            className="relative p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded-xs transition-colors cursor-pointer"
           >
-            <Bell className="w-5 h-5" />
+            <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
-              <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 bg-primary text-on-primary text-[10px] font-bold rounded-full flex items-center justify-center px-1">
+              <span className="absolute top-0.5 right-0.5 min-w-[15px] h-3.5 bg-primary text-on-primary text-[9px] font-bold rounded-xs flex items-center justify-center px-1 leading-none">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
           </button>
 
           {isNotifOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-[#1a1a1a] rounded-2xl shadow-2xl ring-1 ring-outline-variant/20 z-50 max-h-96 flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
-                <span className="text-sm font-bold text-white">Notifications</span>
+            <div className="absolute right-0 mt-1 w-80 bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50 max-h-96 flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/60 bg-surface-container-low">
+                <span className="text-[12px] text-on-surface flex items-center gap-1.5">
+                  <span className="text-outline-variant">▸</span>
+                  notifications
+                </span>
                 {unreadCount > 0 && (
                   <button
                     onClick={markAllRead}
-                    className="text-xs text-primary font-bold hover:underline cursor-pointer"
+                    className="text-[11px] text-primary hover:underline cursor-pointer"
                   >
-                    Mark all read
+                    mark all read
                   </button>
                 )}
               </div>
               <div className="overflow-y-auto flex-1">
                 {notifications.length === 0 ? (
-                  <div className="px-4 py-10 text-center text-sm text-on-surface-variant">
-                    No notifications
+                  <div className="px-3 py-8 text-center text-[12px] text-on-surface-variant">
+                    -- no notifications --
                   </div>
                 ) : (
                   notifications.slice(0, 20).map(notif => (
                     <button
                       key={notif.id}
                       onClick={() => { if (!notif.read) markRead(notif.id); }}
-                      className={`w-full text-left px-4 py-3 border-b border-outline-variant/5 hover:bg-surface-container-high cursor-pointer transition-colors ${
-                        !notif.read ? 'bg-primary/5' : ''
-                      }`}
+                      className={cn(
+                        'w-full text-left px-3 py-2 border-b border-outline-variant/30 hover:bg-surface-container-high cursor-pointer transition-colors',
+                        !notif.read && 'bg-primary-container/30'
+                      )}
                     >
-                      <div className="flex items-start gap-2.5">
-                        {!notif.read && (
-                          <span className="w-2 h-2 bg-primary rounded-full mt-1.5 shrink-0" />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-white truncate">{notif.title}</p>
-                          {notif.body && (
-                            <p className="text-xs text-on-surface-variant truncate mt-0.5">{notif.body}</p>
+                      <div className="flex items-start gap-2">
+                        <span
+                          aria-hidden
+                          className={cn(
+                            'mt-1.5 shrink-0 dot',
+                            !notif.read ? 'dot-ok' : 'dot-idle'
                           )}
-                          <p className="text-[10px] text-on-surface-variant/60 mt-1" suppressHydrationWarning>
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[13px] text-on-surface truncate">{notif.title}</p>
+                          {notif.body && (
+                            <p className="text-[11px] text-on-surface-variant truncate mt-0.5">{notif.body}</p>
+                          )}
+                          <p className="text-[10px] text-outline mt-1" suppressHydrationWarning>
                             {new Date(notif.createdAt).toLocaleTimeString()}
                           </p>
                         </div>
@@ -317,69 +335,76 @@ export function Header() {
           )}
         </div>
 
-        {/* Divider */}
-        <div className="h-6 w-px bg-outline-variant/20" />
+        <div className="h-5 w-px bg-outline-variant/60 mx-1" />
 
-        {/* Profile Dropdown */}
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setIsProfileOpen(!isProfileOpen)}
-            className="flex items-center gap-3 p-1.5 text-on-surface-variant hover:text-white rounded-lg hover:bg-[#1a1a1a] cursor-pointer transition-colors"
+            className="flex items-center gap-2 px-2 py-1.5 text-on-surface-variant hover:text-on-surface rounded-xs hover:bg-surface-container cursor-pointer transition-colors"
           >
-            <div className="text-right hidden sm:block">
-              <p className="text-xs font-bold text-white leading-none">{user?.username || 'Guest'}</p>
-              <p className="text-[10px] text-on-surface-variant">{user?.isAdmin ? 'Superuser Access' : 'User'}</p>
-            </div>
-            <div className="w-8 h-8 rounded-full bg-primary-container/20 flex items-center justify-center text-primary">
-              <User className="w-4 h-4" />
+            <span
+              aria-hidden
+              className={cn('dot', user?.isAdmin ? 'dot-warn' : 'dot-ok')}
+            />
+            <div className="text-left hidden sm:block leading-tight">
+              <p className="text-[12px] text-on-surface">{user?.username || 'guest'}</p>
+              <p className="text-[10px] text-outline-variant uppercase tracking-wider">
+                {user?.isAdmin ? 'root' : 'user'}
+              </p>
             </div>
           </button>
 
           {isProfileOpen && (
-            <div className="absolute right-0 mt-2 w-56 bg-[#1a1a1a] rounded-2xl shadow-2xl ring-1 ring-outline-variant/20 py-1 z-50">
+            <div className="absolute right-0 mt-1 w-52 bg-surface-container border border-outline-variant rounded-xs shadow-xl py-1 z-50">
               {user ? (
                 <>
-                  <div className="px-4 py-2.5 border-b border-outline-variant/10">
-                    <p className="text-sm font-bold text-white">{user.username}</p>
-                    <p className="text-xs text-on-surface-variant">{user.isAdmin ? 'Administrator' : 'User'}</p>
+                  <div className="px-3 py-2 border-b border-outline-variant/60 flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className={cn('dot', user.isAdmin ? 'dot-warn' : 'dot-ok')}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-[13px] text-on-surface truncate">{user.username}</p>
+                      <p className="text-[10px] text-on-surface-variant uppercase tracking-wider">
+                        {user.isAdmin ? 'administrator' : 'user'}
+                      </p>
+                    </div>
                   </div>
-                  <div className="py-1">
-                    <button
-                      onClick={() => { router.push('/secrets'); setIsProfileOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-on-surface-variant hover:text-white hover:bg-surface-container-high cursor-pointer transition-colors"
-                    >
-                      <KeyRound className="w-4 h-4" />
-                      Secrets & Keys
-                    </button>
-                    <button
-                      onClick={() => { router.push('/settings'); setIsProfileOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-on-surface-variant hover:text-white hover:bg-surface-container-high cursor-pointer transition-colors"
-                    >
-                      <Settings className="w-4 h-4" />
-                      Settings
-                    </button>
-                  </div>
-                  <div className="border-t border-outline-variant/10 py-1">
+                  <button
+                    onClick={() => { router.push('/secrets'); setIsProfileOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer transition-colors"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    secrets &amp; keys
+                  </button>
+                  <button
+                    onClick={() => { router.push('/settings'); setIsProfileOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer transition-colors"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    settings
+                  </button>
+                  <div className="border-t border-outline-variant/60 mt-1 pt-1">
                     <button
                       onClick={handleLogout}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-error hover:bg-error/10 cursor-pointer transition-colors"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-error hover:bg-error-container cursor-pointer transition-colors"
                     >
-                      <LogOut className="w-4 h-4" />
-                      Sign Out
+                      <LogOut className="w-3.5 h-3.5" />
+                      sign out
                     </button>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="px-4 py-2.5 border-b border-outline-variant/10">
-                    <p className="text-sm text-on-surface-variant">Not signed in</p>
+                  <div className="px-3 py-2 border-b border-outline-variant/60">
+                    <p className="text-[12px] text-on-surface-variant">not signed in</p>
                   </div>
                   <button
                     onClick={handleLogin}
-                    className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-primary hover:bg-primary/10 cursor-pointer transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-primary hover:bg-primary-container cursor-pointer transition-colors"
                   >
-                    <User className="w-4 h-4" />
-                    Sign In
+                    <User className="w-3.5 h-3.5" />
+                    sign in
                   </button>
                 </>
               )}

@@ -39,49 +39,47 @@ interface NavGroup {
 
 const navGroups: NavGroup[] = [
   {
-    label: 'Main',
+    label: 'main',
     items: [
-      { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-      { name: 'Chat', href: '/chat', icon: MessageSquare },
-      { name: 'Documents', href: '/documents', icon: FileText },
-      { name: 'Profiles', href: '/profiles', icon: Users },
+      { name: 'dashboard', href: '/', icon: LayoutDashboard },
+      { name: 'chat', href: '/chat', icon: MessageSquare },
+      { name: 'documents', href: '/documents', icon: FileText },
+      { name: 'profiles', href: '/profiles', icon: Users },
     ],
   },
   {
-    label: 'AI & Automation',
+    label: 'ai & automation',
     items: [
-      { name: 'Agents', href: '/agents', icon: Bot },
-      { name: 'Models', href: '/models', icon: Cpu },
-      { name: 'Pipelines', href: '/pipelines', icon: GitBranch },
-      { name: 'Tools', href: '/tools', icon: Wrench },
-      { name: 'Skills', href: '/skills', icon: BookOpen },
-      { name: 'Knowledge', href: '/knowledge', icon: Brain },
-      { name: 'Evaluations', href: '/eval', icon: FlaskConical },
-      { name: 'Live Artifacts', href: '/artifacts', icon: Globe },
+      { name: 'agents', href: '/agents', icon: Bot },
+      { name: 'models', href: '/models', icon: Cpu },
+      { name: 'pipelines', href: '/pipelines', icon: GitBranch },
+      { name: 'tools', href: '/tools', icon: Wrench },
+      { name: 'skills', href: '/skills', icon: BookOpen },
+      { name: 'knowledge', href: '/knowledge', icon: Brain },
+      { name: 'evaluations', href: '/eval', icon: FlaskConical },
+      { name: 'artifacts', href: '/artifacts', icon: Globe },
     ],
   },
   {
-    label: 'System',
+    label: 'system',
     items: [
-      { name: 'MCP', href: '/mcp', icon: Cable },
-      { name: 'Hooks & Tasks', href: '/hooks', icon: Webhook },
+      { name: 'mcp', href: '/mcp', icon: Cable },
+      { name: 'hooks', href: '/hooks', icon: Webhook },
     ],
   },
   {
-    label: 'Admin',
+    label: 'admin',
     items: [
-      { name: 'Secrets', href: '/secrets', icon: KeyRound },
-      { name: 'Settings', href: '/settings', icon: Settings },
+      { name: 'secrets', href: '/secrets', icon: KeyRound },
+      { name: 'settings', href: '/settings', icon: Settings },
     ],
   },
 ];
 
 const adminOnlyGroup: NavGroup = {
-  label: 'Multi-user',
+  label: 'multi-user',
   items: [
-    // The /admin layout already exposes Quotas + Audit log as tabs alongside
-    // Users — duplicating them here just makes two paths to the same page.
-    { name: 'Users', href: '/admin/users', icon: Users },
+    { name: 'users', href: '/admin/users', icon: Users },
   ],
 };
 
@@ -94,47 +92,47 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex flex-col bg-surface-container-lowest border-r border-outline-variant/15 transition-all duration-300 ease-in-out shrink-0 font-body',
-        collapsed ? 'w-16' : 'w-64'
+        'flex flex-col bg-surface-container-lowest border-r border-outline-variant/40 transition-[width] duration-200 ease-out shrink-0 font-mono',
+        collapsed ? 'w-14' : 'w-60'
       )}
     >
-      {/* Logo */}
-      <div className="h-16 flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center gap-2.5 overflow-hidden">
-          <div className="w-8 h-8 bg-linear-to-br from-primary to-primary-container rounded-xs flex items-center justify-center shrink-0 shadow-[0_0_18px_-4px_rgba(115,255,227,0.5)]">
-            <img src="/logo.png" alt="Octipus" className="w-full h-full object-contain" />
+      {/* Brand row — small square logo + word "octipus", with a TUI
+          status dot showing the gateway is connected. Logo intentionally
+          flat (no gradient) so it reads as an icon in a terminal grid. */}
+      <div className="h-12 flex items-center justify-between px-3 shrink-0 border-b border-outline-variant/40">
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="w-7 h-7 flex items-center justify-center shrink-0 bg-surface-container border border-outline-variant/60 rounded-xs">
+            <img src="/logo.png" alt="Octipus" className="w-5 h-5 object-contain" />
           </div>
           {!collapsed && (
-            <span className="text-lg font-black tracking-tighter text-primary whitespace-nowrap font-headline">
-              Octipus
+            <span className="text-sm font-bold text-on-surface whitespace-nowrap">
+              octipus
+              <span className="text-primary">_</span>
             </span>
           )}
         </div>
         <button
           onClick={toggle}
-          className="p-1.5 text-on-surface-variant hover:text-primary hover:bg-surface-container-low rounded-lg cursor-pointer shrink-0 transition-colors"
+          className="p-1 text-on-surface-variant hover:text-primary hover:bg-surface-container rounded-xs cursor-pointer shrink-0 transition-colors"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          {collapsed ? (
-            <PanelLeft className="w-4 h-4" />
-          ) : (
-            <PanelLeftClose className="w-4 h-4" />
-          )}
+          {collapsed ? <PanelLeft className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
         </button>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-5">
-        {groups.map((group, groupIndex) => (
+      {/* Navigation. Group labels prefixed with `▸` for a TUI tree feel.
+          Active item uses a `❯` left-marker rendered via ::before in CSS
+          (here just rendered inline so it's keyboard-readable). */}
+      <nav className="flex-1 overflow-y-auto py-3 px-1.5 space-y-3">
+        {groups.map((group) => (
           <div key={group.label}>
             {!collapsed && (
-              <div className="px-4 mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-outline-variant">
-                  {group.label}
-                </span>
+              <div className="px-2 mb-1 flex items-center gap-1.5 text-[10px] text-outline tracking-[0.08em] uppercase">
+                <span className="text-outline-variant">▸</span>
+                <span>{group.label}</span>
               </div>
             )}
-            <div className="space-y-0.5">
+            <div>
               {group.items.map((item) => {
                 const isActive =
                   item.href === '/'
@@ -146,38 +144,51 @@ export function Sidebar() {
                     href={item.href}
                     title={collapsed ? item.name : undefined}
                     className={cn(
-                      'relative flex items-center gap-4 text-sm font-medium uppercase tracking-[0.08em] transition-all duration-200',
-                      collapsed ? 'justify-center px-2 py-2.5 rounded-lg' : 'px-4 py-3',
+                      'group relative flex items-center gap-2 text-[13px] transition-colors',
+                      collapsed
+                        ? 'justify-center px-2 py-2 rounded-xs'
+                        : 'px-2 py-1.5 rounded-xs',
                       isActive
-                        ? 'text-primary bg-linear-to-r from-primary/10 to-transparent border-r-2 border-primary translate-x-0.5'
-                        : 'text-outline-variant hover:text-on-surface-variant hover:bg-surface-container-low border-r-2 border-transparent'
+                        ? 'text-primary bg-primary-container/40'
+                        : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
                     )}
                   >
-                    <item.icon className={cn('shrink-0', collapsed ? 'w-5 h-5' : 'w-5 h-5')} />
-                    {!collapsed && <span>{item.name}</span>}
+                    {/* TUI active marker — chevron in accent. Collapsed
+                        view drops the marker since there's no room. */}
+                    {!collapsed && (
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'w-3 text-center text-primary',
+                          isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
+                        )}
+                      >
+                        ❯
+                      </span>
+                    )}
+                    <item.icon className="shrink-0 w-4 h-4" />
+                    {!collapsed && <span className="truncate">{item.name}</span>}
                   </Link>
                 );
               })}
             </div>
-            {/* Group spacer — no divider lines per design spec */}
-            {groupIndex < groups.length - 1 && !collapsed && (
-              <div className="h-3" />
-            )}
           </div>
         ))}
       </nav>
 
-      {/* User card at bottom — glass variant */}
-      {!collapsed && (
-        <div className="px-4 py-4 space-y-3">
-          <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-container-lowest border border-outline-variant/20">
-            <div className="w-8 h-8 rounded-full bg-linear-to-br from-primary to-tertiary flex items-center justify-center">
-              <Bot className="w-4 h-4 text-on-primary" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-white truncate">System Admin</p>
-              <p className="text-[10px] text-on-surface-variant uppercase tracking-widest">Tier-1 Access</p>
-            </div>
+      {/* User card — single dim-border block, status dot + role. Matches
+          the TUI status-bar pattern of "● label · meta". */}
+      {!collapsed && user && (
+        <div className="px-2 py-2 border-t border-outline-variant/40">
+          <div className="flex items-center gap-2 px-2 py-1.5 text-[12px]">
+            <span
+              className={cn('dot', user.isAdmin ? 'dot-warn' : 'dot-ok')}
+              aria-hidden
+            />
+            <span className="truncate text-on-surface">{user.username}</span>
+            <span className="ml-auto text-[10px] text-outline-variant uppercase tracking-wider">
+              {user.isAdmin ? 'root' : 'user'}
+            </span>
           </div>
         </div>
       )}
