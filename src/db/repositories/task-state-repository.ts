@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import {
   type NewTaskState,
@@ -112,6 +112,31 @@ export class TaskStateRepository {
       .where(and(eq(taskState.status, 'done'), lt(taskState.updatedAt, cutoff)))
       .returning({ id: taskState.id });
     return result.length;
+  }
+
+  /**
+   * Orphan reaper — drop task_state rows whose session_id no longer
+   * exists in `sessions`. The schema deliberately omits the FK (see
+   * migration 0050: keeping the typed output outweighs cascade
+   * correctness when the session row is gone), so this reaper
+   * compensates. Status filter excludes in-flight rows so a long-
+   * running task whose session was recreated mid-flight is safe.
+   * Returns the number of rows deleted.
+   */
+  async reapOrphans(): Promise<number> {
+    const result = await this.db.execute(sql`
+      DELETE FROM task_state
+      WHERE status IN ('done', 'failed', 'cancelled')
+        AND NOT EXISTS (
+          SELECT 1 FROM sessions s WHERE s.id = task_state.session_id
+        )
+      RETURNING id
+    `);
+    if (Array.isArray(result)) return result.length;
+    if (result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows)) {
+      return ((result as { rows: unknown[] }).rows).length;
+    }
+    return 0;
   }
 }
 

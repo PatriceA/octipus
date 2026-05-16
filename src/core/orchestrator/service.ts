@@ -334,7 +334,12 @@ export class OrchestratorService {
       } catch (err) {
         coreLogger.warn({ err }, 'memory.retrieveForContext failed — proceeding without memories');
       }
+      const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
+        // Cadence gate. `off` short-circuits before any work; the
+        // `on_compaction` path is handled inside session-compaction.ts
+        // so the per-turn path skips here.
+        if (memoryCadence !== 'per_turn') return;
         // Best-effort provenance: pick up the just-persisted user
         // message id. Returns undefined when persistence hasn't landed
         // yet (e.g. the worker persists asynchronously) — that's fine,
@@ -501,7 +506,7 @@ export class OrchestratorService {
     const orchestratorAbortController = new AbortController();
     const orchestratorAllowedToolIds = new Set<string>();
     // Meta-tool ids that the orchestrator owns by construction.
-    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update']) {
+    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this']) {
       orchestratorAllowedToolIds.add(name);
     }
     // Role-defined tool ids (if any): orchestrator role uses meta-tools only.
@@ -550,9 +555,23 @@ export class OrchestratorService {
     const session = await sessionRepository.findById(sessionId);
     const sessionCtxData = session?.context as SessionContext | undefined;
     const clearedAt = sessionCtxData?.clearedAt ? new Date(sessionCtxData.clearedAt) : undefined;
-    const sessionSummary = sessionCtxData?.compactedSummary;
+    // Pull session summary from the append-only `compaction_entries`
+    // log (newest row). Falls back to the legacy `context.compactedSummary`
+    // for sessions compacted before the dual-write removal so old data
+    // doesn't lose its summary mid-rollout.
+    let sessionSummary: string | undefined;
+    if (!clearedAt) {
+      try {
+        const { compactionEntryRepository } = await import('@/db/repositories/compaction-entry-repository');
+        const latest = await compactionEntryRepository.findLatest(sessionId);
+        sessionSummary = latest?.summary ?? sessionCtxData?.compactedSummary;
+      } catch (err) {
+        coreLogger.debug({ err, sessionId }, 'compaction-entry lookup failed — falling back to legacy context');
+        sessionSummary = sessionCtxData?.compactedSummary;
+      }
+    }
     const sources: string[] = [];
-    if (sessionSummary && !clearedAt) {
+    if (sessionSummary) {
       systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
       sources.push('session summary');
     }

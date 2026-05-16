@@ -199,10 +199,14 @@ async function compactSessionContext(
 
   const summaryMsg = result.messages.find(m => m.role === 'system' && m.content.startsWith('Summary'));
 
+  // Context.compactedSummary is the legacy single-string field;
+  // compaction_entries is the new append-only log. Readers should pull
+  // from the latest compaction_entries row (see service.ts /
+  // direct-response.ts). We stop writing to compactedSummary here —
+  // commands/clear.ts still nulls it for the old-data case.
   await sessionRepository.update(sessionId, {
     context: {
       ...existingContext,
-      compactedSummary: summaryMsg?.content || existingContext.compactedSummary,
       compactionState: nextState,
     },
   });
@@ -247,6 +251,32 @@ async function compactSessionContext(
     },
     'Session context compacted',
   );
+
+  // On-compaction memory extraction: feed the structured summary
+  // through the memory pipeline so durable facts get captured even
+  // when the orchestrator's per-turn extraction is disabled. The
+  // summary is third-person and condensed, which is actually closer
+  // to the extractor's preferred input than raw user turns.
+  const cadence = getConfig().memory?.extractionCadence ?? 'per_turn';
+  if (cadence === 'on_compaction' && structuredSummary.trim().length > 0) {
+    const sessionRow = await sessionRepository.findById(sessionId).catch(() => null);
+    const userId = sessionRow?.userId;
+    if (userId) {
+      try {
+        const { updateMemoriesAfterTurn } = await import('@/core/memory');
+        updateMemoriesAfterTurn({
+          userId,
+          workspaceId: null,
+          agentScope: null,
+          userMessage: structuredSummary,
+        }).catch((err) =>
+          coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed (non-fatal)'),
+        );
+      } catch (err) {
+        coreLogger.debug({ err, sessionId }, 'on-compaction memory extraction module load failed');
+      }
+    }
+  }
 
   if (ineffective) {
     const nextEligibleTokens = Math.ceil(tokensBefore * cfg.growthMultiplier);

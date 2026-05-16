@@ -340,6 +340,20 @@ export const configSchema = z.object({
   workspace: workspaceConfigSchema.prefault({}),
   multiuser: multiuserConfigSchema.prefault({}),
   compaction: compactionConfigSchema.prefault({}),
+  memory: z.object({
+    /**
+     * When to run the memory extractor + judge pipeline.
+     *
+     * - `per_turn`: extract after every user turn. Granular, more
+     *   LLM calls (one extractor + one judge call per extracted
+     *   fact, typically 0–1 per turn). Default.
+     * - `on_compaction`: extract only when the session compactor
+     *   runs. Fewer LLM calls; learning lags by hours of conversation.
+     * - `off`: skip extraction entirely. Retrieval still works
+     *   for any memories already in the table.
+     */
+    extractionCadence: z.enum(['per_turn', 'on_compaction', 'off']).default('per_turn'),
+  }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
   swarm: swarmConfigSchema.prefault({}),

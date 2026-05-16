@@ -142,6 +142,59 @@ export function createMetaTools(
       },
     },
     {
+      name: 'remember_this',
+      description:
+        'Promote one durable fact about the user into long-term memory. Use SPARINGLY — only when the user states something the next session genuinely needs to recall (preference, profile fact, recurring workflow note). Do NOT use for one-shot intents, transient task state, or facts about anyone other than the user. The fact must be one sentence, third-person about the user. PII is auto-redacted; do not pre-redact.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fact: {
+            type: 'string',
+            description: 'One sentence, third-person about the user. Example: "The user prefers tabs over spaces for indentation."',
+          },
+          fact_type: {
+            type: 'string',
+            enum: ['preference', 'profile', 'relationship', 'skill_observation', 'workflow_note'],
+            description: 'Canonical fact category. Pick the closest match.',
+          },
+          confidence: {
+            type: 'number',
+            description: 'Confidence 0.5–1.0. Use 1.0 for explicit statements ("I always use tabs"), 0.5 for inferred.',
+          },
+        },
+        required: ['fact', 'fact_type'],
+      },
+      execute: async (args, context) => {
+        const fact = String(args.fact).trim();
+        if (fact.length < 5) {
+          return { stored: false, reason: 'fact too short' };
+        }
+        const factType = String(args.fact_type);
+        const confidence = typeof args.confidence === 'number'
+          ? Math.max(0.5, Math.min(1.0, args.confidence as number))
+          : 1.0;
+
+        const { judgeAndApply } = await import('@/core/memory');
+        const outcomes = await judgeAndApply(
+          [{ factType, content: fact, confidence }],
+          {
+            userId: context.userId,
+            workspaceId: (context.workspaceId ?? null) as string | null,
+            agentScope: null,
+            sourceMessageId: null,
+          },
+        );
+        const outcome = outcomes[0];
+        if (!outcome) return { stored: false, reason: 'judge returned no outcome' };
+        return {
+          stored: outcome.action !== 'NOOP',
+          action: outcome.action,
+          memory_id: outcome.memoryId,
+          fact: outcome.candidate.content, // PII-redacted form
+        };
+      },
+    },
+    {
       name: 'request_user_approval',
       description:
         'Pause execution and ask the user for approval before proceeding. Use this at important decision points (e.g., before starting implementation after a plan is created).',

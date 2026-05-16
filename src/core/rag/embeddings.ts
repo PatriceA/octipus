@@ -3,10 +3,10 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { cosineSimilarity, type EmbeddingMetadata, embeddings } from '@/db/schema/embeddings';
-import { type RetentionPolicy, retentionPolicies } from '@/db/schema/retention-policies';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
 import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
+import { type CleanupOptions, type CleanupResult, runCleanup } from './retention-service';
 
 /**
  * Memory-redesign Phase A — `embeddings.purpose` values. Kept here so the
@@ -842,231 +842,17 @@ export class EmbeddingService {
     return result.length;
   }
 
-  /**
-   * Apply one retention_policies row to the embeddings table. Returns
-   * the number of rows removed (0 in dryRun). The age axis uses
-   * `created_at`; the LFU axis uses `access_count` + `created_at`
-   * (a row that has never been accessed and is older than
-   * `lfuMinAgeDays` is reaped if `lfuMinAccess` is >= 1).
-   *
-   * Either axis with NULL on its parameter is disabled. Both NULL =
-   * the policy is a documentation-only row (e.g. `document` rows
-   * cascade-delete with their parent document so they need no
-   * standalone retention).
-   */
-  private async applyRetentionPolicy(policy: RetentionPolicy, dryRun: boolean): Promise<number> {
-    const db = getDb();
-    const conditions: ReturnType<typeof sql>[] = [];
-
-    if (policy.maxAgeDays != null) {
-      const ageCutoff = new Date(Date.now() - policy.maxAgeDays * 24 * 60 * 60 * 1000);
-      conditions.push(sql`created_at < ${ageCutoff.toISOString()}`);
-    }
-
-    if (policy.lfuMinAccess != null && policy.lfuMinAgeDays != null) {
-      const lfuCutoff = new Date(Date.now() - policy.lfuMinAgeDays * 24 * 60 * 60 * 1000);
-      // OR-combined with the age axis: a row is reaped if EITHER it's
-      // too old OR it's cold-and-stale. SQL: `(age_cond) OR (lfu_cond)`.
-      conditions.push(
-        sql`(access_count < ${policy.lfuMinAccess} AND created_at < ${lfuCutoff.toISOString()})`,
-      );
-    }
-
-    if (conditions.length === 0) return 0;
-
-    const where = conditions.reduce<ReturnType<typeof sql> | null>(
-      (acc, c) => (acc === null ? c : sql`${acc} OR ${c}`),
-      null,
-    );
-    if (where === null) return 0;
-
-    const found = await db.execute(sql`
-      SELECT id FROM embeddings
-      WHERE purpose = ${policy.purpose}
-        AND (${where})
-    `);
-    const ids = rows<{ id: string }>(found).map((r) => r.id);
-    if (ids.length === 0) return 0;
-    if (dryRun) return ids.length;
-
-    for (let i = 0; i < ids.length; i += 100) {
-      const batch = ids.slice(i, i + 100);
-      await db.delete(embeddings).where(inArray(embeddings.id, batch));
-    }
-    return ids.length;
-  }
-
   // ── Cleanup ─────────────────────────────────────────────────────
 
   /**
-   * Clean up the knowledge base.
-   *
-   * After Phase A.5 the per-purpose age cap comes from the
-   * `retention_policies` table (seeded with sane defaults in migration
-   * 0051). The legacy `maxAgeDays` option is now a fallback only used
-   * for the rolled-up `staleAgentOutputs` count (legacy `agent_output`
-   * sourceType + `purpose='ephemeral'`) — it does not override
-   * policies for other purposes.
-   *
-   * Passes:
-   *   1. Orphaned document embeddings (documents row gone)
-   *   2. Per-purpose retention from retention_policies
-   *      (age cap + optional LFU)
-   *   3. Legacy ephemeral / agent_output sweep (covered by purpose
-   *      policy too; the count is kept for the audit log)
-   *   4. Short/low-quality entries
-   *   5. Near-duplicates (mostly redundant after the Phase A dedup
-   *      unique index, but kept as a backstop for legacy rows)
+   * Clean up the knowledge base. Thin delegate to `runCleanup` in
+   * `./retention-service.ts` — retention is a distinct concern from
+   * embedding/indexing and now lives in its own module so this file
+   * stays close to "search and store". Kept as a service method for
+   * call-site stability (cron, knowledge API, knowledge tool).
    */
-  async cleanup(options: {
-    maxAgeDays?: number;
-    minContentLength?: number;
-    dryRun?: boolean;
-    triggeredBy?: string;
-  } = {}): Promise<{
-    orphanedDocuments: number;
-    staleAgentOutputs: number;
-    shortEntries: number;
-    duplicates: number;
-    byPurpose: Record<string, number>;
-    total: number;
-  }> {
-    const maxAgeDays = options.maxAgeDays ?? 30;
-    const minContentLength = options.minContentLength ?? 50;
-    const dryRun = options.dryRun ?? false;
-    const triggeredBy = options.triggeredBy ?? 'manual';
-    const startTime = Date.now();
-    const db = getDb();
-
-    // Capture pre-cleanup count
-    const beforeRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
-    const totalBefore = (rows<{ count: number }>(beforeRes)[0]?.count) || 0;
-
-    const results = {
-      orphanedDocuments: 0,
-      staleAgentOutputs: 0,
-      shortEntries: 0,
-      duplicates: 0,
-      byPurpose: {} as Record<string, number>,
-      total: 0,
-    };
-
-    // 0. Per-purpose retention from retention_policies (Phase A.5).
-    // Runs before the legacy passes so they see fewer rows.
-    const policies = await db.select().from(retentionPolicies);
-    for (const p of policies) {
-      const removed = await this.applyRetentionPolicy(p, dryRun);
-      if (removed > 0) results.byPurpose[p.purpose] = removed;
-    }
-
-    // 1. Orphaned document embeddings — documents table record no longer exists
-    const orphanedRes = await db.execute(sql`
-      SELECT e.id FROM embeddings e
-      WHERE e.source_type = 'document'
-        AND NOT EXISTS (SELECT 1 FROM documents d WHERE CAST(d.id AS text) = e.source_id)
-    `);
-    const orphaned = rows<{ id: string }>(orphanedRes);
-
-    results.orphanedDocuments = orphaned.length;
-    if (!dryRun && orphaned.length > 0) {
-      const ids = orphaned.map(r => r.id);
-      for (let i = 0; i < ids.length; i += 100) {
-        const batch = ids.slice(i, i + 100);
-        await db.delete(embeddings).where(inArray(embeddings.id, batch));
-      }
-    }
-
-    // 2. Old agent output embeddings
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - maxAgeDays);
-
-    // After memory-redesign Phase B, agent outputs no longer land in
-    // `embeddings` — they live in `task_state`. The query still runs to
-    // sweep any rows tagged `purpose='ephemeral'` (legacy agent_output
-    // rows from older deployments and the small set of probe/health
-    // rows). Steady-state expectation: this returns 0.
-    const staleRes = await db.execute(sql`
-      SELECT id FROM embeddings
-      WHERE (purpose = 'ephemeral' OR source_type = 'agent_output')
-        AND created_at < ${cutoffDate.toISOString()}
-    `);
-    const stale = rows<{ id: string }>(staleRes);
-
-    results.staleAgentOutputs = stale.length;
-    if (!dryRun && stale.length > 0) {
-      const ids = stale.map(r => r.id);
-      for (let i = 0; i < ids.length; i += 100) {
-        const batch = ids.slice(i, i + 100);
-        await db.delete(embeddings).where(inArray(embeddings.id, batch));
-      }
-    }
-
-    // 3. Very short/low-quality entries
-    const shortRes = await db.execute(sql`
-      SELECT id FROM embeddings
-      WHERE length(content) < ${minContentLength}
-        AND content NOT LIKE '[%'
-    `);
-    const short = rows<{ id: string }>(shortRes);
-
-    results.shortEntries = short.length;
-    if (!dryRun && short.length > 0) {
-      const ids = short.map(r => r.id);
-      for (let i = 0; i < ids.length; i += 100) {
-        const batch = ids.slice(i, i + 100);
-        await db.delete(embeddings).where(inArray(embeddings.id, batch));
-      }
-    }
-
-    // 4. Duplicates — kept as a 0-result placeholder for the audit
-    //    log shape. The Phase A unique index
-    //    (purpose, source_id, content_sha256) makes inserts of
-    //    semantically-identical rows impossible, so the old O(N²)
-    //    EXISTS sweep is dead code. Removed in the post-implementation
-    //    cleanup; left the counter so the audit log schema stays
-    //    backwards-compatible.
-    results.duplicates = 0;
-
-    const byPurposeTotal = Object.values(results.byPurpose).reduce((a, b) => a + b, 0);
-    results.total = results.orphanedDocuments + results.staleAgentOutputs + results.shortEntries + results.duplicates + byPurposeTotal;
-
-    // Capture post-cleanup count and duration
-    const afterRes = await db.execute(sql`SELECT count(*)::int AS count FROM embeddings`);
-    const totalAfter = (rows<{ count: number }>(afterRes)[0]?.count) || 0;
-    const durationMs = Date.now() - startTime;
-
-    // Write audit log entry
-    try {
-      await db.insert(cleanupAuditLog).values({
-        triggeredBy,
-        dryRun,
-        maxAgeDays,
-        minContentLength,
-        orphanedDocuments: results.orphanedDocuments,
-        staleAgentOutputs: results.staleAgentOutputs,
-        shortEntries: results.shortEntries,
-        duplicates: results.duplicates,
-        totalRemoved: results.total,
-        totalBefore,
-        totalAfter,
-        durationMs,
-      });
-    } catch (err) {
-      // Audit logging is non-critical — don't fail the cleanup
-      coreLogger.warn({ err }, 'Failed to write cleanup audit log');
-    }
-
-    coreLogger.info({
-      ...results,
-      dryRun,
-      maxAgeDays,
-      minContentLength,
-      durationMs,
-      totalBefore,
-      totalAfter,
-    }, 'Knowledge base cleanup completed');
-
-    return results;
+  async cleanup(options: CleanupOptions = {}): Promise<CleanupResult> {
+    return runCleanup(options);
   }
 
   // ── Cleanup History ───────────────────────────────────────────────

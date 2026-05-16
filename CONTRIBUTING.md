@@ -182,6 +182,34 @@ If you disagree with any of these, open an issue — don't silently re-enable.
 
 ---
 
+## Database access pattern
+
+**Default: use a repository.** Every domain table has a class in
+`src/db/repositories/<name>-repository.ts`. New domain code goes
+through one. The repository owns the Drizzle calls; callers see typed
+methods.
+
+**Explicitly permitted exceptions** — these files reach `getDb()`
+directly and are the only ones allowed to:
+
+- `src/core/rag/embeddings.ts` + `src/core/rag/retention-service.ts`
+  (RAG is its own service with its own query patterns; a repository
+  here would be a one-call wrapper per query)
+- `src/core/rag/health.ts` (single probe row, no shared shape)
+- `src/core/notification-service.ts` (single-table service)
+- `src/core/cron-runner.ts` (touches multiple tables for scheduling;
+  not a single domain)
+- `src/core/gateway/commands.ts` (expert lookup inline for a
+  command-router; isolated)
+- `src/core/orchestrator/templates.ts` (pipeline template lookups
+  inline for the orchestrator hot path)
+- Migration scripts in `scripts/`
+
+If you're tempted to add to this list, write a one-line comment
+explaining why a repository wouldn't help.
+
+---
+
 ## Getting help
 
 - **GitHub Issues:** bugs and concrete feature requests

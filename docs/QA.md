@@ -56,6 +56,11 @@ convention, without editing a registry.
 
 ### Channels
 
+The previous shipped `src/channels/qa-demo/` was removed (it sat
+disabled and added no value). The `'qa-demo'` literal is preserved
+in `ChannelType` (see `src/core/types.ts`) precisely so this
+exercise still typechecks. To run it:
+
 1. Create `src/channels/qa-demo/index.ts`:
 
    ```ts
@@ -76,14 +81,15 @@ convention, without editing a registry.
    export const qaDemoChannel = new QaDemoChannel();
    ```
 
-   Discovery accepts either an exported instance (preferred) or a class
-   constructor — both work since the discovery loader will instantiate a
-   class if no instance is exported.
+   Discovery accepts either an exported instance (preferred) or a
+   class constructor — both work since the discovery loader will
+   instantiate a class if no instance is exported.
 
 2. Restart. Look for the log `Channel discovered { type: 'qa-demo', enabled: false }`.
 3. **Expect:** discovery picks it up but skips `connect()` because
    `isEnabled()` returned `false`. No errors thrown.
-4. Cleanup: remove the folder, restart.
+4. Cleanup: remove the folder, restart. The literal stays in
+   `ChannelType` for the next time this exercise runs.
 
 ---
 

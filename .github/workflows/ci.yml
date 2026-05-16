@@ -73,7 +73,7 @@ jobs:
         working-directory: web
 
   mcp-server:
-    name: MCP server (typecheck)
+    name: MCP server (typecheck · build · publish-check)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -92,3 +92,23 @@ jobs:
         run: bunx tsc --noEmit
         working-directory: mcp-server
         continue-on-error: true
+
+      - name: Build
+        run: bun run build
+        working-directory: mcp-server
+
+      - name: Verify dist/index.js exists
+        # Catches the misalignment between package.json (main: dist/index.js,
+        # files: ['dist']) and a misconfigured tsc that would silently emit
+        # to a different folder. An `npm publish` with no dist/index.js would
+        # ship a broken package.
+        run: test -f dist/index.js
+        working-directory: mcp-server
+
+      - name: npm pack dry-run (verify shipped files)
+        run: |
+          set -e
+          out=$(npm pack --dry-run --json)
+          echo "$out"
+          echo "$out" | grep -q 'dist/index.js' || (echo "::error::dist/index.js missing from npm pack" && exit 1)
+        working-directory: mcp-server

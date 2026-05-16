@@ -56,6 +56,7 @@ const navGroups: NavGroup[] = [
       { name: 'tools', href: '/tools', icon: Wrench },
       { name: 'skills', href: '/skills', icon: BookOpen },
       { name: 'knowledge', href: '/knowledge', icon: Brain },
+      { name: 'memory', href: '/memory', icon: Brain },
       { name: 'evaluations', href: '/eval', icon: FlaskConical },
       { name: 'artifacts', href: '/artifacts', icon: Globe },
     ],

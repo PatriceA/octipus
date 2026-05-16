@@ -67,7 +67,19 @@ export async function directResponse(
     }));
 
     const session = sessionForBoundary ?? await sessionRepository.findById(sessionId);
-    const summary = clearedAt ? undefined : (session?.context as SessionContext)?.compactedSummary;
+    // Read session summary from compaction_entries (newest row), with
+    // a fallback to legacy `context.compactedSummary` for sessions
+    // compacted before the dual-write removal.
+    let summary: string | undefined;
+    if (!clearedAt) {
+      try {
+        const { compactionEntryRepository } = await import('@/db/repositories/compaction-entry-repository');
+        const latest = await compactionEntryRepository.findLatest(sessionId);
+        summary = latest?.summary ?? (session?.context as SessionContext)?.compactedSummary;
+      } catch {
+        summary = (session?.context as SessionContext)?.compactedSummary;
+      }
+    }
     const now = new Date();
     const dateContext = `\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
     // Persona: dev-flavored when the session is in a coding workspace (devMode / projectPath set),
