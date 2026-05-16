@@ -97,13 +97,22 @@ export function createServer() {
       })
     )
     // Security headers
-    .onAfterHandle(({ set }) => {
+    .onAfterHandle(({ set, request }) => {
       set.headers['X-Content-Type-Options'] = 'nosniff';
-      set.headers['X-Frame-Options'] = 'DENY';
       set.headers['X-XSS-Protection'] = '0';
       set.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin';
-      set.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
       set.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+
+      // Artifact pages and embeds intentionally render in iframes and
+      // set their own CSP (with `frame-ancestors` controlling who can
+      // embed them). Applying the strict global X-Frame-Options/CSP here
+      // would override that and break the outer→embed iframe load.
+      const path = new URL(request.url).pathname;
+      const isArtifactPage = path.startsWith('/a/') || path.startsWith('/__artifacts__/');
+      if (!isArtifactPage) {
+        set.headers['X-Frame-Options'] = 'DENY';
+        set.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:";
+      }
     })
     // Request logging
     .onRequest(({ request }) => {
