@@ -62,6 +62,8 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'sql query', 'migration', 'row-level security', 'multi-tenant',
     'data warehouse', 'analytics', 'data engineering',
     'postgresql', 'mysql', 'mongodb', 'redis schema',
+    'live artifact', 'create artifact', 'dashboard', 'rss feed',
+    'data source', 'hosted dashboard', 'news feed',
   ],
   writing: [
     'documentation', 'api documentation', 'write docs', 'readme',
