@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { documents } from './documents';
 
 // Note: pgvector extension must be installed
 // CREATE EXTENSION IF NOT EXISTS vector;
@@ -27,16 +28,30 @@ const tsvector = customType<{ data: string; driverData: string }>({
 
 export const embeddings = pgTable('embeddings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  sourceType: text('source_type').notNull(), // message, document, code, agent_output
+  /**
+   * LEGACY — superseded by `purpose` (added by Phase A, migration 0049).
+   * Kept notNull during the soft-migration window so the 50+ existing
+   * call sites can continue to read/write it; new code should populate
+   * `purpose` instead and treat this column as derived. A future
+   * cleanup will drop this column once readers fully migrate.
+   * Values that ever existed here: 'message' | 'document' | 'code' |
+   * 'agent_output'.
+   */
+  sourceType: text('source_type').notNull(),
   sourceId: text('source_id').notNull(),
   /**
-   * Owner of the indexed content. Nullable in Phase 0 — RAG queries still
-   * span all rows for backwards compatibility. Phase 1 backfills, then
-   * filters every retrieval by `userId` so one tenant's docs never surface
-   * in another tenant's agent context.
+   * Owner of the indexed content. Multi-user is default-on
+   * (commit 8877d5e); new rows are required to carry a user_id at
+   * write time and retrieval scopes by it. Column remains nullable
+   * for now because old rows pre-date multi-user and a few service-
+   * level probes (rag/health.ts) intentionally write null.
    */
   userId: uuid('user_id'),
-  /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
+  /**
+   * Optional workspace scope. NULL = user-level (or workspace
+   * feature off). Threaded from `AgentContext.workspaceId` so chunks
+   * land in the same workspace as the agent that produced them.
+   */
   workspaceId: uuid('workspace_id'),
   content: text('content').notNull(),
   embedding: vector('embedding').notNull(),
@@ -97,9 +112,12 @@ export const embeddings = pgTable('embeddings', {
   headingLevel: smallint('heading_level'),
   /**
    * FK to the documents row this chunk came from. Cascade delete with
-   * the document. NULL for non-document sources (code, message, …).
+   * the document so chunks never outlive their source. NULL for
+   * non-document sources (code, message, …). The FK is declared via
+   * migration 0054 so older deployments backfill orphan rows before
+   * the constraint lands.
    */
-  docId: uuid('doc_id'),
+  docId: uuid('doc_id').references((): AnyPgColumn => documents.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   sourceTypeIdx: index('embeddings_source_type_idx').on(table.sourceType),
