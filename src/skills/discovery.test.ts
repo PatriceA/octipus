@@ -116,7 +116,12 @@ afterAll(async () => {
   try {
     const { closeDb } = await import('@/db/postgres');
     await closeDb();
-  } catch {}
+  } catch (err) {
+    // Teardown best-effort — surface it at debug level so a hung
+    // connection is still discoverable in logs without failing the
+    // test cleanup itself.
+    console.debug('discovery.test teardown: closeDb failed', err);
+  }
   rmSync(DATA_DIR, { recursive: true, force: true });
 });
 

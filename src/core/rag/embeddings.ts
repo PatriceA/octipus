@@ -553,12 +553,16 @@ export class EmbeddingService {
         LIMIT 50
       ),
       vec AS (
+        -- Parameterised vector literal (not sql.raw). The driver
+        -- binds vecLiteral as a placeholder and pgvector casts it
+        -- server-side. sql.raw splices the literal directly which
+        -- defeats parameterisation.
         SELECT id,
-               row_number() OVER (ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector) AS rank_vec,
-               1 - (embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector) AS cosine_sim
+               row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec,
+               1 - (embedding <=> ${vecLiteral}::vector) AS cosine_sim
         FROM embeddings
         WHERE 1=1 ${sourceFilter}
-        ORDER BY embedding <=> ${sql.raw(`'${vecLiteral}'`)}::vector
+        ORDER BY embedding <=> ${vecLiteral}::vector
         LIMIT 50
       ),
       combined AS (
@@ -1014,28 +1018,14 @@ export class EmbeddingService {
       }
     }
 
-    // 4. Duplicates — same source_type + source_id + content, keep newest
-    const dupesRes = await db.execute(sql`
-      SELECT id FROM embeddings e
-      WHERE EXISTS (
-        SELECT 1 FROM embeddings e2
-        WHERE e2.source_type = e.source_type
-          AND e2.source_id = e.source_id
-          AND e2.content = e.content
-          AND e2.id != e.id
-          AND e2.created_at > e.created_at
-      )
-    `);
-    const dupes = rows<{ id: string }>(dupesRes);
-
-    results.duplicates = dupes.length;
-    if (!dryRun && dupes.length > 0) {
-      const ids = dupes.map(r => r.id);
-      for (let i = 0; i < ids.length; i += 100) {
-        const batch = ids.slice(i, i + 100);
-        await db.delete(embeddings).where(inArray(embeddings.id, batch));
-      }
-    }
+    // 4. Duplicates — kept as a 0-result placeholder for the audit
+    //    log shape. The Phase A unique index
+    //    (purpose, source_id, content_sha256) makes inserts of
+    //    semantically-identical rows impossible, so the old O(N²)
+    //    EXISTS sweep is dead code. Removed in the post-implementation
+    //    cleanup; left the counter so the audit log schema stays
+    //    backwards-compatible.
+    results.duplicates = 0;
 
     const byPurposeTotal = Object.values(results.byPurpose).reduce((a, b) => a + b, 0);
     results.total = results.orphanedDocuments + results.staleAgentOutputs + results.shortEntries + results.duplicates + byPurposeTotal;

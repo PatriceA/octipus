@@ -90,8 +90,24 @@ export class MemoryRepository {
     scope: MemoryAccessScope & { factType: string; limit?: number },
   ): Promise<Array<Memory & { similarity: number }>> {
     const limit = scope.limit ?? 5;
+    // Validate the vector before letting it touch SQL. The driver
+    // parameterises the literal below, but we still refuse non-finite
+    // entries early so a NaN can't escape a calling-side bug into a
+    // confusing pgvector error.
+    if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
+      return [];
+    }
+    for (let i = 0; i < queryEmbedding.length; i++) {
+      if (typeof queryEmbedding[i] !== 'number' || !Number.isFinite(queryEmbedding[i])) {
+        throw new Error(`memories.searchSimilar: queryEmbedding[${i}] is not a finite number`);
+      }
+    }
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
-    const similarity = sql<number>`1 - (${memories.embedding} <=> ${sql.raw(`'${vecLiteral}'`)}::vector)`;
+    // Parameterised — Drizzle binds `vecLiteral` as a placeholder and
+    // pgvector casts it server-side. Earlier draft used sql.raw which
+    // splices the literal directly; parameterising defeats the
+    // splicing class of bug at the cost of one bind param.
+    const similarity = sql<number>`1 - (${memories.embedding} <=> ${vecLiteral}::vector)`;
     const scopeFilter = scope.agentScope
       ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
       : isNull(memories.agentScope);

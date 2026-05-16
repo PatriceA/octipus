@@ -108,6 +108,20 @@ export class OrchestratorService {
 
       const resolvedSessionId = await resolveSession(sessionId, userId, channel || 'api');
 
+      // Resolve the principal's default workspace once and thread it
+      // through every spawn / memory call below. Memory-redesign Phase B
+      // needs the workspace_id on task_state rows and memories rows; the
+      // agent worker carries it via `AgentContext.workspaceId` so the
+      // recorder/extractor can read it without re-resolving per turn.
+      let workspaceId: string | null = null;
+      try {
+        const { getOrgWorkspaceManager } = await import('@/security/orgs');
+        const ws = await getOrgWorkspaceManager().ensureDefaultWorkspace(userId);
+        workspaceId = ws.id;
+      } catch (err) {
+        coreLogger.debug({ err, userId }, 'workspace resolve failed — proceeding with null');
+      }
+
       trajectory = new TrajectoryRecorder({
         rootSessionId: resolvedSessionId,
         userId,
@@ -235,20 +249,51 @@ export class OrchestratorService {
 
         const planMessage = `Execute this project plan. Follow the brief and use the appropriate tools and agents:\n\n${planState.brief}`;
         const classification = classifyMessage(planMessage);
+
+        // Memory-redesign Phase D — also fire on plan execution. The
+        // plan often references the user's preferences ("use my usual
+        // stack"); withholding memory here would degrade plan quality.
+        let planMemoryBlock = '';
+        try {
+          const memories = await retrieveForContext({
+            userId,
+            agentScope: classification.topic ?? null,
+            limit: 12,
+          });
+          planMemoryBlock = renderMemoriesBlock(memories);
+        } catch (err) {
+          coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
+        }
+
         const { response, agentId, sources: _planSources } = await this.runOrchestrator(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
+          planMemoryBlock,
+          workspaceId,
         );
         void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
         const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
+
+        // Plan-execute path also extracts memory from the original
+        // user "go" message. Even though the message is short, the
+        // executor LLM sees the brief — facts in the brief should
+        // get a chance to be extracted. Fire-and-forget like the
+        // main path.
+        updateMemoriesAfterTurn({
+          userId,
+          workspaceId,
+          agentScope: classification.topic ?? null,
+          userMessage: planState.brief,
+        }).catch((err) => coreLogger.warn({ err }, 'memory.updateAfterTurn failed on plan path'));
+
         return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification };
       }
 
       // Expert bypass
       if (expertId) {
-        const expertResult = await handleExpertMessage(expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags);
+        const expertResult = await handleExpertMessage(expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags, workspaceId);
         const outputCheck = guardOutput(expertResult.response, inputGuard.flags);
         if (outputCheck.action === 'replace') {
           coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced expert response');
@@ -271,11 +316,18 @@ export class OrchestratorService {
       // short-circuits unless a model is bound to topic
       // "memory_extraction", so this costs nothing until the operator
       // opts in.
+      //
+      // Scope: classifier topic when available, NULL otherwise. The
+      // repository filter is OR(NULL, scope) so passing a topic still
+      // returns globally-scoped facts. Writing with the topic lets a
+      // future specialist running the same topic see role-relevant
+      // memories without dragging unrelated rows into every turn.
+      const memoryScope = classification.topic ?? null;
       let memoryBlock = '';
       try {
         const memories = await retrieveForContext({
           userId,
-          agentScope: 'orchestrator',
+          agentScope: memoryScope,
           limit: 12,
         });
         memoryBlock = renderMemoriesBlock(memories);
@@ -283,13 +335,37 @@ export class OrchestratorService {
         coreLogger.warn({ err }, 'memory.retrieveForContext failed — proceeding without memories');
       }
       const fireMemoryUpdate = () => {
-        updateMemoriesAfterTurn({
-          userId,
-          agentScope: 'orchestrator',
-          userMessage: message,
-        }).catch((err) =>
-          coreLogger.warn({ err }, 'memory.updateAfterTurn failed (non-fatal)'),
-        );
+        // Best-effort provenance: pick up the just-persisted user
+        // message id. Returns undefined when persistence hasn't landed
+        // yet (e.g. the worker persists asynchronously) — that's fine,
+        // the column is nullable on purpose.
+        void (async () => {
+          let sourceMessageId: string | null = null;
+          let recentTurns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+          try {
+            const latest = await messageRepository.findRecentBySession(resolvedSessionId, 4, ['user', 'assistant']);
+            const lastUser = [...latest].reverse().find((m) => m.role === 'user' && m.content === message);
+            sourceMessageId = lastUser?.id ?? null;
+            recentTurns = latest
+              .filter((m): m is typeof m & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
+              .slice(-3)
+              .map((m) => ({ role: m.role, content: m.content }));
+          } catch (err) {
+            coreLogger.debug({ err }, 'memory.updateAfterTurn: provenance lookup failed (non-fatal)');
+          }
+          try {
+            await updateMemoriesAfterTurn({
+              userId,
+              workspaceId,
+              agentScope: memoryScope,
+              sourceMessageId,
+              userMessage: message,
+              recentTurns,
+            });
+          } catch (err) {
+            coreLogger.warn({ err }, 'memory.updateAfterTurn failed (non-fatal)');
+          }
+        })();
       };
 
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
@@ -341,6 +417,7 @@ export class OrchestratorService {
       const { response, agentId, sources } = await this.runOrchestrator(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         memoryBlock,
+        workspaceId,
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -409,6 +486,8 @@ export class OrchestratorService {
      * long-term memory block.
      */
     extraSystemContext: string = '',
+    /** Workspace scope inherited by every spawned child. */
+    workspaceId: string | null = null,
   ): Promise<{ response: string; agentId: string; sources: string[] }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration();
@@ -557,6 +636,7 @@ export class OrchestratorService {
     const worker = await agentManager.spawn({
       sessionId,
       userId,
+      workspaceId,
       topic: orchestratorConfig.defaultTopic,
       model: modelName,
       role: 'orchestrator',

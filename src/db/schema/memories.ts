@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { customType, index, integer, pgTable, real, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 /**
@@ -83,9 +84,13 @@ export const memories = pgTable('memories', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('memories_user_idx').on(table.userId),
-  // Partial index over active memories — the hot read path filters
-  // by user + scope + fact_type and the supersession check.
-  activeIdx: index('memories_user_scope_type_active_idx').on(table.userId, table.agentScope, table.factType),
+  // Partial index over ACTIVE memories — the hot read path always
+  // filters `superseded_by IS NULL`, so excluding the supersession
+  // tail from this index keeps it small. Realised by migration 0054
+  // (the original 0053 index was full and is dropped there).
+  activeIdx: index('memories_user_scope_type_active_idx')
+    .on(table.userId, table.agentScope, table.factType)
+    .where(sql`${table.supersededBy} IS NULL`),
   workspaceIdx: index('memories_workspace_idx').on(table.workspaceId),
   supersededIdx: index('memories_superseded_by_idx').on(table.supersededBy),
   validUntilIdx: index('memories_valid_until_idx').on(table.validUntil),

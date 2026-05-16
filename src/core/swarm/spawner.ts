@@ -524,6 +524,10 @@ export class SwarmSpawner {
       worker = await agentManager.spawn({
         sessionId: opts.parent.rootSessionId,
         userId: opts.parentContext.userId,
+        // Memory-redesign Phase B — inherit the parent's workspace so
+        // task_state and memories rows written by the child carry the
+        // same scope as the orchestrator that spawned them.
+        workspaceId: opts.parentContext.workspaceId ?? null,
         topic: getRoleConfig(opts.childRole).defaultTopic,
         model: opts.childModel,
         role: opts.childRole,

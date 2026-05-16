@@ -18,6 +18,8 @@ export type AnyAgentWorker = AgentWorker | CLIAgentWorker;
 export interface SpawnOptions {
   sessionId: string;
   userId: string;
+  /** Workspace UUID for multi-tenant scoping (memory-redesign Phase B). */
+  workspaceId?: string | null;
   topic?: string;
   model?: string;
   role?: string;
@@ -134,6 +136,7 @@ export class AgentManager {
       id: agentId,
       sessionId: options.sessionId,
       userId: options.userId,
+      workspaceId: options.workspaceId ?? null,
       topic: routedTopic,
       model: routedModel,
       role: options.role || 'general',

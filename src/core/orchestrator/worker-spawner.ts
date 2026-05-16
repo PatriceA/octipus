@@ -33,6 +33,7 @@ export async function handleExpertMessage(
   userId: string,
   deps: WorkerSpawnerDeps,
   guardFlags: string[] = [],
+  workspaceId: string | null = null,
 ): Promise<{ response: string; sessionId: string; classification: import('./types').MessageClassification; metadata?: import('./types').ResponseMetadata }> {
   const { getDb } = await import('@/db/postgres');
   const db = getDb();
@@ -55,6 +56,7 @@ export async function handleExpertMessage(
     id: `expert-${Date.now()}`,
     sessionId,
     userId,
+    workspaceId,
     model: expert.modelPreference || '',
     topic: roleConfig.defaultTopic,
     role: agentRole,
@@ -461,6 +463,25 @@ If you cannot write files (e.g., read-only environment), include the summary con
     systemPrompt += workspaceHint;
   }
 
+  // Memory-redesign Phase D — surface role-scoped long-term memory.
+  // Filter is OR(NULL, role) so this also picks up globally-scoped
+  // facts. Auto-no-op when the memories table is empty or memory
+  // extraction has not been wired by the operator.
+  if (context.userId) {
+    try {
+      const { retrieveForContext, renderMemoriesBlock } = await import('@/core/memory');
+      const memRows = await retrieveForContext({
+        userId: context.userId,
+        agentScope: agentRole,
+        limit: 8,
+      });
+      const memBlock = renderMemoriesBlock(memRows);
+      if (memBlock) systemPrompt += memBlock;
+    } catch (err) {
+      coreLogger.debug({ err, role: agentRole }, 'specialist memory injection skipped (non-fatal)');
+    }
+  }
+
   // Workers must return results to the orchestrator, not message the user directly
   systemPrompt += `\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`;
 
@@ -488,6 +509,7 @@ Use these when the task benefits from them — especially for people-related que
   const worker = await agentManager.spawn({
     sessionId: context.sessionId,
     userId: context.userId,
+    workspaceId: context.workspaceId ?? null,
     topic: roleConfig.defaultTopic,
     model: finalModel,
     role: agentRole,
@@ -621,6 +643,7 @@ async function handleWorkerFailure(
       const retryWorker = await agentManager.spawn({
         sessionId: context.sessionId,
         userId: context.userId,
+        workspaceId: context.workspaceId ?? null,
         topic: roleConfig.defaultTopic,
         model: routedModel,
         role: agentRole,
@@ -670,6 +693,7 @@ async function handleWorkerFailure(
         const fallbackWorker = await agentManager.spawn({
           sessionId: context.sessionId,
           userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
           topic: roleConfig.defaultTopic,
           model: defaultModel.modelId,
           role: agentRole,
