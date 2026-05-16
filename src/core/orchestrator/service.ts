@@ -6,6 +6,7 @@ import { humanizeProviderError } from '@/core/errors/humanize';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import { type AgentNode, LEVEL_DEFAULT } from '@/core/swarm/types';
+import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -262,6 +263,35 @@ export class OrchestratorService {
         'Message classified',
       );
 
+      // Memory-redesign Phase D — best-effort long-term memory
+      // injection. Auto-no-ops when the memories table is empty or
+      // the embedding provider is down, so zero blast radius if
+      // something upstream is misconfigured. Recorded after the turn
+      // (fire-and-forget) via `fireMemoryUpdate`; the extractor
+      // short-circuits unless a model is bound to topic
+      // "memory_extraction", so this costs nothing until the operator
+      // opts in.
+      let memoryBlock = '';
+      try {
+        const memories = await retrieveForContext({
+          userId,
+          agentScope: 'orchestrator',
+          limit: 12,
+        });
+        memoryBlock = renderMemoriesBlock(memories);
+      } catch (err) {
+        coreLogger.warn({ err }, 'memory.retrieveForContext failed — proceeding without memories');
+      }
+      const fireMemoryUpdate = () => {
+        updateMemoriesAfterTurn({
+          userId,
+          agentScope: 'orchestrator',
+          userMessage: message,
+        }).catch((err) =>
+          coreLogger.warn({ err }, 'memory.updateAfterTurn failed (non-fatal)'),
+        );
+      };
+
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
         // Emit worker_spawned so channel feedback shows a reaction (even for direct responses)
         this.emit({
@@ -274,6 +304,7 @@ export class OrchestratorService {
 
         const { response, metadata } = await directResponse(
           message, resolvedSessionId, userId, this.modelSelector, classification.complexity, inputGuard.flags,
+          memoryBlock,
         );
 
         const outputCheck = guardOutput(response, inputGuard.flags);
@@ -295,6 +326,7 @@ export class OrchestratorService {
           coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
         );
 
+        fireMemoryUpdate();
         return { response: finalResponse, sessionId: resolvedSessionId, classification, metadata };
       }
 
@@ -308,6 +340,7 @@ export class OrchestratorService {
       const startTime = Date.now();
       const { response, agentId, sources } = await this.runOrchestrator(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
+        memoryBlock,
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -336,6 +369,7 @@ export class OrchestratorService {
         );
       }
 
+      fireMemoryUpdate();
       return {
         response: finalResponse,
         sessionId: resolvedSessionId,
@@ -368,6 +402,13 @@ export class OrchestratorService {
     classification: MessageClassification,
     guardFlags: string[] = [],
     channel?: string,
+    /**
+     * Memory-redesign Phase D — appended to the orchestrator's system
+     * prompt. Pre-rendered by `handleMessage` once per turn so both
+     * the orchestrator and the directResponse path see the same
+     * long-term memory block.
+     */
+    extraSystemContext: string = '',
   ): Promise<{ response: string; agentId: string; sources: string[] }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration();
@@ -422,6 +463,9 @@ export class OrchestratorService {
     let systemPrompt = orchestratorConfig.systemPromptTemplate;
     if (guardFlags.length > 0) {
       systemPrompt += buildSecurityReminder(guardFlags);
+    }
+    if (extraSystemContext) {
+      systemPrompt += extraSystemContext;
     }
 
     const session = await sessionRepository.findById(sessionId);

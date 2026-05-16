@@ -20,6 +20,13 @@ export async function directResponse(
   modelSelector: ModelSelector,
   complexity: 'simple' | 'moderate' | 'complex' = 'moderate',
   guardFlags: string[] = [],
+  /**
+   * Memory-redesign Phase D — additional system-prompt context resolved
+   * upstream (typically the rendered long-term memory block from
+   * `renderMemoriesBlock`). Appended verbatim to the system content
+   * after the base prompt; empty string = no-op.
+   */
+  extraSystemContext: string = '',
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
@@ -100,9 +107,9 @@ export async function directResponse(
       } catch (err) { coreLogger.error({ err }, 'silent failure in direct-response'); }
     }
 
-    const systemContent = summary
-      ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}`
-      : basePrompt;
+    const systemContent =
+      (summary ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}` : basePrompt) +
+      extraSystemContext;
 
     const registry = getModelRegistry();
     const resolvedModel = await registry.getModelByModelId(modelName);

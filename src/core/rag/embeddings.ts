@@ -64,6 +64,17 @@ export interface SearchResult {
   similarity: number;
   metadata: EmbeddingMetadata;
   createdAt?: Date;
+  /**
+   * Memory-redesign Phase C — ancestor heading path of this chunk
+   * (root → leaf). Populated for chunks produced by the structural
+   * Markdown chunker; NULL for flat-chunked rows. Callers can render
+   * it next to the hit to give the LLM the section context without a
+   * second query (`getAncestorHeadings` is still available for the
+   * full ancestor chunk objects, not just the titles).
+   */
+  sectionPath?: string[] | null;
+  /** Heading depth for hierarchical filtering. 0=body, 1=H1, … */
+  headingLevel?: number | null;
 }
 
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
@@ -434,6 +445,8 @@ export class EmbeddingService {
         sourceType: embeddings.sourceType,
         sourceId: embeddings.sourceId,
         metadata: embeddings.metadata,
+        sectionPath: embeddings.sectionPath,
+        headingLevel: embeddings.headingLevel,
         similarity: similarityExpr,
       })
       .from(embeddings)
@@ -450,6 +463,8 @@ export class EmbeddingService {
         sourceId: r.sourceId,
         similarity: Number(r.similarity) || 0,
         metadata: (r.metadata || {}) as EmbeddingMetadata,
+        sectionPath: r.sectionPath,
+        headingLevel: r.headingLevel,
       }))
       .filter(r => r.similarity >= minSimilarity);
     this.recordAccess(out.map((r) => r.id));
@@ -463,6 +478,7 @@ export class EmbeddingService {
 
     const results = await db.execute(sql`
       SELECT id, content, abstract, source_type, source_id, metadata,
+             section_path, heading_level,
              ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) AS similarity
       FROM embeddings
       WHERE content_tsv @@ plainto_tsquery('english', ${query})
@@ -471,7 +487,7 @@ export class EmbeddingService {
       LIMIT ${limit}
     `);
 
-    const out = rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown }>(results).map(r => ({
+    const out = rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown; section_path: string[] | null; heading_level: number | null }>(results).map(r => ({
       id: r.id,
       content: r.content,
       abstract: r.abstract,
@@ -479,6 +495,8 @@ export class EmbeddingService {
       sourceId: r.source_id,
       similarity: Number(r.similarity) || 0,
       metadata: (r.metadata || {}) as EmbeddingMetadata,
+      sectionPath: r.section_path,
+      headingLevel: r.heading_level,
     }));
     this.recordAccess(out.map((r) => r.id));
     return out;
@@ -554,7 +572,8 @@ export class EmbeddingService {
         FULL OUTER JOIN vec v ON f.id = v.id
       )
       SELECT c.cosine_sim AS similarity, c.rrf_score, c.has_fts_match,
-             e.id, e.content, e.abstract, e.source_type, e.source_id, e.metadata
+             e.id, e.content, e.abstract, e.source_type, e.source_id, e.metadata,
+             e.section_path, e.heading_level
       FROM combined c
       JOIN embeddings e ON e.id = c.id
       ORDER BY c.rrf_score DESC
@@ -571,6 +590,8 @@ export class EmbeddingService {
       rrf_score: number | string;
       has_fts_match: boolean;
       metadata: unknown;
+      section_path: string[] | null;
+      heading_level: number | null;
     }>(results)
       .map(r => ({
         id: r.id,
@@ -581,6 +602,8 @@ export class EmbeddingService {
         similarity: Number(r.similarity) || 0,
         hasFtsMatch: Boolean(r.has_fts_match),
         metadata: (r.metadata || {}) as EmbeddingMetadata,
+        sectionPath: r.section_path,
+        headingLevel: r.heading_level,
       }))
       // Keep when raw cosine similarity passes the bar, or when an exact
       // keyword (FTS) hit makes the entry relevant on lexical grounds alone.

@@ -7,6 +7,29 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Memory-redesign — final wiring (2026-05)
+
+Closes the two deferred "ships disabled" pieces left from the phase
+batch so nothing in `.octipus/memory-redesign.md` remains a leftover.
+
+- **Memory layer is now wired into the orchestrator turn.**
+  `OrchestratorService.handleMessage` fetches the top-N active
+  memories scoped to `(userId, agentScope='orchestrator')` once per
+  turn and threads the rendered block into both the orchestrator's
+  own system prompt and the `directResponse` system prompt via a new
+  optional `extraSystemContext` parameter. After the response is
+  produced, a fire-and-forget `updateMemoriesAfterTurn` extracts /
+  judges / persists new facts. Auto-no-ops when (a) no model is
+  bound to topic `memory_extraction` (extractor skips, no LLM call)
+  or (b) the memories table is empty (retrieval returns empty,
+  prompt unchanged). Zero behaviour change until the operator binds
+  the extraction model.
+- **`SearchResult` surfaces ancestor heading path.** `search`,
+  `ftsSearch`, and `hybridSearch` now project `section_path` +
+  `heading_level` so callers can render structural context next to
+  a hit without a second query. `getAncestorHeadings` remains for
+  callers that need the full ancestor row objects (abstracts etc).
+
 ### Memory-redesign Phase D — memories layer (2026-05)
 
 Atomic, updatable long-term memories. Distinct from RAG embeddings
