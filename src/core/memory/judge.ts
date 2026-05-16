@@ -20,6 +20,7 @@ import { buildEmbeddingVersion, EmbeddingService } from '@/core/rag/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { filterPII } from '@/core/orchestrator/pii-filter';
 import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
 import type { Memory } from '@/db/schema/memories';
 import type { CandidateFact } from './extractor';
@@ -112,6 +113,31 @@ async function decide(candidate: CandidateFact, closest: Memory | null, userId: 
   }
 }
 
+/**
+ * Redact PII from a candidate fact before it reaches the vector store.
+ *
+ * Policy: redact-not-drop. If the extractor said "the user's email
+ * is alice@example.com", we want to keep the fact ("the user has a
+ * known email") but never store the email itself. The redacted form
+ * is `"the user's email is [EMAIL]"`, which the judge can still
+ * cluster with other email-related facts but never leaks the
+ * literal address.
+ *
+ * If any redactions happened the candidate's confidence is knocked
+ * down by 0.2 (floor 0.5 — extractor already dropped anything below)
+ * because the surviving fact is less specific and more easily
+ * confused with a future genuine email mention.
+ */
+function redactPII(candidate: CandidateFact): CandidateFact {
+  const result = filterPII(candidate.content);
+  if (!result.hasRedactions) return candidate;
+  return {
+    factType: candidate.factType,
+    content: result.filtered,
+    confidence: Math.max(0.5, candidate.confidence - 0.2),
+  };
+}
+
 export async function judgeAndApply(
   candidates: CandidateFact[],
   ctx: JudgeContext,
@@ -122,6 +148,14 @@ export async function judgeAndApply(
   const embeddings = new EmbeddingService();
   const outcomes: JudgeOutcome[] = [];
 
+  // PII pre-pass: redact emails, phone numbers, SSNs, API keys, etc.
+  // before any fact lands in the vector store. The redacted form
+  // preserves the fact's semantic shape (same fact_type, same
+  // ADD/UPDATE clustering target) while never persisting the literal
+  // PII. Caller-side filterPII happens at the conversation surface;
+  // this is the last-mile defence for the memory store.
+  const safeCandidates = candidates.map(redactPII);
+
   // Resolve the embedding model once per batch (was previously
   // re-looked-up inside both ADD and UPDATE branches per candidate).
   // Stored as `<model>/<dim>` via the canonical buildEmbeddingVersion
@@ -130,7 +164,7 @@ export async function judgeAndApply(
   const embeddingModel = await getModelRegistry().getModelForTopic('embedding');
   const embeddingModelId = embeddingModel?.modelId ?? 'unknown';
 
-  for (const candidate of candidates) {
+  for (const candidate of safeCandidates) {
     let queryVec: number[];
     try {
       queryVec = await embeddings.generateEmbedding(candidate.content);
