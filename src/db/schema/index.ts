@@ -29,6 +29,7 @@ export * from './pipeline-templates';
 export * from './pipelines';
 export * from './profiles';
 export * from './recurring-tasks';
+export * from './retention-policies';
 export * from './roles';
 export * from './sessions';
 export * from './settings';
