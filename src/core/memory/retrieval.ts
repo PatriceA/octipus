@@ -17,7 +17,7 @@
  */
 
 import { EmbeddingService } from '@/core/rag/embeddings';
-import { type Memory } from '@/db/schema/memories';
+import type { Memory } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
 import { type MemoryAccessScope, getMemoryRepository } from './repository';
 

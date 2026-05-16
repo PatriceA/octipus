@@ -48,6 +48,10 @@ beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-isolation-'));
 
+  // initializeDb() detects the env change (different dataDir vs the
+  // singleton cached by an earlier test file in the same process)
+  // and closes-and-reopens automatically. See `cachedDbKey` in
+  // src/db/postgres.ts.
   const { initializeDb } = await import('@/db/postgres');
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');

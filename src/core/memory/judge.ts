@@ -21,8 +21,8 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
-import { type Memory } from '@/db/schema/memories';
-import { type CandidateFact } from './extractor';
+import type { Memory } from '@/db/schema/memories';
+import type { CandidateFact } from './extractor';
 import { getMemoryRepository } from './repository';
 
 export type JudgeAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';

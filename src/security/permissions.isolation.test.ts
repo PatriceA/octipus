@@ -149,8 +149,20 @@ describe('PermissionManager.getPendingRequests', () => {
 
 describe('multiuser.enforcePermissions flag', () => {
   test('default is true (multi-user isolation enforced; legacy single-user opts out via MULTIUSER=false)', async () => {
-    const { getConfig, resetConfig } = await import('@/config');
-    resetConfig();
-    expect(getConfig().multiuser.enforcePermissions).toBe(true);
+    // Local single-user installs commonly set MULTIUSER_ENFORCE_PERMISSIONS=false
+    // in their .env so the legacy permissive bypass stays on. Clear it for
+    // this test so the assertion exercises the actual default, not the
+    // developer's local override.
+    const previous = process.env.MULTIUSER_ENFORCE_PERMISSIONS;
+    delete process.env.MULTIUSER_ENFORCE_PERMISSIONS;
+    try {
+      const { getConfig, resetConfig } = await import('@/config');
+      resetConfig();
+      expect(getConfig().multiuser.enforcePermissions).toBe(true);
+    } finally {
+      if (previous !== undefined) process.env.MULTIUSER_ENFORCE_PERMISSIONS = previous;
+      const { resetConfig } = await import('@/config');
+      resetConfig();
+    }
   });
 });

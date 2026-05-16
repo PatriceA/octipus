@@ -37,6 +37,13 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'octipus-audit-'));
   process.env.STORAGE_MODE = 'embedded';
   process.env.DATA_DIR = dataDir;
+  // Single-user installs commonly set MULTIUSER_AUDIT_SHADOW=false in
+  // .env; the middleware short-circuits when the flag is off, which
+  // would make this whole file pass-by-doing-nothing. Force the flag
+  // on for the test and reset cached config so the value is honoured.
+  process.env.MULTIUSER_AUDIT_SHADOW = 'true';
+  const { resetConfig } = await import('@/config');
+  resetConfig();
 
   const { initializeDb } = await import('@/db/postgres');
   await initializeDb();

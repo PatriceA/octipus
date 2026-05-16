@@ -9,6 +9,31 @@ let closeHandle: (() => Promise<void>) | null = null;
 let rawExec: ((query: string, params?: unknown[]) => Promise<unknown>) | null = null;
 let rawQuery: ((query: string, params?: unknown[]) => Promise<{ rows: any[] }>) | null = null;
 let healthCheck: (() => Promise<void>) | null = null;
+/**
+ * Fingerprint of the (storage_mode, target) the cached `db` is bound
+ * to. Used by `initializeDb()` to detect when a caller wants a
+ * different DB than the one already cached — happens in tests where
+ * one file binds embedded PGlite at `dataDir=A` and a subsequent file
+ * binds embedded at `dataDir=B`. Without this check the second file
+ * silently shares the first file's PGlite (and its truncate/seed
+ * decisions), which leads to FK violations like
+ * "user_id is not present in users" because seed went to one store
+ * and the FK check runs against another.
+ */
+let cachedDbKey: string | null = null;
+
+function buildDbKey(): string {
+  const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
+  if (mode === 'embedded') {
+    const config = getConfig();
+    const dataDir = process.env.DATA_DIR || config.database?.dataDir || '~/.octipus/data';
+    return `embedded:${dataDir}`;
+  }
+  // External: keyed by URL so a test pointing at a different
+  // Postgres instance also gets a fresh connection.
+  const config = getConfig();
+  return `external:${config.database?.url ?? ''}`;
+}
 
 /**
  * Initialize PostgreSQL connection (external mode via postgres-js)
@@ -112,7 +137,16 @@ export function getDb(): DrizzleDB {
  * Initialize database based on storage mode. Called during gateway startup.
  */
 export async function initializeDb(): Promise<DrizzleDB> {
-  if (db) return db;
+  const wantedKey = buildDbKey();
+  if (db && cachedDbKey === wantedKey) return db;
+
+  // Caller wants a different DB than the one we have cached. Close
+  // the old one before reopening — otherwise the embedded PGlite
+  // file handle leaks and we keep stacking connections in the
+  // process. See `cachedDbKey` doc for the test-ordering scenario.
+  if (db) {
+    await closeDb();
+  }
 
   const config = getConfig();
   const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
@@ -124,6 +158,7 @@ export async function initializeDb(): Promise<DrizzleDB> {
     db = await initExternal(config.database);
   }
 
+  cachedDbKey = wantedKey;
   return db;
 }
 
@@ -138,6 +173,7 @@ export async function closeDb() {
     rawQuery = null;
     healthCheck = null;
     db = null;
+    cachedDbKey = null;
     dbLogger.info('Database connection closed');
   }
 }
