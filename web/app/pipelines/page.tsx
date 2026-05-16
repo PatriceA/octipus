@@ -258,12 +258,12 @@ function TemplateCard({
                   </span>
                   {step.requiresApproval && (
                     <span title="Requires approval">
-                      <Shield className="w-3.5 h-3.5 text-orange-500" />
+                      <Shield className="w-3.5 h-3.5 text-warning" />
                     </span>
                   )}
                   {(step as any).stageType === 'qa_validation' && (
                     <span title={`QA validation (retries step ${((step as any).retryTargetStage ?? 0) + 1}, max ${(step as any).maxRetries ?? 3})`}>
-                      <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
+                      <RotateCcw className="w-3.5 h-3.5 text-primary" />
                     </span>
                   )}
                 </div>
@@ -510,7 +510,7 @@ function TemplateEditor({
                       </span>
                       <span className="text-xs text-on-surface-variant font-mono">{step.topic}</span>
                       {step.requiresApproval && (
-                        <Shield className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                        <Shield className="w-3.5 h-3.5 text-warning shrink-0" />
                       )}
                       <div className="flex items-center gap-0.5">
                         <button

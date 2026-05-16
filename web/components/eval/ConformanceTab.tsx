@@ -38,7 +38,7 @@ function StatusCell({ status, latencyMs, error }: { status: 'passed' | 'failed' 
   const [showTooltip, setShowTooltip] = useState(false);
 
   const icon =
-    status === 'passed' ? <CheckCircle className="w-4 h-4 text-green-400" /> :
+    status === 'passed' ? <CheckCircle className="w-4 h-4 text-tertiary" /> :
     status === 'failed' ? <XCircle className="w-4 h-4 text-error" /> :
     <Minus className="w-4 h-4 text-on-surface-variant" />;
 
@@ -89,7 +89,7 @@ function RunRow({ run }: { run: ConformanceRun }) {
           {run.models.length} model{run.models.length !== 1 ? 's' : ''}
         </span>
         <div className="flex items-center gap-3 ml-auto">
-          <span className="text-xs text-green-400">{run.summary.passed} passed</span>
+          <span className="text-xs text-tertiary">{run.summary.passed} passed</span>
           {run.summary.failed > 0 && <span className="text-xs text-error">{run.summary.failed} failed</span>}
           {run.summary.skipped > 0 && <span className="text-xs text-on-surface-variant">{run.summary.skipped} skipped</span>}
           <ScoreBar score={passRate} size="sm" />
@@ -296,7 +296,7 @@ export function ConformanceTab() {
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
@@ -315,7 +315,7 @@ export function ConformanceTab() {
               </div>
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-3 text-xs">
-                  <span className="text-green-400 flex items-center gap-1">
+                  <span className="text-tertiary flex items-center gap-1">
                     <CheckCircle className="w-3 h-3" /> {latest.summary.passed}
                   </span>
                   <span className="text-error flex items-center gap-1">

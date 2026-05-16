@@ -81,9 +81,9 @@ function ExpandedRow({ result }: { result: EvalResult }) {
                   )}
                 >
                   {a.passed ? (
-                    <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
+                    <CheckCircle className="w-4 h-4 text-tertiary mt-0.5 shrink-0" />
                   ) : (
-                    <XCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                    <XCircle className="w-4 h-4 text-error mt-0.5 shrink-0" />
                   )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
@@ -179,8 +179,8 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
                         <span className={cn(
                           'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
                           result.passed
-                            ? 'bg-green-950/30 text-green-400'
-                            : 'bg-red-950/30 text-red-400'
+                            ? 'bg-green-950/30 text-tertiary'
+                            : 'bg-red-950/30 text-error'
                         )}>
                           {result.passed ? (
                             <><CheckCircle className="w-3 h-3" /> Pass</>

@@ -98,7 +98,7 @@ function PermissionBanner({
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
           <div className="shrink-0 w-8 h-8 rounded-lg bg-yellow-600/20 flex items-center justify-center">
-            <Shield className="w-4 h-4 text-yellow-400" />
+            <Shield className="w-4 h-4 text-warning" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
@@ -179,7 +179,7 @@ function ApprovalBanner({
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
           <div className="shrink-0 w-8 h-8 rounded-lg bg-orange-600/20 flex items-center justify-center">
-            <Clock className="w-4 h-4 text-orange-400" />
+            <Clock className="w-4 h-4 text-warning" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">

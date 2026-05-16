@@ -62,7 +62,7 @@ function pct(current: number, max: number): number {
 
 function MeterCell({ current, max, ovrd }: { current: number; max: number; ovrd: boolean }) {
   const p = pct(current, max);
-  const tone = p >= 90 ? 'bg-red-600' : p >= 70 ? 'bg-yellow-500' : 'bg-primary';
+  const tone = p >= 90 ? 'bg-red-600' : p >= 70 ? 'bg-warning' : 'bg-primary';
   return (
     <div className="space-y-1">
       <div className="text-xs text-on-surface-variant tabular-nums">

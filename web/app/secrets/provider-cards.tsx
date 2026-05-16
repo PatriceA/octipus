@@ -119,7 +119,7 @@ function ProviderCard({
         </div>
         <span
           className={`w-2.5 h-2.5 rounded-full transition-colors ${
-            isSaved ? 'bg-green-500' : 'bg-[#484847]'
+            isSaved ? 'bg-tertiary' : 'bg-[#484847]'
           }`}
           title={isSaved ? 'Configured' : 'Not configured'}
         />
@@ -146,7 +146,7 @@ function ProviderCard({
       <div className="flex items-center justify-between mt-2 min-h-[24px]">
         {feedback ? (
           <div className={`flex items-center gap-1 text-xs ${
-            feedback.type === 'success' ? 'text-green-400' : 'text-error'
+            feedback.type === 'success' ? 'text-tertiary' : 'text-error'
           }`}>
             {feedback.type === 'success'
               ? <CheckCircle className="w-3 h-3" />

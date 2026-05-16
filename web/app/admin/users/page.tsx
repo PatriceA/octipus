@@ -170,7 +170,7 @@ export default function AdminUsersPage() {
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 text-xs rounded-full ${
                       u.isActive
-                        ? 'bg-green-900/30 text-green-300'
+                        ? 'bg-green-900/30 text-tertiary'
                         : 'bg-surface-container-high text-on-surface-variant'
                     }`}>
                       {u.isActive ? 'Active' : 'Disabled'}

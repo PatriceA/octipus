@@ -267,7 +267,7 @@ export default function EvalPage() {
       {activeTab === 'suite' && (
         <>
           {error && (
-            <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+            <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
               {error}
               <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
             </div>
@@ -275,7 +275,7 @@ export default function EvalPage() {
 
           {/* Running status banner */}
           {runStatus.running && (
-            <div className="bg-yellow-900/20 border border-yellow-800 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+            <div className="bg-yellow-900/20 border border-yellow-800 rounded-xl px-4 py-3 text-warning text-sm">
               <div className="flex items-center gap-3">
                 <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
                 <span className="flex-1">
@@ -299,7 +299,7 @@ export default function EvalPage() {
 
           {/* Last run error banner */}
           {!runStatus.running && runStatus.lastRun && runStatus.lastRun.exitCode !== 0 && (
-            <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+            <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
               <div className="flex items-center gap-3">
                 <XCircle className="w-4 h-4 shrink-0" />
                 <span className="flex-1">
@@ -323,7 +323,7 @@ export default function EvalPage() {
             <Card>
               <CardContent className="flex items-center gap-3 py-4">
                 <div className="w-10 h-10 rounded-lg bg-blue-950/30 flex items-center justify-center">
-                  <BarChart3 className="w-5 h-5 text-blue-400" />
+                  <BarChart3 className="w-5 h-5 text-primary" />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-on-surface">{totalRuns}</p>
@@ -335,7 +335,7 @@ export default function EvalPage() {
             <Card>
               <CardContent className="flex items-center gap-3 py-4">
                 <div className="w-10 h-10 rounded-lg bg-green-950/30 flex items-center justify-center">
-                  <CheckCircle className="w-5 h-5 text-green-400" />
+                  <CheckCircle className="w-5 h-5 text-tertiary" />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-on-surface">
@@ -349,7 +349,7 @@ export default function EvalPage() {
             <Card>
               <CardContent className="flex items-center gap-3 py-4">
                 <div className="w-10 h-10 rounded-lg bg-purple-950/30 flex items-center justify-center">
-                  <FlaskConical className="w-5 h-5 text-purple-400" />
+                  <FlaskConical className="w-5 h-5 text-primary" />
                 </div>
                 <div>
                   <ScoreBar score={avgScore} />
@@ -361,7 +361,7 @@ export default function EvalPage() {
             <Card>
               <CardContent className="flex items-center gap-3 py-4">
                 <div className="w-10 h-10 rounded-lg bg-orange-950/30 flex items-center justify-center">
-                  <Hash className="w-5 h-5 text-orange-400" />
+                  <Hash className="w-5 h-5 text-warning" />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-on-surface">

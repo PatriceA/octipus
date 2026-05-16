@@ -79,7 +79,7 @@ export default function ArtifactDetailPage() {
 
   if (detail.isLoading) return <div className="p-6">Loading…</div>;
   const a = detail.data?.artifact;
-  if (!a) return <div className="p-6 text-red-400">Not found</div>;
+  if (!a) return <div className="p-6 text-error">Not found</div>;
 
   // Use the API-supplied embed URL — respects subdomain vs path-prefix.
   const embedSrc = a.embedUrl;
@@ -105,17 +105,17 @@ export default function ArtifactDetailPage() {
             </a>
             <button
               onClick={() => refresh.mutate()}
-              className="rounded bg-blue-600 px-3 py-1 text-sm text-on-surface hover:bg-blue-500"
+              className="rounded bg-blue-600 px-3 py-1 text-sm text-on-surface hover:bg-primary"
             >
               {refresh.isPending ? 'Refreshing…' : 'Refresh now'}
             </button>
             {confirmDelete ? (
               <span className="flex items-center gap-2 text-sm">
-                <span className="text-red-400">Delete?</span>
+                <span className="text-error">Delete?</span>
                 <button
                   onClick={() => del.mutate()}
                   disabled={del.isPending}
-                  className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-red-500"
+                  className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-error"
                 >
                   Yes
                 </button>
@@ -129,7 +129,7 @@ export default function ArtifactDetailPage() {
             ) : (
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="rounded border border-red-900 px-3 py-1 text-sm text-red-400 hover:bg-red-900/20"
+                className="rounded border border-red-900 px-3 py-1 text-sm text-error hover:bg-red-900/20"
               >
                 Delete
               </button>
@@ -158,7 +158,7 @@ export default function ArtifactDetailPage() {
                   <div className="text-on-surface-variant">
                     refresh {s.refreshSeconds}s · {s.lastStatus}
                   </div>
-                  {s.lastError && <div className="mt-1 text-red-400">{s.lastError}</div>}
+                  {s.lastError && <div className="mt-1 text-error">{s.lastError}</div>}
                 </li>
               ))}
             </ul>
@@ -172,7 +172,7 @@ export default function ArtifactDetailPage() {
                 <span className="truncate">{v.changeSummary || '(no summary)'}</span>
                 <button
                   onClick={() => restore.mutate(v.id)}
-                  className="text-blue-400 hover:underline"
+                  className="text-primary hover:underline"
                 >
                   restore
                 </button>
@@ -189,7 +189,7 @@ export default function ArtifactDetailPage() {
             Mint share link
           </button>
           {mintLink.data && (
-            <div className="break-all rounded bg-yellow-900/20 p-2 text-[10px] text-yellow-300">
+            <div className="break-all rounded bg-yellow-900/20 p-2 text-[10px] text-warning">
               token: {mintLink.data.token}
             </div>
           )}
@@ -197,7 +197,7 @@ export default function ArtifactDetailPage() {
             {links.data?.links.map((l) => (
               <li key={l.id} className="text-on-surface-variant">
                 expires {new Date(l.expiresAt).toLocaleString()}
-                {l.revokedAt && <span className="text-red-400"> (revoked)</span>}
+                {l.revokedAt && <span className="text-error"> (revoked)</span>}
               </li>
             ))}
           </ul>

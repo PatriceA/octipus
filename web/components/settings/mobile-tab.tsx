@@ -137,7 +137,7 @@ export function MobileTab() {
 
             <div className="flex items-center justify-center gap-2 mb-4">
               <span className={`text-xs font-mono px-2 py-1 rounded ${
-                secondsLeft < 60 ? 'bg-red-900/20 text-red-400' : 'bg-surface-container-highest text-on-surface-variant'
+                secondsLeft < 60 ? 'bg-red-900/20 text-error' : 'bg-surface-container-highest text-on-surface-variant'
               }`}>
                 Expires in {minutes}:{seconds.toString().padStart(2, '0')}
               </span>
@@ -147,7 +147,7 @@ export function MobileTab() {
                 className="text-xs px-2 py-1 rounded bg-surface-container-highest text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1"
                 title="Copy pairing code"
               >
-                {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                {copied ? <Check className="w-3 h-3 text-tertiary" /> : <Copy className="w-3 h-3" />}
                 {copied ? 'Copied' : 'Code'}
               </button>
             </div>
@@ -164,7 +164,7 @@ export function MobileTab() {
 
         {error && (
           <div className="mt-4 p-3 bg-red-900/10 border border-red-900/20 rounded-lg">
-            <p className="text-sm text-red-400">{error}</p>
+            <p className="text-sm text-error">{error}</p>
           </div>
         )}
       </div>

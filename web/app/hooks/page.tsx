@@ -236,11 +236,11 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
             className="w-full flex items-center gap-3 px-3 py-2 hover:bg-surface-container-high text-left cursor-pointer"
           >
             {exec.status === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+              <CheckCircle2 className="w-4 h-4 text-tertiary shrink-0" />
             ) : exec.status === 'error' ? (
-              <XCircle className="w-4 h-4 text-red-500 shrink-0" />
+              <XCircle className="w-4 h-4 text-error shrink-0" />
             ) : (
-              <Clock className="w-4 h-4 text-yellow-500 shrink-0" />
+              <Clock className="w-4 h-4 text-warning shrink-0" />
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -255,7 +255,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
                   <span className="text-xs text-on-surface-variant">{exec.triggerType}</span>
                 )}
                 {exec.actionType && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/30 text-green-300">
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/30 text-tertiary">
                     {exec.actionType}
                   </span>
                 )}
@@ -264,7 +264,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
                 )}
               </div>
               {exec.error && (
-                <p className="text-xs text-red-500 truncate mt-0.5">{exec.error}</p>
+                <p className="text-xs text-error truncate mt-0.5">{exec.error}</p>
               )}
             </div>
             <span className="text-xs text-on-surface-variant shrink-0">
@@ -295,7 +295,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
               {exec.error && (
                 <div>
                   <p className="text-xs font-medium text-error">Error</p>
-                  <p className="text-xs text-red-500 font-mono whitespace-pre-wrap">{exec.error}</p>
+                  <p className="text-xs text-error font-mono whitespace-pre-wrap">{exec.error}</p>
                 </div>
               )}
               {exec.result && (
@@ -692,7 +692,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   </div>
                 )}
                 {notifyOwner && userChannels.length === 0 && (
-                  <p className="mt-1 text-xs text-amber-400">No channels linked. Go to Settings → Channels to link Telegram, Slack, etc.</p>
+                  <p className="mt-1 text-xs text-warning">No channels linked. Go to Settings → Channels to link Telegram, Slack, etc.</p>
                 )}
               </div>
               {!notifyOwner && (
@@ -1037,7 +1037,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                   </div>
                 )}
                 {notifyOwner && userChannels.length === 0 && (
-                  <p className="mt-1 text-xs text-amber-400">No channels linked. Go to Settings → Channels to link Telegram, Slack, etc.</p>
+                  <p className="mt-1 text-xs text-warning">No channels linked. Go to Settings → Channels to link Telegram, Slack, etc.</p>
                 )}
               </div>
               {!notifyOwner && (
@@ -1370,7 +1370,7 @@ export default function HooksPage() {
                           className={cn(
                             'text-[11px] px-1.5 py-1 rounded cursor-pointer hover:brightness-110 truncate',
                             h.triggerConfig?.scheduledAt
-                              ? 'bg-blue-900/30 text-blue-300 border border-blue-800/30'
+                              ? 'bg-blue-900/30 text-primary border border-blue-800/30'
                               : 'bg-primary/10 text-primary border border-primary/20',
                           )}
                           title={`${h.name}${h.time ? ` at ${h.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
@@ -1501,7 +1501,7 @@ export default function HooksPage() {
                       <td className="px-4 py-3">
                         <div className="font-medium text-on-surface">{hook.name}</div>
                         {hook.description && <div className="text-xs text-on-surface-variant mt-0.5">{hook.description}</div>}
-                        {hook.lastError && <div className="text-xs text-red-500 mt-0.5">{hook.lastError}</div>}
+                        {hook.lastError && <div className="text-xs text-error mt-0.5">{hook.lastError}</div>}
                       </td>
                       <td className="px-4 py-3 text-xs text-on-surface-variant">
                         {hook.triggerConfig?.scheduledAt ? (
@@ -1517,7 +1517,7 @@ export default function HooksPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 bg-green-900/30 text-green-300 text-xs rounded">
+                        <span className="px-2 py-0.5 bg-green-900/30 text-tertiary text-xs rounded">
                           {hook.action}
                         </span>
                       </td>
@@ -1531,7 +1531,7 @@ export default function HooksPage() {
                       <td className="px-4 py-3">
                         <span className={cn(
                           'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-                          hook.isEnabled && !hook.lastError ? 'bg-green-900/20 text-green-400' :
+                          hook.isEnabled && !hook.lastError ? 'bg-green-900/20 text-tertiary' :
                           hook.lastError ? 'bg-error-dim/20 text-error' :
                           'bg-surface-container-high text-on-surface-variant',
                         )}>
@@ -1559,7 +1559,7 @@ export default function HooksPage() {
                             className="p-1 text-on-surface-variant hover:text-on-surface rounded cursor-pointer"
                             title={hook.isEnabled ? 'Pause' : 'Resume'}
                           >
-                            {hook.isEnabled ? <ToggleRight className="w-5 h-5 text-green-500" /> : <ToggleLeft className="w-5 h-5" />}
+                            {hook.isEnabled ? <ToggleRight className="w-5 h-5 text-tertiary" /> : <ToggleLeft className="w-5 h-5" />}
                           </button>
                           <button
                             onClick={() => handleDelete(hook.id)}
@@ -1626,7 +1626,7 @@ export default function HooksPage() {
                       <span className="px-2 py-1 bg-primary/10 text-primary text-xs rounded">{hook.trigger}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-1 bg-green-900/30 text-green-300 text-xs rounded">
+                      <span className="px-2 py-1 bg-green-900/30 text-tertiary text-xs rounded">
                         {hook.action}
                         {Boolean(hook.actionConfig?.orchestrated) && (
                           <span className="ml-1 text-orange-600" title="Orchestrated">*</span>
@@ -1640,7 +1640,7 @@ export default function HooksPage() {
                         className="text-on-surface-variant hover:text-on-surface cursor-pointer"
                       >
                         {hook.isEnabled ? (
-                          <ToggleRight className="w-6 h-6 text-green-500" />
+                          <ToggleRight className="w-6 h-6 text-tertiary" />
                         ) : (
                           <ToggleLeft className="w-6 h-6" />
                         )}

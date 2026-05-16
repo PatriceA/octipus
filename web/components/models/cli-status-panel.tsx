@@ -95,7 +95,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
   return (
     <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
       <div className="flex items-center gap-2 mb-1">
-        <Terminal className="w-5 h-5 text-violet-400" />
+        <Terminal className="w-5 h-5 text-primary" />
         <h2 className="font-semibold text-on-surface">Detected CLI Tools</h2>
       </div>
       <p className="text-xs text-on-surface-variant mb-3">
@@ -114,7 +114,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    !tool.available ? 'bg-on-surface-variant' : registered ? 'bg-emerald-400' : 'bg-yellow-400'
+                    !tool.available ? 'bg-on-surface-variant' : registered ? 'bg-tertiary' : 'bg-warning'
                   }`} />
                   <span className="text-on-surface truncate">{tool.name}</span>
                   {tool.billingInfo && billingBadge(tool.billingInfo.billingMode)}
@@ -122,7 +122,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                     <span className="text-xs text-on-surface-variant">(not installed)</span>
                   )}
                   {tool.available && !registered && (
-                    <span className="text-xs text-yellow-400">(detected, not registered)</span>
+                    <span className="text-xs text-warning">(detected, not registered)</span>
                   )}
                 </div>
                 <div className="flex items-center gap-2">

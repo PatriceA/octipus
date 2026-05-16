@@ -12,9 +12,9 @@ export function ScoreBar({ score, size = 'md', showLabel = true }: ScoreBarProps
   const safeScore = (score != null && !isNaN(score)) ? score : 0;
   const pct = Math.round(safeScore * 100);
   const color =
-    pct >= 80 ? 'bg-green-500' :
-    pct >= 50 ? 'bg-yellow-500' :
-    'bg-red-500';
+    pct >= 80 ? 'bg-tertiary' :
+    pct >= 50 ? 'bg-warning' :
+    'bg-error';
 
   const trackColor =
     pct >= 80 ? 'bg-green-950/30' :
@@ -37,8 +37,8 @@ export function ScoreBar({ score, size = 'md', showLabel = true }: ScoreBarProps
         <span className={cn(
           'font-mono font-medium',
           size === 'sm' ? 'text-xs' : 'text-sm',
-          pct >= 80 ? 'text-green-400' :
-          pct >= 50 ? 'text-yellow-400' :
+          pct >= 80 ? 'text-tertiary' :
+          pct >= 50 ? 'text-warning' :
           'text-error'
         )}>
           {pct}%

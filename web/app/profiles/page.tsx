@@ -56,9 +56,9 @@ interface ToolResult<T = unknown> {
 // --- Constants ---
 
 const CATEGORY_COLORS: Record<string, string> = {
-  person: 'bg-blue-900/30 text-blue-300',
-  organization: 'bg-purple-900/30 text-purple-300',
-  pet: 'bg-orange-900/30 text-orange-300',
+  person: 'bg-blue-900/30 text-primary',
+  organization: 'bg-purple-900/30 text-primary',
+  pet: 'bg-orange-900/30 text-warning',
 };
 
 const CATEGORY_ICONS: Record<string, typeof User> = {
@@ -69,13 +69,13 @@ const CATEGORY_ICONS: Record<string, typeof User> = {
 
 const RELATIONSHIP_COLORS: Record<string, string> = {
   self: 'bg-primary/20 text-primary',
-  mother: 'bg-pink-900/30 text-pink-300',
-  father: 'bg-indigo-900/30 text-indigo-300',
-  partner: 'bg-red-900/30 text-red-300',
-  friend: 'bg-green-900/30 text-green-300',
-  colleague: 'bg-yellow-900/30 text-yellow-300',
-  boss: 'bg-amber-900/30 text-amber-300',
-  sibling: 'bg-teal-900/30 text-teal-300',
+  mother: 'bg-pink-900/30 text-error',
+  father: 'bg-indigo-900/30 text-primary',
+  partner: 'bg-red-900/30 text-error',
+  friend: 'bg-green-900/30 text-tertiary',
+  colleague: 'bg-yellow-900/30 text-warning',
+  boss: 'bg-amber-900/30 text-warning',
+  sibling: 'bg-teal-900/30 text-tertiary',
 };
 
 function getCategoryColor(category: string): string {

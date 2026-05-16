@@ -26,9 +26,9 @@ const STATUS_CONFIG: Record<string, {
 }> = {
   pending: { icon: Clock, color: 'text-on-surface-variant', bgColor: 'bg-surface-container-high', ringColor: 'ring-outline-variant' },
   running: { icon: Loader2, color: 'text-primary', bgColor: 'bg-primary/10', ringColor: 'ring-primary' },
-  awaiting_approval: { icon: Shield, color: 'text-orange-400', bgColor: 'bg-orange-500/10', ringColor: 'ring-orange-400' },
-  approved: { icon: CheckCircle, color: 'text-emerald-400', bgColor: 'bg-emerald-500/10', ringColor: 'ring-emerald-400' },
-  completed: { icon: CheckCircle, color: 'text-emerald-400', bgColor: 'bg-emerald-500/10', ringColor: 'ring-emerald-500' },
+  awaiting_approval: { icon: Shield, color: 'text-warning', bgColor: 'bg-orange-500/10', ringColor: 'ring-orange-400' },
+  approved: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary/10', ringColor: 'ring-emerald-400' },
+  completed: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary/10', ringColor: 'ring-emerald-500' },
   failed: { icon: XCircle, color: 'text-error', bgColor: 'bg-error/10', ringColor: 'ring-error' },
   skipped: { icon: SkipForward, color: 'text-on-surface-variant', bgColor: 'bg-surface-container', ringColor: 'ring-outline-variant' },
 };
@@ -77,7 +77,7 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
               <div className={cn(
                 'w-8 h-0.5 mx-1',
                 stages[i + 1]?.status !== 'pending'
-                  ? 'bg-emerald-400'
+                  ? 'bg-tertiary'
                   : 'bg-outline-variant'
               )} />
             )}

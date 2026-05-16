@@ -62,7 +62,7 @@ type PermissionLevel = 'ALLOW' | 'ASK' | 'DENY';
 
 const LEVEL_STYLES: Record<PermissionLevel, { active: string; label: string; icon: typeof Check }> = {
   ALLOW: { active: 'bg-green-600 text-on-surface', label: 'Allow', icon: Check },
-  ASK: { active: 'bg-yellow-500 text-on-surface', label: 'Ask', icon: HelpCircle },
+  ASK: { active: 'bg-warning text-on-surface', label: 'Ask', icon: HelpCircle },
   DENY: { active: 'bg-red-600 text-on-surface', label: 'Deny', icon: X },
 };
 
@@ -160,12 +160,12 @@ function ToolModuleCard({
           <div className="text-on-surface-variant">
             {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </div>
-          <Wrench className={cn('w-5 h-5', module.status === 'active' ? 'text-primary' : module.status === 'degraded' ? 'text-amber-400' : 'text-on-surface-variant')} />
+          <Wrench className={cn('w-5 h-5', module.status === 'active' ? 'text-primary' : module.status === 'degraded' ? 'text-warning' : 'text-on-surface-variant')} />
           <div>
             <h3 className="font-medium text-on-surface">{module.name}</h3>
             <p className="text-xs text-on-surface-variant mt-0.5">{module.description}</p>
             {module.status !== 'active' && module.statusReason && (
-              <p className={cn('text-xs mt-0.5', module.status === 'degraded' ? 'text-amber-400' : 'text-red-400')}>{module.statusReason}</p>
+              <p className={cn('text-xs mt-0.5', module.status === 'degraded' ? 'text-warning' : 'text-error')}>{module.statusReason}</p>
             )}
           </div>
         </div>
@@ -177,7 +177,7 @@ function ToolModuleCard({
               : 'no capabilities'}
           </span>
           {overrideCount > 0 && (
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-900/30 text-blue-300">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-900/30 text-primary">
               {overrideCount} custom
             </span>
           )}
@@ -186,9 +186,9 @@ function ToolModuleCard({
             className={cn(
               'px-2 py-0.5 text-xs rounded-full',
               module.status === 'active'
-                ? 'bg-green-900/30 text-green-300'
+                ? 'bg-green-900/30 text-tertiary'
                 : module.status === 'degraded'
-                ? 'bg-amber-900/30 text-amber-300'
+                ? 'bg-amber-900/30 text-warning'
                 : 'bg-surface-container-high text-on-surface-variant'
             )}
             title={module.statusReason}
@@ -221,12 +221,12 @@ function ToolModuleCard({
                       {permission.action}
                     </span>
                     {permission.dangerous && (
-                      <span className="px-1 py-0.5 bg-red-900/30 text-red-300 text-[10px] rounded font-medium">
+                      <span className="px-1 py-0.5 bg-red-900/30 text-error text-[10px] rounded font-medium">
                         dangerous
                       </span>
                     )}
                     {isOverride && (
-                      <span className="text-[10px] text-blue-500">default: {permission.defaultLevel}</span>
+                      <span className="text-[10px] text-primary">default: {permission.defaultLevel}</span>
                     )}
                   </div>
                   <p className="text-xs text-on-surface-variant mt-0.5">
@@ -406,7 +406,7 @@ export default function ToolsPage() {
           <span>Allow — executes without confirmation</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-yellow-500 text-on-surface"><HelpCircle className="w-3 h-3" /></span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-warning text-on-surface"><HelpCircle className="w-3 h-3" /></span>
           <span>Ask — requires your confirmation</span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -466,11 +466,11 @@ export default function ToolsPage() {
                 key={`${tool.serverId}-${tool.name}`}
                 className="flex items-start gap-3 py-2 border-b last:border-0 border-outline-variant/10"
               >
-                <Cable className="w-4 h-4 text-purple-400 mt-0.5 shrink-0" />
+                <Cable className="w-4 h-4 text-primary mt-0.5 shrink-0" />
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-mono text-on-surface/90">{tool.name}</span>
-                    <span className="text-xs text-purple-400">{tool.serverId}</span>
+                    <span className="text-xs text-primary">{tool.serverId}</span>
                   </div>
                   <p className="text-xs text-on-surface-variant">{tool.description}</p>
                 </div>

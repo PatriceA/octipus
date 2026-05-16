@@ -403,8 +403,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           {isCli && (
             <div className="border border-violet-500/20 rounded-lg p-4 space-y-3">
               <div className="flex items-center gap-2 mb-1">
-                <Terminal className="w-4 h-4 text-violet-400" />
-                <h3 className="text-sm font-semibold text-violet-300">CLI Agent Settings</h3>
+                <Terminal className="w-4 h-4 text-primary" />
+                <h3 className="text-sm font-semibold text-primary">CLI Agent Settings</h3>
               </div>
               <p className="text-xs text-on-surface-variant">
                 CLI models run as autonomous sub-agents with their own tools and agent loop.

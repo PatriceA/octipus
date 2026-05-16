@@ -62,11 +62,11 @@ export default function NewArtifactPage() {
             ))}
           </select>
         </Field>
-        {error && <div className="rounded bg-red-900/30 p-3 text-sm text-red-300">{error}</div>}
+        {error && <div className="rounded bg-red-900/30 p-3 text-sm text-error">{error}</div>}
         <button
           disabled={!slug || !title || submitting}
           onClick={submit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-blue-500 disabled:opacity-50"
+          className="rounded bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-primary disabled:opacity-50"
         >
           {submitting ? 'Creating…' : 'Create'}
         </button>

@@ -59,16 +59,16 @@ export interface SwarmNodesListProps {
 
 function statusBadge(status: string) {
   const map: Record<string, { label: string; cls: string; Icon: React.ComponentType<{ className?: string }> }> = {
-    running: { label: 'running', cls: 'bg-blue-900/40 text-blue-300', Icon: Loader2 },
-    completed: { label: 'ok', cls: 'bg-green-900/40 text-green-300', Icon: CheckCircle2 },
-    cache_hit: { label: 'cache', cls: 'bg-emerald-900/40 text-emerald-300', Icon: CheckCircle2 },
-    budget: { label: 'budget', cls: 'bg-amber-900/40 text-amber-300', Icon: XCircle },
-    timeout: { label: 'timeout', cls: 'bg-amber-900/40 text-amber-300', Icon: Clock },
-    denied: { label: 'denied', cls: 'bg-red-900/40 text-red-300', Icon: XCircle },
-    tool_error: { label: 'error', cls: 'bg-red-900/40 text-red-300', Icon: XCircle },
-    provider_error: { label: 'error', cls: 'bg-red-900/40 text-red-300', Icon: XCircle },
+    running: { label: 'running', cls: 'bg-blue-900/40 text-primary', Icon: Loader2 },
+    completed: { label: 'ok', cls: 'bg-green-900/40 text-tertiary', Icon: CheckCircle2 },
+    cache_hit: { label: 'cache', cls: 'bg-emerald-900/40 text-tertiary', Icon: CheckCircle2 },
+    budget: { label: 'budget', cls: 'bg-amber-900/40 text-warning', Icon: XCircle },
+    timeout: { label: 'timeout', cls: 'bg-amber-900/40 text-warning', Icon: Clock },
+    denied: { label: 'denied', cls: 'bg-red-900/40 text-error', Icon: XCircle },
+    tool_error: { label: 'error', cls: 'bg-red-900/40 text-error', Icon: XCircle },
+    provider_error: { label: 'error', cls: 'bg-red-900/40 text-error', Icon: XCircle },
     cancelled: { label: 'cancelled', cls: 'bg-surface-container-highest text-on-surface-variant', Icon: XCircle },
-    concurrency_limit: { label: 'throttled', cls: 'bg-orange-900/40 text-orange-300', Icon: XCircle },
+    concurrency_limit: { label: 'throttled', cls: 'bg-orange-900/40 text-warning', Icon: XCircle },
   };
   return map[status] ?? map.running;
 }

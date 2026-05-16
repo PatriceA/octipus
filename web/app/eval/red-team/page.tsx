@@ -67,18 +67,18 @@ interface EvalListItem {
 }
 
 const CATEGORY_CONFIG: Record<AttackCategory, { label: string; icon: typeof Shield; color: string }> = {
-  injection: { label: 'Prompt Injection', icon: ShieldAlert, color: 'text-red-400' },
-  confusion: { label: 'Role Confusion', icon: AlertTriangle, color: 'text-orange-400' },
-  misuse: { label: 'Tool Misuse', icon: ShieldAlert, color: 'text-yellow-400' },
-  leakage: { label: 'Data Leakage', icon: Shield, color: 'text-purple-400' },
-  drift: { label: 'Off-Topic Drift', icon: AlertTriangle, color: 'text-blue-400' },
+  injection: { label: 'Prompt Injection', icon: ShieldAlert, color: 'text-error' },
+  confusion: { label: 'Role Confusion', icon: AlertTriangle, color: 'text-warning' },
+  misuse: { label: 'Tool Misuse', icon: ShieldAlert, color: 'text-warning' },
+  leakage: { label: 'Data Leakage', icon: Shield, color: 'text-primary' },
+  drift: { label: 'Off-Topic Drift', icon: AlertTriangle, color: 'text-primary' },
 };
 
 const SEVERITY_CONFIG: Record<Severity, { label: string; color: string; bg: string }> = {
-  critical: { label: 'Critical', color: 'text-red-400', bg: 'bg-red-950/30' },
-  high: { label: 'High', color: 'text-orange-400', bg: 'bg-orange-950/30' },
-  medium: { label: 'Medium', color: 'text-yellow-400', bg: 'bg-yellow-950/30' },
-  low: { label: 'Low', color: 'text-blue-400', bg: 'bg-blue-950/30' },
+  critical: { label: 'Critical', color: 'text-error', bg: 'bg-red-950/30' },
+  high: { label: 'High', color: 'text-warning', bg: 'bg-orange-950/30' },
+  medium: { label: 'Medium', color: 'text-warning', bg: 'bg-yellow-950/30' },
+  low: { label: 'Low', color: 'text-primary', bg: 'bg-blue-950/30' },
 };
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -195,7 +195,7 @@ export default function RedTeamPage() {
 
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-red-950/40 flex items-center justify-center">
-            <ShieldAlert className="w-5 h-5 text-red-400" />
+            <ShieldAlert className="w-5 h-5 text-error" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-on-surface">Red Team Results</h1>
@@ -205,7 +205,7 @@ export default function RedTeamPage() {
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
           {error}
         </div>
       )}
@@ -244,11 +244,11 @@ export default function RedTeamPage() {
                     <ScoreBar score={stat.rate} />
                     <div className="flex justify-between mt-2 text-xs text-on-surface-variant">
                       <span className="flex items-center gap-1">
-                        <ShieldCheck className="w-3 h-3 text-green-500" />
+                        <ShieldCheck className="w-3 h-3 text-tertiary" />
                         {stat.defended} defended
                       </span>
                       <span className="flex items-center gap-1">
-                        <XCircle className="w-3 h-3 text-red-500" />
+                        <XCircle className="w-3 h-3 text-error" />
                         {stat.breached} breached
                       </span>
                     </div>
@@ -290,9 +290,9 @@ export default function RedTeamPage() {
                           className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-container-high cursor-pointer"
                         >
                           {test.passed ? (
-                            <ShieldCheck className="w-5 h-5 text-green-500 shrink-0" />
+                            <ShieldCheck className="w-5 h-5 text-tertiary shrink-0" />
                           ) : (
-                            <XCircle className="w-5 h-5 text-red-500 shrink-0" />
+                            <XCircle className="w-5 h-5 text-error shrink-0" />
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">

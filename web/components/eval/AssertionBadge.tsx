@@ -35,8 +35,8 @@ export function AssertionBadge({ type, passed, compact }: AssertionBadgeProps) {
         'inline-flex items-center gap-1 rounded-full font-medium',
         compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-xs',
         passed
-          ? 'bg-green-950/30 text-green-400'
-          : 'bg-red-950/30 text-red-400'
+          ? 'bg-green-950/30 text-tertiary'
+          : 'bg-red-950/30 text-error'
       )}
     >
       {passed ? (

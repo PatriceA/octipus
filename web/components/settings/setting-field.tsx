@@ -93,7 +93,7 @@ export function SettingField({
         <div className="flex items-center gap-2 mb-1">
           <label className="text-xs font-bold text-on-surface-variant uppercase">{shortKey}</label>
           {setting.isSecret && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-900/30 text-amber-300">
+            <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-900/30 text-warning">
               secret
             </span>
           )}
@@ -169,7 +169,7 @@ export function SettingField({
             {isSaving ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : isSaved ? (
-              <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+              <CheckCircle className="w-3.5 h-3.5 text-tertiary" />
             ) : (
               <Save className="w-3.5 h-3.5" />
             )}
@@ -178,7 +178,7 @@ export function SettingField({
         <button
           onClick={onReset}
           disabled={isSaving}
-          className="p-1.5 text-on-surface-variant hover:text-amber-400 disabled:opacity-50"
+          className="p-1.5 text-on-surface-variant hover:text-warning disabled:opacity-50"
           title="Reset to default"
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -242,8 +242,8 @@ export function SecretsRedirectBanner() {
       href="/secrets"
       className="flex items-center gap-2 p-3 text-sm bg-amber-900/20 border border-amber-800/30 rounded-lg hover:bg-amber-900/30 transition-colors"
     >
-      <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
-      <span className="text-amber-300">
+      <KeyRound className="w-4 h-4 text-warning shrink-0" />
+      <span className="text-warning">
         API keys and secrets are managed in <span className="font-medium underline">Secrets & Credentials</span>
       </span>
     </Link>

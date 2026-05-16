@@ -109,9 +109,9 @@ export function VoiceTab() {
               <div key={key} className="flex items-center justify-between text-sm">
                 <span className="text-on-surface-variant">{providerConfig.labels[i]} <code className="text-xs bg-[#111] px-1.5 py-0.5 rounded">{key}</code></span>
                 {existingVaultKeys.has(key) ? (
-                  <span className="flex items-center gap-1 text-green-400 text-xs"><CheckCircle className="w-3 h-3" /> Stored</span>
+                  <span className="flex items-center gap-1 text-tertiary text-xs"><CheckCircle className="w-3 h-3" /> Stored</span>
                 ) : (
-                  <span className="flex items-center gap-1 text-yellow-400 text-xs"><XCircle className="w-3 h-3" /> Missing</span>
+                  <span className="flex items-center gap-1 text-warning text-xs"><XCircle className="w-3 h-3" /> Missing</span>
                 )}
               </div>
             ))}
@@ -154,7 +154,7 @@ export function VoiceTab() {
               {testingHealth ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Test Connection'}
             </button>
             {healthResult && (
-              <div className={`flex items-start gap-2 text-sm ${healthResult.healthy ? 'text-green-400' : 'text-red-400'}`}>
+              <div className={`flex items-start gap-2 text-sm ${healthResult.healthy ? 'text-tertiary' : 'text-error'}`}>
                 {healthResult.healthy ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
                 <span className="break-all">
                   {healthResult.healthy ? `Connected to ${healthResult.provider}` : healthResult.error || 'Connection failed — unknown error'}

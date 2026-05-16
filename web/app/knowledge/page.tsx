@@ -71,9 +71,9 @@ interface KBReadiness {
 // --- Constants ---
 
 const SOURCE_TYPE_COLORS: Record<string, string> = {
-  document: 'bg-blue-900/30 text-blue-300',
-  code: 'bg-green-900/30 text-green-300',
-  message: 'bg-purple-900/30 text-purple-300',
+  document: 'bg-blue-900/30 text-primary',
+  code: 'bg-green-900/30 text-tertiary',
+  message: 'bg-purple-900/30 text-primary',
 };
 
 const SOURCE_TYPE_ICONS: Record<string, typeof FileText> = {
@@ -245,7 +245,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
                   'px-4 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-50',
                   confirmDelete
                     ? 'bg-red-600 text-on-surface hover:bg-red-700'
-                    : 'bg-red-900/30 text-red-300 hover:bg-red-900/50'
+                    : 'bg-red-900/30 text-error hover:bg-red-900/50'
                 )}
               >
                 {deleting ? 'Deleting...' : confirmDelete ? 'Confirm Delete' : 'Delete'}
@@ -322,7 +322,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
           {success && (
-            <div className="text-sm text-green-400 bg-green-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-tertiary bg-green-900/20 rounded-lg px-3 py-2">
               {success}
             </div>
           )}
@@ -592,11 +592,11 @@ export default function KnowledgePage() {
           <p className="text-xs text-on-surface-variant">Total Entries</p>
         </div>
         <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
-          <p className="text-2xl font-bold text-blue-400">{stats?.bySourceType?.document ?? 0}</p>
+          <p className="text-2xl font-bold text-primary">{stats?.bySourceType?.document ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Documents</p>
         </div>
         <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
-          <p className="text-2xl font-bold text-green-400">{stats?.bySourceType?.code ?? 0}</p>
+          <p className="text-2xl font-bold text-tertiary">{stats?.bySourceType?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
       </div>

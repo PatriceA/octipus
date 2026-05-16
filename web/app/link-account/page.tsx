@@ -164,7 +164,7 @@ export default function LinkAccountPage() {
                 <button
                   type="button"
                   onClick={() => unbindMutation.mutate({ channelType: b.channelType, externalId: b.externalId })}
-                  className="ml-3 p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-red-400 cursor-pointer"
+                  className="ml-3 p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-error cursor-pointer"
                   aria-label={`Unbind ${b.channelType}`}
                   title="Unbind"
                 >

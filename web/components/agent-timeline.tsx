@@ -44,12 +44,12 @@ const EVENT_CONFIG: Record<string, {
   label: string;
 }> = {
   thought: { icon: Brain, color: 'text-on-surface-variant', bgColor: 'bg-surface-container-high', label: 'Thought' },
-  action: { icon: Wrench, color: 'text-blue-400', bgColor: 'bg-blue-900/20', label: 'Action' },
-  observation: { icon: Eye, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Result' },
+  action: { icon: Wrench, color: 'text-primary', bgColor: 'bg-blue-900/20', label: 'Action' },
+  observation: { icon: Eye, color: 'text-tertiary', bgColor: 'bg-green-900/20', label: 'Result' },
   error: { icon: AlertCircle, color: 'text-error', bgColor: 'bg-red-900/20', label: 'Error' },
-  complete: { icon: CheckCircle, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Complete' },
-  status_change: { icon: Loader2, color: 'text-yellow-400', bgColor: 'bg-yellow-900/20', label: 'Status' },
-  permission_request: { icon: Shield, color: 'text-orange-400', bgColor: 'bg-orange-900/20', label: 'Permission' },
+  complete: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-green-900/20', label: 'Complete' },
+  status_change: { icon: Loader2, color: 'text-warning', bgColor: 'bg-yellow-900/20', label: 'Status' },
+  permission_request: { icon: Shield, color: 'text-warning', bgColor: 'bg-orange-900/20', label: 'Permission' },
 };
 
 interface TimelineCardProps {
@@ -101,7 +101,7 @@ function TimelineCard({ event }: TimelineCardProps) {
         {hasMore && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 mt-1 text-xs text-blue-500 hover:text-blue-600"
+            className="flex items-center gap-1 mt-1 text-xs text-primary hover:text-blue-600"
           >
             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             {expanded ? 'Collapse' : 'Show more'}

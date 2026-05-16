@@ -109,7 +109,7 @@ function OAuthGroupCard({
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm text-on-surface">{group.title}</span>
           <span
-            className={`w-2 h-2 rounded-full ${allSaved ? 'bg-green-500' : 'bg-[#484847]'}`}
+            className={`w-2 h-2 rounded-full ${allSaved ? 'bg-tertiary' : 'bg-[#484847]'}`}
             title={allSaved ? 'All configured' : 'Setup required'}
           />
         </div>
@@ -146,7 +146,7 @@ function OAuthGroupCard({
 
           {feedback && (
             <span className={`flex items-center gap-1 text-xs ${
-              feedback.type === 'success' ? 'text-green-400' : 'text-error'
+              feedback.type === 'success' ? 'text-tertiary' : 'text-error'
             }`}>
               {feedback.type === 'success'
                 ? <CheckCircle className="w-3 h-3" />

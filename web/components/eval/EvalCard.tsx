@@ -49,7 +49,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
                 : 'bg-red-950/30'
             )}>
               {allPassed ? (
-                <CheckCircle className="w-4 h-4 text-green-400" />
+                <CheckCircle className="w-4 h-4 text-tertiary" />
               ) : (
                 <XCircle className="w-4 h-4 text-error" />
               )}
@@ -71,7 +71,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
             <FlaskConical className="w-3 h-3" />
             {summary.totalTests} tests
           </span>
-          <span className="flex items-center gap-1 text-green-400">
+          <span className="flex items-center gap-1 text-tertiary">
             <CheckCircle className="w-3 h-3" />
             {summary.totalPassed}
           </span>

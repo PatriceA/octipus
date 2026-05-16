@@ -55,7 +55,7 @@ export function ImpersonationBanner() {
     // background (no glass / blur) — the bar is a stop-the-world warning,
     // not decoration. z-50 keeps it above any sticky pickers / overlays in
     // the page body if a route ever escapes the AppShell flow.
-    <div className="relative z-50 w-full bg-yellow-500 text-[#0e0e0e] px-4 py-2 text-sm font-medium shadow-md border-b border-yellow-700">
+    <div className="relative z-50 w-full bg-warning text-[#0e0e0e] px-4 py-2 text-sm font-medium shadow-md border-b border-yellow-700">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">
           <Eye className="w-4 h-4 shrink-0" />

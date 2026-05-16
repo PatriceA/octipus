@@ -224,7 +224,7 @@ export function ApiTokensTab() {
               <button
                 type="button"
                 onClick={() => { setConfirmRevokeId(t.id); setError(null); }}
-                className="ml-3 shrink-0 p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-red-400 cursor-pointer"
+                className="ml-3 shrink-0 p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-error cursor-pointer"
                 aria-label={`Revoke ${t.name}`}
                 title="Revoke"
               >

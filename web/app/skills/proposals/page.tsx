@@ -62,7 +62,7 @@ export default function SkillProposalsPage() {
     <div className="min-h-screen bg-[#0a0a0a] text-gray-200 p-6">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center gap-3 mb-2">
-          <Sparkles className="w-6 h-6 text-amber-400" />
+          <Sparkles className="w-6 h-6 text-warning" />
           <h1 className="text-2xl font-semibold">Skill Proposals</h1>
         </div>
         <p className="text-sm text-gray-400 mb-6">
@@ -104,14 +104,14 @@ export default function SkillProposalsPage() {
                   <button
                     onClick={() => approve(p)}
                     disabled={busyId === p.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/30 hover:bg-green-900/50 text-green-300 rounded-md text-sm disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/30 hover:bg-green-900/50 text-tertiary rounded-md text-sm disabled:opacity-50"
                   >
                     <Check className="w-4 h-4" /> Approve
                   </button>
                   <button
                     onClick={() => reject(p)}
                     disabled={busyId === p.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/20 hover:bg-red-900/40 text-red-300 rounded-md text-sm disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/20 hover:bg-red-900/40 text-error rounded-md text-sm disabled:opacity-50"
                   >
                     <X className="w-4 h-4" /> Reject
                   </button>

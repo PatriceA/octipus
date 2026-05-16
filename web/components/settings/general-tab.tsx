@@ -46,8 +46,8 @@ export function GeneralTab() {
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full ${
                     svc.status === 'healthy'
-                      ? 'bg-green-900/30 text-green-300'
-                      : 'bg-red-900/30 text-red-300'
+                      ? 'bg-green-900/30 text-tertiary'
+                      : 'bg-red-900/30 text-error'
                   }`}
                 >
                   {svc.status}
@@ -86,7 +86,7 @@ export function GeneralTab() {
             <span
               className={`inline-block px-2 py-0.5 text-xs rounded-full ${
                 profile?.isAdmin
-                  ? 'bg-purple-900/30 text-purple-300'
+                  ? 'bg-purple-900/30 text-primary'
                   : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >

@@ -174,7 +174,7 @@ export function PipelineGraph({
             <path d="M0,0 L0,6 L9,3 z" fill="currentColor" className="text-on-surface-variant" />
           </marker>
           <marker id="arrow-retry" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L9,3 z" fill="currentColor" className="text-blue-400" />
+            <path d="M0,0 L0,6 L9,3 z" fill="currentColor" className="text-primary" />
           </marker>
         </defs>
 
@@ -256,7 +256,7 @@ export function PipelineGraph({
                     stroke="currentColor"
                     strokeWidth="2"
                     strokeDasharray="6 3"
-                    className="text-blue-400"
+                    className="text-primary"
                     markerEnd="url(#arrow-retry)"
                   />
                   <text x={laneX + 6} y={(startY + endY) / 2} fontSize="10" className="fill-blue-400">
@@ -313,12 +313,12 @@ export function PipelineGraph({
               </text>
               {step.requiresApproval && (
                 <foreignObject x={PAD_X + BOX_W - 32} y={y + 8} width="20" height="20">
-                  <Shield className="w-4 h-4 text-orange-500" />
+                  <Shield className="w-4 h-4 text-warning" />
                 </foreignObject>
               )}
               {step.stageType === 'qa_validation' && (
                 <foreignObject x={PAD_X + BOX_W - 56} y={y + 8} width="20" height="20">
-                  <RotateCcw className="w-4 h-4 text-blue-400" />
+                  <RotateCcw className="w-4 h-4 text-primary" />
                 </foreignObject>
               )}
               {/* Drag handle (edit + reorder mode) — leading edge of the card */}

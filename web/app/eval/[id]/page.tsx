@@ -118,7 +118,7 @@ export default function EvalDetailPage() {
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
         </Link>
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
           {error || 'Eval result not found'}
         </div>
       </div>
@@ -182,7 +182,7 @@ export default function EvalDetailPage() {
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-green-400">{data.summary.totalPassed}</p>
+            <p className="text-2xl font-bold text-tertiary">{data.summary.totalPassed}</p>
             <p className="text-xs text-on-surface-variant">Passed</p>
           </CardContent>
         </Card>
@@ -237,8 +237,8 @@ export default function EvalDetailPage() {
               <span className={cn(
                 'ml-2 text-xs px-1.5 py-0.5 rounded-full',
                 suite.failed > 0
-                  ? 'bg-red-950/30 text-red-400'
-                  : 'bg-green-950/30 text-green-400'
+                  ? 'bg-red-950/30 text-error'
+                  : 'bg-green-950/30 text-tertiary'
               )}>
                 {suite.passed}/{suite.totalTests}
               </span>

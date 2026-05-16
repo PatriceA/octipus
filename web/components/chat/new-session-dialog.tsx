@@ -304,12 +304,12 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
 
                   {/* Error message */}
                   {createError && (
-                    <p className="text-xs text-red-400">{createError}</p>
+                    <p className="text-xs text-error">{createError}</p>
                   )}
 
                   {/* Success message */}
                   {createSuccess && (
-                    <p className="text-xs text-green-400">{createSuccess}</p>
+                    <p className="text-xs text-tertiary">{createSuccess}</p>
                   )}
 
                   {/* Actions */}

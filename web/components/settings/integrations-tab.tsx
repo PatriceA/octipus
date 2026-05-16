@@ -240,9 +240,9 @@ function CLIIntegrationsSection() {
                   <span
                     className={`px-2 py-0.5 text-xs rounded-full ${
                       tool.status?.configured
-                        ? 'bg-green-900/30 text-green-300'
+                        ? 'bg-green-900/30 text-tertiary'
                         : tool.status?.available
-                          ? 'bg-amber-900/30 text-amber-300'
+                          ? 'bg-amber-900/30 text-warning'
                           : 'bg-surface-container-high text-on-surface-variant'
                     }`}
                   >

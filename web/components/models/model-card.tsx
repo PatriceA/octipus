@@ -13,7 +13,7 @@ export interface ModelCardProps {
 
 function HealthBadge({ health }: { health?: Model['health'] }) {
   const config = {
-    healthy: { color: 'text-emerald-400', icon: CheckCircle, label: 'Healthy' },
+    healthy: { color: 'text-tertiary', icon: CheckCircle, label: 'Healthy' },
     unhealthy: { color: 'text-error', icon: XCircle, label: 'Unhealthy' },
     unknown: { color: 'text-on-surface-variant', icon: AlertCircle, label: 'Unknown' },
   };
@@ -30,11 +30,11 @@ function HealthBadge({ health }: { health?: Model['health'] }) {
 function ProviderBadge({ provider }: { provider: string }) {
   const colors: Record<string, string> = {
     ollama: 'bg-tertiary-container/40 text-tertiary border border-tertiary/60',
-    openai: 'bg-emerald-500/10 text-emerald-300',
-    anthropic: 'bg-orange-500/10 text-orange-300',
-    gemini: 'bg-indigo-500/10 text-indigo-300',
-    deepseek: 'bg-teal-500/10 text-teal-300',
-    cli: 'bg-violet-500/10 text-violet-300',
+    openai: 'bg-tertiary/10 text-tertiary',
+    anthropic: 'bg-orange-500/10 text-warning',
+    gemini: 'bg-primary/10 text-primary',
+    deepseek: 'bg-teal-500/10 text-tertiary',
+    cli: 'bg-violet-500/10 text-primary',
     openrouter: 'bg-primary/10 text-primary',
     custom: 'bg-surface-container-high text-on-surface-variant',
   };
@@ -61,7 +61,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         {!model.isDefault && (
           <button
             onClick={() => onSetDefault(model.name)}
-            className="p-1.5 text-on-surface-variant hover:text-amber-400 hover:bg-amber-500/10 rounded cursor-pointer"
+            className="p-1.5 text-on-surface-variant hover:text-warning hover:bg-warning/10 rounded cursor-pointer"
             title="Set as default"
           >
             <Star className="w-4 h-4" />
@@ -76,7 +76,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         </button>
         <button
           onClick={() => onToggleEnabled(model)}
-          className="p-1.5 text-on-surface-variant hover:text-yellow-400 hover:bg-yellow-500/10 rounded cursor-pointer"
+          className="p-1.5 text-on-surface-variant hover:text-warning hover:bg-warning/10 rounded cursor-pointer"
           title={model.isEnabled ? 'Disable' : 'Enable'}
         >
           {model.isEnabled ? (
@@ -97,7 +97,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
       <div className="mb-3 pr-20">
         <div className="flex items-center gap-2">
           {model.provider === 'cli' ? (
-            <Terminal className="w-5 h-5 text-violet-400" />
+            <Terminal className="w-5 h-5 text-primary" />
           ) : (
             <Cpu className="w-5 h-5 text-primary" />
           )}
@@ -134,7 +134,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         {model.provider === 'cli' && (
           <div className="flex justify-between">
             <span className="text-on-surface-variant">Cost</span>
-            <span className="text-emerald-400 text-xs font-medium">Free (subscription)</span>
+            <span className="text-tertiary text-xs font-medium">Free (subscription)</span>
           </div>
         )}
         <div className="flex justify-between">
@@ -145,16 +145,16 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
 
       <div className="mt-3 pt-3 border-t border-outline-variant/10 flex flex-wrap gap-1.5">
         {model.supportsVision && (
-          <span className="px-2 py-0.5 bg-purple-500/10 text-purple-300 text-xs rounded">Vision</span>
+          <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Vision</span>
         )}
         {model.supportsTools && (
           <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Tools</span>
         )}
         {model.supportsStreaming && (
-          <span className="px-2 py-0.5 bg-cyan-500/10 text-cyan-300 text-xs rounded">Stream</span>
+          <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Stream</span>
         )}
         {model.provider === 'cli' && (
-          <span className="px-2 py-0.5 bg-violet-500/10 text-violet-300 text-xs rounded">Sub-Agent</span>
+          <span className="px-2 py-0.5 bg-violet-500/10 text-primary text-xs rounded">Sub-Agent</span>
         )}
       </div>
 

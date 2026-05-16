@@ -153,7 +153,7 @@ export default function ComparePage() {
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
@@ -287,11 +287,11 @@ export default function ComparePage() {
                           <div className="flex flex-col items-center gap-1">
                             <div className="flex items-center gap-1">
                               {cell.passed ? (
-                                <CheckCircle className="w-4 h-4 text-green-500" />
+                                <CheckCircle className="w-4 h-4 text-tertiary" />
                               ) : regression ? (
-                                <AlertTriangle className="w-4 h-4 text-yellow-500" />
+                                <AlertTriangle className="w-4 h-4 text-warning" />
                               ) : (
-                                <XCircle className="w-4 h-4 text-red-500" />
+                                <XCircle className="w-4 h-4 text-error" />
                               )}
                               <span className="text-xs font-mono">
                                 {Math.round(cell.score * 100)}%
@@ -303,7 +303,7 @@ export default function ComparePage() {
                                 : `${cell.latencyMs}ms`}
                             </span>
                             {regression && (
-                              <span className="text-[10px] text-yellow-400 font-medium">
+                              <span className="text-[10px] text-warning font-medium">
                                 REGRESSION
                               </span>
                             )}

@@ -43,22 +43,22 @@ interface DocumentsResponse {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  invoices: 'bg-emerald-900/30 text-emerald-300',
-  contracts: 'bg-blue-900/30 text-blue-300',
-  reports: 'bg-purple-900/30 text-purple-300',
-  correspondence: 'bg-yellow-900/30 text-yellow-300',
-  technical: 'bg-indigo-900/30 text-indigo-300',
-  receipts: 'bg-orange-900/30 text-orange-300',
-  legal: 'bg-red-900/30 text-red-300',
-  medical: 'bg-pink-900/30 text-pink-300',
-  financial: 'bg-teal-900/30 text-teal-300',
+  invoices: 'bg-emerald-900/30 text-tertiary',
+  contracts: 'bg-blue-900/30 text-primary',
+  reports: 'bg-purple-900/30 text-primary',
+  correspondence: 'bg-yellow-900/30 text-warning',
+  technical: 'bg-indigo-900/30 text-primary',
+  receipts: 'bg-orange-900/30 text-warning',
+  legal: 'bg-red-900/30 text-error',
+  medical: 'bg-pink-900/30 text-error',
+  financial: 'bg-teal-900/30 text-tertiary',
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  queued: 'bg-yellow-900/30 text-yellow-300',
-  processing: 'bg-blue-900/30 text-blue-300 animate-pulse',
-  completed: 'bg-green-900/30 text-green-300',
-  failed: 'bg-red-900/30 text-red-300',
+  queued: 'bg-yellow-900/30 text-warning',
+  processing: 'bg-blue-900/30 text-primary animate-pulse',
+  completed: 'bg-green-900/30 text-tertiary',
+  failed: 'bg-red-900/30 text-error',
 };
 
 function getCategoryColor(category: string): string {
@@ -202,7 +202,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
                   <span className="text-xs text-on-surface-variant">{formatSize(file.size)}</span>
                   <button
                     onClick={() => setSelectedFiles(selectedFiles.filter((_, idx) => idx !== i))}
-                    className="text-on-surface-variant hover:text-red-500 cursor-pointer"
+                    className="text-on-surface-variant hover:text-error cursor-pointer"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -395,7 +395,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
             {data && (data.status === 'queued' || data.status === 'processing') && (
               <button
                 onClick={() => { onCancel(documentId); onClose(); }}
-                className="px-3 py-1.5 text-xs font-medium text-orange-300 bg-orange-900/30 rounded-lg hover:bg-orange-900/50 cursor-pointer flex items-center gap-1"
+                className="px-3 py-1.5 text-xs font-medium text-warning bg-orange-900/30 rounded-lg hover:bg-orange-900/50 cursor-pointer flex items-center gap-1"
               >
                 <Square className="w-3.5 h-3.5" />
                 Cancel
@@ -403,7 +403,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
             )}
             <button
               onClick={() => { onDelete(documentId); onClose(); }}
-              className="px-3 py-1.5 text-xs font-medium text-red-300 bg-red-900/30 rounded-lg hover:bg-red-900/50 cursor-pointer flex items-center gap-1"
+              className="px-3 py-1.5 text-xs font-medium text-error bg-red-900/30 rounded-lg hover:bg-red-900/50 cursor-pointer flex items-center gap-1"
             >
               <Trash2 className="w-3.5 h-3.5" />
               Delete
@@ -567,7 +567,7 @@ function DocumentCard({
                 e.stopPropagation();
                 onCancel(document.id);
               }}
-              className="p-1 text-on-surface-variant hover:text-orange-400 cursor-pointer"
+              className="p-1 text-on-surface-variant hover:text-warning cursor-pointer"
               title="Cancel processing"
             >
               <Square className="w-4 h-4" />
@@ -718,7 +718,7 @@ export default function DocumentsPage() {
 
       {/* Queue status banner */}
       {(queue.queueLength > 0 || queue.isProcessing) && (
-        <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-900/20 text-blue-300 rounded-lg text-sm">
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-900/20 text-primary rounded-lg text-sm">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>
             Processing: {queue.queueLength} queued{queue.isProcessing ? ', 1 in progress' : ''}

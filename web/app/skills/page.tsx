@@ -56,21 +56,21 @@ const CATEGORIES = [
 ];
 
 const CATEGORY_COLORS: Record<string, string> = {
-  coding: 'bg-blue-900/30 text-blue-300',
+  coding: 'bg-blue-900/30 text-primary',
   architecture: 'bg-sky-900/30 text-sky-300',
-  review: 'bg-cyan-900/30 text-cyan-300',
-  qa: 'bg-teal-900/30 text-teal-300',
-  research: 'bg-violet-900/30 text-violet-300',
-  design: 'bg-purple-900/30 text-purple-300',
-  devops: 'bg-orange-900/30 text-orange-300',
-  security: 'bg-red-900/30 text-red-300',
-  data: 'bg-green-900/30 text-green-300',
-  ai: 'bg-indigo-900/30 text-indigo-300',
-  finance: 'bg-emerald-900/30 text-emerald-300',
-  automation: 'bg-amber-900/30 text-amber-300',
-  pm: 'bg-yellow-900/30 text-yellow-300',
-  writing: 'bg-rose-900/30 text-rose-300',
-  communication: 'bg-pink-900/30 text-pink-300',
+  review: 'bg-cyan-900/30 text-primary',
+  qa: 'bg-teal-900/30 text-tertiary',
+  research: 'bg-violet-900/30 text-primary',
+  design: 'bg-purple-900/30 text-primary',
+  devops: 'bg-orange-900/30 text-warning',
+  security: 'bg-red-900/30 text-error',
+  data: 'bg-green-900/30 text-tertiary',
+  ai: 'bg-indigo-900/30 text-primary',
+  finance: 'bg-emerald-900/30 text-tertiary',
+  automation: 'bg-amber-900/30 text-warning',
+  pm: 'bg-yellow-900/30 text-warning',
+  writing: 'bg-rose-900/30 text-error',
+  communication: 'bg-pink-900/30 text-error',
   general: 'bg-slate-900/30 text-slate-300',
 };
 
@@ -133,7 +133,7 @@ function ArrayFieldInput({
               <button
                 type="button"
                 onClick={() => onRemove(i)}
-                className="text-on-surface-variant hover:text-red-500 cursor-pointer"
+                className="text-on-surface-variant hover:text-error cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -783,7 +783,7 @@ function SkillCard({
             {skill.category}
           </span>
           {skill.content?.trim() && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-violet-900/20 text-violet-300">
+            <span className="px-2 py-0.5 text-xs rounded-full bg-violet-900/20 text-primary">
               md
             </span>
           )}
@@ -836,12 +836,12 @@ function SkillCard({
               {skill.principles.length > 0 && (
                 <div>
                   <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <Lightbulb className="w-4 h-4 text-yellow-500" />
+                    <Lightbulb className="w-4 h-4 text-warning" />
                     Principles
                   </h4>
                   <ul className="space-y-1">
                     {skill.principles.map((p, i) => (
-                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-yellow-400">
+                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-warning">
                         {p}
                       </li>
                     ))}
@@ -852,12 +852,12 @@ function SkillCard({
               {skill.bestPractices.length > 0 && (
                 <div>
                   <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <ThumbsUp className="w-4 h-4 text-green-500" />
+                    <ThumbsUp className="w-4 h-4 text-tertiary" />
                     Best Practices
                   </h4>
                   <ul className="space-y-1">
                     {skill.bestPractices.map((p, i) => (
-                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-green-400">
+                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-tertiary">
                         {p}
                       </li>
                     ))}
@@ -868,12 +868,12 @@ function SkillCard({
               {skill.antiPatterns.length > 0 && (
                 <div>
                   <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-red-500" />
+                    <AlertTriangle className="w-4 h-4 text-error" />
                     Anti-Patterns
                   </h4>
                   <ul className="space-y-1">
                     {skill.antiPatterns.map((p, i) => (
-                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-red-400">
+                      <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-error">
                         {p}
                       </li>
                     ))}
@@ -884,12 +884,12 @@ function SkillCard({
               {skill.frameworks.length > 0 && (
                 <div>
                   <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <Layers className="w-4 h-4 text-blue-500" />
+                    <Layers className="w-4 h-4 text-primary" />
                     Frameworks
                   </h4>
                   <div className="flex flex-wrap gap-1.5">
                     {skill.frameworks.map((f, i) => (
-                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-900/20 text-blue-300">
+                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-900/20 text-primary">
                         {f}
                       </span>
                     ))}

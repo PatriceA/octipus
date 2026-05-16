@@ -92,20 +92,20 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
-  orchestrator: 'bg-purple-900/40 text-purple-300',
-  research: 'bg-blue-900/40 text-blue-300',
-  coding: 'bg-green-900/40 text-green-300',
-  review: 'bg-yellow-900/40 text-yellow-300',
-  design: 'bg-pink-900/40 text-pink-300',
-  devops: 'bg-orange-900/40 text-orange-300',
-  security: 'bg-red-900/40 text-red-300',
-  data: 'bg-cyan-900/40 text-cyan-300',
-  ai: 'bg-indigo-900/40 text-indigo-300',
-  qa: 'bg-teal-900/40 text-teal-300',
-  finance: 'bg-emerald-900/40 text-emerald-300',
-  automation: 'bg-amber-900/40 text-amber-300',
-  pm: 'bg-violet-900/40 text-violet-300',
-  writing: 'bg-rose-900/40 text-rose-300',
+  orchestrator: 'bg-purple-900/40 text-primary',
+  research: 'bg-blue-900/40 text-primary',
+  coding: 'bg-green-900/40 text-tertiary',
+  review: 'bg-yellow-900/40 text-warning',
+  design: 'bg-pink-900/40 text-error',
+  devops: 'bg-orange-900/40 text-warning',
+  security: 'bg-red-900/40 text-error',
+  data: 'bg-cyan-900/40 text-primary',
+  ai: 'bg-indigo-900/40 text-primary',
+  qa: 'bg-teal-900/40 text-tertiary',
+  finance: 'bg-emerald-900/40 text-tertiary',
+  automation: 'bg-amber-900/40 text-warning',
+  pm: 'bg-violet-900/40 text-primary',
+  writing: 'bg-rose-900/40 text-error',
   communication: 'bg-sky-900/40 text-sky-300',
   general: 'bg-surface-container-highest text-on-surface-variant',
 };
@@ -362,11 +362,11 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
 
   const statusIcon =
     agent.status === 'running' ? (
-      <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+      <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
     ) : agent.status === 'completed' ? (
-      <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+      <CheckCircle className="h-3.5 w-3.5 text-tertiary" />
     ) : (
-      <XCircle className="h-3.5 w-3.5 text-red-500" />
+      <XCircle className="h-3.5 w-3.5 text-error" />
     );
 
   const durationMs =
@@ -406,7 +406,7 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
         )}
 
         {agent.error && (
-          <span className="text-red-500 truncate max-w-[300px]" title={agent.error}>
+          <span className="text-error truncate max-w-[300px]" title={agent.error}>
             {agent.error}
           </span>
         )}
@@ -463,9 +463,9 @@ function TeamActivityInline({
 
   const statusIcon =
     status === 'running' ? (
-      <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+      <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
     ) : (
-      <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+      <CheckCircle className="h-3.5 w-3.5 text-tertiary" />
     );
 
   return (
@@ -509,14 +509,14 @@ function TeamActivityInline({
 // ---------------------------------------------------------------------------
 
 const FILE_ACTION_ICONS: Record<string, { icon: typeof FileText; color: string; label: string }> = {
-  write: { icon: FilePlus, color: 'text-emerald-400', label: 'created' },
-  create: { icon: FilePlus, color: 'text-emerald-400', label: 'created' },
-  edit: { icon: FileEdit, color: 'text-amber-400', label: 'modified' },
-  append: { icon: FileEdit, color: 'text-amber-400', label: 'modified' },
-  delete: { icon: FileX, color: 'text-red-400', label: 'deleted' },
-  move: { icon: FileEdit, color: 'text-blue-400', label: 'moved' },
-  copy: { icon: FilePlus, color: 'text-blue-400', label: 'copied' },
-  create_dir: { icon: FilePlus, color: 'text-emerald-400', label: 'created dir' },
+  write: { icon: FilePlus, color: 'text-tertiary', label: 'created' },
+  create: { icon: FilePlus, color: 'text-tertiary', label: 'created' },
+  edit: { icon: FileEdit, color: 'text-warning', label: 'modified' },
+  append: { icon: FileEdit, color: 'text-warning', label: 'modified' },
+  delete: { icon: FileX, color: 'text-error', label: 'deleted' },
+  move: { icon: FileEdit, color: 'text-primary', label: 'moved' },
+  copy: { icon: FilePlus, color: 'text-primary', label: 'copied' },
+  create_dir: { icon: FilePlus, color: 'text-tertiary', label: 'created dir' },
 };
 
 function FileDiffView({ change }: { change: FileChange }) {
@@ -532,13 +532,13 @@ function FileDiffView({ change }: { change: FileChange }) {
     return (
       <div className="mt-1 rounded bg-[#0d1117] border border-white/10 overflow-auto max-h-48 text-xs font-mono">
         {oldLines.map((line, i) => (
-          <div key={`old-${i}`} className="px-2 py-px bg-red-950/40 text-red-300 whitespace-pre">
-            <span className="select-none text-red-500/60 mr-2">-</span>{line}
+          <div key={`old-${i}`} className="px-2 py-px bg-red-950/40 text-error whitespace-pre">
+            <span className="select-none text-error/60 mr-2">-</span>{line}
           </div>
         ))}
         {newLines.map((line, i) => (
-          <div key={`new-${i}`} className="px-2 py-px bg-green-950/40 text-green-300 whitespace-pre">
-            <span className="select-none text-green-500/60 mr-2">+</span>{line}
+          <div key={`new-${i}`} className="px-2 py-px bg-green-950/40 text-tertiary whitespace-pre">
+            <span className="select-none text-tertiary/60 mr-2">+</span>{line}
           </div>
         ))}
       </div>
@@ -551,8 +551,8 @@ function FileDiffView({ change }: { change: FileChange }) {
     return (
       <div className="mt-1 rounded bg-[#0d1117] border border-white/10 overflow-auto max-h-48 text-xs font-mono">
         {lines.map((line, i) => (
-          <div key={i} className="px-2 py-px bg-green-950/30 text-green-300 whitespace-pre">
-            <span className="select-none text-green-500/60 mr-2">+</span>{line}
+          <div key={i} className="px-2 py-px bg-green-950/30 text-tertiary whitespace-pre">
+            <span className="select-none text-tertiary/60 mr-2">+</span>{line}
           </div>
         ))}
       </div>

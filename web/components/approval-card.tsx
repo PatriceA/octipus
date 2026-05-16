@@ -29,7 +29,7 @@ export function ApprovalCard({
     )}>
       <div className="flex items-start gap-3">
         <div className="w-8 h-8 rounded-full bg-orange-900/50 flex items-center justify-center shrink-0">
-          <Shield className="w-4 h-4 text-orange-400" />
+          <Shield className="w-4 h-4 text-warning" />
         </div>
         <div className="flex-1">
           <h4 className="text-sm font-semibold text-orange-200 mb-1">
@@ -57,7 +57,7 @@ export function ApprovalCard({
               ))}
               <button
                 onClick={() => onDeny(requestId)}
-                className="px-3 py-1.5 text-sm bg-red-900/20 border border-red-800 rounded-lg hover:bg-red-900/30 text-red-400"
+                className="px-3 py-1.5 text-sm bg-red-900/20 border border-red-800 rounded-lg hover:bg-red-900/30 text-error"
               >
                 Deny
               </button>

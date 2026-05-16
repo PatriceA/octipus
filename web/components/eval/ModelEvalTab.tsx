@@ -56,8 +56,8 @@ function ScoreCell({ value }: { value: { mean: number; passRate: number; count: 
   if (!value) return <td className="py-2 px-3 text-center text-on-surface-variant text-xs">—</td>;
   const pct = Math.round(value.mean * 100);
   const textColor =
-    pct >= 80 ? 'text-green-400' :
-    pct >= 50 ? 'text-yellow-400' :
+    pct >= 80 ? 'text-tertiary' :
+    pct >= 50 ? 'text-warning' :
     'text-error';
   return (
     <td className="py-2 px-3 text-center">
@@ -92,7 +92,7 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
             <div className="flex items-center gap-1 shrink-0">
               {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                 <span key={s.metric} className={`text-[10px] px-1.5 py-0.5 rounded ${
-                  s.status === 'PASS' ? 'bg-green-900/30 text-green-400' :
+                  s.status === 'PASS' ? 'bg-green-900/30 text-tertiary' :
                   s.status === 'FAIL' ? 'bg-red-900/30 text-error' :
                   'bg-gray-900/30 text-gray-400'
                 }`}>
@@ -114,7 +114,7 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
               {r.reference && (
                 <div>
                   <span className="text-on-surface-variant font-medium">Expected/Reference:</span>
-                  <p className="text-blue-300/80 mt-0.5 whitespace-pre-wrap">{r.reference}</p>
+                  <p className="text-primary/80 mt-0.5 whitespace-pre-wrap">{r.reference}</p>
                 </div>
               )}
               <div className="space-y-1.5 mt-2">
@@ -123,7 +123,7 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
                   <div key={s.metric} className="flex items-start gap-2 bg-[#0a0a0a] rounded p-2">
                     <div className="flex items-center gap-2 min-w-[140px] shrink-0">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${
-                        s.status === 'PASS' ? 'bg-green-500' : s.status === 'FAIL' ? 'bg-red-500' : 'bg-gray-500'
+                        s.status === 'PASS' ? 'bg-tertiary' : s.status === 'FAIL' ? 'bg-error' : 'bg-gray-500'
                       }`} />
                       <span className="text-on-surface/70">{s.metric}</span>
                       <ScoreBar score={s.score} size="sm" />
@@ -415,7 +415,7 @@ export function ModelEvalTab() {
       </Card>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
@@ -449,7 +449,7 @@ export function ModelEvalTab() {
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="w-8 h-8 rounded-lg bg-blue-950/30 flex items-center justify-center">
-                      <BarChart3 className="w-4 h-4 text-blue-400" />
+                      <BarChart3 className="w-4 h-4 text-primary" />
                     </div>
                     <ScoreBar score={score.mean} size="sm" />
                   </div>

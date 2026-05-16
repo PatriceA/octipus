@@ -45,7 +45,7 @@ export default function ArtifactsPage() {
   });
 
   if (list.isLoading) return <div className="p-6">Loading…</div>;
-  if (list.error) return <div className="p-6 text-red-400">Failed to load artifacts</div>;
+  if (list.error) return <div className="p-6 text-error">Failed to load artifacts</div>;
 
   const items = list.data?.artifacts ?? [];
   const mode = meta.data?.mode;
@@ -65,7 +65,7 @@ export default function ArtifactsPage() {
         </div>
         <Link
           href="/artifacts/new"
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-blue-500"
+          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-primary"
         >
           New artifact
         </Link>
@@ -108,10 +108,10 @@ export default function ArtifactsPage() {
               </a>
               {confirmId === a.id ? (
                 <span className="flex items-center gap-2 text-xs">
-                  <span className="text-red-400">Delete?</span>
+                  <span className="text-error">Delete?</span>
                   <button
                     onClick={() => del.mutate(a.id)}
-                    className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-red-500"
+                    className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-error"
                   >
                     Yes
                   </button>
@@ -125,7 +125,7 @@ export default function ArtifactsPage() {
               ) : (
                 <button
                   onClick={() => setConfirmId(a.id)}
-                  className="rounded p-1 text-on-surface-variant hover:bg-red-900/30 hover:text-red-300"
+                  className="rounded p-1 text-on-surface-variant hover:bg-red-900/30 hover:text-error"
                   title="Delete"
                 >
                   <Trash2 className="h-4 w-4" />

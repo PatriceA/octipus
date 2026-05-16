@@ -417,11 +417,11 @@ export default function MCPPage() {
   const statusColor = (status: string) => {
     switch (status) {
       case 'connected':
-        return 'bg-green-900/30 text-green-300';
+        return 'bg-green-900/30 text-tertiary';
       case 'connecting':
-        return 'bg-yellow-900/30 text-yellow-300';
+        return 'bg-yellow-900/30 text-warning';
       case 'error':
-        return 'bg-red-900/30 text-red-300';
+        return 'bg-red-900/30 text-error';
       default:
         return 'bg-surface-container-high text-on-surface-variant';
     }
@@ -500,7 +500,7 @@ export default function MCPPage() {
                         )}
                         {circuitStates?.circuits?.find?.((c: any) => c.serverId === server.id && c.state !== 'closed') && (
                           <span
-                            className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-900/30 text-amber-300 shrink-0"
+                            className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-900/30 text-warning shrink-0"
                             title={`Circuit ${circuitStates.circuits.find((c: any) => c.serverId === server.id)?.state} — ${circuitStates.circuits.find((c: any) => c.serverId === server.id)?.failureCount} failures`}
                           >
                             circuit: {circuitStates.circuits.find((c: any) => c.serverId === server.id)?.state}
@@ -559,7 +559,7 @@ export default function MCPPage() {
                         {/* Delete */}
                         <button
                           onClick={() => handleDelete(server.id)}
-                          className="p-1.5 text-on-surface-variant hover:text-red-500 hover:bg-red-900/20 rounded-lg cursor-pointer"
+                          className="p-1.5 text-on-surface-variant hover:text-error hover:bg-red-900/20 rounded-lg cursor-pointer"
                           title="Delete"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -570,7 +570,7 @@ export default function MCPPage() {
                 </div>
 
                 {server.error && (
-                  <p className="mt-2 ml-8 text-xs text-red-500">{server.error}</p>
+                  <p className="mt-2 ml-8 text-xs text-error">{server.error}</p>
                 )}
               </div>
 

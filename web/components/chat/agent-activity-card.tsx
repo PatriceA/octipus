@@ -49,12 +49,12 @@ function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: num
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  orchestrator: 'bg-purple-900/30 text-purple-400',
-  research: 'bg-blue-900/30 text-blue-400',
-  coding: 'bg-green-900/30 text-green-400',
-  review: 'bg-yellow-900/30 text-yellow-400',
-  qa: 'bg-orange-900/30 text-orange-400',
-  communication: 'bg-pink-900/30 text-pink-400',
+  orchestrator: 'bg-purple-900/30 text-primary',
+  research: 'bg-blue-900/30 text-primary',
+  coding: 'bg-green-900/30 text-tertiary',
+  review: 'bg-yellow-900/30 text-warning',
+  qa: 'bg-orange-900/30 text-warning',
+  communication: 'bg-pink-900/30 text-error',
   general: 'bg-surface-container-highest text-on-surface-variant',
 };
 
@@ -65,7 +65,7 @@ export function AgentActivityCard({ agent }: AgentActivityCardProps) {
   return (
     <div className="flex gap-3 justify-start">
       <div className="w-8 h-8 rounded-full bg-indigo-900 flex items-center justify-center shrink-0">
-        <Wrench className="w-4 h-4 text-indigo-400" />
+        <Wrench className="w-4 h-4 text-primary" />
       </div>
       <div className="max-w-[80%] bg-indigo-900/10 border border-outline-variant/10 px-3 py-2 rounded-lg text-sm">
         <div className="flex items-center gap-2 flex-wrap">
@@ -74,11 +74,11 @@ export function AgentActivityCard({ agent }: AgentActivityCardProps) {
           </span>
           <span className="text-xs text-on-surface-variant font-mono">{agent.model}</span>
           {agent.status === 'running' ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
           ) : agent.status === 'completed' ? (
-            <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+            <CheckCircle className="w-3.5 h-3.5 text-tertiary" />
           ) : (
-            <XCircle className="w-3.5 h-3.5 text-red-500" />
+            <XCircle className="w-3.5 h-3.5 text-error" />
           )}
           <span className="text-xs text-on-surface-variant">
             <ElapsedTimer startTime={agent.startTime} endTime={agent.endTime} />
@@ -100,7 +100,7 @@ export function AgentActivityCard({ agent }: AgentActivityCardProps) {
           <div className="mt-2 space-y-1 border-t border-outline-variant/10 pt-2">
             {agent.toolCalls.map((tc) => (
               <div key={tc.id} className="text-xs text-on-surface-variant font-mono truncate">
-                <span className="text-indigo-400">{tc.name}</span>
+                <span className="text-primary">{tc.name}</span>
                 {tc.argsSummary && <span className="text-on-surface-variant/60"> {tc.argsSummary}</span>}
               </div>
             ))}
@@ -125,16 +125,16 @@ export function TeamCard({ teamId, members, status, durationMs }: TeamCardProps)
   return (
     <div className="flex gap-3 justify-start">
       <div className="w-8 h-8 rounded-full bg-violet-900 flex items-center justify-center shrink-0">
-        <Users className="w-4 h-4 text-violet-400" />
+        <Users className="w-4 h-4 text-primary" />
       </div>
       <div className="max-w-[85%] bg-violet-900/10 border border-outline-variant/10 px-3 py-2 rounded-lg text-sm">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-violet-400">Team</span>
+          <span className="font-medium text-primary">Team</span>
           <span className="text-xs text-on-surface-variant">{members.length} agents</span>
           {status === 'running' ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
           ) : (
-            <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+            <CheckCircle className="w-3.5 h-3.5 text-tertiary" />
           )}
           {durationMs != null && (
             <span className="text-xs text-on-surface-variant font-mono">{(durationMs / 1000).toFixed(1)}s</span>
@@ -156,9 +156,9 @@ export function TeamCard({ teamId, members, status, durationMs }: TeamCardProps)
                 {agent.status === 'running' ? (
                   <Loader2 className="w-3 h-3 animate-spin text-on-surface-variant" />
                 ) : agent.status === 'completed' ? (
-                  <CheckCircle className="w-3 h-3 text-green-500" />
+                  <CheckCircle className="w-3 h-3 text-tertiary" />
                 ) : (
-                  <XCircle className="w-3 h-3 text-red-500" />
+                  <XCircle className="w-3 h-3 text-error" />
                 )}
                 {agent.totalTokens != null && agent.totalTokens > 0 && (
                   <span className="text-on-surface-variant font-mono">{agent.totalTokens}t</span>
