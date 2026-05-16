@@ -52,8 +52,11 @@ export interface Principal {
    * tenant headers are silently ignored — alice handing bob's
    * workspace UUID gets her own default workspace, not bob's row.
    *
-   * Only populated when `multiuser.orgWorkspaces` is on. Off keeps
-   * the field undefined so existing call sites see no change.
+   * Populated for any real user (`user` / `master_key` / `service`)
+   * — the resolver lazily creates a default workspace if needed.
+   * Anonymous / system principals leave it undefined. The
+   * `multiuser.orgWorkspaces` flag only gates header-driven
+   * switching between multiple workspaces, not workspace existence.
    */
   readonly workspaceId?: string | null;
 }

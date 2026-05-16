@@ -85,11 +85,19 @@ const anonPrincipal = {
 };
 
 describe('flag-off behavior', () => {
-  test('flag off → workspaceId null regardless of header', async () => {
+  test('flag off → real user gets default workspace, header ignored', async () => {
     const { resolveWorkspace } = await import('@/security/workspace-resolver');
-    expect((await resolveWorkspace(alicePrincipal, null)).workspaceId).toBeNull();
-    expect((await resolveWorkspace(alicePrincipal, aliceProjectXId)).workspaceId).toBeNull();
-    expect((await resolveWorkspace(alicePrincipal, 'project-x')).workspaceId).toBeNull();
+    const r1 = await resolveWorkspace(alicePrincipal, null);
+    expect(r1.workspaceId).toBe(aliceDefaultId);
+    expect(r1.isDefault).toBe(true);
+    // Header is ignored when switching is disabled — still default.
+    expect((await resolveWorkspace(alicePrincipal, aliceProjectXId)).workspaceId).toBe(aliceDefaultId);
+    expect((await resolveWorkspace(alicePrincipal, 'project-x')).workspaceId).toBe(aliceDefaultId);
+  });
+
+  test('flag off → anonymous still gets workspaceId null', async () => {
+    const { resolveWorkspace } = await import('@/security/workspace-resolver');
+    expect((await resolveWorkspace(anonPrincipal, null)).workspaceId).toBeNull();
   });
 });
 

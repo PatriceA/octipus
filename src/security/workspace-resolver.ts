@@ -8,9 +8,12 @@
  *
  * Resolution order:
  *
- *   1. If `multiuser.orgWorkspaces` is OFF, return undefined — the
- *      principal stays at "user-level" scope and scopedRepos behave
- *      as they did pre-Phase-4.
+ *   1. If `multiuser.orgWorkspaces` is OFF, ignore the header and
+ *      return the user's default workspace. Single-user installs
+ *      still need a workspace UUID — features like artifacts have
+ *      a `workspace_id` FK and can't run without one. The flag
+ *      gates header-driven *switching* between multiple workspaces,
+ *      not workspace existence.
  *   2. If the header is absent OR points at the literal string
  *      `"all"`, ensure the user has a default workspace and return
  *      its id. Treating "no header" as "default" is what Phase 3g's
@@ -58,21 +61,25 @@ export interface WorkspaceResolution {
  * one indexed lookup against `(user_id, slug)` or `(id, user_id)`.
  *
  * Anonymous / system principals get `workspaceId: null` — they have
- * no workspaces. Real users always get a UUID when the flag is on,
- * because `ensureDefaultWorkspace` creates one if it doesn't exist.
+ * no workspaces. Real users always get a UUID; `ensureDefaultWorkspace`
+ * creates one lazily if it doesn't exist.
  */
 export async function resolveWorkspace(
   principal: Principal,
   header: string | null | undefined,
 ): Promise<WorkspaceResolution> {
-  if (!getConfig().multiuser?.orgWorkspaces) {
-    return { workspaceId: null, isDefault: true };
-  }
   if (principal.kind !== 'user' && principal.kind !== 'master_key' && principal.kind !== 'service') {
     return { workspaceId: null, isDefault: true };
   }
 
   const mgr = getOrgWorkspaceManager();
+
+  // Single-user mode: ignore header, always use the default workspace.
+  // The flag gates multi-workspace switching, not workspace existence.
+  if (!getConfig().multiuser?.orgWorkspaces) {
+    const def = await mgr.ensureDefaultWorkspace(principal.userId);
+    return { workspaceId: def.id, isDefault: true };
+  }
 
   // Empty / sentinel "all" → default workspace.
   const trimmed = header?.trim();

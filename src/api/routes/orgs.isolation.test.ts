@@ -119,13 +119,16 @@ function setFlag(value: boolean) {
 }
 
 describe('flag-gated 404 when orgWorkspaces is off', () => {
-  test('GET /api/me/workspaces → 404', async () => {
+  test('GET /api/me/workspaces → 200 with default workspace (always available)', async () => {
     await setFlag(false);
     const r = await get(aliceApp, '/api/me/workspaces');
-    expect(r.status).toBe(404);
+    expect(r.status).toBe(200);
+    const body = r.body as { workspaces: Array<{ isDefault: boolean }> };
+    expect(body.workspaces.length).toBeGreaterThanOrEqual(1);
+    expect(body.workspaces.some((w) => w.isDefault)).toBe(true);
   });
 
-  test('POST /api/me/workspaces → 404', async () => {
+  test('POST /api/me/workspaces → 404 (multi-workspace creation gated)', async () => {
     await setFlag(false);
     const r = await postJson(aliceApp, '/api/me/workspaces', { slug: 'x', name: 'X' });
     expect(r.status).toBe(404);

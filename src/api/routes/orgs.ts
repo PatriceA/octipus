@@ -95,8 +95,10 @@ export const workspaceMeRoutes = new Elysia({ prefix: '/me/workspaces' })
   .get(
     '/',
     async (ctx) => {
-      const flag = requireFlag(ctx);
-      if (!flag.ok) return flag.body;
+      // List is available regardless of the `orgWorkspaces` flag — every
+      // real user always has a default workspace (artifacts and other
+      // workspace-scoped features need one). The flag only gates
+      // creating / renaming / deleting additional workspaces below.
       const auth = requireAuth(ctx);
       if (!auth.ok) return auth.body;
       const mgr = getOrgWorkspaceManager();
