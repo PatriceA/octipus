@@ -51,12 +51,12 @@ export default function DashboardPage() {
     },
     refetchInterval: (query) => {
       const h = query.state.data?.health;
-      if (!h) return 3000; // No data yet — poll fast
+      if (!h) return 3000;
       const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.voyage, h.openrouter, h.custom]
         .map(s => s?.status)
         .filter(s => s && s !== 'not_configured');
       const allHealthy = statuses.every(s => s === 'healthy');
-      return allHealthy ? 30000 : 5000; // Slow down once all green
+      return allHealthy ? 30000 : 5000;
     },
   });
 
@@ -72,38 +72,10 @@ export default function DashboardPage() {
   });
 
   const stats = [
-    {
-      name: 'Active Agents',
-      value: health?.agents?.running || 0,
-      icon: Bot,
-      iconBg: 'bg-primary/10',
-      iconColor: 'text-primary',
-      trend: null,
-    },
-    {
-      name: 'Total Sessions',
-      value: health?.agents?.total || 0,
-      icon: MessageSquare,
-      iconBg: 'bg-emerald-500/10',
-      iconColor: 'text-emerald-400',
-      trend: null,
-    },
-    {
-      name: 'API Requests',
-      value: usage?.stats?.requestCount || 0,
-      icon: Activity,
-      iconBg: 'bg-primary/10',
-      iconColor: 'text-primary',
-      trend: null,
-    },
-    {
-      name: 'Total Cost',
-      value: `$${(usage?.stats?.totalCost || 0).toFixed(2)}`,
-      icon: Zap,
-      iconBg: 'bg-amber-500/10',
-      iconColor: 'text-amber-400',
-      trend: null,
-    },
+    { name: 'active agents',  value: health?.agents?.running || 0,         icon: Bot,             tone: 'text-primary' },
+    { name: 'total sessions', value: health?.agents?.total || 0,           icon: MessageSquare,   tone: 'text-tertiary' },
+    { name: 'api requests',   value: usage?.stats?.requestCount || 0,      icon: Activity,        tone: 'text-primary' },
+    { name: 'total cost',     value: `$${(usage?.stats?.totalCost || 0).toFixed(2)}`, icon: Zap, tone: 'text-warning' },
   ];
 
   const runningAgents = health?.agents?.running ?? 0;
@@ -111,56 +83,51 @@ export default function DashboardPage() {
   const statusLabel = runningAgents > 0 ? `${runningAgents} live` : 'idle';
 
   return (
-    <div className="space-y-8">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Dashboard</h1>
-            <StatusBadge variant={statusVariant} dot pulse={runningAgents > 0}>
-              {statusLabel}
-            </StatusBadge>
-          </div>
-          <p className="text-on-surface-variant">
-            Live overview of your AI infrastructure — active agents, sessions, token usage, and system health.
-          </p>
+    <div className="space-y-6 font-mono">
+      {/* Page header — TUI-style title row: `❯ dashboard` + status. */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-primary text-lg font-bold" aria-hidden>❯</span>
+          <h1 className="text-xl text-on-surface">dashboard</h1>
+          <StatusBadge variant={statusVariant} dot pulse={runningAgents > 0}>
+            {statusLabel}
+          </StatusBadge>
         </div>
+        <p className="text-[12px] text-on-surface-variant">
+          live overview · agents · sessions · token usage · system health
+        </p>
       </div>
 
-      {/* Bento Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Stat counters. Big mono number, label as `▸ name` so they
+          read like ticker rows rather than marketing cards. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {stats.map((stat) => (
-          <Card key={stat.name} variant="bento" className="p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+          <Card key={stat.name} variant="default" className="p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-on-surface-variant">
+                  <span aria-hidden className="text-outline-variant">▸</span>
                   {stat.name}
                 </p>
-                <p className="mt-2 text-4xl font-extrabold tracking-tight text-white font-headline">
+                <p className="mt-2 text-3xl text-on-surface tabular-nums">
                   {stat.value}
                 </p>
               </div>
-              <div className={`p-3 rounded-lg ${stat.iconBg}`}>
-                <stat.icon className={`w-5 h-5 ${stat.iconColor}`} />
-              </div>
+              <stat.icon className={`w-4 h-4 mt-1 shrink-0 ${stat.tone}`} aria-hidden />
             </div>
           </Card>
         ))}
       </div>
 
-      {/* System Health */}
       <HealthStatus health={health?.health} isFetching={healthFetching} />
 
-      {/* Feature Status */}
       <FeatureStatus />
 
-      {/* Charts and Lists */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <UsageChart />
         <ActiveAgents />
       </div>
 
-      {/* Recent Sessions */}
       <RecentSessions />
     </div>
   );

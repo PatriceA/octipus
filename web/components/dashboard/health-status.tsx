@@ -2,6 +2,7 @@
 
 import { Brain, Compass, Cpu, Database, Globe, Layers, RefreshCw, Rocket, Server, Settings2, Sparkles, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 interface ServiceHealth {
   status: string;
@@ -28,112 +29,88 @@ interface HealthStatusProps {
 }
 
 const SERVICE_CONFIG = [
-  { key: 'database', label: 'PostgreSQL', icon: Database, description: 'Primary database' },
-  { key: 'redis', label: 'Valkey', icon: Server, description: 'Cache & sessions' },
-  { key: 'litellm', label: 'LiteLLM', icon: Layers, description: 'Model proxy' },
-  { key: 'ollama', label: 'Ollama', icon: Cpu, description: 'Local models' },
-  { key: 'openai', label: 'OpenAI', icon: Zap, description: 'GPT models' },
-  { key: 'anthropic', label: 'Anthropic', icon: Brain, description: 'Claude models' },
-  { key: 'gemini', label: 'Gemini', icon: Sparkles, description: 'Google AI' },
-  { key: 'deepseek', label: 'DeepSeek', icon: Layers, description: 'DeepSeek models' },
-  { key: 'grok', label: 'Grok (xAI)', icon: Rocket, description: 'xAI Grok models' },
-  { key: 'voyage', label: 'Voyage', icon: Compass, description: 'Embeddings' },
-  { key: 'openrouter', label: 'OpenRouter', icon: Globe, description: 'Model gateway' },
-  { key: 'custom', label: 'Custom Providers', icon: Settings2, description: 'OpenAI / Gemini compatible endpoints' },
+  { key: 'database',   label: 'postgres',   icon: Database },
+  { key: 'redis',      label: 'valkey',     icon: Server },
+  { key: 'litellm',    label: 'litellm',    icon: Layers },
+  { key: 'ollama',     label: 'ollama',     icon: Cpu },
+  { key: 'openai',     label: 'openai',     icon: Zap },
+  { key: 'anthropic',  label: 'anthropic',  icon: Brain },
+  { key: 'gemini',     label: 'gemini',     icon: Sparkles },
+  { key: 'deepseek',   label: 'deepseek',   icon: Layers },
+  { key: 'grok',       label: 'grok',       icon: Rocket },
+  { key: 'voyage',     label: 'voyage',     icon: Compass },
+  { key: 'openrouter', label: 'openrouter', icon: Globe },
+  { key: 'custom',     label: 'custom',     icon: Settings2 },
 ] as const;
 
+function dotClass(status?: string, hasData?: boolean): string {
+  if (!hasData) return 'dot dot-idle';
+  switch (status) {
+    case 'healthy':        return 'dot dot-ok';
+    case 'degraded':       return 'dot dot-warn';
+    case 'not_configured': return 'dot dot-idle';
+    default:               return 'dot dot-err';
+  }
+}
+
+function statusLabel(status?: string, hasData?: boolean): string {
+  if (!hasData) return 'checking…';
+  switch (status) {
+    case 'healthy':        return 'ok';
+    case 'degraded':       return 'degraded';
+    case 'not_configured': return '--';
+    default:               return 'down';
+  }
+}
+
+function rowAccent(status?: string): string {
+  switch (status) {
+    case 'healthy':        return 'border-l-tertiary/60';
+    case 'degraded':       return 'border-l-warning/60';
+    case 'not_configured': return 'border-l-outline-variant/40';
+    case undefined:        return 'border-l-outline-variant/40';
+    default:               return 'border-l-error/60';
+  }
+}
+
 export function HealthStatus({ health, isFetching }: HealthStatusProps) {
-  const getStatusDot = (status?: string) => {
-    if (!health) {
-      return <RefreshCw className="w-4 h-4 text-on-surface-variant animate-spin" />;
-    }
-    switch (status) {
-      case 'healthy':
-        return <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />;
-      case 'degraded':
-        return <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />;
-      case 'not_configured':
-        return <span className="w-1.5 h-1.5 rounded-full bg-on-surface-variant" />;
-      default:
-        return <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse" />;
-    }
-  };
-
-  const getStatusBg = (status?: string) => {
-    if (!health) return 'bg-surface-container-high/50';
-    switch (status) {
-      case 'healthy':
-        return 'bg-surface-container-high/50';
-      case 'degraded':
-        return 'bg-amber-500/5';
-      case 'not_configured':
-        return 'bg-surface-container-high/50';
-      default:
-        return 'bg-error/5';
-    }
-  };
-
-  const getStatusLabel = (status?: string) => {
-    if (!health) return 'Checking...';
-    switch (status) {
-      case 'healthy':
-        return 'Healthy';
-      case 'degraded':
-        return 'Degraded';
-      case 'not_configured':
-        return 'Not configured';
-      default:
-        return 'Unhealthy';
-    }
-  };
+  const hasData = !!health;
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle>System Health</CardTitle>
-          {isFetching && health && (
-            <RefreshCw className="w-3.5 h-3.5 text-on-surface-variant animate-spin" />
-          )}
-        </div>
+        <CardTitle>system health</CardTitle>
+        {isFetching && hasData && (
+          <RefreshCw className="ml-auto w-3 h-3 text-on-surface-variant animate-spin" />
+        )}
       </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {SERVICE_CONFIG.map(({ key, label, icon: Icon, description }) => {
+      <CardContent className="p-0">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {SERVICE_CONFIG.map(({ key, label, icon: Icon }, idx) => {
             const service = health?.[key];
             return (
               <div
                 key={key}
-                className={`flex items-center gap-3 p-4 rounded-[0.75rem] transition-colors duration-500 ${getStatusBg(service?.status)}`}
+                className={cn(
+                  'flex items-center gap-2.5 px-3 py-2 border-t border-r border-outline-variant/40 border-l-2',
+                  rowAccent(service?.status),
+                  idx < 4 && 'border-t-0',
+                  '[&:nth-child(4n)]:border-r-0',
+                )}
               >
-                <div className="flex items-center justify-center w-8 h-8 transition-all duration-500">
-                  {getStatusDot(service?.status)}
-                </div>
+                <span aria-hidden className={dotClass(service?.status, hasData)} />
+                <Icon className="w-3.5 h-3.5 text-on-surface-variant shrink-0" aria-hidden />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Icon className="w-3.5 h-3.5 text-on-surface-variant shrink-0" />
-                    <span className="font-bold text-white text-sm">
-                      {label}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
-                      {getStatusLabel(service?.status)}
-                    </span>
+                  <p className="text-[12px] text-on-surface truncate">{label}</p>
+                  <p className="text-[10px] text-on-surface-variant truncate">
+                    {statusLabel(service?.status, hasData)}
                     {service?.latency != null && service.latency > 0 && (
-                      <span className="text-xs text-on-surface-variant">
-                        {service.latency}ms
-                      </span>
+                      <span className="ml-1.5 text-outline">· {service.latency}ms</span>
                     )}
-                  </div>
+                  </p>
                   {service?.status === 'unhealthy' && service.message && (
-                    <p className="text-xs text-error mt-0.5 truncate" title={service.message}>
-                      {service.message}
-                    </p>
-                  )}
-                  {service?.status === 'not_configured' && (
-                    <p className="text-xs text-on-surface-variant mt-0.5">
-                      Optional
+                    <p className="text-[10px] text-error truncate mt-0.5" title={service.message}>
+                      ! {service.message}
                     </p>
                   )}
                 </div>

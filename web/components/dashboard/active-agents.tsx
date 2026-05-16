@@ -3,14 +3,23 @@
 import { useQuery } from '@tanstack/react-query';
 import { Bot } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
-import { cn } from '@/lib/utils';
 
 interface Agent {
   id: string;
   status: string;
   topic?: string;
   model: string;
+}
+
+function statusVariant(status: string): StatusVariant {
+  switch (status) {
+    case 'running':   return 'success';
+    case 'paused':    return 'warning';
+    case 'completed': return 'info';
+    default:          return 'neutral';
+  }
 }
 
 export function ActiveAgents() {
@@ -28,65 +37,44 @@ export function ActiveAgents() {
 
   const agents: Agent[] = Array.isArray(data) ? data : ((data as { agents: Agent[] })?.agents || []);
 
-  const getStatusDot = (status: string) => {
-    switch (status) {
-      case 'running':
-        return <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />;
-      case 'paused':
-        return <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />;
-      case 'completed':
-        return <span className="w-1.5 h-1.5 rounded-full bg-primary" />;
-      default:
-        return <span className="w-1.5 h-1.5 rounded-full bg-on-surface-variant" />;
-    }
-  };
-
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle>Active Agents</CardTitle>
-          <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
-            {agents.length} total
-          </span>
-        </div>
+        <CardTitle>active agents</CardTitle>
+        <span className="ml-auto text-[10px] uppercase tracking-wider text-outline-variant">
+          {agents.length} total
+        </span>
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-0">
         {agents.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-on-surface-variant">
-            <Bot className="w-8 h-8 mb-2 opacity-40" />
-            <p className="text-sm">No active agents</p>
+          <div className="flex flex-col items-center justify-center py-8 text-on-surface-variant">
+            <Bot className="w-6 h-6 mb-2 opacity-40" />
+            <p className="text-[12px]">-- no active agents --</p>
           </div>
         ) : (
-          <div className="divide-y divide-outline-variant/5">
+          <div className="divide-y divide-outline-variant/40">
             {agents.slice(0, 5).map((agent) => (
               <div
                 key={agent.id}
-                className="flex items-center justify-between py-3 hover:bg-surface-container-high/50 -mx-2 px-2 rounded-lg transition-colors"
+                className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-surface-container-high transition-colors"
               >
-                <div className="flex items-center gap-3">
-                  {getStatusDot(agent.status)}
-                  <div>
-                    <p className="font-medium text-white text-sm">
-                      {agent.topic || 'General'}
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    aria-hidden
+                    className={`dot ${agent.status === 'running' ? 'dot-ok' : agent.status === 'paused' ? 'dot-warn' : 'dot-idle'}`}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-[13px] text-on-surface truncate">
+                      {agent.topic || 'general'}
                     </p>
-                    <p className="text-xs text-on-surface-variant">
+                    <p className="text-[11px] text-on-surface-variant truncate">
                       {agent.model}
                     </p>
                   </div>
                 </div>
-                <span
-                  className={cn(
-                    'text-[10px] uppercase tracking-widest font-bold px-2.5 py-1 rounded-full',
-                    agent.status === 'running'
-                      ? 'bg-emerald-500/10 text-emerald-400'
-                      : agent.status === 'paused'
-                        ? 'bg-amber-500/10 text-amber-400'
-                        : 'bg-surface-container-high text-on-surface-variant'
-                  )}
-                >
+                <StatusBadge variant={statusVariant(agent.status)} dot={false}>
                   {agent.status}
-                </span>
+                </StatusBadge>
               </div>
             ))}
           </div>

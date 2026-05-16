@@ -10,21 +10,24 @@ interface CardProps {
   variant?: CardVariant;
 }
 
+/**
+ * Terminal-UI card primitive — every variant resolves to a flat
+ * surface with a single-line dim border. The three names are kept
+ * for backwards compatibility; the visual difference between them
+ * is now subtle (surface tint) instead of dramatic (glass blur /
+ * bento gradient). Pages that need a denser panel use `glass`;
+ * pages that want emphasis use `bento`.
+ */
 const variantClasses: Record<CardVariant, string> = {
-  default: 'bg-surface-container rounded-[1rem] ring-1 ring-outline-variant/10',
-  glass:
-    'bg-surface-variant/60 backdrop-blur-glass rounded-[1rem] border border-outline-variant/10',
-  bento:
-    'bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)]',
+  default: 'bg-surface-container border border-outline-variant/60 rounded-xs',
+  glass: 'bg-surface-container-low/80 backdrop-blur-glass border border-outline-variant/60 rounded-xs',
+  bento: 'bg-surface-container border border-outline-variant rounded-xs',
 };
 
 const hoverClasses: Record<CardVariant, string> = {
-  default:
-    'hover:bg-surface-container-high hover:ring-outline-variant/20 transition-all cursor-pointer',
-  glass:
-    'hover:bg-surface-variant/80 hover:border-outline-variant/20 transition-all cursor-pointer',
-  bento:
-    'hover:border-primary/30 hover:shadow-[0_0_40px_-10px_rgba(115,255,227,0.25)] hover:-translate-y-0.5 transition-all duration-300 cursor-pointer',
+  default: 'hover:border-outline hover:bg-surface-container-high transition-colors cursor-pointer',
+  glass: 'hover:border-outline hover:bg-surface-container transition-colors cursor-pointer',
+  bento: 'hover:border-primary hover:bg-surface-container-high transition-colors cursor-pointer',
 };
 
 export function Card({ children, className, hover, variant = 'default' }: CardProps) {
@@ -37,7 +40,12 @@ export function Card({ children, className, hover, variant = 'default' }: CardPr
 
 export function CardHeader({ children, className }: Omit<CardProps, 'hover' | 'variant'>) {
   return (
-    <div className={cn('px-6 py-5 border-b border-outline-variant/10', className)}>
+    <div
+      className={cn(
+        'px-4 py-2.5 border-b border-outline-variant/60 bg-surface-container-low/60 flex items-center gap-2',
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -45,12 +53,20 @@ export function CardHeader({ children, className }: Omit<CardProps, 'hover' | 'v
 
 export function CardTitle({ children, className }: Omit<CardProps, 'hover' | 'variant'>) {
   return (
-    <h3 className={cn('text-sm font-extrabold tracking-tighter text-white', className)}>
+    <h3
+      className={cn(
+        'text-[13px] text-on-surface font-mono flex items-center gap-1.5',
+        className,
+      )}
+    >
+      <span aria-hidden className="text-outline-variant">
+        ▸
+      </span>
       {children}
     </h3>
   );
 }
 
 export function CardContent({ children, className }: Omit<CardProps, 'hover' | 'variant'>) {
-  return <div className={cn('p-6', className)}>{children}</div>;
+  return <div className={cn('p-4', className)}>{children}</div>;
 }

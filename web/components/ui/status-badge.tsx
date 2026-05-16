@@ -11,29 +11,37 @@ interface StatusBadgeProps {
   className?: string;
 }
 
+/**
+ * Terminal-UI status badge — `[ ● label ]` style.
+ *
+ * Square frame, monospace, single-line border in the variant colour.
+ * The dot uses the same colour as the text so the badge reads like a
+ * single coloured token rather than a Material-style pill. Pulse is
+ * retained for the "live" case (e.g. "3 live agents").
+ */
 const variantStyles: Record<StatusVariant, { wrap: string; dot: string }> = {
   success: {
-    wrap: 'bg-primary/10 border-primary/20 text-primary',
-    dot: 'bg-primary shadow-[0_0_8px_rgba(115,255,227,0.6)]',
+    wrap: 'border-tertiary/60 text-tertiary bg-tertiary-container/40',
+    dot: 'bg-tertiary',
   },
   primary: {
-    wrap: 'bg-primary/10 border-primary/20 text-primary',
-    dot: 'bg-primary shadow-[0_0_8px_rgba(115,255,227,0.6)]',
+    wrap: 'border-primary/60 text-primary bg-primary-container/40',
+    dot: 'bg-primary',
   },
   info: {
-    wrap: 'bg-tertiary/10 border-tertiary/20 text-tertiary',
-    dot: 'bg-tertiary shadow-[0_0_8px_rgba(156,243,255,0.6)]',
+    wrap: 'border-primary/60 text-primary bg-primary-container/30',
+    dot: 'bg-primary',
   },
   warning: {
-    wrap: 'bg-amber-500/10 border-amber-500/20 text-amber-300',
-    dot: 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]',
+    wrap: 'border-warning/60 text-warning bg-warning-container/40',
+    dot: 'bg-warning',
   },
   danger: {
-    wrap: 'bg-error/10 border-error/20 text-error',
-    dot: 'bg-error shadow-[0_0_8px_rgba(255,113,108,0.6)]',
+    wrap: 'border-error/60 text-error bg-error-container/40',
+    dot: 'bg-error',
   },
   neutral: {
-    wrap: 'bg-surface-container-highest border-outline-variant/20 text-on-surface-variant',
+    wrap: 'border-outline-variant text-on-surface-variant bg-surface-container-high',
     dot: 'bg-on-surface-variant',
   },
 };
@@ -49,7 +57,7 @@ export function StatusBadge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 px-2.5 py-0.5 border rounded-full text-[10px] font-bold uppercase tracking-widest',
+        'inline-flex items-center gap-1.5 px-1.5 py-0.5 border rounded-xs text-[10px] uppercase tracking-wider font-mono leading-none',
         v.wrap,
         className,
       )}

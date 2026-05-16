@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Cpu, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
 
@@ -31,49 +31,41 @@ export function FeatureStatus() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Cpu className="w-4 h-4 text-on-surface-variant" />
-            <CardTitle>Feature Status</CardTitle>
-          </div>
-          {isFetching && features.length > 0 && (
-            <RefreshCw className="w-3.5 h-3.5 text-on-surface-variant animate-spin" />
-          )}
-        </div>
+        <CardTitle>feature status</CardTitle>
+        {isFetching && features.length > 0 && (
+          <RefreshCw className="ml-auto w-3 h-3 text-on-surface-variant animate-spin" />
+        )}
       </CardHeader>
-      <CardContent>
+      <CardContent className="p-0">
         {features.length === 0 ? (
-          <div className="flex items-center justify-center py-4">
-            <RefreshCw className="w-4 h-4 text-on-surface-variant animate-spin" />
+          <div className="flex items-center justify-center py-6 text-[12px] text-on-surface-variant gap-2">
+            <RefreshCw className="w-3 h-3 animate-spin" />
+            loading…
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="divide-y divide-outline-variant/40">
             {features.map((feature) => (
               <div
                 key={feature.topic}
-                className="flex items-center gap-3 px-4 py-3 rounded-[0.75rem] bg-surface-container-high/50"
+                className={`flex items-center gap-2.5 px-3 py-2 border-l-2 ${
+                  feature.configured ? 'border-l-tertiary/60' : 'border-l-error/60'
+                }`}
               >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    feature.configured ? 'bg-emerald-400' : 'bg-error'
-                  }`}
-                />
+                <span aria-hidden className={feature.configured ? 'dot dot-ok' : 'dot dot-err'} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-white text-sm">
-                      {feature.name}
-                    </span>
-                    <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+                    <span className="text-[13px] text-on-surface">{feature.name}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-outline-variant">
                       {feature.topic}
                     </span>
                   </div>
                   {feature.configured ? (
-                    <p className="text-xs text-on-surface-variant mt-0.5 truncate">
+                    <p className="text-[11px] text-on-surface-variant mt-0.5 truncate">
                       {feature.model}
                     </p>
                   ) : (
-                    <p className="text-xs text-error/80 mt-0.5 truncate" title={feature.hint}>
-                      {feature.hint}
+                    <p className="text-[11px] text-error mt-0.5 truncate" title={feature.hint}>
+                      ! {feature.hint}
                     </p>
                   )}
                 </div>
