@@ -6,6 +6,7 @@ import { cosineSimilarity, type EmbeddingMetadata, embeddings } from '@/db/schem
 import { type RetentionPolicy, retentionPolicies } from '@/db/schema/retention-policies';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
+import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
 
 /**
  * Memory-redesign Phase A — `embeddings.purpose` values. Kept here so the
@@ -130,6 +131,11 @@ export class EmbeddingService {
     }
   }
 
+  /**
+   * Memory-redesign Phase C — optional structural metadata. Threaded
+   * through `store()` so the structural chunker can write hierarchy
+   * fields without growing a parallel insert path.
+   */
   async store(
     sourceType: string,
     sourceId: string,
@@ -137,6 +143,12 @@ export class EmbeddingService {
     embedding: number[],
     metadata?: EmbeddingMetadata,
     purpose?: EmbeddingPurpose,
+    structural?: {
+      parentChunkId?: string | null;
+      sectionPath?: string[] | null;
+      headingLevel?: number | null;
+      docId?: string | null;
+    },
   ): Promise<string> {
     const db = getDb();
     const model = this.model || await this.resolveModel().catch(() => 'unknown');
@@ -151,6 +163,10 @@ export class EmbeddingService {
       purpose: effectivePurpose,
       contentSha256: sha256Hex(content),
       embeddingVersion: buildEmbeddingVersion(model, embedding.length),
+      parentChunkId: structural?.parentChunkId ?? null,
+      sectionPath: structural?.sectionPath ?? null,
+      headingLevel: structural?.headingLevel ?? null,
+      docId: structural?.docId ?? null,
     })
       // Dedup is enforced by the (purpose, source_id, content_sha256) unique
       // index. A re-index of unchanged content is a no-op rather than an
@@ -169,7 +185,14 @@ export class EmbeddingService {
     content: string,
     metadata?: EmbeddingMetadata,
     purpose?: EmbeddingPurpose,
+    documentId?: string,
   ): Promise<number> {
+    // Memory-redesign Phase C — pick the structural chunker when the
+    // content looks like Markdown (or the caller's filePath hint says
+    // so). Other content types fall through to the flat chunker.
+    if (looksLikeMarkdown(content, metadata?.filePath)) {
+      return this.indexStructured(sourceType, sourceId, content, metadata, purpose, documentId);
+    }
     const chunks = this.chunkText(content);
     if (chunks.length === 0) {
       // Not an error — caller passed empty/whitespace content.
@@ -239,6 +262,140 @@ export class EmbeddingService {
     }
 
     return stored;
+  }
+
+  /**
+   * Memory-redesign Phase C — index a Markdown document with its
+   * heading hierarchy preserved. Chunks are inserted in array order
+   * so each child can resolve its parent's UUID from the rows already
+   * written.
+   *
+   * Failure model matches `indexText`: every chunk's embedding call
+   * is independently try/caught; if every chunk fails we throw the
+   * first error; partial failures log a warning and return the
+   * count that did succeed.
+   */
+  private async indexStructured(
+    sourceType: string,
+    sourceId: string,
+    content: string,
+    metadata: EmbeddingMetadata | undefined,
+    purpose: EmbeddingPurpose | undefined,
+    documentId: string | undefined,
+  ): Promise<number> {
+    const chunks: StructuralChunk[] = chunkMarkdown(content);
+    if (chunks.length === 0) return 0;
+
+    const insertedIds: (string | null)[] = new Array(chunks.length).fill(null);
+    const errors: Array<{ chunk: number; message: string }> = [];
+    const storedTexts: string[] = [];
+    const storedIds: string[] = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      const parentId = c.parentIndex != null ? insertedIds[c.parentIndex] : null;
+      try {
+        const embedding = await this.generateEmbedding(c.content);
+        const id = await this.store(
+          sourceType,
+          sourceId,
+          c.content,
+          embedding,
+          {
+            ...metadata,
+            chunkIndex: i,
+            totalChunks: chunks.length,
+            originalLength: content.length,
+          },
+          purpose,
+          {
+            parentChunkId: parentId,
+            sectionPath: c.sectionPath.length > 0 ? c.sectionPath : null,
+            headingLevel: c.headingLevel,
+            docId: documentId ?? null,
+          },
+        );
+        insertedIds[i] = id;
+        storedTexts.push(c.content);
+        storedIds.push(id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push({ chunk: i, message });
+        coreLogger.error(
+          { err, sourceType, sourceId, chunk: i, totalChunks: chunks.length },
+          'Failed to index structural chunk',
+        );
+      }
+    }
+
+    if (storedIds.length === 0 && errors.length > 0) {
+      const first = errors[0];
+      throw new Error(
+        `Indexing failed for all ${errors.length} chunk(s) of ${sourceType}:${sourceId}. ` +
+          `First error (chunk ${first.chunk}): ${first.message}`,
+      );
+    }
+    if (errors.length > 0) {
+      coreLogger.warn(
+        { sourceType, sourceId, stored: storedIds.length, failed: errors.length, totalChunks: chunks.length },
+        'Partial structural indexing: some chunks failed',
+      );
+    }
+
+    if (storedIds.length > 0) {
+      this.generateAbstracts(storedIds, storedTexts).catch((err: unknown) =>
+        coreLogger.error({ err }, 'background task failed in embeddings'),
+      );
+    }
+    return storedIds.length;
+  }
+
+  /**
+   * Memory-redesign Phase C — walk the parent chain of a chunk and
+   * return the ancestor heading chunks ordered root-first. Empty
+   * array means the chunk is a top-level heading or has no structural
+   * parent (e.g. a flat-chunked row). Use this to inject "you are
+   * reading under § A / § B / § C" context next to a hit.
+   */
+  async getAncestorHeadings(chunkId: string): Promise<Array<{ id: string; content: string; headingLevel: number | null; sectionPath: string[] | null }>> {
+    const db = getDb();
+    const out: Array<{ id: string; content: string; headingLevel: number | null; sectionPath: string[] | null }> = [];
+    let current: string | null = chunkId;
+    // Defensive bound so a corrupt parent cycle (shouldn't happen
+    // given the chunker emits a tree) can't loop forever.
+    for (let depth = 0; depth < 32 && current !== null; depth++) {
+      const cursor: string = current;
+      const rowRes: Array<{
+        id: string;
+        parentChunkId: string | null;
+        content: string;
+        headingLevel: number | null;
+        sectionPath: string[] | null;
+      }> = await db
+        .select({
+          id: embeddings.id,
+          parentChunkId: embeddings.parentChunkId,
+          content: embeddings.content,
+          headingLevel: embeddings.headingLevel,
+          sectionPath: embeddings.sectionPath,
+        })
+        .from(embeddings)
+        .where(eq(embeddings.id, cursor))
+        .limit(1);
+      const row = rowRes[0];
+      if (!row) break;
+      // Don't include the chunk itself, only ancestors.
+      if (depth > 0) {
+        out.unshift({
+          id: row.id,
+          content: row.content,
+          headingLevel: row.headingLevel,
+          sectionPath: row.sectionPath,
+        });
+      }
+      current = row.parentChunkId;
+    }
+    return out;
   }
 
   // ── Search methods ────────────────────────────────────────────────

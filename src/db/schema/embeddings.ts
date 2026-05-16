@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { customType, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 // Note: pgvector extension must be installed
 // CREATE EXTENSION IF NOT EXISTS vector;
@@ -74,6 +74,32 @@ export const embeddings = pgTable('embeddings', {
   accessCount: integer('access_count').notNull().default(0),
   /** Last time this row appeared in a search result. NULL = never queried. */
   lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
+  /**
+   * Memory-redesign Phase C — document hierarchy. The chunker that
+   * structures a document into heading + body chunks links each chunk
+   * to its nearest enclosing heading via `parent_chunk_id`. Retrieval
+   * walks the parent chain to inject ancestor headings into the prompt.
+   *
+   * NULL `parentChunkId` = this row is either a top-level chunk
+   * (e.g. an H1) or comes from a flat (non-structural) source like
+   * `code` or `message`.
+   */
+  parentChunkId: uuid('parent_chunk_id').references((): AnyPgColumn => embeddings.id, { onDelete: 'set null' }),
+  /**
+   * Heading path from root to this chunk, e.g. ['Article IV', 'Clause 4.2'].
+   * NULL on non-structural chunks.
+   */
+  sectionPath: text('section_path').array(),
+  /**
+   * 0 = body chunk, 1 = H1, 2 = H2, … Lets queries cheaply find "give
+   * me all the H2s in this document".
+   */
+  headingLevel: smallint('heading_level'),
+  /**
+   * FK to the documents row this chunk came from. Cascade delete with
+   * the document. NULL for non-document sources (code, message, …).
+   */
+  docId: uuid('doc_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   sourceTypeIdx: index('embeddings_source_type_idx').on(table.sourceType),
@@ -82,6 +108,8 @@ export const embeddings = pgTable('embeddings', {
   purposeIdx: index('embeddings_purpose_idx').on(table.purpose),
   embeddingVersionIdx: index('embeddings_embedding_version_idx').on(table.embeddingVersion),
   lastAccessedAtIdx: index('embeddings_last_accessed_at_idx').on(table.lastAccessedAt),
+  parentChunkIdx: index('embeddings_parent_chunk_idx').on(table.parentChunkId),
+  docIdIdx: index('embeddings_doc_id_idx').on(table.docId),
   dedupIdx: uniqueIndex('embeddings_dedup_idx').on(table.purpose, table.sourceId, table.contentSha256),
 }));
 

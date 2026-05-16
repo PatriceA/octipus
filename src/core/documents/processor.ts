@@ -798,9 +798,16 @@ export class DocumentProcessor {
     const embeddingModel = (await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? null;
     this.logger.info({ documentId, filename, model: embeddingModel }, 'Indexing document into knowledge base');
     try {
-      const stored = await service.indexText('document', `doc:${documentId}`, text, {
-        filePath: filename,
-      });
+      const stored = await service.indexText(
+        'document',
+        `doc:${documentId}`,
+        text,
+        { filePath: filename },
+        undefined,
+        // Memory-redesign Phase C — populate embeddings.doc_id so
+        // hierarchy walks and per-document scoping work.
+        documentId,
+      );
       this.logger.info({ documentId, filename, model: embeddingModel, chunksStored: stored }, 'Document indexed into knowledge base');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
