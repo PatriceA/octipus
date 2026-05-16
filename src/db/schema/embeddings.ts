@@ -155,14 +155,14 @@ function validateVector(vector: number[]): void {
 }
 
 // Helper for vector similarity search (cosine distance)
-export const cosineSimilarity = (column: any, vector: number[]) => {
+export const cosineSimilarity = (column: AnyPgColumn, vector: number[]) => {
   validateVector(vector);
   const vectorLiteral = `[${vector.join(',')}]`;
   return sql`1 - (${column} <=> ${vectorLiteral}::vector)`;
 };
 
 // Helper for vector distance search (L2 distance)
-export const l2Distance = (column: any, vector: number[]) => {
+export const l2Distance = (column: AnyPgColumn, vector: number[]) => {
   validateVector(vector);
   const vectorLiteral = `[${vector.join(',')}]`;
   return sql`${column} <-> ${vectorLiteral}::vector`;

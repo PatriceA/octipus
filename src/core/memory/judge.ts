@@ -16,7 +16,7 @@
  * is enough.
  */
 
-import { EmbeddingService } from '@/core/rag/embeddings';
+import { buildEmbeddingVersion, EmbeddingService } from '@/core/rag/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -122,6 +122,14 @@ export async function judgeAndApply(
   const embeddings = new EmbeddingService();
   const outcomes: JudgeOutcome[] = [];
 
+  // Resolve the embedding model once per batch (was previously
+  // re-looked-up inside both ADD and UPDATE branches per candidate).
+  // Stored as `<model>/<dim>` via the canonical buildEmbeddingVersion
+  // helper so memories rows stay in sync with the embeddings table's
+  // versioning scheme.
+  const embeddingModel = await getModelRegistry().getModelForTopic('embedding');
+  const embeddingModelId = embeddingModel?.modelId ?? 'unknown';
+
   for (const candidate of candidates) {
     let queryVec: number[];
     try {
@@ -142,6 +150,8 @@ export async function judgeAndApply(
       ? { id: closest.id, content: closest.content, similarity: closest.similarity }
       : undefined;
 
+    const embeddingVersion = buildEmbeddingVersion(embeddingModelId, queryVec.length);
+
     try {
       if (action === 'ADD') {
         const created = await repo.addNew({
@@ -151,7 +161,7 @@ export async function judgeAndApply(
           factType: candidate.factType,
           content: candidate.content,
           embedding: queryVec,
-          embeddingVersion: `${(await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? 'unknown'}/${queryVec.length}`,
+          embeddingVersion,
           sourceMessageId: ctx.sourceMessageId ?? null,
           confidence: candidate.confidence,
         });
@@ -164,7 +174,7 @@ export async function judgeAndApply(
           factType: candidate.factType,
           content: candidate.content,
           embedding: queryVec,
-          embeddingVersion: `${(await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? 'unknown'}/${queryVec.length}`,
+          embeddingVersion,
           sourceMessageId: ctx.sourceMessageId ?? null,
           confidence: candidate.confidence,
         });
