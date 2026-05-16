@@ -121,6 +121,10 @@ export interface ModelUsage {
 }
 
 // Channel Types
+// 'qa-demo' is reserved for the optional channel-discovery QA
+// exercise documented in `docs/QA.md` — operators temporarily create
+// a channel of this type to verify discovery, then delete it. The
+// literal stays in the union so the QA-doc snippet compiles.
 export type ChannelType = 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat' | 'api' | 'qa-demo';
 
 export interface UnifiedMessage {
