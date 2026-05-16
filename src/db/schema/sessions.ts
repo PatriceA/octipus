@@ -66,6 +66,13 @@ export interface SessionContext {
   workspaceId?: string;
   currentTopic?: string;
   activeAgentId?: string;
+  /**
+   * @deprecated Legacy single-string summary field. Writes were
+   * removed in the architecture-cleanup pass; the canonical source
+   * is the newest `compaction_entries` row (see
+   * `CompactionEntryRepository.findLatest`). Readers retain this as
+   * a fallback for sessions compacted before the dual-write removal.
+   */
   compactedSummary?: string;
   activeCommand?: string;
   planningState?: PlanningState;

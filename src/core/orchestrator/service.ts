@@ -550,9 +550,23 @@ export class OrchestratorService {
     const session = await sessionRepository.findById(sessionId);
     const sessionCtxData = session?.context as SessionContext | undefined;
     const clearedAt = sessionCtxData?.clearedAt ? new Date(sessionCtxData.clearedAt) : undefined;
-    const sessionSummary = sessionCtxData?.compactedSummary;
+    // Pull session summary from the append-only `compaction_entries`
+    // log (newest row). Falls back to the legacy `context.compactedSummary`
+    // for sessions compacted before the dual-write removal so old data
+    // doesn't lose its summary mid-rollout.
+    let sessionSummary: string | undefined;
+    if (!clearedAt) {
+      try {
+        const { compactionEntryRepository } = await import('@/db/repositories/compaction-entry-repository');
+        const latest = await compactionEntryRepository.findLatest(sessionId);
+        sessionSummary = latest?.summary ?? sessionCtxData?.compactedSummary;
+      } catch (err) {
+        coreLogger.debug({ err, sessionId }, 'compaction-entry lookup failed — falling back to legacy context');
+        sessionSummary = sessionCtxData?.compactedSummary;
+      }
+    }
     const sources: string[] = [];
-    if (sessionSummary && !clearedAt) {
+    if (sessionSummary) {
       systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
       sources.push('session summary');
     }

@@ -199,10 +199,14 @@ async function compactSessionContext(
 
   const summaryMsg = result.messages.find(m => m.role === 'system' && m.content.startsWith('Summary'));
 
+  // Context.compactedSummary is the legacy single-string field;
+  // compaction_entries is the new append-only log. Readers should pull
+  // from the latest compaction_entries row (see service.ts /
+  // direct-response.ts). We stop writing to compactedSummary here —
+  // commands/clear.ts still nulls it for the old-data case.
   await sessionRepository.update(sessionId, {
     context: {
       ...existingContext,
-      compactedSummary: summaryMsg?.content || existingContext.compactedSummary,
       compactionState: nextState,
     },
   });
