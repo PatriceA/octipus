@@ -83,8 +83,8 @@ function autoIndexFile(filePath: string): void {
 
     // Fire-and-forget — don't block the write operation
     import('@/core/rag/indexer').then(({ getFileIndexer }) => {
-      const sourceType = ['.md', '.txt', '.rst', '.csv', '.log'].includes(ext) ? 'document' : 'code';
-      getFileIndexer().indexFile(filePath, sourceType).then((chunks) => {
+      const purpose = ['.md', '.txt', '.rst', '.csv', '.log'].includes(ext) ? 'document' : 'code';
+      getFileIndexer().indexFile(filePath, purpose).then((chunks) => {
         coreLogger.debug({ filePath, chunks }, 'Auto-indexed file into knowledge base');
       }).catch((err) => {
         coreLogger.debug({ err, filePath }, 'Auto-index skipped (embedding service may be unavailable)');

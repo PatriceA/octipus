@@ -814,16 +814,16 @@ export class DocumentProcessor {
     const embeddingModel = (await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? null;
     this.logger.info({ documentId, filename, model: embeddingModel, purpose: purpose ?? 'document' }, 'Indexing document into knowledge base');
     try {
+      // Phase E: image-derived rows are tagged 'image_description' so
+      // retention/retrieval can treat them distinctly; everything else
+      // is a regular document chunk. Document id is passed so the
+      // structural chunker can populate embeddings.doc_id for
+      // hierarchy walks and per-document scoping.
       const stored = await service.indexText(
-        'document',
+        purpose ?? 'document',
         `doc:${documentId}`,
         text,
         { filePath: filename },
-        // Phase E: image-derived rows tagged for purpose-aware retention
-        // and retrieval (the row content is a vision-LLM caption + OCR).
-        purpose,
-        // Memory-redesign Phase C — populate embeddings.doc_id so
-        // hierarchy walks and per-document scoping work.
         documentId,
       );
       this.logger.info({ documentId, filename, model: embeddingModel, chunksStored: stored }, 'Document indexed into knowledge base');
@@ -831,7 +831,7 @@ export class DocumentProcessor {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
       this.logger.error(
-        { err, message, stack, documentId, filename, sourceType: 'document' },
+        { err, message, stack, documentId, filename, purpose: purpose ?? 'document' },
         'Knowledge indexing failed — document will be marked as failed',
       );
       throw err;

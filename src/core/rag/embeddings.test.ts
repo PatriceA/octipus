@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from 'bun:test';
-import { buildEmbeddingVersion, EmbeddingService, purposeFromSourceType, sha256Hex } from './embeddings';
+import { buildEmbeddingVersion, EmbeddingService, sha256Hex } from './embeddings';
 
 /**
  * Unit tests for the loudest new fail-loud path: when the embedding provider
@@ -52,30 +52,16 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
 
     let thrown: unknown = null;
     try {
-      await service.indexText('agent_output', 'agent:abc123', content);
+      await service.indexText('ephemeral', 'agent:abc123', content);
     } catch (err) {
       thrown = err;
     }
 
     expect(thrown).toBeInstanceOf(Error);
     const msg = (thrown as Error).message;
-    expect(msg).toContain('agent_output');
+    expect(msg).toContain('ephemeral');
     expect(msg).toContain('agent:abc123');
     expect(msg).toContain('401 Unauthorized');
-  });
-
-  test('purposeFromSourceType maps known sourceTypes; unknowns fall back to ephemeral', () => {
-    // Phase A rollout: explicit mapping rather than a passthrough so retention
-    // policy works without per-call-site updates.
-    expect(purposeFromSourceType('document')).toBe('document');
-    expect(purposeFromSourceType('code')).toBe('code');
-    expect(purposeFromSourceType('message')).toBe('message');
-    expect(purposeFromSourceType('image_description')).toBe('image_description');
-    expect(purposeFromSourceType('knowledge_artifact')).toBe('knowledge_artifact');
-    // agent_output is targeted for accelerated cleanup until Phase B kills
-    // the write path entirely.
-    expect(purposeFromSourceType('agent_output')).toBe('ephemeral');
-    expect(purposeFromSourceType('something-unknown')).toBe('ephemeral');
   });
 
   test('sha256Hex is stable and matches Node crypto for utf-8 input', () => {

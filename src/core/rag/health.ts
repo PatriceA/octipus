@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'crypto';
-import { eq, } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { checkDbHealth, getDb } from '@/db/postgres';
 import { embeddings } from '@/db/schema/embeddings';
 import { coreLogger } from '@/utils/logger';
@@ -26,7 +26,9 @@ export interface KBReadiness {
 
 const logger = coreLogger.child({ component: 'kb-health' });
 
-const PROBE_SOURCE_TYPE = '__kb_health_probe__';
+// The probe writes a row with purpose='ephemeral' and a unique sourceId
+// so the cleanup pass at delete time picks up any stragglers from
+// crashed prior runs without colliding with real ephemeral rows.
 const PROBE_SOURCE_ID = '__kb_health_probe_id__';
 
 let cached: KBReadiness | null = null;
@@ -100,7 +102,6 @@ export async function runKBSelfCheck(): Promise<KBReadiness> {
       const probeContent = 'kb health probe';
       const probeModel = resolvedModelId || 'probe';
       const inserted = await db.insert(embeddings).values({
-        sourceType: PROBE_SOURCE_TYPE,
         sourceId: PROBE_SOURCE_ID,
         content: probeContent,
         embedding: probeVector,
@@ -116,8 +117,12 @@ export async function runKBSelfCheck(): Promise<KBReadiness> {
         throw new Error('vector insert returned no row');
       }
 
-      // Delete the probe row (and any stragglers from prior runs)
-      await db.delete(embeddings).where(eq(embeddings.sourceType, PROBE_SOURCE_TYPE));
+      // Delete the probe row (and any stragglers from prior runs).
+      // Match by purpose+sourceId since both columns combine into the
+      // unique dedup index — finds every probe row even across restarts.
+      await db
+        .delete(embeddings)
+        .where(and(eq(embeddings.purpose, 'ephemeral'), eq(embeddings.sourceId, PROBE_SOURCE_ID)));
       checks.vectorWrite.ok = true;
       checks.vectorWrite.detail = 'insert+delete probe round-tripped';
     } catch (err) {

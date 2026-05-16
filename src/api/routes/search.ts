@@ -158,7 +158,7 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
             id: k.id,
             type: 'knowledge',
             title: k.abstract || k.sourceId || 'Knowledge entry',
-            subtitle: `${k.sourceType}${k.similarity ? ` - relevance: ${(k.similarity * 100).toFixed(0)}%` : ''}`,
+            subtitle: `${k.purpose}${k.similarity ? ` - relevance: ${(k.similarity * 100).toFixed(0)}%` : ''}`,
             href: `/knowledge`,
           });
         }

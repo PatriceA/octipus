@@ -28,16 +28,6 @@ const tsvector = customType<{ data: string; driverData: string }>({
 
 export const embeddings = pgTable('embeddings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /**
-   * LEGACY — superseded by `purpose` (added by Phase A, migration 0049).
-   * Kept notNull during the soft-migration window so the 50+ existing
-   * call sites can continue to read/write it; new code should populate
-   * `purpose` instead and treat this column as derived. A future
-   * cleanup will drop this column once readers fully migrate.
-   * Values that ever existed here: 'message' | 'document' | 'code' |
-   * 'agent_output'.
-   */
-  sourceType: text('source_type').notNull(),
   sourceId: text('source_id').notNull(),
   /**
    * Owner of the indexed content. Multi-user is default-on
@@ -120,7 +110,6 @@ export const embeddings = pgTable('embeddings', {
   docId: uuid('doc_id').references((): AnyPgColumn => documents.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  sourceTypeIdx: index('embeddings_source_type_idx').on(table.sourceType),
   sourceIdIdx: index('embeddings_source_id_idx').on(table.sourceId),
   userIdIdx: index('embeddings_user_id_idx').on(table.userId),
   purposeIdx: index('embeddings_purpose_idx').on(table.purpose),

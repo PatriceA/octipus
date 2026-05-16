@@ -10,7 +10,10 @@ import { type CleanupOptions, type CleanupResult, runCleanup } from './retention
 
 /**
  * Memory-redesign Phase A — `embeddings.purpose` values. Kept here so the
- * read path, write path, and (future) retention_policies stay in sync.
+ * read path, write path, and retention_policies stay in sync.
+ *
+ * Migration 0056 dropped the legacy `source_type` column; `purpose` is
+ * the single categorisation field on every row.
  */
 export type EmbeddingPurpose =
   | 'document'
@@ -19,32 +22,6 @@ export type EmbeddingPurpose =
   | 'knowledge_artifact'
   | 'message'
   | 'ephemeral';
-
-/**
- * Default mapping from legacy `sourceType` to the new `purpose` column.
- * Callers that already know the purpose should pass it explicitly to
- * `store()` / `indexText()`; this fallback exists so untouched call
- * sites keep working during the rollout. Exported for unit tests.
- */
-export function purposeFromSourceType(sourceType: string): EmbeddingPurpose {
-  switch (sourceType) {
-    case 'document':
-      return 'document';
-    case 'code':
-      return 'code';
-    case 'message':
-      return 'message';
-    case 'image_description':
-      return 'image_description';
-    case 'knowledge_artifact':
-      return 'knowledge_artifact';
-    // 'agent_output' and anything else → ephemeral. Phase B kills the
-    // agent-output write path entirely; until then, those rows get the
-    // shortest retention so they don't pollute long-term retrieval.
-    default:
-      return 'ephemeral';
-  }
-}
 
 export function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
@@ -59,7 +36,7 @@ export interface SearchResult {
   id: string;
   content: string;
   abstract?: string | null;
-  sourceType: string;
+  purpose: EmbeddingPurpose;
   sourceId: string;
   similarity: number;
   metadata: EmbeddingMetadata;
@@ -148,12 +125,11 @@ export class EmbeddingService {
    * fields without growing a parallel insert path.
    */
   async store(
-    sourceType: string,
+    purpose: EmbeddingPurpose,
     sourceId: string,
     content: string,
     embedding: number[],
     metadata?: EmbeddingMetadata,
-    purpose?: EmbeddingPurpose,
     structural?: {
       parentChunkId?: string | null;
       sectionPath?: string[] | null;
@@ -163,15 +139,13 @@ export class EmbeddingService {
   ): Promise<string> {
     const db = getDb();
     const model = this.model || await this.resolveModel().catch(() => 'unknown');
-    const effectivePurpose = purpose ?? purposeFromSourceType(sourceType);
     const result = await db.insert(embeddings).values({
-      sourceType,
       sourceId,
       content,
       embedding,
       model,
       metadata: metadata || {},
-      purpose: effectivePurpose,
+      purpose,
       contentSha256: sha256Hex(content),
       embeddingVersion: buildEmbeddingVersion(model, embedding.length),
       parentChunkId: structural?.parentChunkId ?? null,
@@ -191,18 +165,17 @@ export class EmbeddingService {
   }
 
   async indexText(
-    sourceType: string,
+    purpose: EmbeddingPurpose,
     sourceId: string,
     content: string,
     metadata?: EmbeddingMetadata,
-    purpose?: EmbeddingPurpose,
     documentId?: string,
   ): Promise<number> {
     // Memory-redesign Phase C — pick the structural chunker when the
     // content looks like Markdown (or the caller's filePath hint says
     // so). Other content types fall through to the flat chunker.
     if (looksLikeMarkdown(content, metadata?.filePath)) {
-      return this.indexStructured(sourceType, sourceId, content, metadata, purpose, documentId);
+      return this.indexStructured(purpose, sourceId, content, metadata, documentId);
     }
     const chunks = this.chunkText(content);
     if (chunks.length === 0) {
@@ -218,7 +191,7 @@ export class EmbeddingService {
       try {
         const embedding = await this.generateEmbedding(chunks[i]);
         const id = await this.store(
-          sourceType,
+          purpose,
           sourceId,
           chunks[i],
           embedding,
@@ -228,7 +201,6 @@ export class EmbeddingService {
             totalChunks: chunks.length,
             originalLength: content.length,
           },
-          purpose,
         );
         storedIds.push(id);
         stored++;
@@ -237,7 +209,7 @@ export class EmbeddingService {
         const stack = err instanceof Error ? err.stack : undefined;
         errors.push({ chunk: i, message });
         coreLogger.error(
-          { err, message, stack, sourceType, sourceId, chunk: i, totalChunks: chunks.length },
+          { err, message, stack, purpose, sourceId, chunk: i, totalChunks: chunks.length },
           'Failed to index chunk',
         );
       }
@@ -249,11 +221,11 @@ export class EmbeddingService {
     if (stored === 0 && errors.length > 0) {
       const first = errors[0];
       const err = new Error(
-        `Indexing failed for all ${errors.length} chunk(s) of ${sourceType}:${sourceId}. ` +
+        `Indexing failed for all ${errors.length} chunk(s) of ${purpose}:${sourceId}. ` +
           `First error (chunk ${first.chunk}): ${first.message}`,
       );
       coreLogger.error(
-        { sourceType, sourceId, totalChunks: chunks.length, failedChunks: errors.length, errors },
+        { purpose, sourceId, totalChunks: chunks.length, failedChunks: errors.length, errors },
         'Indexing failed for every chunk — nothing was written to the knowledge base',
       );
       throw err;
@@ -262,7 +234,7 @@ export class EmbeddingService {
     // Partial failure is still logged loudly but does not throw — some content made it.
     if (errors.length > 0 && stored > 0) {
       coreLogger.warn(
-        { sourceType, sourceId, stored, failed: errors.length, totalChunks: chunks.length },
+        { purpose, sourceId, stored, failed: errors.length, totalChunks: chunks.length },
         'Partial indexing: some chunks failed — see prior error logs for details',
       );
     }
@@ -287,11 +259,10 @@ export class EmbeddingService {
    * count that did succeed.
    */
   private async indexStructured(
-    sourceType: string,
+    purpose: EmbeddingPurpose,
     sourceId: string,
     content: string,
     metadata: EmbeddingMetadata | undefined,
-    purpose: EmbeddingPurpose | undefined,
     documentId: string | undefined,
   ): Promise<number> {
     const chunks: StructuralChunk[] = chunkMarkdown(content);
@@ -308,7 +279,7 @@ export class EmbeddingService {
       try {
         const embedding = await this.generateEmbedding(c.content);
         const id = await this.store(
-          sourceType,
+          purpose,
           sourceId,
           c.content,
           embedding,
@@ -318,7 +289,6 @@ export class EmbeddingService {
             totalChunks: chunks.length,
             originalLength: content.length,
           },
-          purpose,
           {
             parentChunkId: parentId,
             sectionPath: c.sectionPath.length > 0 ? c.sectionPath : null,
@@ -333,7 +303,7 @@ export class EmbeddingService {
         const message = err instanceof Error ? err.message : String(err);
         errors.push({ chunk: i, message });
         coreLogger.error(
-          { err, sourceType, sourceId, chunk: i, totalChunks: chunks.length },
+          { err, purpose, sourceId, chunk: i, totalChunks: chunks.length },
           'Failed to index structural chunk',
         );
       }
@@ -342,13 +312,13 @@ export class EmbeddingService {
     if (storedIds.length === 0 && errors.length > 0) {
       const first = errors[0];
       throw new Error(
-        `Indexing failed for all ${errors.length} chunk(s) of ${sourceType}:${sourceId}. ` +
+        `Indexing failed for all ${errors.length} chunk(s) of ${purpose}:${sourceId}. ` +
           `First error (chunk ${first.chunk}): ${first.message}`,
       );
     }
     if (errors.length > 0) {
       coreLogger.warn(
-        { sourceType, sourceId, stored: storedIds.length, failed: errors.length, totalChunks: chunks.length },
+        { purpose, sourceId, stored: storedIds.length, failed: errors.length, totalChunks: chunks.length },
         'Partial structural indexing: some chunks failed',
       );
     }
@@ -419,7 +389,7 @@ export class EmbeddingService {
    * nothing is actually relevant — useless for small knowledge bases where
    * every entry ranks "in the top N" by default.
    */
-  async search(query: string, limit = 5, sourceType?: string, minSimilarity = 0): Promise<SearchResult[]> {
+  async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
@@ -433,8 +403,8 @@ export class EmbeddingService {
     const db = getDb();
 
     const similarityExpr = cosineSimilarity(embeddings.embedding, queryEmbedding);
-    const conditions = sourceType
-      ? and(eq(embeddings.sourceType, sourceType))
+    const conditions = purpose
+      ? and(eq(embeddings.purpose, purpose))
       : undefined;
 
     const results = await db
@@ -442,7 +412,7 @@ export class EmbeddingService {
         id: embeddings.id,
         content: embeddings.content,
         abstract: embeddings.abstract,
-        sourceType: embeddings.sourceType,
+        purpose: embeddings.purpose,
         sourceId: embeddings.sourceId,
         metadata: embeddings.metadata,
         sectionPath: embeddings.sectionPath,
@@ -459,7 +429,7 @@ export class EmbeddingService {
         id: r.id,
         content: r.content,
         abstract: r.abstract,
-        sourceType: r.sourceType,
+        purpose: r.purpose as EmbeddingPurpose,
         sourceId: r.sourceId,
         similarity: Number(r.similarity) || 0,
         metadata: (r.metadata || {}) as EmbeddingMetadata,
@@ -472,26 +442,26 @@ export class EmbeddingService {
   }
 
   /** Full-text search only (no embedding needed) */
-  async ftsSearch(query: string, limit = 5, sourceType?: string): Promise<SearchResult[]> {
+  async ftsSearch(query: string, limit = 5, purpose?: EmbeddingPurpose): Promise<SearchResult[]> {
     const db = getDb();
-    const sourceFilter = sourceType ? sql`AND source_type = ${sourceType}` : sql``;
+    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
 
     const results = await db.execute(sql`
-      SELECT id, content, abstract, source_type, source_id, metadata,
+      SELECT id, content, abstract, purpose, source_id, metadata,
              section_path, heading_level,
              ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) AS similarity
       FROM embeddings
       WHERE content_tsv @@ plainto_tsquery('english', ${query})
-        ${sourceFilter}
+        ${purposeFilter}
       ORDER BY similarity DESC
       LIMIT ${limit}
     `);
 
-    const out = rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown; section_path: string[] | null; heading_level: number | null }>(results).map(r => ({
+    const out = rows<{ id: string; content: string; abstract: string | null; purpose: string; source_id: string; similarity: number | string; metadata: unknown; section_path: string[] | null; heading_level: number | null }>(results).map(r => ({
       id: r.id,
       content: r.content,
       abstract: r.abstract,
-      sourceType: r.source_type,
+      purpose: r.purpose as EmbeddingPurpose,
       sourceId: r.source_id,
       similarity: Number(r.similarity) || 0,
       metadata: (r.metadata || {}) as EmbeddingMetadata,
@@ -523,7 +493,7 @@ export class EmbeddingService {
   async hybridSearch(
     query: string,
     limit = 5,
-    sourceType?: string,
+    purpose?: EmbeddingPurpose,
     alpha = 0.6,
     minSimilarity = 0,
   ): Promise<SearchResult[]> {
@@ -535,12 +505,12 @@ export class EmbeddingService {
         { err, queryLength: query.length },
         'Hybrid search: embedding failed, falling back to keyword-only (FTS)',
       );
-      return this.ftsSearch(query, limit, sourceType);
+      return this.ftsSearch(query, limit, purpose);
     }
 
     const db = getDb();
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
-    const sourceFilter = sourceType ? sql`AND source_type = ${sourceType}` : sql``;
+    const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
     const k = 60; // RRF constant
 
     const results = await db.execute(sql`
@@ -549,7 +519,7 @@ export class EmbeddingService {
                row_number() OVER (ORDER BY ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) DESC) AS rank_fts
         FROM embeddings
         WHERE content_tsv @@ plainto_tsquery('english', ${query})
-          ${sourceFilter}
+          ${purposeFilter}
         LIMIT 50
       ),
       vec AS (
@@ -561,7 +531,7 @@ export class EmbeddingService {
                row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec,
                1 - (embedding <=> ${vecLiteral}::vector) AS cosine_sim
         FROM embeddings
-        WHERE 1=1 ${sourceFilter}
+        WHERE 1=1 ${purposeFilter}
         ORDER BY embedding <=> ${vecLiteral}::vector
         LIMIT 50
       ),
@@ -576,7 +546,7 @@ export class EmbeddingService {
         FULL OUTER JOIN vec v ON f.id = v.id
       )
       SELECT c.cosine_sim AS similarity, c.rrf_score, c.has_fts_match,
-             e.id, e.content, e.abstract, e.source_type, e.source_id, e.metadata,
+             e.id, e.content, e.abstract, e.purpose, e.source_id, e.metadata,
              e.section_path, e.heading_level
       FROM combined c
       JOIN embeddings e ON e.id = c.id
@@ -588,7 +558,7 @@ export class EmbeddingService {
       id: string;
       content: string;
       abstract: string | null;
-      source_type: string;
+      purpose: string;
       source_id: string;
       similarity: number | string;
       rrf_score: number | string;
@@ -601,7 +571,7 @@ export class EmbeddingService {
         id: r.id,
         content: r.content,
         abstract: r.abstract,
-        sourceType: r.source_type,
+        purpose: r.purpose as EmbeddingPurpose,
         sourceId: r.source_id,
         similarity: Number(r.similarity) || 0,
         hasFtsMatch: Boolean(r.has_fts_match),
@@ -646,7 +616,7 @@ export class EmbeddingService {
         id: embeddings.id,
         content: embeddings.content,
         abstract: embeddings.abstract,
-        sourceType: embeddings.sourceType,
+        purpose: embeddings.purpose,
         sourceId: embeddings.sourceId,
         metadata: embeddings.metadata,
         createdAt: embeddings.createdAt,
@@ -662,7 +632,7 @@ export class EmbeddingService {
       id: r.id,
       content: r.content,
       abstract: r.abstract,
-      sourceType: r.sourceType,
+      purpose: r.purpose as EmbeddingPurpose,
       sourceId: r.sourceId,
       similarity: 1,
       metadata: (r.metadata || {}) as EmbeddingMetadata,
@@ -718,10 +688,10 @@ export class EmbeddingService {
   // ── Listing & Stats ──────────────────────────────────────────────
 
   /** Paginated listing (excludes embedding vector and full content for performance) */
-  async listAll(limit = 50, offset = 0, sourceType?: string): Promise<{
+  async listAll(limit = 50, offset = 0, purpose?: EmbeddingPurpose): Promise<{
     entries: Array<{
       id: string;
-      sourceType: string;
+      purpose: EmbeddingPurpose;
       sourceId: string;
       abstract: string | null;
       metadata: EmbeddingMetadata;
@@ -730,12 +700,12 @@ export class EmbeddingService {
     total: number;
   }> {
     const db = getDb();
-    const conditions = sourceType ? eq(embeddings.sourceType, sourceType) : undefined;
+    const conditions = purpose ? eq(embeddings.purpose, purpose) : undefined;
 
     const [entries, countResult] = await Promise.all([
       db.select({
         id: embeddings.id,
-        sourceType: embeddings.sourceType,
+        purpose: embeddings.purpose,
         sourceId: embeddings.sourceId,
         abstract: embeddings.abstract,
         metadata: embeddings.metadata,
@@ -746,22 +716,23 @@ export class EmbeddingService {
         .orderBy(desc(embeddings.createdAt))
         .limit(limit)
         .offset(offset),
-      db.execute(sql`SELECT count(*)::int AS count FROM embeddings ${sourceType ? sql`WHERE source_type = ${sourceType}` : sql``}`),
+      db.execute(sql`SELECT count(*)::int AS count FROM embeddings ${purpose ? sql`WHERE purpose = ${purpose}` : sql``}`),
     ]);
 
     return {
       entries: entries.map(e => ({
         ...e,
+        purpose: e.purpose as EmbeddingPurpose,
         metadata: (e.metadata || {}) as EmbeddingMetadata,
       })),
       total: rows<{ count: number }>(countResult)[0]?.count || 0,
     };
   }
 
-  /** Get stats grouped by source type, with age distribution and storage metrics */
+  /** Get stats grouped by purpose, with age distribution and storage metrics */
   async getStats(): Promise<{
     total: number;
-    bySourceType: Record<string, number>;
+    byPurpose: Record<string, number>;
     models: string[];
     avgContentLength: number;
     oldestEntry: string | null;
@@ -771,7 +742,7 @@ export class EmbeddingService {
   }> {
     const db = getDb();
     const [typeResults, modelResults, metaResults, ageResults, abstractResults] = await Promise.all([
-      db.execute(sql`SELECT source_type, count(*)::int AS count FROM embeddings GROUP BY source_type`),
+      db.execute(sql`SELECT purpose, count(*)::int AS count FROM embeddings GROUP BY purpose`),
       db.execute(sql`SELECT DISTINCT model FROM embeddings WHERE model IS NOT NULL`),
       db.execute(sql`
         SELECT count(*)::int AS total,
@@ -796,9 +767,9 @@ export class EmbeddingService {
       `),
     ]);
 
-    const bySourceType: Record<string, number> = {};
-    for (const row of rows<{ source_type: string; count: number }>(typeResults)) {
-      bySourceType[row.source_type] = row.count;
+    const byPurpose: Record<string, number> = {};
+    for (const row of rows<{ purpose: string; count: number }>(typeResults)) {
+      byPurpose[row.purpose] = row.count;
     }
 
     const meta = rows<{ total: number; avg_len: number; oldest: string | null; newest: string | null }>(metaResults)[0] || {};
@@ -807,7 +778,7 @@ export class EmbeddingService {
 
     return {
       total: meta.total || 0,
-      bySourceType,
+      byPurpose,
       models: rows<{ model: string }>(modelResults).map(r => r.model),
       avgContentLength: meta.avg_len || 0,
       oldestEntry: meta.oldest || null,
@@ -833,11 +804,11 @@ export class EmbeddingService {
     return result.length > 0;
   }
 
-  async deleteBySource(sourceType: string, sourceId: string): Promise<number> {
+  async deleteBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
     const db = getDb();
     const result = await db
       .delete(embeddings)
-      .where(and(eq(embeddings.sourceType, sourceType), eq(embeddings.sourceId, sourceId)))
+      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId)))
       .returning({ id: embeddings.id });
     return result.length;
   }

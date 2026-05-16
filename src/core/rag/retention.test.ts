@@ -47,9 +47,9 @@ describe.skipIf(!isIntegration)('RAG cleanup with retention_policies (Integratio
     // policy gets a chance.
     const content = `fixture content for retention test — purpose=${args.purpose} ageDays=${args.ageDays} accessCount=${args.accessCount ?? 0}`;
     await getDb().execute(sql`
-      INSERT INTO embeddings (id, source_type, source_id, content, embedding, model, purpose, content_sha256, embedding_version, access_count, created_at)
+      INSERT INTO embeddings (id, source_id, content, embedding, model, purpose, content_sha256, embedding_version, access_count, created_at)
       VALUES (
-        ${id}, 'message', ${randomUUID()}, ${content}, '[0.1,0.2,0.3]'::vector,
+        ${id}, ${randomUUID()}, ${content}, '[0.1,0.2,0.3]'::vector,
         'test-embed-model', ${args.purpose}, ${randomUUID().replace(/-/g, '')},
         'test/3', ${args.accessCount ?? 0}, ${created.toISOString()}
       )

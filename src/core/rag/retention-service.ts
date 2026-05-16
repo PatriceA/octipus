@@ -15,9 +15,9 @@
  *      below see fewer rows.
  *   2. Orphaned `purpose='document'` rows whose `documents` parent
  *      is gone.
- *   3. Legacy `purpose='ephemeral'` / `source_type='agent_output'`
- *      rows older than `maxAgeDays`. Phase B removed the agent-output
- *      write path; steady-state expectation: 0.
+ *   3. Legacy `purpose='ephemeral'` rows older than `maxAgeDays`.
+ *      Phase B removed the agent-output write path; steady-state
+ *      expectation: 0.
  *   4. Very short / low-quality entries.
  *
  * Writes a `cleanup_audit_log` row at the end describing the run.
@@ -144,7 +144,7 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
   // pointing at a deleted document).
   const orphanedRes = await db.execute(sql`
     SELECT e.id FROM embeddings e
-    WHERE e.source_type = 'document'
+    WHERE e.purpose = 'document'
       AND NOT EXISTS (SELECT 1 FROM documents d WHERE CAST(d.id AS text) = e.source_id)
   `);
   const orphaned = unwrapRows<{ id: string }>(orphanedRes);
@@ -153,14 +153,14 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
     await deleteIdsInBatches(orphaned.map((r) => r.id));
   }
 
-  // 2. Legacy ephemeral / agent_output sweep. After Phase B these
-  // shouldn't exist; sweep catches rows from older deployments and
-  // health-probe rows. Steady-state: 0.
+  // 2. Legacy ephemeral sweep. After Phase B agent outputs no longer
+  // write here; this catches health-probe rows and rows from older
+  // deployments. Steady-state: 0.
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - maxAgeDays);
   const staleRes = await db.execute(sql`
     SELECT id FROM embeddings
-    WHERE (purpose = 'ephemeral' OR source_type = 'agent_output')
+    WHERE purpose = 'ephemeral'
       AND created_at < ${cutoffDate.toISOString()}
   `);
   const stale = unwrapRows<{ id: string }>(staleRes);

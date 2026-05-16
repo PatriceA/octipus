@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getEmbeddingService } from '@/core/rag/embeddings';
+import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } from '@/core/rag/health';
 import { getFileIndexer } from '@/core/rag/indexer';
 import { apiLogger } from '@/utils/logger';
@@ -52,11 +52,11 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
 
     const limit = query.limit ? parseInt(query.limit, 10) : 50;
     const offset = query.offset ? parseInt(query.offset, 10) : 0;
-    const sourceType = query.sourceType || undefined;
+    const purpose = (query.purpose || undefined) as EmbeddingPurpose | undefined;
 
     try {
       const service = getEmbeddingService();
-      const result = await service.listAll(limit, offset, sourceType);
+      const result = await service.listAll(limit, offset, purpose);
       return {
         entries: result.entries,
         total: result.total,
@@ -73,7 +73,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     query: t.Object({
       limit: t.Optional(t.String()),
       offset: t.Optional(t.String()),
-      sourceType: t.Optional(t.String()),
+      purpose: t.Optional(t.String()),
     }),
     detail: { tags: ['knowledge'] },
   })
@@ -111,7 +111,8 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const notReady = ensureKBReady(set);
     if (notReady) return notReady;
 
-    const { query, mode = 'hybrid', limit = 10, sourceType, minSimilarity } = body;
+    const { query, mode = 'hybrid', limit = 10, purpose, minSimilarity } = body;
+    const purposeTyped = purpose as EmbeddingPurpose | undefined;
     const service = getEmbeddingService();
     // Apply the same defaults as the MCP tool so REST callers get useful
     // results instead of "everything in the KB at ~0.01 similarity".
@@ -123,14 +124,14 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       let results;
       switch (mode) {
         case 'semantic':
-          results = await service.search(query, limit, sourceType, threshold);
+          results = await service.search(query, limit, purposeTyped, threshold);
           break;
         case 'keyword':
-          results = await service.ftsSearch(query, limit, sourceType);
+          results = await service.ftsSearch(query, limit, purposeTyped);
           break;
         case 'hybrid':
         default:
-          results = await service.hybridSearch(query, limit, sourceType, undefined, threshold);
+          results = await service.hybridSearch(query, limit, purposeTyped, undefined, threshold);
           break;
       }
       return { results, mode, query, minSimilarity: threshold };
@@ -145,7 +146,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       query: t.String(),
       mode: t.Optional(t.Union([t.Literal('hybrid'), t.Literal('semantic'), t.Literal('keyword')])),
       limit: t.Optional(t.Number()),
-      sourceType: t.Optional(t.String()),
+      purpose: t.Optional(t.String()),
       minSimilarity: t.Optional(t.Number()),
     }),
     detail: { tags: ['knowledge'] },
@@ -256,9 +257,9 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const notReady = ensureKBReady(set);
     if (notReady) return notReady;
 
-    const { path, type = 'file', sourceType = 'document', patterns } = body;
+    const { path, type = 'file', purpose = 'document', patterns } = body;
     const indexer = getFileIndexer();
-    const validSourceType = (sourceType === 'code' ? 'code' : 'document') as 'document' | 'code';
+    const validPurpose = (purpose === 'code' ? 'code' : 'document') as 'document' | 'code';
 
     try {
       if (type === 'directory') {
@@ -275,7 +276,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
         }
         return result;
       } else {
-        const chunks = await indexer.indexFile(path, validSourceType);
+        const chunks = await indexer.indexFile(path, validPurpose);
         logger.info({ path, chunks, userId: user.id }, 'File indexed');
         if (chunks === 0) {
           // indexText returns 0 either for empty content or every-chunk-failed
@@ -297,7 +298,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     body: t.Object({
       path: t.String(),
       type: t.Optional(t.Union([t.Literal('file'), t.Literal('directory')])),
-      sourceType: t.Optional(t.String()),
+      purpose: t.Optional(t.String()),
       patterns: t.Optional(t.String()),
     }),
     detail: { tags: ['knowledge'] },

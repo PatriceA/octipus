@@ -344,17 +344,17 @@ describe('Search API (Unit)', () => {
     });
 
     test('knowledge subtitle includes relevance percentage', () => {
-      const sourceType = 'document';
+      const purpose = 'document';
       const similarity = 0.85;
-      const subtitle = `${sourceType}${similarity ? ` - relevance: ${(similarity * 100).toFixed(0)}%` : ''}`;
+      const subtitle = `${purpose}${similarity ? ` - relevance: ${(similarity * 100).toFixed(0)}%` : ''}`;
 
       expect(subtitle).toBe('document - relevance: 85%');
     });
 
     test('knowledge subtitle without similarity', () => {
-      const sourceType = 'document';
+      const purpose = 'document';
       const similarity: number | undefined = undefined;
-      const subtitle = `${sourceType}${similarity ? ` - relevance: ${(similarity * 100).toFixed(0)}%` : ''}`;
+      const subtitle = `${purpose}${similarity ? ` - relevance: ${(similarity * 100).toFixed(0)}%` : ''}`;
 
       expect(subtitle).toBe('document');
     });
