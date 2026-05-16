@@ -229,7 +229,7 @@ export default function ComparePage() {
 
       {/* Comparison matrix */}
       {compareData && !loading && (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 overflow-hidden">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>

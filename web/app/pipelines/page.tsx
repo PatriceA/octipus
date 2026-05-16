@@ -112,7 +112,7 @@ export default function PipelinesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-[1rem] bg-primary/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
             <GitBranch className="w-5 h-5 text-primary" />
           </div>
           <div>
@@ -131,7 +131,7 @@ export default function PipelinesPage() {
 
       {/* Template list */}
       {templates.length === 0 ? (
-        <div className="text-center py-16 bg-surface-container rounded-[1rem] border border-outline-variant/10">
+        <div className="text-center py-16 bg-surface-container rounded-xs border border-outline-variant/10">
           <GitBranch className="w-12 h-12 mx-auto text-on-surface-variant mb-4" />
           <h3 className="text-lg font-medium text-white mb-2">No pipeline templates</h3>
           <p className="text-sm text-on-surface-variant mb-4">
@@ -183,7 +183,7 @@ function TemplateCard({
   const [view, setView] = useState<'list' | 'graph'>('list');
 
   return (
-    <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10 p-4">
+    <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2">
@@ -386,7 +386,7 @@ function TemplateEditor({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-2xl max-h-[90vh] flex flex-col">
+      <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10">
           <h2 className="text-lg font-semibold text-white">

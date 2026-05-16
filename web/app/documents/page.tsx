@@ -222,7 +222,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
             <button
               onClick={handleUpload}
               disabled={uploading || selectedFiles.length === 0}
-              className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+              className="px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
             >
               {uploading ? (
                 <>
@@ -527,7 +527,7 @@ function DocumentCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10">
+    <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
@@ -699,7 +699,7 @@ export default function DocumentsPage() {
           <FileText className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Documents</h1>
+          <h1 className="text-xl text-on-surface">Documents</h1>
           <p className="text-on-surface-variant">
             Upload and manage documents. Files are processed with OCR, categorized by AI, and indexed into the knowledge base for retrieval.
           </p>
@@ -709,7 +709,7 @@ export default function DocumentsPage() {
         </div>
         <button
           onClick={() => setShowUpload(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 cursor-pointer"
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           Upload
@@ -744,7 +744,7 @@ export default function DocumentsPage() {
             className={cn(
               'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
               !categoryFilter
-                ? 'bg-primary-800 text-white'
+                ? 'bg-primary text-white'
                 : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
             )}
           >
@@ -757,7 +757,7 @@ export default function DocumentsPage() {
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
                 categoryFilter === cat
-                  ? 'bg-primary-800 text-white'
+                  ? 'bg-primary text-white'
                   : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
               )}
             >
@@ -780,12 +780,12 @@ export default function DocumentsPage() {
 
       {/* Documents list */}
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <FileText className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No documents found</p>
           <p className="text-sm text-on-surface-variant mt-1">Click &quot;Upload&quot; to add files. They will be processed with OCR and indexed automatically.</p>

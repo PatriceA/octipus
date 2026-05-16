@@ -229,7 +229,7 @@ function CLIIntegrationsSection() {
         {cliTools.map((tool) => (
           <div
             key={tool.name}
-            className="flex items-center justify-between p-3 bg-surface-container-low rounded-[1rem]"
+            className="flex items-center justify-between p-3 bg-surface-container-low rounded-xs"
           >
             <div className="flex-1">
               <div className="flex items-center gap-2">
@@ -306,7 +306,7 @@ function IntegrationSettingsSection() {
 
       {/* N8N Settings */}
       {n8nSettings.length > 0 && (
-        <div className="bg-surface-container-low rounded-[1rem] overflow-hidden">
+        <div className="bg-surface-container-low rounded-xs overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
             <Workflow className="w-5 h-5 text-on-surface-variant" />
             <div>
@@ -329,7 +329,7 @@ function IntegrationSettingsSection() {
       {/* MCP Servers — managed on the dedicated /mcp page */}
       <a
         href="/mcp"
-        className="flex items-center justify-between p-4 bg-surface-container-low rounded-[1rem] hover:bg-[#20201f] transition-colors"
+        className="flex items-center justify-between p-4 bg-surface-container-low rounded-xs hover:bg-[#20201f] transition-colors"
       >
         <div className="flex items-center gap-3">
           <Cable className="w-5 h-5 text-on-surface-variant" />
@@ -343,7 +343,7 @@ function IntegrationSettingsSection() {
 
       {/* OAuth Settings (publicUrl) */}
       {oauthSettings.length > 0 && (
-        <div className="bg-surface-container-low rounded-[1rem] overflow-hidden">
+        <div className="bg-surface-container-low rounded-xs overflow-hidden">
           <div className="px-5 py-4 border-b border-outline-variant/10">
             <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">OAuth</h4>
           </div>

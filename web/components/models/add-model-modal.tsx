@@ -388,7 +388,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
           <div className="flex items-center gap-2">
             {backStep && (
@@ -926,7 +926,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 {testResult && (
                   <div className={`mt-2 px-3 py-2 rounded text-sm ${
                     testResult.success
-                      ? 'bg-emerald-500/10 text-emerald-400'
+                      ? 'bg-tertiary-container/40 text-tertiary border border-tertiary/60'
                       : 'bg-error/10 text-error'
                   }`}>
                     {testResult.success ? testResult.message : testResult.error}

@@ -99,7 +99,7 @@ export function GeneralTab() {
       {/* Secrets redirect */}
       <Link
         href="/secrets"
-        className="flex items-center justify-between p-4 bg-primary/10 rounded-[1rem] hover:bg-primary/15 transition-colors group"
+        className="flex items-center justify-between p-4 bg-primary/10 rounded-xs hover:bg-primary/15 transition-colors group"
       >
         <div className="flex items-center gap-3">
           <KeyRound className="w-5 h-5 text-primary" />

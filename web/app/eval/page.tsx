@@ -168,7 +168,7 @@ export default function EvalPage() {
             <FlaskConical className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Evaluations</h1>
+            <h1 className="text-xl text-on-surface">Evaluations</h1>
             <p className="text-on-surface-variant">Test agent routing accuracy, tool usage, and response quality. Run evaluation suites and compare results across models.</p>
           </div>
         </div>
@@ -202,7 +202,7 @@ export default function EvalPage() {
               className={`px-4 py-2 rounded-lg flex items-center gap-2 cursor-pointer ${
                 runStatus.running
                   ? 'bg-yellow-600 text-white'
-                  : 'bg-primary-800 text-white hover:bg-primary-900'
+                  : 'bg-primary text-white hover:bg-primary-dim'
               }`}
             >
               {runStatus.running ? (

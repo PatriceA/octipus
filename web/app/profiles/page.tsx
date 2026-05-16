@@ -621,7 +621,7 @@ function UserProfileCard({
     return (
       <button
         onClick={onClick}
-        className="w-full bg-[#1a1a1a] rounded-[1rem] p-6 border border-dashed border-outline-variant/20 hover:border-primary/40 transition-colors text-left cursor-pointer"
+        className="w-full bg-[#1a1a1a] rounded-xs p-6 border border-dashed border-outline-variant/20 hover:border-primary/40 transition-colors text-left cursor-pointer"
       >
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-full bg-[#262626] flex items-center justify-center">
@@ -642,7 +642,7 @@ function UserProfileCard({
   return (
     <button
       onClick={onClick}
-      className="w-full bg-[#1a1a1a] rounded-[1rem] p-6 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
+      className="w-full bg-[#1a1a1a] rounded-xs p-6 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
     >
       <div className="flex items-center gap-4">
         <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -679,7 +679,7 @@ function PersonCard({
   return (
     <button
       onClick={onClick}
-      className="w-full bg-[#1a1a1a] rounded-[1rem] p-5 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
+      className="w-full bg-[#1a1a1a] rounded-xs p-5 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
     >
       <div className="flex items-start gap-3">
         <div className="w-10 h-10 rounded-full bg-[#262626] flex items-center justify-center shrink-0">
@@ -716,7 +716,7 @@ function EmptyState({
   onAddPerson: () => void;
 }) {
   return (
-    <div className="bg-[#1a1a1a] rounded-[1rem] border border-outline-variant/10 p-12 text-center">
+    <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-12 text-center">
       <Users className="w-10 h-10 text-on-surface-variant mx-auto mb-4" />
       <p className="text-on-surface-variant max-w-md mx-auto">
         No profiles yet. Create your own profile to get personalized responses, or add people you interact with regularly.
@@ -778,14 +778,14 @@ export default function ProfilesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">People & Profiles</h1>
+        <h1 className="text-xl text-on-surface">People & Profiles</h1>
         <p className="text-on-surface-variant mt-2">
           Store information about people, organizations, and relationships. Your own profile is automatically shared with agents for personalized responses.
         </p>
       </div>
 
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] border border-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading profiles...
         </div>
@@ -844,12 +844,12 @@ export default function ProfilesPage() {
 
             {/* Grid */}
             {filtered.length === 0 && otherProfiles.length > 0 ? (
-              <div className="bg-[#1a1a1a] rounded-[1rem] border border-outline-variant/10 p-8 text-center">
+              <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-8 text-center">
                 <Search className="w-6 h-6 text-on-surface-variant mx-auto mb-2" />
                 <p className="text-on-surface-variant text-sm">No profiles match your search.</p>
               </div>
             ) : filtered.length === 0 ? (
-              <div className="bg-[#1a1a1a] rounded-[1rem] border border-outline-variant/10 p-8 text-center">
+              <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-8 text-center">
                 <Users className="w-6 h-6 text-on-surface-variant mx-auto mb-2" />
                 <p className="text-on-surface-variant text-sm">
                   No people added yet. Click &quot;Add Person&quot; to get started.

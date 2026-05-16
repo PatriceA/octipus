@@ -276,7 +276,7 @@ export function ConformanceTab() {
           onClick={runConformance}
           disabled={running}
           className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm cursor-pointer ${
-            running ? 'bg-yellow-600 text-white' : 'bg-primary-800 text-white hover:bg-primary-900'
+            running ? 'bg-yellow-600 text-white' : 'bg-primary text-white hover:bg-primary-dim'
           }`}
         >
           {running ? (

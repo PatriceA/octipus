@@ -483,7 +483,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-[#1a1a1a] rounded-[1rem] shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
+      <div className="bg-[#1a1a1a] rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-extrabold tracking-tighter text-white">New Automation</h2>
           <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
@@ -897,7 +897,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-[#1a1a1a] rounded-[1rem] shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-[#1a1a1a] rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-extrabold tracking-tighter text-white">Edit Hook</h2>
           <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
@@ -1197,7 +1197,7 @@ export default function HooksPage() {
             <Webhook className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Hooks & Tasks</h1>
+            <h1 className="text-xl text-on-surface">Hooks & Tasks</h1>
             <p className="text-on-surface-variant">Event-driven automation. Create hooks that trigger on messages, agent events, schedules, or incoming webhooks.</p>
           </div>
         </div>
@@ -1233,7 +1233,7 @@ export default function HooksPage() {
       </div>
 
       {activeTab === 'executions' && (
-        <div className="bg-[#1a1a1a] rounded-[1rem] p-4">
+        <div className="bg-[#1a1a1a] rounded-xs p-4">
           <h2 className="text-sm font-semibold text-white mb-3">
             {viewingExecutions ? 'Hook Executions' : 'All Recent Executions'}
             {viewingExecutions && (
@@ -1470,7 +1470,7 @@ export default function HooksPage() {
             </div>
           )}
 
-          <div className="bg-[#1a1a1a] rounded-[1rem]">
+          <div className="bg-[#1a1a1a] rounded-xs">
             {isLoading ? (
               <div className="p-8 text-center text-on-surface-variant">
                 <Loader2 className="w-5 h-5 animate-spin inline mr-2" />Loading...
@@ -1580,7 +1580,7 @@ export default function HooksPage() {
       )}
 
       {activeTab === 'hooks' && <>
-      <div className="bg-[#1a1a1a] rounded-[1rem]">
+      <div className="bg-[#1a1a1a] rounded-xs">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>

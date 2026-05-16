@@ -417,7 +417,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
             >
               {submitting ? 'Indexing...' : 'Index'}
             </button>
@@ -546,7 +546,7 @@ export default function KnowledgePage() {
           <Brain className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Knowledge Base</h1>
+          <h1 className="text-xl text-on-surface">Knowledge Base</h1>
           <p className="text-on-surface-variant">
             RAG knowledge base powered by pgvector. Search indexed documents, code, and conversation messages using hybrid semantic + keyword search.
           </p>
@@ -556,7 +556,7 @@ export default function KnowledgePage() {
         </div>
         <button
           onClick={() => setShowIndexDialog(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 cursor-pointer"
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
           disabled={!!kbNotReadyMessage}
           title={kbNotReadyMessage ? 'Knowledge base is not ready — fix configuration below' : undefined}
         >
@@ -636,7 +636,7 @@ export default function KnowledgePage() {
           <button
             onClick={handleSearch}
             disabled={isSearching || !searchQuery.trim()}
-            className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
           >
             {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Search'}
           </button>
@@ -654,7 +654,7 @@ export default function KnowledgePage() {
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors capitalize',
                   searchMode === mode
-                    ? 'bg-primary-800 text-white shadow-xs'
+                    ? 'bg-primary text-white shadow-xs'
                     : 'text-on-surface-variant hover:text-white'
                 )}
               >
@@ -688,7 +688,7 @@ export default function KnowledgePage() {
             {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &ldquo;{activeSearch}&rdquo;
           </h3>
           {searchResults.length === 0 ? (
-            <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+            <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
               <Search className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
               <p className="text-on-surface-variant">No results found</p>
             </div>
@@ -697,7 +697,7 @@ export default function KnowledgePage() {
               <button
                 key={result.id}
                 onClick={() => setSelectedEntryId(result.id)}
-                className="w-full text-left bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
+                className="w-full text-left bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
@@ -727,12 +727,12 @@ export default function KnowledgePage() {
         /* Browse section */
         <div className="space-y-3">
           {browseLoading && browseOffset === 0 ? (
-            <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+            <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
               <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
               Loading...
             </div>
           ) : displayedEntries.length === 0 ? (
-            <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+            <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
               <Brain className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
               <p className="text-on-surface-variant">No knowledge entries found</p>
               <p className="text-xs text-on-surface-variant mt-1">Click &quot;Index Files&quot; to add documents or code to the knowledge base for semantic retrieval.</p>
@@ -743,7 +743,7 @@ export default function KnowledgePage() {
                 <button
                   key={entry.id}
                   onClick={() => setSelectedEntryId(entry.id)}
-                  className="w-full text-left bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
+                  className="w-full text-left bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-start gap-3">
                     <SourceTypeIcon sourceType={entry.sourceType} className="w-4 h-4 text-on-surface-variant mt-0.5 shrink-0" />

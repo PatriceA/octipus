@@ -305,7 +305,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                     className={cn(
                       'px-2 py-1 text-xs rounded-md text-left cursor-pointer transition-colors',
                       selected
-                        ? 'bg-primary-800 text-white'
+                        ? 'bg-primary text-white'
                         : 'bg-[#262626] text-white/70 hover:bg-[#20201f]',
                     )}
                   >
@@ -381,7 +381,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
             >
               {submitting ? 'Creating...' : 'Create Skill'}
             </button>
@@ -497,7 +497,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
                 }
                 className={cn(
                   'text-xs px-2 py-1.5 rounded border transition-colors cursor-pointer disabled:opacity-50',
-                  state === 'active' && 'bg-primary-800/40 border-primary-700 text-white',
+                  state === 'active' && 'bg-primary/40 border-primary-700 text-white',
                   state === 'attached' && 'bg-[#262626] border-outline-variant/20 text-on-surface-variant',
                   state === 'off' && 'bg-transparent border-outline-variant/10 text-on-surface-variant/50 hover:border-outline-variant/30',
                 )}
@@ -673,7 +673,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
             >
               {submitting ? 'Saving...' : 'Save Changes'}
             </button>
@@ -762,7 +762,7 @@ function SkillCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10">
+    <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
@@ -947,7 +947,7 @@ export default function SkillsPage() {
           <BookOpen className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Skills</h1>
+          <h1 className="text-xl text-on-surface">Skills</h1>
           <p className="text-on-surface-variant">
             Domain knowledge injected into agent prompts. Skills provide expertise in areas like software architecture, security practices, and API design.
           </p>
@@ -957,7 +957,7 @@ export default function SkillsPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 cursor-pointer"
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           Create Skill
@@ -984,7 +984,7 @@ export default function SkillsPage() {
             className={cn(
               'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
               !categoryFilter
-                ? 'bg-primary-800 text-white'
+                ? 'bg-primary text-white'
                 : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
             )}
           >
@@ -997,7 +997,7 @@ export default function SkillsPage() {
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
                 categoryFilter === cat
-                  ? 'bg-primary-800 text-white'
+                  ? 'bg-primary text-white'
                   : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
               )}
             >
@@ -1009,12 +1009,12 @@ export default function SkillsPage() {
 
       {/* Skills list */}
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <BookOpen className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No skills found</p>
           <p className="text-sm text-on-surface-variant mt-1">Click &quot;Create Skill&quot; to add domain knowledge that agents can use during conversations.</p>

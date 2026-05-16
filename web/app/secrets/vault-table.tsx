@@ -109,7 +109,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
             : 'No secrets match your filter.'}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-[1rem] bg-[#1a1a1a]">
+        <div className="overflow-x-auto rounded-xs bg-[#1a1a1a]">
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-outline-variant/10">

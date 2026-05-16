@@ -134,7 +134,7 @@ export function ConfigurationTab() {
         return (
           <div
             key={section.id}
-            className="bg-surface-container-low rounded-[1rem] overflow-hidden"
+            className="bg-surface-container-low rounded-xs overflow-hidden"
           >
             {/* Section header */}
             <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">

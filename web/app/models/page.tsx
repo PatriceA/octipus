@@ -113,7 +113,7 @@ export default function ModelsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-[1rem] bg-primary/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
             <Cpu className="w-5 h-5 text-primary" />
           </div>
           <div>
@@ -140,7 +140,7 @@ export default function ModelsPage() {
       </div>
 
       {error && (
-        <div className="bg-error/10 border border-error/20 rounded-[1rem] px-4 py-3 text-error text-sm">
+        <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>

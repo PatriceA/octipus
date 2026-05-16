@@ -10,13 +10,10 @@ interface PageHeaderProps {
 }
 
 /**
- * Shared page header — compact "admin-panel" style to keep the whole app
- * visually coherent with the Intelligent Void design.
- *
- * Title:       font-headline text-2xl font-extrabold tracking-tighter
- * Description: text-on-surface-variant, max-w-prose
- * Badge slot:  typically a <StatusBadge/> next to the title
- * Actions:     primary/secondary buttons right-aligned
+ * Shared terminal-UI page header — the `❯ pagename` prompt + an
+ * optional badge + optional right-aligned actions, followed by a dim
+ * description line. Used by most app pages so heading style stays
+ * consistent without each page re-implementing the chevron pattern.
  */
 export function PageHeader({
   title,
@@ -28,19 +25,22 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        'flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6',
+        'flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 font-mono',
         className,
       )}
     >
       <div className="min-w-0">
-        <div className="flex items-center gap-3 mb-2">
-          <h1 className="font-headline text-2xl font-extrabold tracking-tighter text-white">
-            {title}
-          </h1>
+        <div className="flex items-center gap-2">
+          <span aria-hidden className="text-primary text-base font-bold">
+            ❯
+          </span>
+          <h1 className="text-lg text-on-surface lowercase">{title}</h1>
           {badge}
         </div>
         {description && (
-          <p className="text-sm text-on-surface-variant max-w-prose">{description}</p>
+          <p className="text-[12px] text-on-surface-variant max-w-prose mt-1 pl-5">
+            {description}
+          </p>
         )}
       </div>
       {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}

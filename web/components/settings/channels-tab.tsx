@@ -63,7 +63,7 @@ export function ChannelsTab() {
       <h2 className="text-lg font-extrabold tracking-tighter text-white">Channels</h2>
 
       {/* Link Code Input */}
-      <div className="p-6 bg-primary/10 rounded-[1rem]">
+      <div className="p-6 bg-primary/10 rounded-xs">
         <div className="flex items-center gap-2 mb-2">
           <Link2 className="w-5 h-5 text-primary" />
           <h3 className="font-medium text-white">Link a Channel</h3>
@@ -211,7 +211,7 @@ function ChannelStatusList() {
         return (
           <div
             key={ch.type}
-            className="flex items-center justify-between p-3 bg-surface-container-low rounded-[1rem]"
+            className="flex items-center justify-between p-3 bg-surface-container-low rounded-xs"
           >
             <h4 className="font-medium text-white">{ch.label}</h4>
             <span
@@ -273,7 +273,7 @@ function ChannelConfigSection() {
   const toggle = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   return (
-    <div className="bg-surface-container-low rounded-[1rem] overflow-hidden">
+    <div className="bg-surface-container-low rounded-xs overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
         <Settings2 className="w-5 h-5 text-on-surface-variant" />
         <div>

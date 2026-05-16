@@ -400,7 +400,7 @@ export function ModelEvalTab() {
                 className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm cursor-pointer ${
                   running ? 'bg-yellow-600 text-white' :
                   !selectedModel ? 'bg-[#1a1a1a] text-on-surface-variant cursor-not-allowed' :
-                  'bg-primary-800 text-white hover:bg-primary-900'
+                  'bg-primary text-white hover:bg-primary-dim'
                 }`}
               >
                 {running ? (

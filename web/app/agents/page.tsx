@@ -22,8 +22,8 @@ interface Agent {
 function StatusBadge({ status }: { status: Agent['status'] }) {
   const config: Record<string, { color: string; icon: typeof Play }> = {
     idle: { color: 'bg-on-surface-variant/10 text-on-surface-variant', icon: Clock },
-    running: { color: 'bg-emerald-500/10 text-emerald-400', icon: Play },
-    paused: { color: 'bg-yellow-500/10 text-yellow-400', icon: Pause },
+    running: { color: 'bg-tertiary-container/40 text-tertiary border border-tertiary/60', icon: Play },
+    paused: { color: 'bg-warning-container/40 text-warning border border-warning/60', icon: Pause },
     stopped: { color: 'bg-on-surface-variant/10 text-on-surface-variant', icon: Ban },
     completed: { color: 'bg-primary/10 text-primary', icon: CheckCircle },
     failed: { color: 'bg-error/10 text-error', icon: XCircle },
@@ -76,7 +76,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 p-6">
+      <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">New Agent</h2>
           <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
@@ -200,7 +200,7 @@ export default function AgentsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-[1rem] bg-primary/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
             <Bot className="w-5 h-5 text-primary" />
           </div>
           <div>
@@ -217,7 +217,7 @@ export default function AgentsPage() {
         </button>
       </div>
 
-      <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10">
+      <div className="bg-surface-container rounded-xs border border-outline-variant/10">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>

@@ -161,7 +161,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   }, [code]);
 
   return (
-    <div className="relative my-3 rounded-[1rem] bg-surface-container-lowest text-gray-100 overflow-hidden">
+    <div className="relative my-3 rounded-xs bg-surface-container-lowest text-gray-100 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-1.5 bg-surface-container-low text-xs text-on-surface-variant">
         <span>{language || 'text'}</span>
         <button

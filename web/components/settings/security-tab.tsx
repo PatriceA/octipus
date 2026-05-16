@@ -152,7 +152,7 @@ export function SecurityTab() {
 
         {/* Disable 2FA */}
         {profile?.totpEnabled && (
-          <div className="p-4 bg-surface-container-low rounded-[1rem]">
+          <div className="p-4 bg-surface-container-low rounded-xs">
             <h4 className="font-medium text-white mb-2">Disable 2FA</h4>
             <div className="flex gap-2">
               <input

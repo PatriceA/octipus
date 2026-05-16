@@ -29,7 +29,7 @@ function HealthBadge({ health }: { health?: Model['health'] }) {
 
 function ProviderBadge({ provider }: { provider: string }) {
   const colors: Record<string, string> = {
-    ollama: 'bg-emerald-500/10 text-emerald-400',
+    ollama: 'bg-tertiary-container/40 text-tertiary border border-tertiary/60',
     openai: 'bg-emerald-500/10 text-emerald-300',
     anthropic: 'bg-orange-500/10 text-orange-300',
     gemini: 'bg-indigo-500/10 text-indigo-300',
@@ -51,7 +51,7 @@ export { HealthBadge, ProviderBadge };
 export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDelete }: ModelCardProps) {
   return (
     <div
-      className={`bg-surface-container rounded-[1rem] border ${
+      className={`bg-surface-container rounded-xs border ${
         model.isEnabled
           ? 'border-outline-variant/10'
           : 'border-outline-variant/10 opacity-60'

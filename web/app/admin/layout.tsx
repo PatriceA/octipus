@@ -48,7 +48,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           <Shield className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Admin console</h1>
+          <h1 className="text-xl text-on-surface">Admin console</h1>
           <p className="text-on-surface-variant">Manage users and inspect the audit log.</p>
         </div>
       </div>

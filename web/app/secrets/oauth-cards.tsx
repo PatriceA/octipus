@@ -104,7 +104,7 @@ function OAuthGroupCard({
   };
 
   return (
-    <div className="p-4 bg-[#1a1a1a] rounded-[1rem]">
+    <div className="p-4 bg-[#1a1a1a] rounded-xs">
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm text-white">{group.title}</span>

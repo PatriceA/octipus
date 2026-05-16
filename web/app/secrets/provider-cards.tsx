@@ -107,7 +107,7 @@ function ProviderCard({
   };
 
   return (
-    <div className="p-4 bg-[#1a1a1a] rounded-[1rem]">
+    <div className="p-4 bg-[#1a1a1a] rounded-xs">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">

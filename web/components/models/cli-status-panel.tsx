@@ -84,16 +84,16 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
 
   const billingBadge = (mode: string) => {
     const cls = mode === 'subscription'
-      ? 'bg-emerald-500/10 text-emerald-400'
+      ? 'bg-tertiary-container/40 text-tertiary border border-tertiary/60'
       : mode === 'api-key'
-        ? 'bg-amber-500/10 text-amber-400'
+        ? 'bg-warning-container/40 text-warning border border-warning/60'
         : 'bg-sky-500/10 text-sky-400';
     const label = mode === 'subscription' ? 'Subscription' : mode === 'api-key' ? 'API key' : 'Mixed';
     return <span className={`text-[10px] px-2 py-0.5 rounded ${cls}`}>{label}</span>;
   };
 
   return (
-    <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10 p-4">
+    <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
       <div className="flex items-center gap-2 mb-1">
         <Terminal className="w-5 h-5 text-violet-400" />
         <h2 className="font-semibold text-white">Detected CLI Tools</h2>
@@ -128,7 +128,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                 <div className="flex items-center gap-2">
                   {tool.quota && registered && (
                     <span className={`text-xs px-2 py-0.5 rounded ${
-                      tool.quota.exhausted ? 'bg-error/10 text-error' : 'bg-emerald-500/10 text-emerald-400'
+                      tool.quota.exhausted ? 'bg-error/10 text-error' : 'bg-tertiary-container/40 text-tertiary border border-tertiary/60'
                     }`}>
                       {tool.quota.exhausted ? 'Quota Exhausted' : 'Quota OK'}
                     </span>

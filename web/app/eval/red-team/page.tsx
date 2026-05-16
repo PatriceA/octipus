@@ -283,7 +283,7 @@ export default function RedTeamPage() {
                     return (
                       <div
                         key={test.testId}
-                        className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 overflow-hidden"
+                        className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 overflow-hidden"
                       >
                         <button
                           onClick={() => setExpandedTest(isExpanded ? null : test.testId)}

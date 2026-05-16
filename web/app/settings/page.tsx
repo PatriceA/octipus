@@ -44,7 +44,7 @@ export default function SettingsPage() {
           <Settings className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Settings</h1>
+          <h1 className="text-xl text-on-surface">Settings</h1>
           <p className="text-on-surface-variant">System configuration — workspace paths, model routing, channel integrations, security, and notifications.</p>
         </div>
       </div>
@@ -67,7 +67,7 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        <div className="flex-1 bg-[#1a1a1a] rounded-[1rem] p-6">
+        <div className="flex-1 bg-[#1a1a1a] rounded-xs p-6">
           {activeTab === 'general' && <GeneralTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}

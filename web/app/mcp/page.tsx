@@ -162,7 +162,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   className={cn(
                     'flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer',
                     transport === t.value
-                      ? 'bg-primary-800 text-white border-primary-800'
+                      ? 'bg-primary text-white border-primary-800'
                       : 'bg-surface-container-low text-on-surface-variant border-outline-variant/10 hover:border-outline-variant/30'
                   )}
                 >
@@ -285,7 +285,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-white cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 text-sm"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Add & Connect
@@ -435,7 +435,7 @@ export default function MCPPage() {
             <Cable className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">MCP Servers</h1>
+            <h1 className="text-xl text-on-surface">MCP Servers</h1>
             <p className="text-on-surface-variant">
               Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients.
             </p>
@@ -443,7 +443,7 @@ export default function MCPPage() {
         </div>
         <button
           onClick={() => setShowAdd(true)}
-          className="px-4 py-2 bg-primary-800 text-white cursor-pointer rounded-lg hover:bg-primary-900 flex items-center gap-2"
+          className="px-4 py-2 bg-primary text-white cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
           Add Server
@@ -452,12 +452,12 @@ export default function MCPPage() {
 
       <div className="space-y-3">
         {isLoading ? (
-          <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+          <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
             <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
             Loading...
           </div>
         ) : servers.length === 0 ? (
-          <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+          <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
             <Cable className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
             <p className="text-on-surface-variant">No MCP servers configured</p>
             <p className="text-sm text-on-surface-variant mt-1">
@@ -468,7 +468,7 @@ export default function MCPPage() {
           servers.map((server) => (
             <div
               key={server.id}
-              className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10"
+              className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10"
             >
               <div className="p-4">
                 <div className="flex items-center justify-between">

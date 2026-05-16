@@ -153,7 +153,7 @@ export default function AgentDetailPage() {
               {new Date(agent.createdAt).toLocaleString()}
             </span>
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-              isRunning ? 'bg-emerald-500/10 text-emerald-400' :
+              isRunning ? 'bg-tertiary-container/40 text-tertiary border border-tertiary/60' :
               agent.status === 'completed' ? 'bg-primary/10 text-primary' :
               agent.status === 'failed' ? 'bg-error/10 text-error' :
               'bg-on-surface-variant/10 text-on-surface-variant'
@@ -189,7 +189,7 @@ export default function AgentDetailPage() {
 
       {/* Pipeline stepper (if applicable) */}
       {pipelineData?.pipeline && pipelineData.stages && (
-        <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10 p-4">
+        <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
           <h2 className="text-sm font-semibold text-on-surface-variant mb-3">
             Pipeline: {pipelineData.pipeline.title}
             <span className="ml-2 text-xs text-on-surface-variant">({pipelineData.pipeline.type})</span>
@@ -208,7 +208,7 @@ export default function AgentDetailPage() {
       )}
 
       {/* Event Timeline */}
-      <div className="bg-surface-container rounded-[1rem] border border-outline-variant/10">
+      <div className="bg-surface-container rounded-xs border border-outline-variant/10">
         <div className="px-4 py-3 border-b border-outline-variant/10">
           <h2 className="text-sm font-semibold text-on-surface-variant">
             Event Timeline

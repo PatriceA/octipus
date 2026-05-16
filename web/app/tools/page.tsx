@@ -151,7 +151,7 @@ function ToolModuleCard({
   );
 
   return (
-    <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10">
+    <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
@@ -378,7 +378,7 @@ export default function ToolsPage() {
           <Wrench className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Tools & Permissions</h1>
+          <h1 className="text-xl text-on-surface">Tools & Permissions</h1>
           <p className="text-on-surface-variant">
             Executable capabilities available to agents — filesystem, shell, git, browser, email, and more. Each tool has configurable permissions.
           </p>
@@ -429,12 +429,12 @@ export default function ToolsPage() {
 
       {/* Tool Modules */}
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filteredModules.length === 0 && filteredMcpTools.length === 0 ? (
-        <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-8 text-center">
+        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <Wrench className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No tools found</p>
           <p className="text-sm text-on-surface-variant mt-1">Tools are loaded from the backend at startup. Check that the server is running.</p>
@@ -460,7 +460,7 @@ export default function ToolsPage() {
             <Cable className="w-4 h-4" />
             MCP Tools
           </h2>
-          <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 p-4 space-y-2">
+          <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-4 space-y-2">
             {filteredMcpTools.map((tool) => (
               <div
                 key={`${tool.serverId}-${tool.name}`}
