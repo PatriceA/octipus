@@ -486,6 +486,10 @@ export class ModelRegistry {
       'general', 'coding', 'research', 'architecture', 'communication',
       'chat', 'embedding', 'ocr', 'vision', 'data', 'design', 'devops', 'security',
       'ai', 'finance', 'automation', 'qa', 'pm', 'writing', 'review', 'voice', 'local', 'simple',
+      // Memory-redesign Phase D — extractor/judge bind here. Cheap
+      // model is fine: this runs per turn so latency matters more than
+      // raw capability.
+      'memory_extraction',
     ];
     for (const topic of topics) {
       await this.cacheDelete(`model:topic:${topic}`);
