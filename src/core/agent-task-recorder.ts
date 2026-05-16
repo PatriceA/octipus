@@ -30,6 +30,38 @@ export interface AgentCompletionInput {
   role: string;
   topic?: string;
   output: string;
+  /**
+   * Override the auto-derived task_kind. Most callers should omit
+   * this — `taskKindForRole(role)` already picks the right value
+   * based on the agent's role. Set explicitly when a single agent
+   * produces multiple kinds in one session (e.g. a review agent
+   * filing a `finding` row separate from its own `review` row).
+   */
+  taskKind?: string;
+}
+
+/**
+ * Map a role id to the canonical `task_state.task_kind` value.
+ *
+ * - `review`              → `review`   (peer-output critique)
+ * - `qa`, `security`      → `finding`  (audit-style observations)
+ * - everything else       → `agent_output` (default)
+ *
+ * The mapping is intentionally small. Adding kinds is cheap (free-text
+ * column), but every new kind needs a matching reader: the
+ * task_state tool's owner_agent filter already covers role-based
+ * querying, so most workflows can stay on the default.
+ */
+export function taskKindForRole(role: string): string {
+  switch (role) {
+    case 'review':
+      return 'review';
+    case 'qa':
+    case 'security':
+      return 'finding';
+    default:
+      return 'agent_output';
+  }
 }
 
 export function isAgentTaskRecordingEnabled(): boolean {
@@ -45,6 +77,8 @@ export async function recordAgentCompletion(input: AgentCompletionInput): Promis
   if (!input.output || input.output.length < MIN_OUTPUT_LENGTH) return;
   if (input.role === 'orchestrator') return;
 
+  const taskKind = input.taskKind ?? taskKindForRole(input.role);
+
   try {
     await getTaskStateRepository().create({
       sessionId: input.sessionId,
@@ -52,7 +86,7 @@ export async function recordAgentCompletion(input: AgentCompletionInput): Promis
       workspaceId: input.workspaceId ?? null,
       swarmNodeId: input.swarmNodeId ?? null,
       ownerAgent: input.role,
-      taskKind: 'agent_output',
+      taskKind,
       status: 'done',
       inputs: input.topic ? { topic: input.topic } : {},
       outputs: { agentId: input.agentId, text: input.output },

@@ -140,6 +140,46 @@ async function main() {
       logger.error({ err }, 'Swarm orphan reaper failed (non-fatal)');
     }
 
+    // task_state orphan reaper — drops typed-output rows whose session
+    // was deleted (schema deliberately has no FK; see migration 0050).
+    // Runs once on boot, then weekly via the cron runner.
+    try {
+      const { getTaskStateRepository } = await import('@/db/repositories/task-state-repository');
+      const removed = await getTaskStateRepository().reapOrphans();
+      if (removed > 0) {
+        logger.warn({ removed }, 'task_state orphan reaper removed rows from deleted sessions');
+      }
+    } catch (err) {
+      logger.error({ err }, 'task_state orphan reaper failed (non-fatal)');
+    }
+
+    // Embedding-drift early warning. If the embeddings or memories
+    // table carries rows produced by multiple embedding models,
+    // cosine similarity across them is meaningless. The dedicated
+    // script `scripts/check-embedding-drift.ts` gives the breakdown
+    // and remediation; this is just a boot-time heads-up.
+    try {
+      const { sql } = await import('drizzle-orm');
+      const { getDb } = await import('@/db/postgres');
+      const db = getDb();
+      for (const table of ['embeddings', 'memories'] as const) {
+        const res = await db.execute(sql`
+          SELECT count(DISTINCT embedding_version)::int AS distinct_versions
+          FROM ${sql.raw(table)}
+        `);
+        const rows = Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows ?? [];
+        const distinct = (rows[0] as { distinct_versions?: number } | undefined)?.distinct_versions ?? 0;
+        if (distinct > 1) {
+          logger.warn(
+            { table, distinctVersions: distinct },
+            'Embedding-version drift detected — run `bun run scripts/check-embedding-drift.ts` for breakdown',
+          );
+        }
+      }
+    } catch (err) {
+      logger.debug({ err }, 'embedding drift check skipped (non-fatal)');
+    }
+
     // Wire gateway message handler and bridge orchestrator/agent events
     wireMessageHandler(gatewayHub);
     const disconnectBridge = connectEventBridge(gatewayHub);
