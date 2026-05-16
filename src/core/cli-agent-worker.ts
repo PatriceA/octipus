@@ -162,6 +162,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
         agentId: this.context.id,
         sessionId: this.context.sessionId,
         userId: this.context.userId,
+        workspaceId: this.context.workspaceId ?? null,
+        swarmNodeId: this.context.id,
         role: this.context.role,
         topic: this.context.topic,
         output: result,

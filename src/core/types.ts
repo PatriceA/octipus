@@ -7,6 +7,13 @@ export interface AgentContext {
   id: string;
   sessionId: string;
   userId: string;
+  /**
+   * Workspace UUID for multi-tenant scoping. Resolved at the message
+   * entry point (orchestrator.handleMessage) and propagated down the
+   * swarm tree so every spawned worker inherits the same scope. NULL
+   * for anonymous / system principals that have no workspaces.
+   */
+  workspaceId?: string | null;
   topic: string;
   model: string;
   role: string;

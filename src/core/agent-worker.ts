@@ -382,10 +382,17 @@ export class AgentWorker extends BaseAgentWorker {
       // Record completion to task_state so siblings can discover it
       // via typed lookup (Phase B of `.octipus/memory-redesign.md`).
       // Fire-and-forget — never block on recording failures.
+      //
+      // `swarmNodeId` is the agent id: `swarm_nodes.id` is 1:1 with
+      // `agents.id` (see `swarm-design.md`). `workspaceId` is
+      // inherited from the agent context, which the orchestrator
+      // threads in at spawn time.
       recordAgentCompletion({
         agentId: this.context.id,
         sessionId: this.context.sessionId,
         userId: this.context.userId,
+        workspaceId: this.context.workspaceId ?? null,
+        swarmNodeId: this.context.id,
         role: this.context.role,
         topic: this.context.topic,
         output: typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult),
