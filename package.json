@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Autonomous development assistant with multi-channel support",
   "type": "module",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PatriceA/octipus.git"
+  },
   "bin": {
     "octi": "./bin/octi.mjs",
     "octi-tui-edit": "./bin/octi-tui-edit.mjs"
