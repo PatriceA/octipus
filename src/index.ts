@@ -194,6 +194,15 @@ async function main() {
       await mcpBridge.disconnectAll();
       await gateway.stop();
 
+      // Close the long-lived task_state LISTEN connection (if it was
+      // ever opened). Safe to call when no subscribers were active.
+      try {
+        const { shutdownTaskStateListener } = await import('@/db/task-state-listener');
+        await shutdownTaskStateListener();
+      } catch {
+        // Module may not have loaded; nothing to close.
+      }
+
       logger.info('Shutdown complete');
       process.exit(0);
     };
