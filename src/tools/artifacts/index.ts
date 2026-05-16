@@ -8,7 +8,7 @@ import type { ToolManifest } from '@/core/types';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactSourceKind } from '@/db/schema/artifact-data-sources';
 import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
-import { buildArtifactEmbedUrl } from '@/core/artifacts/host';
+import { buildArtifactEmbedUrl, buildArtifactOuterUrl } from '@/core/artifacts/host';
 import { refreshSource } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
@@ -16,6 +16,58 @@ import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+/**
+ * Find `{{data.<sourceName>.…}}` references in a template body. Used to
+ * cross-check that every `data.X` referenced has a source named `X`. Empty
+ * array means no data bindings were declared.
+ */
+function extractTemplateSourceRefs(template: string): string[] {
+  const refs = new Set<string>();
+  const re = /\{\{\s*data\.([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(template)) !== null) refs.add(m[1]);
+  return [...refs];
+}
+
+function diffTemplateAndSources(template: string, sourceNames: string[]): {
+  missingSources: string[];
+  unusedSources: string[];
+} {
+  const refs = extractTemplateSourceRefs(template);
+  const present = new Set(sourceNames);
+  const referenced = new Set(refs);
+  return {
+    missingSources: refs.filter((r) => !present.has(r)),
+    unusedSources: sourceNames.filter((n) => !referenced.has(n)),
+  };
+}
+
+const SOURCES_PARAM_DESCRIPTION =
+  'Initial data sources. Array of objects with: ' +
+  '`name` (string, unique per artifact, MUST match every `{{data.<name>.…}}` placeholder in html_template), ' +
+  '`kind` (one of: `http`, `rss`, `tool`, `mcp`, `skill_query`), ' +
+  '`config` (kind-specific object — see below), ' +
+  '`refresh_seconds` (number, default 300). ' +
+  'Config shapes — ' +
+  'http: `{ url, method?, headers? }`. ' +
+  'rss: `{ url }` (exposes `items[]` with title/link/pubDate/summary). ' +
+  'tool: `{ tool: <toolName>, params?: {...} }`. ' +
+  'mcp: `{ server, tool, params? }`. ' +
+  'skill_query: `{ skill, prompt }`. ' +
+  'Example: `[{ "name": "feed", "kind": "rss", "config": { "url": "https://hnrss.org/frontpage" }, "refresh_seconds": 300 }]` paired with a template using `{{data.feed.items.0.title}}`.';
+
+const CREATE_DESCRIPTION =
+  'Create a persistent hosted artifact (dashboard, news feed, RSS reader, table). ' +
+  'Returns `{ embedUrl, outerUrl, visibility, warnings }`. ' +
+  'IMPORTANT: ' +
+  '(1) If `html_template` uses `{{data.<name>.…}}` placeholders, you MUST pass a matching `sources[]` entry with `name: "<name>"` in the same call — otherwise the rendered page will be blank. ' +
+  '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` if the user wants a shareable link, or `"signed"` to require a share token. ' +
+  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render succeeded.';
+
+const UPDATE_DESCRIPTION =
+  'Update an artifact. Body changes (template/css) create a new version. ' +
+  'Same template/source coupling applies as `create_live_artifact` — if you change `html_template` to reference a new `{{data.<name>.…}}`, call `add_artifact_data_source` for that name first (or pass `sources` here is NOT supported — use the dedicated tool).';
 
 async function resolveDefaultWorkspaceId(userId: string): Promise<string> {
   const { getOrgWorkspaceManager } = await import('@/services/org-membership').catch(
@@ -67,24 +119,26 @@ export class ArtifactsTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'create_live_artifact',
-      'Create a persistent hosted artifact (dashboard, news, RSS, table). Returns the public URL.',
+      CREATE_DESCRIPTION,
       createParameterSchema({
         slug: { type: 'string', description: 'URL slug (lowercase, digits, dashes, 1-64 chars)', required: true },
         title: { type: 'string', description: 'Display title', required: true },
-        type: { type: 'string', description: 'Artifact type: dashboard, table, rss, news, html', required: true },
-        visibility: { type: 'string', description: 'private | workspace | signed | public (default workspace)' },
-        html_template: { type: 'string', description: 'Optional template body (with {{data.<source>.<path>}} expressions)' },
-        css: { type: 'string', description: 'Optional CSS' },
-        sources: {
-          type: 'array',
-          description: 'Optional initial sources: [{name, kind, config, refresh_seconds}]',
+        type: { type: 'string', description: 'Artifact type', required: true, enum: ['dashboard', 'table', 'rss', 'news', 'html'] },
+        visibility: {
+          type: 'string',
+          description: '`private` (only creator), `workspace` (default — anonymous URL returns 404), `signed` (requires share token), `public` (anyone with URL).',
+          enum: ['private', 'workspace', 'signed', 'public'],
         },
+        html_template: { type: 'string', description: 'Template body. Use `{{data.<sourceName>.<path>}}` to bind to a data source — every `<sourceName>` referenced must appear in `sources[]`.' },
+        css: { type: 'string', description: 'Optional CSS' },
+        sources: { type: 'array', description: SOURCES_PARAM_DESCRIPTION },
       }),
       async (args, context) => {
         if (!SLUG_RE.test(args.slug as string)) {
           return { error: 'invalid slug (lowercase/digits/dashes, 1-64 chars)' };
         }
         const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const visibility = ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace');
         const a = await artifactsRepository.create({
           slug: args.slug as string,
           workspaceId,
@@ -92,12 +146,13 @@ export class ArtifactsTool extends BaseTool {
           createdByAgentId: context.id,
           title: args.title as string,
           type: args.type as ArtifactType,
-          visibility: ((args.visibility as ArtifactVisibility | undefined) ?? 'workspace'),
+          visibility,
         });
-        if (args.html_template || args.css) {
+        const template = (args.html_template as string) ?? '';
+        if (template || args.css) {
           const v = await artifactsRepository.createVersion({
             artifactId: a.id,
-            htmlTemplate: (args.html_template as string) ?? '',
+            htmlTemplate: template,
             css: (args.css as string) ?? '',
             changeSummary: 'initial',
             createdByUserId: context.userId,
@@ -120,6 +175,24 @@ export class ArtifactsTool extends BaseTool {
           scheduleArtifactRefresh(created.id).catch(() => {});
         }
 
+        const warnings: string[] = [];
+        if (template) {
+          const { missingSources, unusedSources } = diffTemplateAndSources(template, sources.map((s) => s.name));
+          if (missingSources.length > 0) {
+            warnings.push(
+              `Template references {{data.${missingSources.join('}}, {{data.')}}} but no source(s) with those names were created — the page will render blank. Call add_artifact_data_source for each missing name, or rewrite the template.`,
+            );
+          }
+          if (unusedSources.length > 0) {
+            warnings.push(`Sources [${unusedSources.join(', ')}] are attached but unused by the template.`);
+          }
+        }
+        if (visibility === 'workspace') {
+          warnings.push(
+            'visibility is `workspace` — the outerUrl returns 404 to anonymous viewers. Pass visibility:"public" if the user wants a shareable link.',
+          );
+        }
+
         artifactLifecycleBus.emitEvent({
           type: 'artifact:created',
           artifactId: a.id,
@@ -130,8 +203,11 @@ export class ArtifactsTool extends BaseTool {
         return {
           id: a.id,
           slug: a.slug,
-          url: buildArtifactEmbedUrl(a.slug),
+          visibility,
+          embedUrl: buildArtifactEmbedUrl(a.slug),
+          outerUrl: buildArtifactOuterUrl(a.slug),
           sourceIds,
+          warnings,
           message: `Artifact "${a.title}" created`,
         };
       },
@@ -140,12 +216,16 @@ export class ArtifactsTool extends BaseTool {
 
     this.registerTool(
       'update_live_artifact',
-      'Update an artifact. Body changes (template/css) create a new version.',
+      UPDATE_DESCRIPTION,
       createParameterSchema({
         id: { type: 'string', description: 'Artifact id', required: true },
         title: { type: 'string', description: 'New title' },
-        visibility: { type: 'string', description: 'private | workspace | signed | public' },
-        html_template: { type: 'string', description: 'New template body' },
+        visibility: {
+          type: 'string',
+          description: '`private` | `workspace` (anonymous URL 404s) | `signed` | `public`',
+          enum: ['private', 'workspace', 'signed', 'public'],
+        },
+        html_template: { type: 'string', description: 'New template body. Must reference only `{{data.<name>.…}}` sources that already exist (see list_live_artifacts → sources, or call add_artifact_data_source first).' },
         css: { type: 'string', description: 'New CSS' },
         change_summary: { type: 'string', description: 'Short description of the change' },
       }),
@@ -161,11 +241,13 @@ export class ArtifactsTool extends BaseTool {
             visibility: ((args.visibility as ArtifactVisibility | undefined) ?? a.visibility),
           });
         }
+        const warnings: string[] = [];
         if (args.html_template !== undefined || args.css !== undefined) {
           const prev = a.currentVersionId ? await artifactsRepository.getVersion(a.currentVersionId) : null;
+          const template = (args.html_template as string) ?? prev?.htmlTemplate ?? '';
           const v = await artifactsRepository.createVersion({
             artifactId: a.id,
-            htmlTemplate: (args.html_template as string) ?? prev?.htmlTemplate ?? '',
+            htmlTemplate: template,
             css: (args.css as string) ?? prev?.css ?? '',
             changeSummary: (args.change_summary as string) ?? '',
             createdByUserId: context.userId,
@@ -173,21 +255,46 @@ export class ArtifactsTool extends BaseTool {
           await artifactsRepository.setCurrentVersion(a.id, v.id);
           publishArtifactVersionUpdated(a.id, v.id);
           artifactLifecycleBus.emitEvent({ type: 'artifact:updated', artifactId: a.id, versionId: v.id });
+
+          if (template) {
+            const existingSources = await artifactsRepository.listSources(a.id);
+            const { missingSources } = diffTemplateAndSources(template, existingSources.map((s) => s.name));
+            if (missingSources.length > 0) {
+              warnings.push(
+                `Template references {{data.${missingSources.join('}}, {{data.')}}} but no source with that name exists on this artifact — the page will render blank until you add it.`,
+              );
+            }
+          }
         }
-        return { id: a.id, message: 'Artifact updated' };
+        const newVisibility = (args.visibility as ArtifactVisibility | undefined) ?? a.visibility;
+        return { id: a.id, visibility: newVisibility, warnings, message: 'Artifact updated' };
       },
       { permissionAction: 'write' },
     );
 
     this.registerTool(
       'add_artifact_data_source',
-      'Attach a data source to an artifact.',
+      'Attach a data source to an artifact. The `name` you pick is what the template binds to via `{{data.<name>.…}}` — pick something stable and matching the template references.',
       createParameterSchema({
         artifact_id: { type: 'string', description: 'Artifact id', required: true },
-        name: { type: 'string', description: 'Source name (unique per artifact)', required: true },
-        kind: { type: 'string', description: 'tool | http | rss | mcp | skill_query', required: true },
-        config: { type: 'object', description: 'Source config (kind-specific)' },
-        refresh_seconds: { type: 'number', description: 'Refresh interval (default 300)' },
+        name: { type: 'string', description: 'Source name (unique per artifact). Must match the `{{data.<name>.…}}` placeholders in the artifact template.', required: true },
+        kind: {
+          type: 'string',
+          description: 'Source kind.',
+          required: true,
+          enum: ['tool', 'http', 'rss', 'mcp', 'skill_query'],
+        },
+        config: {
+          type: 'object',
+          description:
+            'Kind-specific config. ' +
+            'http: `{ url, method?, headers? }`. ' +
+            'rss: `{ url }` (returns `items[]` with title/link/pubDate/summary). ' +
+            'tool: `{ tool, params? }`. ' +
+            'mcp: `{ server, tool, params? }`. ' +
+            'skill_query: `{ skill, prompt }`.',
+        },
+        refresh_seconds: { type: 'number', description: 'Refresh interval (default 300). Refresh only runs while the artifact has recent viewers.' },
       }),
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
