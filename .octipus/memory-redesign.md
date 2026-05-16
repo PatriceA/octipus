@@ -1,6 +1,6 @@
 # Memory & Knowledge System Redesign
 
-**Status:** Proposal — not implemented. Working branch: `claude/redesign-memory-system-Pftvt`.
+**Status:** Shipped. All five phases (A → E) landed in commits `b8c9300..56b4262` on main; post-implementation review cleanup landed in `e55a314..901b3c4` on `claude/redesign-memory-system-Pftvt`. This document is now a historical reference for the design and migration order — runtime behaviour is in `src/core/memory/`, `src/db/schema/{memories,task-state,retention-policies}.ts`, and migrations 0049–0054.
 **Constraint:** Max two storage systems. Postgres+pgvector is system 1, Valkey/Redis is system 2 (hot cache only). No new database.
 
 ## Problem
