@@ -9,7 +9,7 @@ export interface IndexResult {
 }
 
 export class FileIndexer {
-  async indexFile(filePath: string, sourceType: 'document' | 'code' = 'document'): Promise<number> {
+  async indexFile(filePath: string, purpose: 'document' | 'code' = 'document'): Promise<number> {
     const file = Bun.file(filePath);
     if (!(await file.exists())) {
       throw new Error(`File not found: ${filePath}`);
@@ -22,9 +22,9 @@ export class FileIndexer {
     const _sourceId = generateId();
 
     // Delete existing embeddings for this file path
-    await service.deleteBySource(sourceType, filePath);
+    await service.deleteBySource(purpose, filePath);
 
-    return service.indexText(sourceType, filePath, content, {
+    return service.indexText(purpose, filePath, content, {
       filePath,
       language: this.detectLanguage(filePath),
     });

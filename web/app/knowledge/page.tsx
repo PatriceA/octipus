@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils';
 
 interface KnowledgeEntry {
   id: string;
-  sourceType: string;
+  purpose: string;
   sourceId: string;
   abstract: string | null;
   metadata: {
@@ -45,7 +45,7 @@ interface SearchResult {
   id: string;
   content: string;
   abstract: string | null;
-  sourceType: string;
+  purpose: string;
   sourceId: string;
   similarity: number;
   metadata: Record<string, unknown>;
@@ -53,7 +53,7 @@ interface SearchResult {
 
 interface KnowledgeStats {
   total: number;
-  bySourceType: Record<string, number>;
+  byPurpose: Record<string, number>;
   models: string[];
 }
 
@@ -70,24 +70,27 @@ interface KBReadiness {
 
 // --- Constants ---
 
-const SOURCE_TYPE_COLORS: Record<string, string> = {
+const PURPOSE_COLORS: Record<string, string> = {
   document: 'bg-blue-900/30 text-primary',
   code: 'bg-green-900/30 text-tertiary',
   message: 'bg-purple-900/30 text-primary',
+  image_description: 'bg-amber-900/30 text-amber-300',
+  knowledge_artifact: 'bg-pink-900/30 text-pink-300',
+  ephemeral: 'bg-stone-900/30 text-stone-300',
 };
 
-const SOURCE_TYPE_ICONS: Record<string, typeof FileText> = {
+const PURPOSE_ICONS: Record<string, typeof FileText> = {
   document: FileText,
   code: Code,
   message: MessageSquare,
 };
 
-function getSourceTypeColor(sourceType: string): string {
-  return SOURCE_TYPE_COLORS[sourceType] || 'bg-surface-container-high text-on-surface-variant';
+function getPurposeColor(purpose: string): string {
+  return PURPOSE_COLORS[purpose] || 'bg-surface-container-high text-on-surface-variant';
 }
 
-function SourceTypeIcon({ sourceType, className }: { sourceType: string; className?: string }) {
-  const Icon = SOURCE_TYPE_ICONS[sourceType] || Database;
+function PurposeIcon({ purpose, className }: { purpose: string; className?: string }) {
+  const Icon = PURPOSE_ICONS[purpose] || Database;
   return <Icon className={className} />;
 }
 
@@ -184,10 +187,10 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
                 <table className="w-full text-sm">
                   <tbody>
                     <tr className="border-b border-outline-variant/10">
-                      <td className="px-3 py-2 font-medium text-on-surface/80 w-40">Source Type</td>
+                      <td className="px-3 py-2 font-medium text-on-surface/80 w-40">Purpose</td>
                       <td className="px-3 py-2">
-                        <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getSourceTypeColor(entry.sourceType))}>
-                          {entry.sourceType}
+                        <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getPurposeColor(entry.purpose))}>
+                          {entry.purpose}
                         </span>
                       </td>
                     </tr>
@@ -266,7 +269,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [path, setPath] = useState('');
   const [type, setType] = useState<'file' | 'directory'>('file');
-  const [sourceType, setSourceType] = useState<'document' | 'code'>('document');
+  const [purpose, setPurpose] = useState<'document' | 'code'>('document');
   const [patterns, setPatterns] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -285,7 +288,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
       const body: Record<string, unknown> = {
         path: path.trim(),
         type,
-        sourceType,
+        purpose,
       };
       if (type === 'directory' && patterns.trim()) {
         body.patterns = patterns.split(',').map((p) => p.trim()).filter(Boolean);
@@ -365,24 +368,24 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-on-surface/80 mb-1">Source Type</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Purpose</label>
             <div className="flex rounded-lg bg-surface-container-high p-0.5">
               <button
                 type="button"
-                onClick={() => setSourceType('document')}
+                onClick={() => setPurpose('document')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  sourceType === 'document' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
+                  purpose === 'document' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <FileText className="w-3.5 h-3.5" /> Document
               </button>
               <button
                 type="button"
-                onClick={() => setSourceType('code')}
+                onClick={() => setPurpose('code')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  sourceType === 'code' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
+                  purpose === 'code' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <Code className="w-3.5 h-3.5" /> Code
@@ -433,7 +436,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
 export default function KnowledgePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'hybrid' | 'semantic' | 'keyword'>('hybrid');
-  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('all');
+  const [purposeFilter, setPurposeFilter] = useState<string>('all');
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   const [searchError, setSearchError] = useState('');
@@ -470,10 +473,10 @@ export default function KnowledgePage() {
 
   // Browse query
   const { data: browseData, isLoading: browseLoading } = useQuery({
-    queryKey: ['knowledge', 'browse', browseOffset, sourceTypeFilter],
+    queryKey: ['knowledge', 'browse', browseOffset, purposeFilter],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(BROWSE_LIMIT), offset: String(browseOffset) });
-      if (sourceTypeFilter !== 'all') params.set('sourceType', sourceTypeFilter);
+      if (purposeFilter !== 'all') params.set('purpose', purposeFilter);
       return await api.get<{ entries: KnowledgeEntry[]; total: number }>(`/knowledge?${params}`);
     },
   });
@@ -505,7 +508,7 @@ export default function KnowledgePage() {
         mode: searchMode,
         limit: 20,
       };
-      if (sourceTypeFilter !== 'all') body.sourceType = sourceTypeFilter;
+      if (purposeFilter !== 'all') body.purpose = purposeFilter;
       const result = await api.post<{ results: SearchResult[] }>('/knowledge/search', body);
       setSearchResults(result.results);
       setActiveSearch(searchQuery.trim());
@@ -528,7 +531,7 @@ export default function KnowledgePage() {
   };
 
   const handleFilterChange = (value: string) => {
-    setSourceTypeFilter(value);
+    setPurposeFilter(value);
     setBrowseOffset(0);
     setAllEntries([]);
     if (searchResults) {
@@ -551,7 +554,7 @@ export default function KnowledgePage() {
             RAG knowledge base powered by pgvector. Search indexed documents, code, and conversation messages using hybrid semantic + keyword search.
           </p>
           <p className="text-sm text-on-surface-variant mt-1">
-            {stats?.total ?? 0} entries indexed across {Object.keys(stats?.bySourceType || {}).length} source types
+            {stats?.total ?? 0} entries indexed across {Object.keys(stats?.byPurpose || {}).length} source types
           </p>
         </div>
         <button
@@ -592,11 +595,11 @@ export default function KnowledgePage() {
           <p className="text-xs text-on-surface-variant">Total Entries</p>
         </div>
         <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
-          <p className="text-2xl font-bold text-primary">{stats?.bySourceType?.document ?? 0}</p>
+          <p className="text-2xl font-bold text-primary">{stats?.byPurpose?.document ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Documents</p>
         </div>
         <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
-          <p className="text-2xl font-bold text-tertiary">{stats?.bySourceType?.code ?? 0}</p>
+          <p className="text-2xl font-bold text-tertiary">{stats?.byPurpose?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
       </div>
@@ -621,7 +624,7 @@ export default function KnowledgePage() {
           {/* Source type filter */}
           <div className="relative">
             <select
-              value={sourceTypeFilter}
+              value={purposeFilter}
               onChange={(e) => handleFilterChange(e.target.value)}
               className="appearance-none pl-3 pr-8 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface cursor-pointer"
             >
@@ -705,8 +708,8 @@ export default function KnowledgePage() {
                       {result.abstract || result.content.slice(0, 200)}
                     </p>
                     <div className="flex items-center gap-2 mt-2">
-                      <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getSourceTypeColor(result.sourceType))}>
-                        {result.sourceType}
+                      <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getPurposeColor(result.purpose))}>
+                        {result.purpose}
                       </span>
                       {(result.metadata as KnowledgeEntry['metadata'])?.filePath && (
                         <span className="text-xs text-on-surface-variant font-mono truncate">
@@ -746,14 +749,14 @@ export default function KnowledgePage() {
                   className="w-full text-left bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-start gap-3">
-                    <SourceTypeIcon sourceType={entry.sourceType} className="w-4 h-4 text-on-surface-variant mt-0.5 shrink-0" />
+                    <PurposeIcon purpose={entry.purpose} className="w-4 h-4 text-on-surface-variant mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-on-surface/80 line-clamp-2">
                         {entry.abstract || entry.sourceId}
                       </p>
                       <div className="flex items-center gap-2 mt-2">
-                        <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getSourceTypeColor(entry.sourceType))}>
-                          {entry.sourceType}
+                        <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getPurposeColor(entry.purpose))}>
+                          {entry.purpose}
                         </span>
                         {entry.metadata?.filePath && (
                           <span className="text-xs text-on-surface-variant font-mono truncate">

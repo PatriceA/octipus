@@ -1,4 +1,4 @@
-import { getEmbeddingService } from '@/core/rag/embeddings';
+import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
@@ -56,7 +56,7 @@ export class KnowledgeTool extends BaseTool {
         const stats = await service.getStats();
         return {
           ...stats,
-          summary: `${stats.total} entries across ${Object.keys(stats.bySourceType).length} source types. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
+          summary: `${stats.total} entries across ${Object.keys(stats.byPurpose).length} purposes. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
         };
       },
       { requiresPermission: false },
@@ -68,14 +68,14 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results to return (default: 5)', default: 5 },
-        source_type: { type: 'string', description: 'Filter by source type: document, code, message, image_description, or all. Agent outputs are no longer indexed here — sibling-agent results live in task_state (see .octipus/memory-redesign.md Phase B).' },
+        purpose: { type: 'string', description: 'Filter by row purpose: document, code, message, image_description, knowledge_artifact, ephemeral, or omit for all. Agent outputs no longer land here — sibling-agent results live in task_state (see .octipus/memory-redesign.md Phase B).' },
         mode: { type: 'string', description: 'Search mode: hybrid (default), semantic (vector only), or keyword (full-text only)' },
         min_similarity: { type: 'number', description: 'Minimum cosine similarity (0–1) to keep a result. Defaults: 0.35 semantic, 0.3 hybrid, 0 keyword.' },
       }),
       async (args) => {
         const service = getEmbeddingService();
         const limit = (args.limit as number) || 5;
-        const sourceType = args.source_type as string | undefined;
+        const purpose = args.purpose as EmbeddingPurpose | undefined;
         const mode = (args.mode as string) || 'hybrid';
         const userMin = typeof args.min_similarity === 'number' ? (args.min_similarity as number) : undefined;
 
@@ -87,13 +87,13 @@ export class KnowledgeTool extends BaseTool {
         let results;
         switch (mode) {
           case 'semantic':
-            results = await service.search(args.query as string, limit, sourceType, minSimilarity);
+            results = await service.search(args.query as string, limit, purpose, minSimilarity);
             break;
           case 'keyword':
-            results = await service.ftsSearch(args.query as string, limit, sourceType);
+            results = await service.ftsSearch(args.query as string, limit, purpose);
             break;
           default:
-            results = await service.hybridSearch(args.query as string, limit, sourceType, undefined, minSimilarity);
+            results = await service.hybridSearch(args.query as string, limit, purpose, undefined, minSimilarity);
         }
 
         if (results.length === 0) {
@@ -108,7 +108,7 @@ export class KnowledgeTool extends BaseTool {
             id: r.id,
             abstract: r.abstract || r.content.slice(0, 200),
             similarity: r.similarity.toFixed(3),
-            sourceType: r.sourceType,
+            purpose: r.purpose,
             filePath: r.metadata.filePath,
           })),
           hint: 'Use read_knowledge with an entry ID to get the full content. Similarity is cosine (0–1); below 0.3 means the match is weak.',
@@ -134,7 +134,7 @@ export class KnowledgeTool extends BaseTool {
         return {
           id: entry.id,
           content: entry.content,
-          sourceType: entry.sourceType,
+          purpose: entry.purpose,
           sourceId: entry.sourceId,
           filePath: entry.metadata.filePath,
           language: entry.metadata.language,

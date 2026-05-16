@@ -393,6 +393,13 @@
       "when": 1779800000000,
       "tag": "0055_vector_hnsw_when_homogeneous",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1779900000000,
+      "tag": "0056_drop_source_type",
+      "breakpoints": true
     }
   ]
 }
