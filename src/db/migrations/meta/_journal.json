@@ -386,6 +386,13 @@
       "when": 1779700000000,
       "tag": "0054_memory_cleanup_phase2",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1779800000000,
+      "tag": "0055_vector_hnsw_when_homogeneous",
+      "breakpoints": true
     }
   ]
 }
