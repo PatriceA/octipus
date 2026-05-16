@@ -128,9 +128,10 @@ CREATE INDEX embeddings_section_path_idx ON embeddings USING GIN (section_path);
 
 
 -- --------------------------------------------------------------------
--- Phase D — Memories layer (mem0-pattern, octipus-native)
+-- Phase D — Memories layer
 -- Goal: user preferences, profile, relationships, workflow notes get an
 -- update path. ADD/UPDATE/DELETE driven by an LLM judge at write time.
+-- Implemented inline in src/core/memory/ — no external dependency.
 -- --------------------------------------------------------------------
 
 CREATE TABLE memories (
@@ -192,7 +193,7 @@ INSERT INTO retention_policies (purpose, max_age_days, lfu_min_access, lfu_min_a
 
 -- ====================================================================
 -- End of sketch. Things deliberately NOT included here:
---   - Apache AGE / graph schema   (out of scope; SQL parent pointers suffice)
+--   - Apache AGE / graph schema    (out of scope; SQL parent pointers suffice)
 --   - CLIP / ColPali image vectors (out of scope; vision caption is enough)
---   - mem0 integration tables     (we own this layer; mem0 is a trial-only scaffold)
+--   - Third-party memory service   (no mem0, no Letta — memory layer is octipus code on octipus tables)
 -- ====================================================================

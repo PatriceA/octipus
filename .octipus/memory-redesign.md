@@ -20,12 +20,12 @@ A fifth issue is implicit: there is no notion of "long-term memory" distinct fro
 
 | User-named layer | Primitive | Storage |
 |---|---|---|
-| User-specific data & preferences | Extracted facts with ADD/UPDATE/DELETE (mem0 pattern) | `memories` table, pgvector |
+| User-specific data & preferences | LLM-extracted atomic facts with ADD/UPDATE/DELETE | `memories` table, pgvector |
 | Document data (contracts, forms) | Hierarchical chunks with parent pointers | `embeddings` + `document_sections` |
 | Agent output & workflow state | Typed relational rows + LISTEN/NOTIFY | `task_state` table, no embeddings |
 | Image data | Vision-LLM caption + OCR text, indexed as text | `embeddings` with `purpose='image_description'` |
 
-Mem0 itself (Apache 2, supports pgvector backend) is an option for Layer 1. The recommendation here is to internalise the *pattern* (LLM-mediated extract-merge-dedup) rather than take the dep — fits DESIGN.md's "no dep for 20 lines" rule, lets us use our SECURITY_PREAMBLE in the extraction prompt, and avoids coupling to mem0's data model. If we want a fast experiment first, install mem0 with pgvector backend, validate the win on real conversations, then port the prompts inline and remove the dep.
+The memory layer is implemented inline in octipus. No external dependency: extraction prompts live next to the existing role prompts in `src/core/orchestrator/roles/`, use the existing `ModelRegistry` topic binding, and inherit the `SECURITY_PREAMBLE`. The shape is informed by published patterns for LLM-mediated extract-merge-dedup, but the code, prompts, and data model are ours and remain under the same DESIGN.md rules (fail loud, typed contracts, minimal deps) as the rest of the codebase.
 
 ## Target schema
 
@@ -143,9 +143,13 @@ Five phases, each shippable independently.
 
 **Phase D — Memories layer**
 - Add `memories` table.
-- Build `extract_memories` worker (single role in `src/core/orchestrator/roles/` with one prompt, one tool: `judge_memory_diff`).
-- Wire orchestrator turn-start to fetch memories into context.
-- Optional: prototype with mem0 (pgvector backend) for a week, compare extraction quality, port prompts inline, drop the dep.
+- Build extraction module `src/core/memory/`:
+  - `extractor.ts` — LLM call with extraction prompt, returns candidate facts `{ fact_type, content, confidence }[]`.
+  - `judge.ts` — for each candidate, vector-search top-k existing memories for same `(user_id, fact_type)`, LLM decides `ADD | UPDATE | DELETE | NOOP`.
+  - `retrieval.ts` — turn-start fetch: top-N by cosine similarity to current user message, filtered to active memories (`superseded_by IS NULL`, not expired), scoped to `(user_id, agent_scope ∈ {NULL, current_role})`.
+- New model registry topic `memory_extraction` — extractor and judge bind to it (small/cheap model is fine, this runs per turn).
+- Wire `OrchestratorService.handleMessage()` to inject memory retrieval into the system context, fire-and-forget extraction after the user turn completes.
+- New tool none — the memory module is internal to the orchestrator pipeline, not exposed to agents as a tool.
 
 **Phase E — Images, optional**
 - Today: vision caption already lands in `embeddings`. Just tag with `purpose='image_description'` at write time.
@@ -155,15 +159,15 @@ Five phases, each shippable independently.
 
 - Not a graph DB. The "graph" relationships the user enumerated — clause→section, task→dependency, fact→supersession — fit in SQL with `parent_chunk_id`, `depends_on uuid[]`, and `superseded_by`. Apache AGE is available as a future-proof escape hatch inside the same Postgres if we ever need true Cypher queries; we are not adopting it now.
 - Not a second vector store. pgvector handles all four data layers when each layer has the right table shape.
-- Not a mem0 dependency. mem0 is allowed as a temporary scaffold but the steady state is octipus-native code with mem0's patterns.
+- Not a third-party memory service. No mem0, no Letta, no hosted memory API. The memory layer is octipus code on octipus tables; the extraction prompts ship in this repo and are auditable like every other prompt.
 - Not a feature flag rollout. Each phase is an irreversible migration that lands or doesn't.
 
 ## Open questions
 
-1. **Extraction model topic.** New topic `memory_extraction` in the model registry, or reuse `summary`? Probably new — extraction prompts are different and may run on a cheaper model.
+1. **Extraction cadence.** Run after every user turn (cheap, granular, more LLM calls) or only on session compaction (batched, fewer calls, late updates). Lean: every turn, with a short-circuit when the turn contains no first-person statements.
 2. **Workspace vs user memories.** Org-shared facts (company holidays, escalation paths) belong on `workspace_id`. Conflict resolution when user and workspace facts disagree — user wins, but flag for review. Needs UI surface.
-3. **Mem0 trial.** Worth a one-week spike before Phase D, or commit to inline implementation? Trial gives concrete numbers; inline is faster to ship.
-4. **PII in memories.** The extractor sees raw conversations. SECURITY_PREAMBLE must be in its prompt. Do we also run `filter_pii` on extracted facts before persistence?
+3. **PII in memories.** The extractor sees raw conversations. SECURITY_PREAMBLE must be in its prompt. Open: do we also run `filter_pii` on extracted facts before persistence, and how do we handle "the user wants me to remember their phone number" vs "the user mentioned their phone number in passing"?
+4. **Eval coverage.** New `eval/` scenarios for: preference recall across sessions, preference update (old fact superseded), workflow handoff between sibling agents via task_state, hierarchical document retrieval (clause + ancestor headings). Required for sign-off on each phase.
 
 ## Files touched (preview)
 
