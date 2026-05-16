@@ -1,9 +1,57 @@
+import { createHash } from 'crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { cosineSimilarity, type EmbeddingMetadata, embeddings } from '@/db/schema/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
+
+/**
+ * Memory-redesign Phase A — `embeddings.purpose` values. Kept here so the
+ * read path, write path, and (future) retention_policies stay in sync.
+ */
+export type EmbeddingPurpose =
+  | 'document'
+  | 'code'
+  | 'image_description'
+  | 'knowledge_artifact'
+  | 'message'
+  | 'ephemeral';
+
+/**
+ * Default mapping from legacy `sourceType` to the new `purpose` column.
+ * Callers that already know the purpose should pass it explicitly to
+ * `store()` / `indexText()`; this fallback exists so untouched call
+ * sites keep working during the rollout. Exported for unit tests.
+ */
+export function purposeFromSourceType(sourceType: string): EmbeddingPurpose {
+  switch (sourceType) {
+    case 'document':
+      return 'document';
+    case 'code':
+      return 'code';
+    case 'message':
+      return 'message';
+    case 'image_description':
+      return 'image_description';
+    case 'knowledge_artifact':
+      return 'knowledge_artifact';
+    // 'agent_output' and anything else → ephemeral. Phase B kills the
+    // agent-output write path entirely; until then, those rows get the
+    // shortest retention so they don't pollute long-term retrieval.
+    default:
+      return 'ephemeral';
+  }
+}
+
+export function sha256Hex(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+/** Stable embedding identity: model id + vector dimension. */
+export function buildEmbeddingVersion(model: string, dimension: number): string {
+  return `${model}/${dimension}`;
+}
 
 export interface SearchResult {
   id: string;
@@ -87,16 +135,30 @@ export class EmbeddingService {
     content: string,
     embedding: number[],
     metadata?: EmbeddingMetadata,
+    purpose?: EmbeddingPurpose,
   ): Promise<string> {
     const db = getDb();
+    const model = this.model || await this.resolveModel().catch(() => 'unknown');
+    const effectivePurpose = purpose ?? purposeFromSourceType(sourceType);
     const result = await db.insert(embeddings).values({
       sourceType,
       sourceId,
       content,
       embedding,
-      model: this.model || await this.resolveModel().catch(() => 'unknown'),
+      model,
       metadata: metadata || {},
-    }).returning({ id: embeddings.id });
+      purpose: effectivePurpose,
+      contentSha256: sha256Hex(content),
+      embeddingVersion: buildEmbeddingVersion(model, embedding.length),
+    })
+      // Dedup is enforced by the (purpose, source_id, content_sha256) unique
+      // index. A re-index of unchanged content is a no-op rather than an
+      // error — return the existing row id so callers can chain on it.
+      .onConflictDoUpdate({
+        target: [embeddings.purpose, embeddings.sourceId, embeddings.contentSha256],
+        set: { lastAccessedAt: sql`now()` },
+      })
+      .returning({ id: embeddings.id });
     return result[0].id;
   }
 
@@ -105,6 +167,7 @@ export class EmbeddingService {
     sourceId: string,
     content: string,
     metadata?: EmbeddingMetadata,
+    purpose?: EmbeddingPurpose,
   ): Promise<number> {
     const chunks = this.chunkText(content);
     if (chunks.length === 0) {
@@ -119,12 +182,19 @@ export class EmbeddingService {
     for (let i = 0; i < chunks.length; i++) {
       try {
         const embedding = await this.generateEmbedding(chunks[i]);
-        const id = await this.store(sourceType, sourceId, chunks[i], embedding, {
-          ...metadata,
-          chunkIndex: i,
-          totalChunks: chunks.length,
-          originalLength: content.length,
-        });
+        const id = await this.store(
+          sourceType,
+          sourceId,
+          chunks[i],
+          embedding,
+          {
+            ...metadata,
+            chunkIndex: i,
+            totalChunks: chunks.length,
+            originalLength: content.length,
+          },
+          purpose,
+        );
         storedIds.push(id);
         stored++;
       } catch (err) {
@@ -213,7 +283,7 @@ export class EmbeddingService {
       .orderBy(desc(similarityExpr))
       .limit(limit);
 
-    return results
+    const out = results
       .map(r => ({
         id: r.id,
         content: r.content,
@@ -224,6 +294,8 @@ export class EmbeddingService {
         metadata: (r.metadata || {}) as EmbeddingMetadata,
       }))
       .filter(r => r.similarity >= minSimilarity);
+    this.recordAccess(out.map((r) => r.id));
+    return out;
   }
 
   /** Full-text search only (no embedding needed) */
@@ -241,7 +313,7 @@ export class EmbeddingService {
       LIMIT ${limit}
     `);
 
-    return rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown }>(results).map(r => ({
+    const out = rows<{ id: string; content: string; abstract: string | null; source_type: string; source_id: string; similarity: number | string; metadata: unknown }>(results).map(r => ({
       id: r.id,
       content: r.content,
       abstract: r.abstract,
@@ -250,6 +322,8 @@ export class EmbeddingService {
       similarity: Number(r.similarity) || 0,
       metadata: (r.metadata || {}) as EmbeddingMetadata,
     }));
+    this.recordAccess(out.map((r) => r.id));
+    return out;
   }
 
   /**
@@ -329,7 +403,7 @@ export class EmbeddingService {
       LIMIT ${limit}
     `);
 
-    return rows<{
+    const out = rows<{
       id: string;
       content: string;
       abstract: string | null;
@@ -354,6 +428,28 @@ export class EmbeddingService {
       // keyword (FTS) hit makes the entry relevant on lexical grounds alone.
       .filter(r => r.similarity >= minSimilarity || r.hasFtsMatch)
       .map(({ hasFtsMatch: _hasFtsMatch, ...rest }) => rest);
+    this.recordAccess(out.map((r) => r.id));
+    return out;
+  }
+
+  /**
+   * Memory-redesign Phase A — LFU signal. Bumps `access_count` and stamps
+   * `last_accessed_at` on the rows that were actually returned to a
+   * caller. Fire-and-forget: a search returns to the caller before this
+   * UPDATE lands, so a slow write never blocks retrieval. Errors are
+   * logged but never thrown — access tracking is an optimisation, not a
+   * correctness property.
+   */
+  private recordAccess(ids: string[]): void {
+    if (ids.length === 0) return;
+    const db = getDb();
+    db
+      .update(embeddings)
+      .set({ accessCount: sql`${embeddings.accessCount} + 1`, lastAccessedAt: sql`now()` })
+      .where(inArray(embeddings.id, ids))
+      .catch((err) => {
+        coreLogger.warn({ err, count: ids.length }, 'embeddings.recordAccess failed (non-fatal)');
+      });
   }
 
   // ── Read by ID ────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from 'bun:test';
-import { EmbeddingService } from './embeddings';
+import { buildEmbeddingVersion, EmbeddingService, purposeFromSourceType, sha256Hex } from './embeddings';
 
 /**
  * Unit tests for the loudest new fail-loud path: when the embedding provider
@@ -56,6 +56,37 @@ describe('EmbeddingService — fail-loud indexing', () => {
     expect(msg).toContain('agent_output');
     expect(msg).toContain('agent:abc123');
     expect(msg).toContain('401 Unauthorized');
+  });
+
+  test('purposeFromSourceType maps known sourceTypes; unknowns fall back to ephemeral', () => {
+    // Phase A rollout: explicit mapping rather than a passthrough so retention
+    // policy works without per-call-site updates.
+    expect(purposeFromSourceType('document')).toBe('document');
+    expect(purposeFromSourceType('code')).toBe('code');
+    expect(purposeFromSourceType('message')).toBe('message');
+    expect(purposeFromSourceType('image_description')).toBe('image_description');
+    expect(purposeFromSourceType('knowledge_artifact')).toBe('knowledge_artifact');
+    // agent_output is targeted for accelerated cleanup until Phase B kills
+    // the write path entirely.
+    expect(purposeFromSourceType('agent_output')).toBe('ephemeral');
+    expect(purposeFromSourceType('something-unknown')).toBe('ephemeral');
+  });
+
+  test('sha256Hex is stable and matches Node crypto for utf-8 input', () => {
+    // SHA-256 of empty string is a well-known constant.
+    expect(sha256Hex('')).toBe(
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    );
+    expect(sha256Hex('hello')).toBe(
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    );
+    // Determinism: same input → same hash.
+    expect(sha256Hex('repeat-me')).toBe(sha256Hex('repeat-me'));
+  });
+
+  test('buildEmbeddingVersion encodes model + dimension', () => {
+    expect(buildEmbeddingVersion('nomic-embed-text:v1.5', 768)).toBe('nomic-embed-text:v1.5/768');
+    expect(buildEmbeddingVersion('text-embedding-3-large', 3072)).toBe('text-embedding-3-large/3072');
   });
 
   test('generateEmbedding rejects empty-vector responses loud (not silent)', async () => {

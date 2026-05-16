@@ -6,6 +6,7 @@
  * upload look successful while silently dropping content.
  */
 
+import { createHash } from 'crypto';
 import { eq, } from 'drizzle-orm';
 import { checkDbHealth, getDb } from '@/db/postgres';
 import { embeddings } from '@/db/schema/embeddings';
@@ -96,13 +97,18 @@ export async function runKBSelfCheck(): Promise<KBReadiness> {
   if (checks.db.ok && checks.embeddingModel.ok && probeVector) {
     try {
       const db = getDb();
+      const probeContent = 'kb health probe';
+      const probeModel = resolvedModelId || 'probe';
       const inserted = await db.insert(embeddings).values({
         sourceType: PROBE_SOURCE_TYPE,
         sourceId: PROBE_SOURCE_ID,
-        content: 'kb health probe',
+        content: probeContent,
         embedding: probeVector,
-        model: resolvedModelId || 'probe',
+        model: probeModel,
         metadata: {},
+        purpose: 'ephemeral',
+        contentSha256: createHash('sha256').update(probeContent, 'utf8').digest('hex'),
+        embeddingVersion: `${probeModel}/${probeVector.length}`,
       }).returning({ id: embeddings.id });
 
       const insertedId = inserted[0]?.id;

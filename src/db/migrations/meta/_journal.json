@@ -344,6 +344,13 @@
       "when": 1779100000000,
       "tag": "0048_timestamps_timestamptz",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1779200000000,
+      "tag": "0049_embeddings_purpose_versioning",
+      "breakpoints": true
     }
   ]
 }

@@ -7,7 +7,7 @@
 
 The current RAG layer (`src/db/schema/embeddings.ts`, `src/core/rag/*`) treats every persistent piece of state as a 1000-char chunk in one flat table — user preferences, agent debug outputs, contract clauses, and code snippets are all ranked against each other by cosine similarity. Four concrete failure modes:
 
-1. **No update path.** `EmbeddingService.indexText()` and `auto-indexer.ts` only append. A preference said three months apart exists three times; the cleanup job (`embeddings.ts:564-722`) only removes by age, length, and exact-content dedup — never by semantic conflict.
+1. **No update path.** `EmbeddingService.indexText()` and `auto-indexer.ts` only append. A preference said three months apart exists three times; the cleanup job in `src/core/rag/embeddings.ts` only removes by age, length, and exact-content dedup — never by semantic conflict.
 2. **Cleanup is purpose-blind.** It cannot distinguish "user said they prefer Slack" from "agent dumped 4 KB of trace output". Both age out identically. The user's intuition that cleanup is inaccurate because it doesn't know what matters is correct: the data was never tagged with what it is.
 3. **Documents lose structure.** `src/core/documents/processor.ts` extracts text and chunks at 1000 chars. Section / clause / heading relationships are gone. "Clause 4.2 modifies Section 1" is unrecoverable post-ingest.
 4. **Workflow state is in the wrong store.** `src/core/rag/auto-indexer.ts` writes every >100-char agent output into the vector store. Sibling agents discover each other's results via cosine similarity instead of typed lookup. `swarm_nodes.result` already holds the typed version — the RAG copy is noise.
@@ -126,9 +126,11 @@ Five phases, each shippable independently.
 
 **Phase A — Tag and version what's already there** (low risk, no behaviour change)
 - Add `purpose`, `content_sha256`, `embedding_version`, `access_count`, `last_accessed_at` to `embeddings`.
-- Backfill `purpose` from existing `source_type` (`document`→document, `code`→code, `agent_output`→ephemeral, `message`→message).
-- Backfill `content_sha256`, add unique index after dedup.
-- Wire `access_count` increment into `EmbeddingService.search()`.
+- Knowledge base is disposable in this install — `TRUNCATE embeddings` in the migration instead of backfilling. Re-indexing happens on next document upload / agent activity.
+- Add unique index on `(purpose, source_id, content_sha256)`.
+- Wire `access_count` + `last_accessed_at` increment into `EmbeddingService.search()`/`ftsSearch()`/`hybridSearch()`.
+- App-side SHA-256 of `content` at insert time (no `pgcrypto` dependency on the hot path).
+- `retention_policies` table from `memory-redesign-schema.sql` deferred to a follow-up after Phase B so retention policy lands together with purpose-aware cleanup.
 
 **Phase B — Workflow state out of RAG**
 - Add `task_state` table + LISTEN/NOTIFY trigger.
