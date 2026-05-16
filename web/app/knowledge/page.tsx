@@ -2,7 +2,6 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Bot,
   Brain,
   ChevronDown,
   Code,
@@ -75,14 +74,12 @@ const SOURCE_TYPE_COLORS: Record<string, string> = {
   document: 'bg-blue-900/30 text-blue-300',
   code: 'bg-green-900/30 text-green-300',
   message: 'bg-purple-900/30 text-purple-300',
-  agent_output: 'bg-orange-900/30 text-orange-300',
 };
 
 const SOURCE_TYPE_ICONS: Record<string, typeof FileText> = {
   document: FileText,
   code: Code,
   message: MessageSquare,
-  agent_output: Bot,
 };
 
 function getSourceTypeColor(sourceType: string): string {
@@ -551,7 +548,7 @@ export default function KnowledgePage() {
         <div className="flex-1">
           <h1 className="text-2xl font-extrabold tracking-tighter text-white font-headline">Knowledge Base</h1>
           <p className="text-on-surface-variant">
-            RAG knowledge base powered by pgvector. Search indexed documents, code, and agent outputs using hybrid semantic + keyword search.
+            RAG knowledge base powered by pgvector. Search indexed documents, code, and conversation messages using hybrid semantic + keyword search.
           </p>
           <p className="text-sm text-on-surface-variant mt-1">
             {stats?.total ?? 0} entries indexed across {Object.keys(stats?.bySourceType || {}).length} source types
@@ -602,10 +599,6 @@ export default function KnowledgePage() {
           <p className="text-2xl font-bold text-green-400">{stats?.bySourceType?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
-          <p className="text-2xl font-bold text-orange-400">{stats?.bySourceType?.agent_output ?? 0}</p>
-          <p className="text-xs text-on-surface-variant">Agent Output</p>
-        </div>
       </div>
 
       {/* Search section */}
@@ -636,7 +629,6 @@ export default function KnowledgePage() {
               <option value="document">Document</option>
               <option value="message">Message</option>
               <option value="code">Code</option>
-              <option value="agent_output">Agent Output</option>
             </select>
             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
           </div>

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join as joinPath, resolve as resolvePath } from 'path';
 import { getConfig } from '@/config';
-import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
+import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -156,15 +156,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
         durationMs,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
 
-      // Auto-index output into knowledge base
-      autoIndexAgentOutput({
+      // Record completion to task_state (Phase B of memory-redesign).
+      // Fire-and-forget — never block on recording failures.
+      recordAgentCompletion({
         agentId: this.context.id,
         sessionId: this.context.sessionId,
         userId: this.context.userId,
         role: this.context.role,
         topic: this.context.topic,
         output: result,
-      }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to index agent output'));
+      }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to record agent completion'));
 
       return result;
     } catch (error) {

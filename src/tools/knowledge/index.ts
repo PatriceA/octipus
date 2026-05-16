@@ -68,7 +68,7 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results to return (default: 5)', default: 5 },
-        source_type: { type: 'string', description: 'Filter by source type: document, code, agent_output, or all' },
+        source_type: { type: 'string', description: 'Filter by source type: document, code, message, image_description, or all. Agent outputs are no longer indexed here — sibling-agent results live in task_state (see .octipus/memory-redesign.md Phase B).' },
         mode: { type: 'string', description: 'Search mode: hybrid (default), semantic (vector only), or keyword (full-text only)' },
         min_similarity: { type: 'number', description: 'Minimum cosine similarity (0–1) to keep a result. Defaults: 0.35 semantic, 0.3 hybrid, 0 keyword.' },
       }),
@@ -179,9 +179,9 @@ export class KnowledgeTool extends BaseTool {
 
     this.registerTool(
       'cleanup_knowledge',
-      'Clean up the knowledge base by removing orphaned document embeddings, stale agent outputs (older than N days), very short entries, and duplicates. Returns counts of removed entries. Use dry_run=true to preview without deleting.',
+      'Clean up the knowledge base: orphaned document embeddings, very short entries, and any remaining stale ephemeral rows. Returns counts of removed entries. Use dry_run=true to preview without deleting. Note: agent outputs no longer land in this table (see task_state in .octipus/memory-redesign.md Phase B); the staleAgentOutputs count is expected to stay at 0.',
       createParameterSchema({
-        max_age_days: { type: 'number', description: 'Max age in days for agent outputs (default: 30)', default: 30 },
+        max_age_days: { type: 'number', description: 'Max age in days for ephemeral entries (default: 30)', default: 30 },
         min_content_length: { type: 'number', description: 'Minimum content length to keep (default: 50)', default: 50 },
         dry_run: { type: 'boolean', description: 'Preview only, do not delete (default: false)', default: false },
       }),

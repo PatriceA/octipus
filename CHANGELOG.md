@@ -7,6 +7,48 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Memory-redesign Phase B — workflow state out of RAG (2026-05)
+
+Sibling agents stop discovering each other's results through cosine
+similarity over chunked text and start reading typed SQL rows.
+
+- **New table `task_state`** (migration `0050`) with per-session
+  LISTEN/NOTIFY trigger (`task_state_<session_id>`). Holds the typed
+  durable record of agent work: inputs, outputs (jsonb), status,
+  depends_on, error. Indexed by `(session_id, created_at)` for
+  sibling-discovery reads.
+- **`src/core/rag/auto-indexer.ts` deleted.** Agent outputs no longer
+  land in the `embeddings` table — they were polluting cosine search
+  (a 4 KB trace ranked against a one-line user preference). Replaced by
+  `src/core/agent-task-recorder.ts`, which calls
+  `TaskStateRepository.create` with the same skip-rules (orchestrator
+  outputs and outputs < 100 chars are still skipped).
+- **`TaskStateRepository`** added with create / complete / fail /
+  updateStatus / getById / listSessionRecent / listByOwnerStatus /
+  deleteDoneOlderThan. Long-lived LISTEN subscriber deferred to a
+  follow-up so the connection-management story can land as its own
+  reviewable change.
+- **Knowledge tool + Web** drop `agent_output` from the
+  `search_knowledge` source-type filter (and the Web Knowledge page
+  loses the orange "Agent Output" stats tile / filter option). The RAG
+  cleanup pass keeps the old branch but now matches
+  `purpose='ephemeral' OR source_type='agent_output'` — steady-state
+  count is expected to stay at 0.
+
+### Memory-redesign Phase A — embeddings purpose + versioning (2026-05)
+
+See prior batch c entry below for the artifacts/single-user batch.
+
+- Adds `purpose`, `content_sha256`, `embedding_version`,
+  `access_count`, `last_accessed_at` to `embeddings`. Migration `0049`
+  truncates and adds NOT NULL columns plus a UNIQUE
+  `(purpose, source_id, content_sha256)` dedup index.
+- Write path: app-side SHA-256 + `embedding_version` (`<model>/<dim>`).
+  ON CONFLICT (dedup key) DO UPDATE just refreshes `last_accessed_at`,
+  so re-indexing unchanged content is a no-op.
+- Read path: `search` / `ftsSearch` / `hybridSearch` fire-and-forget
+  bump `access_count` + `last_accessed_at` on returned rows.
+
 ### Live artifacts + single-user fixes (2026-05 batch c)
 
 Bug-fix and DX batch surfaced while bringing the live-artifacts feature

@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { homedir } from 'os';
 import { join as joinPath } from 'path';
-import { autoIndexAgentOutput } from '@/core/rag/auto-indexer';
+import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -379,15 +379,17 @@ export class AgentWorker extends BaseAgentWorker {
         durationMs,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
 
-      // Auto-index output into knowledge base (fire-and-forget)
-      autoIndexAgentOutput({
+      // Record completion to task_state so siblings can discover it
+      // via typed lookup (Phase B of `.octipus/memory-redesign.md`).
+      // Fire-and-forget — never block on recording failures.
+      recordAgentCompletion({
         agentId: this.context.id,
         sessionId: this.context.sessionId,
         userId: this.context.userId,
         role: this.context.role,
         topic: this.context.topic,
         output: typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult),
-      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker')); // Never block on indexing failures
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
 
       // Auto-update project summary for roles that work on projects
       const summaryRoles = ['coding', 'research', 'review', 'general', 'qa', 'devops', 'design', 'security', 'data', 'ai'];

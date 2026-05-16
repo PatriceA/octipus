@@ -720,9 +720,14 @@ export class EmbeddingService {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - maxAgeDays);
 
+    // After memory-redesign Phase B, agent outputs no longer land in
+    // `embeddings` — they live in `task_state`. The query still runs to
+    // sweep any rows tagged `purpose='ephemeral'` (legacy agent_output
+    // rows from older deployments and the small set of probe/health
+    // rows). Steady-state expectation: this returns 0.
     const staleRes = await db.execute(sql`
       SELECT id FROM embeddings
-      WHERE source_type = 'agent_output'
+      WHERE (purpose = 'ephemeral' OR source_type = 'agent_output')
         AND created_at < ${cutoffDate.toISOString()}
     `);
     const stale = rows<{ id: string }>(staleRes);
