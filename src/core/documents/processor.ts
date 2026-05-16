@@ -194,7 +194,17 @@ export class DocumentProcessor {
 
       // Step 5: Index into knowledge base — must succeed before we file the document away,
       // otherwise a failed doc ends up in the wrong category folder with no knowledge entry.
-      await this.indexDocument(documentId, extractedText, doc.originalName, category);
+      // Image-strategy extractions get purpose='image_description' (Phase E)
+      // so retention and retrieval can distinguish vision-derived text
+      // from regular document text.
+      const isImageDerived = strategy === 'ocr' && doc.mimeType !== 'application/pdf';
+      await this.indexDocument(
+        documentId,
+        extractedText,
+        doc.originalName,
+        category,
+        isImageDerived ? 'image_description' : undefined,
+      );
 
       // Step 6: Move file to category folder (after indexing succeeded)
       const newPath = await this.moveToCategory(doc.storagePath, category);
@@ -793,17 +803,25 @@ export class DocumentProcessor {
    * this swallowed the error and the document was marked 'completed' with
    * nothing in the knowledge base.
    */
-  private async indexDocument(documentId: string, text: string, filename: string, _category: string): Promise<void> {
+  private async indexDocument(
+    documentId: string,
+    text: string,
+    filename: string,
+    _category: string,
+    purpose?: 'image_description',
+  ): Promise<void> {
     const service = getEmbeddingService();
     const embeddingModel = (await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? null;
-    this.logger.info({ documentId, filename, model: embeddingModel }, 'Indexing document into knowledge base');
+    this.logger.info({ documentId, filename, model: embeddingModel, purpose: purpose ?? 'document' }, 'Indexing document into knowledge base');
     try {
       const stored = await service.indexText(
         'document',
         `doc:${documentId}`,
         text,
         { filePath: filename },
-        undefined,
+        // Phase E: image-derived rows tagged for purpose-aware retention
+        // and retrieval (the row content is a vision-LLM caption + OCR).
+        purpose,
         // Memory-redesign Phase C — populate embeddings.doc_id so
         // hierarchy walks and per-document scoping work.
         documentId,

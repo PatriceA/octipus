@@ -7,6 +7,88 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Memory-redesign Phase D — memories layer (2026-05)
+
+Atomic, updatable long-term memories. Distinct from RAG embeddings
+(content chunks) and `task_state` (per-session workflow). One row =
+one fact about the user with ADD/UPDATE/DELETE/NOOP semantics driven
+by an LLM judge.
+
+- **New table `memories`** (migration `0053`) with self-FK
+  `superseded_by` (never destructive — updates insert a new row and
+  link the old). `memories_active` view filters superseded + expired
+  so callers don't have to remember the predicate.
+- **`src/core/memory/`** — `repository.ts` (typed CRUD, vector-scoped
+  search, LFU-ordered retrieval), `extractor.ts` (LLM call: latest
+  user turn → candidate facts, short-circuits on no-first-person
+  turns), `judge.ts` (embed candidate, find closest existing match,
+  LLM picks action, apply), `retrieval.ts` (turn-start hot list +
+  `renderMemoriesBlock` for system-prompt injection).
+- **ModelRegistry**: new topic `memory_extraction` (cheap model;
+  extractor + judge bind to it).
+- **Not auto-wired into the orchestrator.** The operator must first
+  bind a model to `memory_extraction`; the wiring into
+  `OrchestratorService.handleMessage` ships separately so per-turn
+  LLM spend turns on deliberately.
+
+### Memory-redesign Phase E — image-purpose tagging (2026-05)
+
+Vision-derived rows in `embeddings` (vision-LLM caption + OCR for an
+image upload) are now tagged `purpose='image_description'` at write
+time, so the retention policy for images can diverge from the
+document retention policy without a schema change. No vector model
+or storage layer added.
+
+### Memory-redesign Phase C — document hierarchy (2026-05)
+
+A chunk now knows its section path. Retrieval can pull "Clause 4.2"
+plus its ancestor headings into the prompt without extracting a
+knowledge graph.
+
+- **Migration `0052`** adds `parent_chunk_id` (uuid, self-FK
+  ON DELETE SET NULL), `section_path text[]`, `heading_level
+  smallint`, `doc_id uuid` to `embeddings`. GIN index on
+  `section_path` for path queries.
+- **`src/core/rag/markdown-chunker.ts`** walks Markdown, emits one
+  chunk per heading and one per body block, threads `parentIndex`
+  so callers can resolve `parent_chunk_id` after insert. ATX
+  headings only; fenced code blocks pass through verbatim.
+- **`EmbeddingService.indexText`** dispatches to the structural
+  chunker when the content (or `metadata.filePath`) looks like
+  Markdown. Other content types keep using the flat chunker.
+- **`EmbeddingService.getAncestorHeadings(chunkId)`** walks the
+  parent chain for retrieval-side ancestor injection (wiring into
+  the orchestrator ships in a follow-up).
+
+### Memory-redesign Phase A.5 — retention_policies (2026-05)
+
+Per-purpose retention replaces the hardcoded 30-day sweep.
+
+- **Migration `0051`** adds `retention_policies(purpose pk,
+  max_age_days, lfu_min_access, lfu_min_age_days, notes, updated_at)`
+  seeded with the defaults from
+  `.octipus/memory-redesign-schema.sql`.
+- **`EmbeddingService.cleanup`** now runs a per-purpose pass first
+  (age cap OR cold-and-stale LFU per row). Result adds
+  `byPurpose: Record<string, number>`. Legacy passes
+  (orphaned-docs / short-entries / duplicates) remain as backstop
+  for non-purpose rows.
+
+### Memory-redesign Phase B.2 — LISTEN subscriber (2026-05)
+
+Closes the deferred follow-up from Phase B. Sibling agents can now
+react to peer completions without polling.
+
+- **`src/db/task-state-listener.ts`** wraps a dedicated postgres-js
+  connection (max=1, separate from the query pool — LISTEN ties up a
+  socket). `subscribeTaskState(sessionId, handler)` returns an
+  unsubscribe function; multiple subscribers on the same session
+  share one upstream LISTEN via reference counting.
+- Embedded (PGlite) mode returns a no-op subscriber — readers must
+  poll. Same trade-off as the rest of embedded mode.
+- Shutdown hook wired into SIGTERM/SIGINT so the dedicated
+  connection closes cleanly on process exit.
+
 ### Memory-redesign Phase B — workflow state out of RAG (2026-05)
 
 Sibling agents stop discovering each other's results through cosine
