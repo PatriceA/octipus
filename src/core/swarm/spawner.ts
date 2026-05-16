@@ -972,8 +972,20 @@ export class InsufficientBudgetError extends Error {
 export function deriveChildBudget(parent: NodeBudget, childDepth: 0 | 1 | 2): NodeBudget {
   const defaults = getLevelDefault(childDepth);
 
-  const parentRemainingTokens = Math.max(0, parent.tokens.cap - parent.tokens.used);
-  const tokenReserve = Math.ceil(parent.tokens.cap * BUDGET_RESERVE_FRACTION);
+  // Parent's cap was snapshotted at node creation, but the operator may have
+  // raised `swarm.levelDefaults.*.tokens` since then. Use the current config
+  // default if it's higher — this lets settings changes take effect on the
+  // next spawn instead of requiring a session restart. We never *shrink*
+  // the parent's effective cap because `used` may already exceed a lower
+  // new value; decreases still need a restart.
+  const parentCurrentDefault = getLevelDefault(parent.depth).tokens;
+  const effectiveParentCap = Math.max(parent.tokens.cap, parentCurrentDefault);
+  if (effectiveParentCap > parent.tokens.cap) {
+    parent.tokens.cap = effectiveParentCap;
+  }
+
+  const parentRemainingTokens = Math.max(0, effectiveParentCap - parent.tokens.used);
+  const tokenReserve = Math.ceil(effectiveParentCap * BUDGET_RESERVE_FRACTION);
   const tokenCap = Math.min(defaults.tokens, parentRemainingTokens - tokenReserve);
 
   if (tokenCap < MIN_CHILD_TOKENS) {

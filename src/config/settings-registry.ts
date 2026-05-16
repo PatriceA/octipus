@@ -278,7 +278,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'agent',
     valueType: 'number',
     defaultValue: 100000,
-    description: 'Agent max token budget (0 = unlimited)',
+    description:
+      'Agent max token budget (0 = unlimited). Applies to NEW agents only — running agents keep their spawn-time budget. Open chat tabs need a page reload to show the updated cap.',
     isSecret: false,
     envVar: 'AGENT_MAX_TOKEN_BUDGET',
   },
