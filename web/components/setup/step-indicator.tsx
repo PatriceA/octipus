@@ -1,6 +1,7 @@
 'use client';
 
-import { CheckCircle, type LucideIcon } from 'lucide-react';
+import { Check, type LucideIcon } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 export interface StepDefinition {
   id: string;
@@ -14,38 +15,57 @@ export interface StepIndicatorProps {
   onStepClick: (index: number) => void;
 }
 
+/**
+ * Step indicator rendered as a TUI progress strip:
+ *
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+ *   └────────────────────────────────────────────────────────────┘
+ *     [x] welcome  [x] llm  [▸] model  [ ] channels  [ ] account
+ *
+ * The single-line progress bar at the top is the bar; the row below
+ * is a button strip with `[x]` / `[▸]` / `[ ]` glyphs.
+ */
 export function StepIndicator({ steps, currentStep, onStepClick }: StepIndicatorProps) {
+  const pct = ((currentStep + 1) / steps.length) * 100;
+
   return (
-    <>
-      {/* Progress bar */}
-      <div className="w-full bg-gray-200 dark:bg-gray-800 h-1">
+    <div className="border-b border-outline-variant/60 bg-surface-container-low font-mono">
+      <div className="h-1 bg-outline-variant/30">
         <div
-          className="bg-primary-600 h-1 transition-all duration-300"
-          style={{ width: `${((currentStep + 1) / steps.length) * 100}%` }}
+          className="h-full bg-primary transition-all duration-300"
+          style={{ width: `${pct}%` }}
         />
       </div>
-
-      {/* Step indicators */}
-      <div className="flex justify-center gap-4 py-6">
-        {steps.map((step, i) => (
-          <button
-            key={step.id}
-            onClick={() => onStepClick(i)}
-            className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${
-              i <= currentStep
-                ? 'text-primary-700 dark:text-primary-400'
-                : 'text-gray-400 dark:text-gray-600'
-            }`}
-          >
-            {i < currentStep ? (
-              <CheckCircle className="w-4 h-4" />
-            ) : (
-              <step.icon className="w-4 h-4" />
-            )}
-            <span className="hidden sm:inline">{step.label}</span>
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[12px]">
+        <span className="text-primary" aria-hidden>❯</span>
+        <span className="text-on-surface-variant uppercase tracking-wider text-[10px]">setup</span>
+        <span className="text-outline">|</span>
+        {steps.map((step, i) => {
+          const isDone = i < currentStep;
+          const isActive = i === currentStep;
+          return (
+            <button
+              key={step.id}
+              onClick={() => onStepClick(i)}
+              className={cn(
+                'flex items-center gap-1.5 transition-colors',
+                isActive
+                  ? 'text-primary'
+                  : isDone
+                    ? 'text-tertiary hover:text-on-surface'
+                    : 'text-outline-variant hover:text-on-surface-variant',
+              )}
+            >
+              <span aria-hidden className="w-3 text-center">
+                {isDone ? <Check className="w-3 h-3 inline" /> : isActive ? '▸' : '·'}
+              </span>
+              <step.icon className="w-3.5 h-3.5" aria-hidden />
+              <span className="hidden sm:inline">{step.label.toLowerCase()}</span>
+            </button>
+          );
+        })}
       </div>
-    </>
+    </div>
   );
 }

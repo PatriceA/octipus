@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { cn } from '@/lib/utils';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,7 +33,7 @@ export default function LoginPage() {
 
     try {
       if (!isLogin && formData.password !== formData.confirmPassword) {
-        setError('Passwords do not match');
+        setError('passwords do not match');
         setIsLoading(false);
         return;
       }
@@ -49,9 +50,7 @@ export default function LoginPage() {
         error?: string;
       }>(endpoint, body);
 
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      if (data.error) throw new Error(data.error);
 
       if (data.totpRequired) {
         setTotpRequired(true);
@@ -69,7 +68,7 @@ export default function LoginPage() {
         router.push('/');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      setError(err instanceof Error ? err.message : 'authentication failed');
     } finally {
       setIsLoading(false);
     }
@@ -99,193 +98,189 @@ export default function LoginPage() {
         router.push('/');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Verification failed');
+      setError(err instanceof Error ? err.message : 'verification failed');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const inputClass =
+    'w-full px-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[13px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary transition-colors';
+  const labelClass = 'block text-[10px] uppercase tracking-wider text-outline-variant mb-1';
+
   return (
-    <div className="min-h-screen bg-surface-container-lowest flex items-center justify-center p-4">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4 crt-scanlines font-mono">
       <div className="w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl mb-4 inline-flex items-center justify-center bg-linear-to-br from-primary to-primary-container shadow-[0_0_30px_-5px_rgba(115,255,227,0.5)]">
-            <img src="/logo.png" alt="Octipus" className="w-16 h-16 rounded-2xl object-contain" />
-          </div>
-          <h1 className="font-headline text-2xl font-extrabold tracking-tighter text-primary">Octipus</h1>
-          <p className="text-on-surface-variant text-sm mt-1">Autonomous Development Agent</p>
+        {/* Boot-style banner. ASCII frame around the title so the login
+            page introduces the design language up-front. */}
+        <pre className="text-primary text-[10px] leading-tight mb-3 select-none" aria-hidden>
+{`┌─[ octipus :: terminal ]─────────────────┐
+│  multi-agent orchestrator               │
+│  multi-channel · multi-provider         │
+└─────────────────────────────────────────┘`}
+        </pre>
+        <div className="flex items-center gap-2 mb-6 text-on-surface-variant text-[12px]">
+          <span className="text-primary">❯</span>
+          <span>
+            {totpRequired ? 'two-factor verification' : isLogin ? 'sign in' : 'register'}
+            <span className="term-caret" />
+          </span>
         </div>
 
-        {/* TOTP Verification */}
         {totpRequired ? (
-          <div className="bg-surface-variant/60 backdrop-blur-glass border border-outline-variant/20 rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Two-Factor Authentication</h2>
-            <p className="text-sm text-on-surface-variant mb-4">Enter the 6-digit code from your authenticator app.</p>
-            <form onSubmit={handleTotpVerify} className="space-y-4">
+          <div className="term-frame p-4 space-y-3">
+            <p className="text-[12px] text-on-surface-variant">
+              enter the 6-digit code from your authenticator app.
+            </p>
+            <form onSubmit={handleTotpVerify} className="space-y-3">
               <input
                 type="text"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
-                className="w-full px-4 py-3 text-center text-2xl tracking-widest border border-outline-variant/10 rounded-lg bg-surface-container-low text-white focus:ring-2 focus:ring-primary"
+                className="w-full px-3 py-3 text-center text-2xl tracking-[0.5em] bg-surface-container-low border border-outline-variant/60 rounded-xs text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary"
                 autoFocus
                 required
               />
               {error && (
-                <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
-                  <p className="text-sm text-error">{error}</p>
+                <div className="px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-xs text-[12px] text-error">
+                  ! {error}
                 </div>
               )}
               <button
                 type="submit"
                 disabled={isLoading || totpCode.length !== 6}
-                className="w-full py-2 bg-primary-800 text-white font-medium rounded-lg hover:bg-primary-900 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-2 bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[13px]"
               >
-                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Verify'}
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : '❯ verify'}
               </button>
               <button
                 type="button"
                 onClick={() => { setTotpRequired(false); setTotpCode(''); setError(''); }}
-                className="w-full py-2 text-sm text-on-surface-variant hover:text-white"
+                className="w-full text-[12px] text-on-surface-variant hover:text-on-surface"
               >
-                Back to login
+                ← back to login
               </button>
             </form>
           </div>
         ) : (
-
-        /* Form */
-        <div className="bg-surface-variant/60 backdrop-blur-glass border border-outline-variant/20 rounded-[1rem] shadow-[0_20px_60px_-15px_rgba(115,255,227,0.1)] p-6">
-          <div className="flex mb-6">
-            <button
-              onClick={() => setIsLogin(true)}
-              className={`flex-1 py-2 text-center font-medium rounded-lg transition-colors ${
-                isLogin
-                  ? 'bg-primary-800 text-white'
-                  : 'text-on-surface-variant hover:bg-[#1a1a1a]'
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              onClick={() => setIsLogin(false)}
-              className={`flex-1 py-2 text-center font-medium rounded-lg transition-colors ${
-                !isLogin
-                  ? 'bg-primary-800 text-white'
-                  : 'text-on-surface-variant hover:bg-[#1a1a1a]'
-              }`}
-            >
-              Register
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">
-                Username
-              </label>
-              <input
-                type="text"
-                value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                placeholder="Enter your username"
-                className="w-full px-4 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-low text-white focus:ring-2 focus:ring-primary focus:border-transparent"
-                required
-              />
+          <div className="term-frame">
+            {/* Sign in / register tabs as bordered top-row buttons —
+                terminal-app modal style. */}
+            <div className="flex border-b border-outline-variant/60">
+              <button
+                onClick={() => setIsLogin(true)}
+                className={cn(
+                  'flex-1 py-2 text-center text-[12px] uppercase tracking-wider transition-colors border-r border-outline-variant/60',
+                  isLogin
+                    ? 'bg-primary-container/40 text-primary'
+                    : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                )}
+              >
+                sign in
+              </button>
+              <button
+                onClick={() => setIsLogin(false)}
+                className={cn(
+                  'flex-1 py-2 text-center text-[12px] uppercase tracking-wider transition-colors',
+                  !isLogin
+                    ? 'bg-primary-container/40 text-primary'
+                    : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                )}
+              >
+                register
+              </button>
             </div>
 
-            {!isLogin && (
+            <form onSubmit={handleSubmit} className="p-4 space-y-3">
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">
-                  Email
-                </label>
+                <label className={labelClass}>username</label>
                 <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="Enter your email"
-                  className="w-full px-4 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-low text-white focus:ring-2 focus:ring-primary focus:border-transparent"
-                  required={!isLogin}
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="Enter your password"
-                  className="w-full px-4 py-2 pr-10 border border-outline-variant/10 rounded-lg bg-surface-container-low text-white focus:ring-2 focus:ring-primary focus:border-transparent"
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  placeholder="alice"
+                  className={inputClass}
                   required
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-white"
-                >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
               </div>
-            </div>
 
-            {!isLogin && (
-              <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">
-                  Confirm Password
-                </label>
-                <input
-                  type="password"
-                  value={formData.confirmPassword}
-                  onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                  placeholder="Confirm your password"
-                  className="w-full px-4 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-low text-white focus:ring-2 focus:ring-primary focus:border-transparent"
-                  required={!isLogin}
-                />
-              </div>
-            )}
-
-            {error && (
-              <div className="p-3 bg-red-900/20 border border-red-800 rounded-lg">
-                <p className="text-sm text-error">{error}</p>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-2 bg-primary-800 text-white font-medium rounded-lg hover:bg-primary-900 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  {isLogin ? 'Signing in...' : 'Creating account...'}
-                </>
-              ) : (
-                isLogin ? 'Sign In' : 'Create Account'
+              {!isLogin && (
+                <div>
+                  <label className={labelClass}>email</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder="alice@example.com"
+                    className={inputClass}
+                    required={!isLogin}
+                  />
+                </div>
               )}
-            </button>
-          </form>
 
-          {isLogin && (
-            <div className="mt-4 text-center">
-              <p className="text-sm text-on-surface-variant">
-                Don't have an account? Switch to Register above.
-              </p>
-            </div>
-          )}
-        </div>
+              <div>
+                <label className={labelClass}>password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder="••••••••"
+                    className={cn(inputClass, 'pr-9')}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-outline-variant hover:text-on-surface"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {!isLogin && (
+                <div>
+                  <label className={labelClass}>confirm password</label>
+                  <input
+                    type="password"
+                    value={formData.confirmPassword}
+                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                    placeholder="••••••••"
+                    className={inputClass}
+                    required={!isLogin}
+                  />
+                </div>
+              )}
+
+              {error && (
+                <div className="px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-xs text-[12px] text-error">
+                  ! {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-2 bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[13px]"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {isLogin ? 'signing in…' : 'creating account…'}
+                  </>
+                ) : (
+                  <>❯ {isLogin ? 'sign in' : 'create account'}</>
+                )}
+              </button>
+            </form>
+          </div>
         )}
 
-        {/* Footer */}
-        <p className="text-center text-sm text-on-surface-variant mt-6">
-          Powered by Ollama + Local LLMs
+        <p className="text-center text-[11px] text-outline mt-5">
+          octipus · self-hosted · multi-provider
         </p>
       </div>
     </div>

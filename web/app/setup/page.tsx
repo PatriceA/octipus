@@ -87,8 +87,12 @@ export default function SetupPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-950">
-        <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+      <div className="flex h-screen items-center justify-center bg-background font-mono">
+        <div className="flex items-center gap-2 text-on-surface-variant text-[13px]">
+          <Loader2 className="w-4 h-4 animate-spin text-primary" />
+          <span className="text-primary">❯</span>
+          <span>checking setup state<span className="term-caret" /></span>
+        </div>
       </div>
     );
   }
@@ -96,28 +100,26 @@ export default function SetupPage() {
   if (setupComplete) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col">
+    <div className="min-h-screen bg-background flex flex-col font-mono">
       <StepIndicator steps={STEPS} currentStep={currentStep} onStepClick={setCurrentStep} />
 
-      {/* Content */}
-      <div className="flex-1 flex items-start justify-center px-4 pt-4">
-        <div className="w-full max-w-lg bg-white dark:bg-gray-800/90 rounded-xl shadow-xs ring-1 ring-gray-200/60 dark:ring-gray-700/60 p-8">
+      <div className="flex-1 flex items-start justify-center px-4 pt-6">
+        <div className="w-full max-w-lg term-frame p-6">
           {error && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            <div className="mb-3 px-2 py-1.5 border border-error/60 bg-error-container/40 rounded-xs text-[12px] text-error">
+              ! {error}
             </div>
           )}
 
-          {/* Step: Welcome */}
           {currentStep === 0 && (
             <div className="text-center space-y-4">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-100 dark:bg-primary-950/40 flex items-center justify-center">
-                <Sparkles className="w-8 h-8 text-primary-700 dark:text-primary-400" />
+              <div className="inline-flex items-center justify-center w-14 h-14 mx-auto border border-outline-variant rounded-xs bg-surface-container">
+                <Sparkles className="w-6 h-6 text-primary" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Welcome to Octipus</h2>
-              <p className="text-gray-500 dark:text-gray-400 max-w-sm mx-auto">
-                Let&apos;s configure your assistant. This will only take a minute.
-                You can change all settings later in Settings &gt; Configuration.
+              <h2 className="text-lg text-on-surface">welcome to octipus</h2>
+              <p className="text-[12px] text-on-surface-variant max-w-sm mx-auto leading-relaxed">
+                let&apos;s configure your assistant. takes about a minute.
+                everything below is also editable from settings &gt; configuration.
               </p>
             </div>
           )}
@@ -165,33 +167,32 @@ export default function SetupPage() {
             />
           )}
 
-          {/* Navigation */}
-          <div className="flex justify-between mt-8 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="flex justify-between mt-6 pt-4 border-t border-outline-variant/60">
             <button
               onClick={prevStep}
               disabled={currentStep === 0}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 disabled:opacity-30"
+              className="flex items-center gap-1 px-2 py-1 text-[12px] text-on-surface-variant hover:text-on-surface disabled:opacity-30 cursor-pointer"
             >
-              <ArrowLeft className="w-4 h-4" />
-              Back
+              <ArrowLeft className="w-3.5 h-3.5" />
+              back
             </button>
 
             {currentStep < STEPS.length - 1 ? (
               <button
                 onClick={nextStep}
-                className="flex items-center gap-1 px-4 py-1.5 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900"
+                className="flex items-center gap-1.5 px-3 py-1 text-[12px] bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
               >
-                Next
-                <ArrowRight className="w-4 h-4" />
+                next
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             ) : (
               <button
                 onClick={completeSetup}
                 disabled={saving}
-                className="flex items-center gap-1 px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1 text-[12px] bg-tertiary text-on-tertiary rounded-xs hover:bg-tertiary-dim disabled:opacity-50 cursor-pointer"
               >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Finish Setup'}
-                <CheckCircle className="w-4 h-4" />
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <>❯ finish setup</>}
+                {!saving && <CheckCircle className="w-3.5 h-3.5" />}
               </button>
             )}
           </div>

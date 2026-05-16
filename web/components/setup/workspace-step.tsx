@@ -3,8 +3,9 @@
 import { Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 
-const inputClasses =
-  'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-primary-500';
+const inputClass =
+  'w-full px-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[13px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary transition-colors';
+const labelClass = 'block text-[10px] uppercase tracking-wider text-outline-variant mb-1';
 
 export interface WorkspaceStepProps {
   workspacePath: string;
@@ -34,26 +35,33 @@ export function WorkspaceStep({
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Workspace</h2>
-      <p className="text-sm text-gray-500">Set the root directory the agent can access.</p>
+      <div>
+        <h2 className="text-[14px] text-on-surface flex items-center gap-2">
+          <span className="text-primary" aria-hidden>❯</span>
+          workspace
+        </h2>
+        <p className="text-[12px] text-on-surface-variant mt-1">
+          root directory the agent can access on this host.
+        </p>
+      </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Workspace Root Path</label>
+        <label className={labelClass}>workspace root path</label>
         <input
           type="text"
           value={workspacePath}
           onChange={(e) => setWorkspacePath(e.target.value)}
           placeholder="./workspace"
-          className={`${inputClasses} font-mono`}
+          className={inputClass}
         />
       </div>
 
       <button
         onClick={saveWorkspaceSettings}
         disabled={saving}
-        className="px-4 py-2 text-sm bg-primary-800 text-white rounded-lg hover:bg-primary-900 disabled:opacity-50"
+        className="px-3 py-1.5 text-[12px] bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
       >
-        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
+        {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '❯ save'}
       </button>
     </div>
   );
