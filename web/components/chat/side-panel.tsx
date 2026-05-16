@@ -90,26 +90,30 @@ const ROLE_COLORS: Record<string, string> = {
 // --- Helpers ---
 
 function getRoleBadgeClasses(role: string): string {
-  const color = ROLE_COLORS[role] ?? 'gray';
+  // Roles collapse onto the four palette accents so a long agent
+  // tree doesn't degenerate into a rainbow. Mostly dim, with the
+  // hot statuses (security / qa / review / error-prone) flagged in
+  // warning/error tones for at-a-glance triage.
+  const tone = ROLE_COLORS[role] ?? 'gray';
   const map: Record<string, string> = {
-    purple: 'bg-purple-900/40 text-purple-300',
-    blue: 'bg-blue-900/40 text-blue-300',
-    green: 'bg-green-900/40 text-green-300',
-    yellow: 'bg-yellow-900/40 text-yellow-300',
-    orange: 'bg-orange-900/40 text-orange-300',
-    pink: 'bg-pink-900/40 text-pink-300',
-    gray: 'bg-surface-container-highest text-on-surface-variant',
-    indigo: 'bg-indigo-900/40 text-indigo-300',
-    cyan: 'bg-cyan-900/40 text-cyan-300',
-    red: 'bg-red-900/40 text-red-300',
-    emerald: 'bg-emerald-900/40 text-emerald-300',
-    violet: 'bg-violet-900/40 text-violet-300',
-    amber: 'bg-amber-900/40 text-amber-300',
-    teal: 'bg-teal-900/40 text-teal-300',
-    rose: 'bg-rose-900/40 text-rose-300',
-    slate: 'bg-slate-700/40 text-slate-300',
+    purple:   'bg-primary-container/40 border-primary/60 text-primary',
+    blue:     'bg-primary-container/40 border-primary/60 text-primary',
+    cyan:     'bg-primary-container/40 border-primary/60 text-primary',
+    indigo:   'bg-primary-container/40 border-primary/60 text-primary',
+    violet:   'bg-primary-container/40 border-primary/60 text-primary',
+    green:    'bg-tertiary-container/40 border-tertiary/60 text-tertiary',
+    emerald:  'bg-tertiary-container/40 border-tertiary/60 text-tertiary',
+    teal:     'bg-tertiary-container/40 border-tertiary/60 text-tertiary',
+    yellow:   'bg-warning-container/40 border-warning/60 text-warning',
+    orange:   'bg-warning-container/40 border-warning/60 text-warning',
+    amber:    'bg-warning-container/40 border-warning/60 text-warning',
+    red:      'bg-error-container/40 border-error/60 text-error',
+    rose:     'bg-error-container/40 border-error/60 text-error',
+    pink:     'bg-error-container/40 border-error/60 text-error',
+    slate:    'bg-surface-container-high border-outline-variant text-on-surface-variant',
+    gray:     'bg-surface-container-high border-outline-variant text-on-surface-variant',
   };
-  return map[color] ?? map.gray;
+  return map[tone] ?? map.gray;
 }
 
 function formatDuration(ms: number): string {
@@ -144,13 +148,13 @@ function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: num
 function StatusIcon({ status }: { status: TrackedAgent['status'] }) {
   switch (status) {
     case 'running':
-      return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />;
+      return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
     case 'completed':
-      return <CheckCircle className="h-3.5 w-3.5 text-green-500" />;
+      return <CheckCircle className="h-3.5 w-3.5 text-tertiary" />;
     case 'failed':
-      return <XCircle className="h-3.5 w-3.5 text-red-500" />;
+      return <XCircle className="h-3.5 w-3.5 text-error" />;
     case 'stopped':
-      return <XCircle className="h-3.5 w-3.5 text-yellow-500" />;
+      return <XCircle className="h-3.5 w-3.5 text-warning" />;
   }
 }
 
@@ -168,23 +172,24 @@ function CollapsibleSection({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="border-b border-outline-variant/10 last:border-b-0">
+    <div className="border-b border-outline-variant/60 last:border-b-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-3 py-2 hover:bg-surface-container-high/40"
+        className="flex w-full items-center justify-between px-3 py-1.5 bg-surface-container-low/60 hover:bg-surface-container transition-colors cursor-pointer"
       >
-        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-          <Icon className="h-3.5 w-3.5" />
+        <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-on-surface-variant">
+          <span aria-hidden className="text-outline-variant">▸</span>
+          <Icon className="h-3 w-3" />
           {title}
         </span>
         {open ? (
-          <ChevronUp className="h-3.5 w-3.5 text-on-surface-variant" />
+          <ChevronUp className="h-3 w-3 text-outline-variant" />
         ) : (
-          <ChevronDown className="h-3.5 w-3.5 text-on-surface-variant" />
+          <ChevronDown className="h-3 w-3 text-outline-variant" />
         )}
       </button>
-      {open && <div className="px-3 pb-3">{children}</div>}
+      {open && <div className="px-3 py-2">{children}</div>}
     </div>
   );
 }
@@ -193,21 +198,21 @@ function _AgentCard({ agent }: { agent: TrackedAgent }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
   return (
-    <div className="rounded-md bg-surface-container-highest p-2 shadow-xs">
+    <div className="rounded-xs bg-surface-container-high border border-outline-variant/40 p-2 font-mono">
       <div className="flex items-center gap-1.5">
         <StatusIcon status={agent.status} />
         <span
           className={cn(
-            'inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none',
+            'inline-block rounded-xs border px-1.5 py-0.5 text-[10px] uppercase tracking-wider leading-none',
             getRoleBadgeClasses(agent.role),
           )}
         >
           {agent.role}
         </span>
-        <span className="ml-auto text-[10px] text-on-surface-variant">{agent.model}</span>
+        <span className="ml-auto text-[10px] text-outline-variant truncate">{agent.model}</span>
       </div>
 
-      <div className="mt-1 flex items-center gap-2 text-xs text-on-surface-variant">
+      <div className="mt-1 flex items-center gap-2 text-[11px] text-on-surface-variant tabular-nums">
         <ElapsedTimer startTime={agent.startTime} endTime={agent.endTime} />
         {agent.totalTokens != null && (
           <span className="flex items-center gap-0.5">
@@ -216,13 +221,13 @@ function _AgentCard({ agent }: { agent: TrackedAgent }) {
           </span>
         )}
         {agent.iterations != null && (
-          <span className="text-[10px]">{agent.iterations} iter</span>
+          <span className="text-[10px]">· {agent.iterations} iter</span>
         )}
       </div>
 
       {agent.error && (
-        <p className="mt-1 text-[10px] text-red-500 truncate" title={agent.error}>
-          {agent.error}
+        <p className="mt-1 text-[10px] text-error truncate" title={agent.error}>
+          ! {agent.error}
         </p>
       )}
 
@@ -231,19 +236,19 @@ function _AgentCard({ agent }: { agent: TrackedAgent }) {
           <button
             type="button"
             onClick={() => setToolsOpen((v) => !v)}
-            className="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-white"
+            className="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-on-surface cursor-pointer"
           >
             <Wrench className="h-3 w-3" />
             {agent.toolCalls.length} tool call{agent.toolCalls.length !== 1 ? 's' : ''}
             {toolsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
           {toolsOpen && (
-            <ul className="mt-1 space-y-0.5 pl-3">
+            <ul className="mt-1 space-y-0.5 pl-3 border-l border-outline-variant/40">
               {agent.toolCalls.map((tc) => (
-                <li key={tc.id} className="text-[10px] text-on-surface-variant">
-                  <span className="font-mono">{tc.name}</span>
+                <li key={tc.id} className="text-[10px] text-on-surface-variant pl-2">
+                  <span className="text-primary">›</span> <span>{tc.name}</span>
                   {tc.argsSummary && (
-                    <span className="ml-1 text-on-surface-variant/60">({tc.argsSummary})</span>
+                    <span className="ml-1 text-outline">({tc.argsSummary})</span>
                   )}
                 </li>
               ))}
@@ -294,58 +299,52 @@ export default function SidePanel({
   const tokenPercent = isUnlimited ? 0 : Math.min((totalTokens / maxTokenBudget) * 100, 100);
 
   const connectionDot: Record<string, string> = {
-    connected: 'bg-green-500',
-    connecting: 'bg-yellow-500 animate-pulse',
-    disconnected: 'bg-red-500',
+    connected: 'dot dot-ok',
+    connecting: 'dot dot-warn animate-pulse',
+    disconnected: 'dot dot-err',
   };
 
   const connectionLabel: Record<string, string> = {
-    connected: 'Connected',
-    connecting: 'Connecting...',
-    disconnected: 'Disconnected',
+    connected: 'connected',
+    connecting: 'connecting…',
+    disconnected: 'disconnected',
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-surface-container">
-      {/* Section 1: Connection & Model */}
-      <CollapsibleSection title="Connection & Model" icon={Settings2}>
+    <div className="flex h-full flex-col overflow-y-auto bg-surface-container-low font-mono">
+      <CollapsibleSection title="connection & model" icon={Settings2}>
         <div className="space-y-3">
-          {/* Connection status */}
           <div className="flex items-center gap-2">
-            <span className={cn('h-2 w-2 rounded-full', connectionDot[connectionStatus])} />
-            <span className="text-xs text-on-surface-variant">
-              {connectionLabel[connectionStatus]}
-            </span>
+            <span aria-hidden className={connectionDot[connectionStatus]} />
+            <span className="text-[11px] text-on-surface-variant">{connectionLabel[connectionStatus]}</span>
           </div>
 
-          {/* Model (read-only — routing is handled by the orchestrator) */}
           <div>
-            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-on-surface-variant">
-              Default Model
+            <label className="mb-1 block text-[10px] uppercase tracking-wider text-outline-variant">
+              default model
             </label>
-            <div className="w-full rounded-md border border-outline-variant/10 bg-surface-container-highest px-2 py-1 text-xs text-white">
-              {selectedModel || 'No model configured'}
+            <div className="w-full rounded-xs border border-outline-variant/60 bg-surface-container px-2 py-1 text-[12px] text-on-surface truncate">
+              {selectedModel || 'no model configured'}
             </div>
           </div>
 
-          {/* Expert / Preset pills */}
           <div>
-            <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-on-surface-variant">
-              Expert
+            <label className="mb-1 block text-[10px] uppercase tracking-wider text-outline-variant">
+              expert
             </label>
-            <p className="text-[10px] text-on-surface-variant mb-1.5">Chat directly with an expert.</p>
+            <p className="text-[10px] text-outline mb-1.5">chat directly with an expert.</p>
             <div className="flex flex-wrap gap-1">
               <button
                 type="button"
                 onClick={() => onPresetChange(null)}
                 className={cn(
-                  'rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors',
+                  'rounded-xs border px-2 py-0.5 text-[10px] transition-colors cursor-pointer',
                   selectedPresetId === null
-                    ? 'bg-primary text-[#002a6d]'
-                    : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high',
+                    ? 'bg-primary-container/40 border-primary text-primary'
+                    : 'border-outline-variant/60 text-on-surface-variant hover:border-outline hover:text-on-surface',
                 )}
               >
-                None
+                none
               </button>
               {presets.map((p) => (
                 <button
@@ -354,10 +353,10 @@ export default function SidePanel({
                   onClick={() => onPresetChange(p.id)}
                   title={p.description}
                   className={cn(
-                    'rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors',
+                    'rounded-xs border px-2 py-0.5 text-[10px] transition-colors cursor-pointer',
                     selectedPresetId === p.id
-                      ? 'bg-primary text-[#002a6d]'
-                      : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high',
+                      ? 'bg-primary-container/40 border-primary text-primary'
+                      : 'border-outline-variant/60 text-on-surface-variant hover:border-outline hover:text-on-surface',
                   )}
                 >
                   {p.name}
@@ -368,42 +367,35 @@ export default function SidePanel({
         </div>
       </CollapsibleSection>
 
-      {/* Section 2: Session Stats */}
-      <CollapsibleSection title="Session Stats" icon={Activity}>
+      <CollapsibleSection title="session stats" icon={Activity}>
         <div className="space-y-3">
-          {/* Token usage */}
           <div>
-            <div className="mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1 text-xs text-on-surface-variant">
+            <div className="mb-1 flex items-center justify-between text-[11px]">
+              <span className="flex items-center gap-1 text-on-surface-variant">
                 <Coins className="h-3 w-3" />
-                Tokens
+                tokens
               </span>
-              <span className="text-xs tabular-nums text-on-surface-variant">
+              <span className="text-on-surface-variant tabular-nums">
                 {formatTokens(totalTokens)}{isUnlimited ? '' : ` / ${formatTokens(maxTokenBudget)}`}
               </span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-container-highest">
+            <div className="h-1.5 w-full overflow-hidden rounded-xs bg-outline-variant/30">
               <div
                 className={cn(
-                  'h-full rounded-full transition-all',
-                  tokenPercent > 90
-                    ? 'bg-error'
-                    : tokenPercent > 70
-                      ? 'bg-yellow-500'
-                      : 'bg-primary',
+                  'h-full transition-all',
+                  tokenPercent > 90 ? 'bg-error' : tokenPercent > 70 ? 'bg-warning' : 'bg-primary',
                 )}
                 style={{ width: `${tokenPercent}%` }}
               />
             </div>
           </div>
 
-          {/* Active agents */}
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-xs text-on-surface-variant">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="flex items-center gap-1 text-on-surface-variant">
               <Bot className="h-3 w-3" />
-              Active Agents
+              active agents
             </span>
-            <span className="text-xs font-medium tabular-nums text-white">
+            <span className="tabular-nums text-on-surface">
               {runningAgents.length}
             </span>
           </div>

@@ -19,12 +19,12 @@ interface PresetSelectorProps {
 }
 
 const ICON_MAP: Record<string, React.ReactNode> = {
-  search: <Search className="w-3.5 h-3.5" />,
-  code: <Code className="w-3.5 h-3.5" />,
-  eye: <Eye className="w-3.5 h-3.5" />,
-  'file-text': <FileText className="w-3.5 h-3.5" />,
-  'bar-chart': <BarChart3 className="w-3.5 h-3.5" />,
-  bot: <Bot className="w-3.5 h-3.5" />,
+  search: <Search className="w-3 h-3" />,
+  code: <Code className="w-3 h-3" />,
+  eye: <Eye className="w-3 h-3" />,
+  'file-text': <FileText className="w-3 h-3" />,
+  'bar-chart': <BarChart3 className="w-3 h-3" />,
+  bot: <Bot className="w-3 h-3" />,
 };
 
 export function PresetSelector({ selectedPresetId, onSelect }: PresetSelectorProps) {
@@ -41,23 +41,26 @@ export function PresetSelector({ selectedPresetId, onSelect }: PresetSelectorPro
   if (presets.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
-      {presets.map((preset) => (
-        <button
-          key={preset.id}
-          onClick={() => onSelect(selectedPresetId === preset.id ? null : preset.id)}
-          className={cn(
-            'flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors',
-            selectedPresetId === preset.id
-              ? 'bg-primary text-[#002a6d]'
-              : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high'
-          )}
-          title={preset.description || preset.name}
-        >
-          {preset.icon && ICON_MAP[preset.icon] ? ICON_MAP[preset.icon] : null}
-          {preset.name}
-        </button>
-      ))}
+    <div className="flex items-center gap-1 flex-wrap font-mono">
+      {presets.map((preset) => {
+        const active = selectedPresetId === preset.id;
+        return (
+          <button
+            key={preset.id}
+            onClick={() => onSelect(active ? null : preset.id)}
+            className={cn(
+              'flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] border transition-colors cursor-pointer',
+              active
+                ? 'bg-primary-container/40 border-primary text-primary'
+                : 'border-outline-variant/60 text-on-surface-variant hover:text-on-surface hover:border-outline',
+            )}
+            title={preset.description || preset.name}
+          >
+            {preset.icon && ICON_MAP[preset.icon] ? ICON_MAP[preset.icon] : null}
+            {preset.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

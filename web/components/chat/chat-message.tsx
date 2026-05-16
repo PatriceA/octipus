@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot, User, Zap } from 'lucide-react';
+import { Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface MessageMetadata {
@@ -24,57 +24,59 @@ interface ChatMessageProps {
   message: ChatMessageData;
 }
 
+/**
+ * TUI-style chat row. Matches the role-prefixed layout of
+ * `src/tui-pi/components/messages-pane.ts`:
+ *
+ *   ❯  user message goes here
+ *      assistant message goes here
+ *   ·  system message goes here
+ *
+ * No bubbles, no avatars — colour + prefix is enough to disambiguate
+ * roles in a mono terminal. The metadata footer is dim and tabular.
+ */
 export function ChatMessage({ message }: ChatMessageProps) {
   const meta = message.metadata;
 
+  const prefix =
+    message.role === 'user' ? '❯' :
+    message.role === 'system' ? '·' :
+    ' ';
+
+  const prefixColor =
+    message.role === 'user' ? 'text-primary' :
+    message.role === 'system' ? 'text-outline-variant' :
+    'text-outline-variant';
+
+  const bodyColor =
+    message.role === 'user' ? 'text-on-surface' :
+    message.role === 'system' ? 'text-on-surface-variant italic' :
+    'text-on-surface';
+
   return (
-    <div
-      className={cn(
-        'flex gap-3',
-        message.role === 'user' ? 'justify-end' : 'justify-start'
-      )}
-    >
-      {message.role !== 'user' && (
-        <div className="w-8 h-8 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shrink-0">
-          <Bot className="w-5 h-5 text-[#002a6d]" />
-        </div>
-      )}
-      <div
-        className={cn(
-          'max-w-[70%] px-4 py-2',
-          message.role === 'user'
-            ? 'bg-linear-to-r from-primary to-primary-container text-[#002a6d] rounded-2xl rounded-br-md'
-            : message.role === 'system'
-            ? 'bg-surface-container text-on-surface-variant italic rounded-2xl'
-            : 'bg-surface-container border border-outline-variant/10 text-white rounded-2xl rounded-tl-md'
-        )}
-      >
-        <p className="whitespace-pre-wrap">{message.content}</p>
-        <div className="flex items-center gap-2 mt-1 flex-wrap">
-          <p className="text-xs opacity-60" suppressHydrationWarning>
-            {message.timestamp.toLocaleTimeString()}
-          </p>
-          {message.classification && message.classification !== 'casual' && (
-            <span className="text-xs opacity-50 font-mono">
-              [{message.classification}]
-            </span>
-          )}
-          {/* Metadata bar for assistant messages */}
-          {message.role === 'assistant' && meta && (
-            <span className="text-xs opacity-50 font-mono flex items-center gap-1">
-              {meta.cached && <Zap className="w-3 h-3 text-yellow-500" />}
-              {meta.model && <span>{meta.model}</span>}
-              {meta.tokens != null && <span>{meta.tokens}t</span>}
-              {meta.latencyMs != null && <span>{meta.latencyMs}ms</span>}
-            </span>
-          )}
+    <div className="font-mono group">
+      <div className="flex gap-2 items-baseline">
+        <span aria-hidden className={cn('shrink-0 w-3 text-center font-bold', prefixColor)}>
+          {prefix}
+        </span>
+        <div className={cn('flex-1 min-w-0 text-[13px] leading-relaxed whitespace-pre-wrap break-words', bodyColor)}>
+          {message.content}
         </div>
       </div>
-      {message.role === 'user' && (
-        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0">
-          <User className="w-5 h-5 text-[#002a6d]" />
-        </div>
-      )}
+      <div className="flex items-center gap-3 mt-0.5 pl-5 text-[10px] text-outline opacity-0 group-hover:opacity-100 transition-opacity">
+        <span suppressHydrationWarning>{message.timestamp.toLocaleTimeString()}</span>
+        {message.classification && message.classification !== 'casual' && (
+          <span>[{message.classification}]</span>
+        )}
+        {message.role === 'assistant' && meta && (
+          <span className="flex items-center gap-1.5 tabular-nums">
+            {meta.cached && <Zap className="w-3 h-3 text-warning" />}
+            {meta.model && <span>{meta.model}</span>}
+            {meta.tokens != null && <span>· {meta.tokens}t</span>}
+            {meta.latencyMs != null && <span>· {meta.latencyMs}ms</span>}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

@@ -132,41 +132,30 @@ export function SessionList({
   };
 
   return (
-    <div className="flex h-full flex-col bg-surface-container-low">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-outline-variant/10 px-3 py-3">
-        <h2 className="text-sm font-extrabold tracking-tighter text-white">Sessions</h2>
+    <div className="flex h-full flex-col bg-surface-container-lowest font-mono">
+      <div className="flex items-center justify-between border-b border-outline-variant/60 px-3 py-2">
+        <h2 className="text-[12px] uppercase tracking-wider text-on-surface flex items-center gap-1.5">
+          <span aria-hidden className="text-outline-variant">▸</span>
+          sessions
+        </h2>
         <button
           onClick={onCreate}
-          className={cn(
-            'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium',
-            'bg-primary/20 text-primary hover:bg-primary/30',
-            'transition-colors'
-          )}
+          className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[11px] border border-primary/60 bg-primary-container/40 text-primary hover:bg-primary-container transition-colors cursor-pointer"
         >
-          <Plus className="h-3.5 w-3.5" />
-          New
+          <Plus className="h-3 w-3" />
+          new
         </button>
       </div>
 
-      {/* Search */}
-      <div className="px-3 py-2">
+      <div className="px-2 py-2 border-b border-outline-variant/60">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-on-surface-variant" />
+          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-outline-variant" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search sessions..."
-            className={cn(
-              'w-full rounded-md py-1.5 pl-8 pr-3 text-xs',
-              'bg-surface-container-highest',
-              'text-white',
-              'placeholder:text-on-surface-variant',
-              'ring-1 ring-outline-variant/10',
-              'focus:outline-hidden focus:ring-2 focus:ring-primary/40',
-              'transition-shadow'
-            )}
+            placeholder="search…"
+            className="w-full rounded-xs py-1 pl-7 pr-2 text-[12px] bg-surface-container-low border border-outline-variant/60 text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary transition-colors"
           />
         </div>
       </div>
@@ -180,12 +169,13 @@ export function SessionList({
         )}
 
         {GROUP_ORDER.filter((g) => grouped[g]).map((group) => (
-          <div key={group} className="mt-2 first:mt-0">
-            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant">
-              {group}
+          <div key={group} className="mt-1 first:mt-0">
+            <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-outline-variant flex items-center gap-1.5">
+              <span aria-hidden>▸</span>
+              {group.toLowerCase()}
             </div>
 
-            <div className="space-y-0.5">
+            <div>
               {grouped[group].map((session) => {
                 const isActive = session.id === activeSessionId;
                 const isRenaming = renamingId === session.id;
@@ -194,10 +184,10 @@ export function SessionList({
                   <div
                     key={session.id}
                     className={cn(
-                      'group relative rounded-lg px-3 py-2 cursor-pointer transition-colors',
+                      'group relative px-2 py-1.5 cursor-pointer transition-colors border-l-2',
                       isActive
-                        ? 'border-l-2 border-l-primary bg-surface-container'
-                        : 'border-l-2 border-l-transparent hover:bg-surface-container-high/60'
+                        ? 'border-l-primary bg-primary-container/30'
+                        : 'border-l-transparent hover:border-l-outline-variant hover:bg-surface-container-low'
                     )}
                     onClick={() => {
                       if (!isRenaming) onSelect(session.id);
@@ -221,30 +211,22 @@ export function SessionList({
                               }
                             }}
                             onClick={(e) => e.stopPropagation()}
-                            className={cn(
-                              'w-full rounded px-1.5 py-0.5 text-sm',
-                              'bg-surface-container-highest',
-                              'text-white',
-                              'ring-1 ring-primary/50',
-                              'focus:outline-hidden focus:ring-2 focus:ring-primary/60'
-                            )}
+                            className="w-full rounded-xs px-1.5 py-0.5 text-[13px] bg-surface-container-low border border-primary text-on-surface focus:outline-none"
                           />
                         ) : (
                           <p
                             className={cn(
-                              'truncate text-sm',
-                              isActive
-                                ? 'font-medium text-white'
-                                : 'text-on-surface-variant'
+                              'truncate text-[13px]',
+                              isActive ? 'text-on-surface' : 'text-on-surface-variant'
                             )}
                           >
                             {session.title}
                           </p>
                         )}
 
-                        <div className="mt-0.5 flex items-center gap-2">
+                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-outline">
                           {session.channelType && session.channelType !== 'webchat' && session.channelType !== 'api' && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] text-blue-400" title={session.channelType}>
+                            <span className="inline-flex items-center gap-0.5 text-primary" title={session.channelType}>
                               {session.channelType === 'telegram' ? <Smartphone className="h-2.5 w-2.5" /> :
                                session.channelType === 'slack' ? <Hash className="h-2.5 w-2.5" /> :
                                <Globe className="h-2.5 w-2.5" />}
@@ -252,22 +234,19 @@ export function SessionList({
                             </span>
                           )}
                           {session.devMode && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400" title={session.projectName}>
+                            <span className="inline-flex items-center gap-0.5 text-tertiary" title={session.projectName}>
                               <Code2 className="h-2.5 w-2.5" />
                               {session.projectName || 'dev'}
                             </span>
                           )}
-                          <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant">
+                          <span className="inline-flex items-center gap-0.5 tabular-nums">
                             <MessageSquare className="h-2.5 w-2.5" />
                             {session.messageCount}
                           </span>
-                          <span className="text-[10px] text-on-surface-variant">
-                            {timeAgo(session.updatedAt)}
-                          </span>
+                          <span>· {timeAgo(session.updatedAt)}</span>
                         </div>
                       </div>
 
-                      {/* Action menu trigger */}
                       {!isRenaming && (
                         <button
                           onClick={(e) => {
@@ -277,14 +256,11 @@ export function SessionList({
                           }}
                           aria-label="Session actions"
                           className={cn(
-                            'mt-0.5 rounded p-0.5 text-on-surface-variant transition-opacity',
-                            'hover:bg-surface-container-highest hover:text-white',
-                            menuOpenId === session.id
-                              ? 'opacity-100'
-                              : 'opacity-0 group-hover:opacity-100'
+                            'mt-0.5 rounded-xs p-0.5 text-outline-variant transition-opacity hover:bg-surface-container hover:text-on-surface',
+                            menuOpenId === session.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                           )}
                         >
-                          <MoreHorizontal className="h-3.5 w-3.5" />
+                          <MoreHorizontal className="h-3 w-3" />
                         </button>
                       )}
                     </div>
@@ -293,25 +269,17 @@ export function SessionList({
                     {menuOpenId === session.id && (
                       <div
                         ref={menuRef}
-                        className={cn(
-                          'absolute right-2 top-9 z-10 min-w-[120px] rounded-md py-1 shadow-lg',
-                          'bg-surface-container-highest',
-                          'ring-1 ring-outline-variant/10'
-                        )}
+                        className="absolute right-2 top-8 z-10 min-w-[120px] rounded-xs py-1 bg-surface-container border border-outline-variant shadow-xl"
                       >
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleStartRename(session);
                           }}
-                          className={cn(
-                            'flex w-full items-center gap-2 px-3 py-1.5 text-xs',
-                            'text-on-surface-variant',
-                            'hover:bg-surface-container-high'
-                          )}
+                          className="flex w-full items-center gap-2 px-2.5 py-1 text-[12px] text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface cursor-pointer"
                         >
                           <Pencil className="h-3 w-3" />
-                          Rename
+                          rename
                         </button>
                         <button
                           onClick={(e) => {
@@ -319,15 +287,12 @@ export function SessionList({
                             handleDeleteClick(session.id);
                           }}
                           className={cn(
-                            'flex w-full items-center gap-2 px-3 py-1.5 text-xs',
-                            confirmDeleteId === session.id
-                              ? 'text-error font-medium'
-                              : 'text-on-surface-variant',
-                            'hover:bg-surface-container-high'
+                            'flex w-full items-center gap-2 px-2.5 py-1 text-[12px] cursor-pointer hover:bg-error-container/40',
+                            confirmDeleteId === session.id ? 'text-error' : 'text-on-surface-variant hover:text-error',
                           )}
                         >
                           <Trash2 className="h-3 w-3" />
-                          {confirmDeleteId === session.id ? 'Confirm?' : 'Delete'}
+                          {confirmDeleteId === session.id ? '! confirm?' : 'delete'}
                         </button>
                       </div>
                     )}

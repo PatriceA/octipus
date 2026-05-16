@@ -9,6 +9,12 @@ interface ChatInputProps {
   disabled?: boolean;
 }
 
+/**
+ * Compact composer matching the TUI's prompt row: leading `❯` glyph
+ * (turns red on speech recognition active), single-line dim border,
+ * blue accent on focus. Send / mic are square framed buttons rather
+ * than rounded chips.
+ */
 export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -56,41 +62,53 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   };
 
   return (
-    <div className="border-t border-outline-variant/10 p-4">
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-          placeholder={isListening ? 'Listening...' : 'Send a message...'}
-          className={cn(
-            'flex-1 px-4 py-2 bg-surface-container-highest border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white placeholder:text-on-surface-variant',
-            isListening && 'ring-2 ring-error'
-          )}
-          disabled={disabled}
-        />
+    <div className="border-t border-outline-variant/60 p-3 bg-surface-container-lowest">
+      <div className="flex gap-2 items-stretch font-mono">
+        <div className="relative flex-1">
+          <span
+            aria-hidden
+            className={cn(
+              'absolute left-2 top-1/2 -translate-y-1/2 font-bold transition-colors text-sm',
+              isListening ? 'text-error' : input ? 'text-primary' : 'text-outline-variant',
+            )}
+          >
+            ❯
+          </span>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+            placeholder={isListening ? 'listening…' : 'send a message…'}
+            className={cn(
+              'w-full pl-7 pr-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-xs text-[13px] text-on-surface placeholder-outline-variant focus:outline-none focus:border-primary transition-colors',
+              isListening && 'border-error',
+            )}
+            disabled={disabled}
+          />
+        </div>
         {speechSupported && (
           <button
             onClick={toggleListening}
             disabled={disabled}
             className={cn(
-              'px-3 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed',
+              'px-2.5 rounded-xs border transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
               isListening
-                ? 'bg-error text-white hover:bg-error/80'
-                : 'bg-surface-container-highest text-on-surface-variant hover:bg-surface-container-high'
+                ? 'border-error bg-error-container/40 text-error hover:bg-error-container'
+                : 'border-outline-variant/60 bg-surface-container-low text-on-surface-variant hover:text-on-surface hover:border-outline',
             )}
             title={isListening ? 'Stop listening' : 'Voice input'}
           >
-            {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
           </button>
         )}
         <button
           onClick={handleSend}
           disabled={disabled || !input.trim()}
-          className="px-4 py-2 bg-primary text-[#002a6d] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-3 rounded-xs bg-primary text-on-primary cursor-pointer hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 text-[12px]"
         >
-          <Send className="w-5 h-5" />
+          <Send className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">send</span>
         </button>
       </div>
     </div>
