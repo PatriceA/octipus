@@ -7,6 +7,44 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Live artifacts + single-user fixes (2026-05 batch c)
+
+Bug-fix and DX batch surfaced while bringing the live-artifacts feature
+end-to-end in a single-user install.
+
+- **Single-user mode now provisions a default workspace.** The artifacts
+  feature (and any other workspace-scoped surface) previously 500'd in
+  single-user installs because `resolveWorkspace` returned
+  `workspaceId: null` when `multiuser.orgWorkspaces` was off. The flag
+  is now correctly scoped to *multi-workspace switching*; real users
+  always get a default workspace. `/api/me/workspaces` GET is no longer
+  flag-gated (mutations stay gated).
+- **Artifact pages render in iframes again.** The global
+  `X-Frame-Options: DENY` middleware was overriding the per-artifact CSP
+  and blocking the same-origin embed iframe. Artifact routes (`/a/*`,
+  `/__artifacts__/*`) now skip the global XFO + generic CSP and rely on
+  the per-artifact CSP with `frame-ancestors`.
+- **Swarm token-budget changes now apply to running sessions.**
+  `deriveChildBudget` re-reads `swarm.levelDefaults.*.tokens` from
+  current config on every spawn instead of using the snapshot captured
+  at root-node creation, so raising the cap via the settings UI takes
+  effect on the next child spawn. Decreases still need a session
+  restart (we never shrink a parent's effective cap below `used`).
+- **Artifacts tool now reachable by agents.** The `artifacts` tool was
+  registered but no role's `toolIds` included it, so orchestrator
+  routing fell through. Added to `general` and `data` roles, with
+  matching classifier keywords ("live artifact", "dashboard", "rss
+  feed", etc.).
+- **Tighter artifact tool descriptions + validation.**
+  `create_live_artifact` / `update_live_artifact` now spell out the
+  template ↔ source coupling rule, the visibility consequence
+  (`workspace` returns 404 to anonymous viewers), and the auto-refresh
+  wake-gate. `sources` param gains per-kind config examples; `kind` and
+  `visibility` get enum constraints. The server cross-checks
+  `{{data.<name>.…}}` references against attached sources and returns
+  any mismatches in a new `warnings[]` field. Create now returns
+  `embedUrl` + `outerUrl` + `visibility` + `warnings`.
+
 ### Multi-user + TUI follow-ups (2026-05 batch b)
 
 Carry-overs from the May feature work — the Web UI / org-shared
