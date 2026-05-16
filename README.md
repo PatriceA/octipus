@@ -105,6 +105,8 @@ Open [http://localhost:3005/setup](http://localhost:3005/setup) to finish config
 
 Requirements: **Bun ≥ 1.1**, **Node ≥ 18**, **Docker** (for the full stack), **Postgres 15** (external mode).
 
+> **Runtime split:** the server runs on **Bun only** (tests, scripts, channels, gateway, MCP server). The web dashboard runs on Node via Next.js. Bun is not a soft requirement — provider clients, the LiteLLM bridge, and the gateway rely on Bun's runtime surface. There is no Node entry point for the server and there are no plans to add one.
+
 ## Outlook
 
 Highlights from the [roadmap](./ROADMAP.md):
