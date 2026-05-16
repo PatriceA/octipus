@@ -66,7 +66,7 @@ export default function NewArtifactPage() {
         <button
           disabled={!slug || !title || submitting}
           onClick={submit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
+          className="rounded bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-blue-500 disabled:opacity-50"
         >
           {submitting ? 'Creating…' : 'Create'}
         </button>

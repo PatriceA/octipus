@@ -30,7 +30,7 @@ interface WorkspaceConfig {
 export function IntegrationsTab() {
   return (
     <div className="space-y-8">
-      <h2 className="text-lg font-extrabold tracking-tighter text-white">Integrations</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Integrations</h2>
       <WorkspaceSection />
       <hr className="border-outline-variant/10" />
       <CLIIntegrationsSection />
@@ -101,7 +101,7 @@ function WorkspaceSection() {
       <p className="text-xs text-on-surface-variant mb-3">
         Filesystem directories the agent can read and write. These are separate from the
         organization workspace selector in the top-right header (which scopes data, not files).
-        The root path is set via the <code className="px-1 py-0.5 bg-[#262626] rounded text-[10px]">OCTIPUS_WORKSPACE_ROOT</code> environment variable.
+        The root path is set via the <code className="px-1 py-0.5 bg-surface-container-high rounded text-[10px]">OCTIPUS_WORKSPACE_ROOT</code> environment variable.
       </p>
       <p className="text-xs text-on-surface-variant mb-3">
         Add a parent folder (e.g. your repos directory) and its subdirectories will appear in the
@@ -111,7 +111,7 @@ function WorkspaceSection() {
       {/* Root path (read-only) */}
       <div className="mb-3">
         <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Root Path</label>
-        <div className="flex items-center gap-2 bg-[#262626] border-none rounded-md py-3 px-4 text-sm text-white font-mono">
+        <div className="flex items-center gap-2 bg-surface-container-high border-none rounded-md py-3 px-4 text-sm text-on-surface font-mono">
           {wsLoading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin text-on-surface-variant" />
           ) : (
@@ -129,7 +129,7 @@ function WorkspaceSection() {
           )}
           {workspace?.additionalPaths.map((path, i) => (
             <div key={i} className="flex items-center gap-2 bg-surface-container-low rounded-lg py-3 px-4">
-              <span className="flex-1 text-sm font-mono text-white">{path}</span>
+              <span className="flex-1 text-sm font-mono text-on-surface">{path}</span>
               <button
                 onClick={() => handleRemovePath(i)}
                 disabled={saving}
@@ -151,7 +151,7 @@ function WorkspaceSection() {
           onChange={(e) => setNewPath(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAddPath()}
           placeholder="/path/to/directory"
-          className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm font-mono focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
         />
         <button
           onClick={handleAddPath}
@@ -233,7 +233,7 @@ function CLIIntegrationsSection() {
           >
             <div className="flex-1">
               <div className="flex items-center gap-2">
-                <h4 className="font-medium text-sm text-white">{tool.name}</h4>
+                <h4 className="font-medium text-sm text-on-surface">{tool.name}</h4>
                 {tool.loading ? (
                   <Loader2 className="w-3 h-3 animate-spin text-on-surface-variant" />
                 ) : (
@@ -243,7 +243,7 @@ function CLIIntegrationsSection() {
                         ? 'bg-green-900/30 text-green-300'
                         : tool.status?.available
                           ? 'bg-amber-900/30 text-amber-300'
-                          : 'bg-[#262626] text-on-surface-variant'
+                          : 'bg-surface-container-high text-on-surface-variant'
                     }`}
                   >
                     {tool.status?.configured ? 'Available' : tool.status?.available ? 'Detected' : 'Not found'}
@@ -257,7 +257,7 @@ function CLIIntegrationsSection() {
             </div>
             <button
               onClick={() => tool.refetch()}
-              className="p-1.5 text-on-surface-variant hover:text-white"
+              className="p-1.5 text-on-surface-variant hover:text-on-surface"
               title="Refresh status"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -310,7 +310,7 @@ function IntegrationSettingsSection() {
           <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
             <Workflow className="w-5 h-5 text-on-surface-variant" />
             <div>
-              <h3 className="text-base font-semibold text-white">N8N Workflow Automation</h3>
+              <h3 className="text-base font-semibold text-on-surface">N8N Workflow Automation</h3>
               <p className="text-xs text-on-surface-variant">Connect to your N8N instance for workflow triggers</p>
             </div>
           </div>
@@ -329,12 +329,12 @@ function IntegrationSettingsSection() {
       {/* MCP Servers — managed on the dedicated /mcp page */}
       <a
         href="/mcp"
-        className="flex items-center justify-between p-4 bg-surface-container-low rounded-xs hover:bg-[#20201f] transition-colors"
+        className="flex items-center justify-between p-4 bg-surface-container-low rounded-xs hover:bg-surface-container-high transition-colors"
       >
         <div className="flex items-center gap-3">
           <Cable className="w-5 h-5 text-on-surface-variant" />
           <div>
-            <h3 className="text-base font-semibold text-white">MCP Servers</h3>
+            <h3 className="text-base font-semibold text-on-surface">MCP Servers</h3>
             <p className="text-xs text-on-surface-variant">Add and manage Model Context Protocol servers</p>
           </div>
         </div>

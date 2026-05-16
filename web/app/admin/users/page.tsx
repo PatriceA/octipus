@@ -73,7 +73,7 @@ export default function AdminUsersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-extrabold tracking-tighter text-white">Users</h2>
+        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Users</h2>
         <button
           type="button"
           onClick={() => { setShowCreate(true); setError(null); }}
@@ -84,31 +84,31 @@ export default function AdminUsersPage() {
       </div>
 
       {showCreate && (
-        <div className="p-4 bg-[#1a1a1a] rounded-lg space-y-3 border border-primary/20">
-          <h3 className="font-medium text-white text-sm">Create user</h3>
+        <div className="p-4 bg-surface-container rounded-lg space-y-3 border border-primary/20">
+          <h3 className="font-medium text-on-surface text-sm">Create user</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               type="text"
               value={createName}
               onChange={(e) => setCreateName(e.target.value.slice(0, 64))}
               placeholder="Username"
-              className="bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             />
             <input
               type="email"
               value={createEmail}
               onChange={(e) => setCreateEmail(e.target.value)}
               placeholder="Email (optional)"
-              className="bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             />
             <input
               type="password"
               value={createPassword}
               onChange={(e) => setCreatePassword(e.target.value)}
               placeholder="Initial password (≥8 chars, optional)"
-              className="md:col-span-2 bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="md:col-span-2 bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             />
-            <label className="flex items-center gap-2 text-sm text-white">
+            <label className="flex items-center gap-2 text-sm text-on-surface">
               <input
                 type="checkbox"
                 checked={createIsAdmin}
@@ -129,7 +129,7 @@ export default function AdminUsersPage() {
             <button
               type="button"
               onClick={() => setShowCreate(false)}
-              className="px-3 py-2 bg-[#262626] text-on-surface-variant rounded-lg text-sm hover:text-white cursor-pointer"
+              className="px-3 py-2 bg-surface-container-high text-on-surface-variant rounded-lg text-sm hover:text-on-surface cursor-pointer"
             >
               Cancel
             </button>
@@ -141,7 +141,7 @@ export default function AdminUsersPage() {
         <div className="p-2 bg-error-dim/10 border border-error-dim/20 rounded text-sm text-error">{error}</div>
       )}
 
-      <div className="overflow-hidden bg-[#1a1a1a] rounded-lg">
+      <div className="overflow-hidden bg-surface-container rounded-lg">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-on-surface-variant">
             <tr className="border-b border-outline-variant/10">
@@ -161,7 +161,7 @@ export default function AdminUsersPage() {
               const isSelf = u.id === currentUser?.id;
               return (
                 <tr key={u.id} className="border-b border-outline-variant/5 last:border-0">
-                  <td className="px-4 py-3 text-white font-medium flex items-center gap-2">
+                  <td className="px-4 py-3 text-on-surface font-medium flex items-center gap-2">
                     {u.username}
                     {u.isAdmin && <ShieldCheck className="w-4 h-4 text-primary" aria-label="admin" />}
                   </td>
@@ -171,7 +171,7 @@ export default function AdminUsersPage() {
                     <span className={`px-2 py-0.5 text-xs rounded-full ${
                       u.isActive
                         ? 'bg-green-900/30 text-green-300'
-                        : 'bg-[#262626] text-on-surface-variant'
+                        : 'bg-surface-container-high text-on-surface-variant'
                     }`}>
                       {u.isActive ? 'Active' : 'Disabled'}
                     </span>
@@ -182,7 +182,7 @@ export default function AdminUsersPage() {
                       type="button"
                       disabled={isSelf || patchMutation.isPending}
                       onClick={() => patchMutation.mutate({ id: u.id, body: { isActive: !u.isActive } })}
-                      className="px-2 py-1 text-xs bg-[#262626] rounded hover:bg-[#333] text-on-surface-variant hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      className="px-2 py-1 text-xs bg-surface-container-high rounded hover:bg-[#333] text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                       title={isSelf ? 'You cannot disable yourself' : (u.isActive ? 'Disable user' : 'Re-enable user')}
                     >
                       {u.isActive ? 'Disable' : 'Enable'}
@@ -191,7 +191,7 @@ export default function AdminUsersPage() {
                       type="button"
                       disabled={isSelf || patchMutation.isPending}
                       onClick={() => patchMutation.mutate({ id: u.id, body: { isAdmin: !u.isAdmin } })}
-                      className="px-2 py-1 text-xs bg-[#262626] rounded hover:bg-[#333] text-on-surface-variant hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      className="px-2 py-1 text-xs bg-surface-container-high rounded hover:bg-[#333] text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                       title={isSelf ? 'You cannot demote yourself' : (u.isAdmin ? 'Revoke admin' : 'Grant admin')}
                     >
                       {u.isAdmin ? 'Revoke admin' : 'Grant admin'}

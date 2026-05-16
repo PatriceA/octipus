@@ -43,7 +43,7 @@ function ExpandedRow({ result }: { result: EvalResult }) {
           {/* Input */}
           <div>
             <p className="text-xs font-medium text-on-surface-variant mb-1">Input</p>
-            <pre className="text-sm text-white/80 whitespace-pre-wrap bg-[#0e0e0e] rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
+            <pre className="text-sm text-on-surface/80 whitespace-pre-wrap bg-background rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
               {result.input}
             </pre>
           </div>
@@ -52,7 +52,7 @@ function ExpandedRow({ result }: { result: EvalResult }) {
           {result.output && (
             <div>
               <p className="text-xs font-medium text-on-surface-variant mb-1">Output</p>
-              <pre className="text-sm text-white/80 whitespace-pre-wrap bg-[#0e0e0e] rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
+              <pre className="text-sm text-on-surface/80 whitespace-pre-wrap bg-background rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
                 {result.output}
               </pre>
             </div>
@@ -132,7 +132,7 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
   }
 
   return (
-    <div className="bg-[#1a1a1a] rounded-[1rem] ring-1 ring-outline-variant/10 overflow-hidden">
+    <div className="bg-surface-container rounded-[1rem] ring-1 ring-outline-variant/10 overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
@@ -160,7 +160,7 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
                     <tr
                       key={result.testId}
                       onClick={() => toggleExpand(result.testId)}
-                      className="border-b border-outline-variant/10 hover:bg-[#20201f] cursor-pointer"
+                      className="border-b border-outline-variant/10 hover:bg-surface-container-high cursor-pointer"
                     >
                       <td className="px-3 py-3">
                         {isExpanded ? (
@@ -169,7 +169,7 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
                           <ChevronRight className="w-4 h-4 text-on-surface-variant" />
                         )}
                       </td>
-                      <td className="px-4 py-3 text-sm font-mono text-white">
+                      <td className="px-4 py-3 text-sm font-mono text-on-surface">
                         {result.testId}
                       </td>
                       <td className="px-4 py-3 text-sm text-on-surface-variant max-w-xs truncate">

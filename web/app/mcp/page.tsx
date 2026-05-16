@@ -137,10 +137,10 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
+      <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-white">Add MCP Server</h2>
-          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-semibold text-on-surface">Add MCP Server</h2>
+          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -148,7 +148,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         <div className="space-y-4">
           {/* Transport toggle */}
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1.5">Transport</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1.5">Transport</label>
             <div className="flex gap-2">
               {([
                 { value: 'streamable-http' as const, label: 'HTTP', desc: 'n8n, modern MCP' },
@@ -162,7 +162,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   className={cn(
                     'flex-1 px-3 py-2 text-sm rounded-lg border transition-colors cursor-pointer',
                     transport === t.value
-                      ? 'bg-primary text-white border-primary-800'
+                      ? 'bg-primary text-on-surface border-primary-800'
                       : 'bg-surface-container-low text-on-surface-variant border-outline-variant/10 hover:border-outline-variant/30'
                   )}
                 >
@@ -175,12 +175,12 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
 
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Name</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+              className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
               placeholder={transport === 'sse' ? 'e.g., n8n Workflows' : 'e.g., Brave Search'}
             />
           </div>
@@ -189,12 +189,12 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
             <>
               {/* Server URL */}
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">Server URL</label>
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">Server URL</label>
                 <input
                   type="text"
                   value={serverUrl}
                   onChange={(e) => setServerUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
                   placeholder={transport === 'streamable-http'
                     ? 'https://n8n.example.com/mcp-server/http'
                     : 'http://localhost:5678/mcp/your-path'}
@@ -206,7 +206,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
 
               {/* Authorization header */}
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">
                   Authorization Header
                   <span className="text-on-surface-variant font-normal ml-1">(optional)</span>
                 </label>
@@ -215,13 +215,13 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                     type={showAuth ? 'text' : 'password'}
                     value={authHeader}
                     onChange={(e) => setAuthHeader(e.target.value)}
-                    className="w-full px-3 py-2 pr-10 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                    className="w-full px-3 py-2 pr-10 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
                     placeholder="Bearer eyJhbGci..."
                   />
                   <button
                     type="button"
                     onClick={() => setShowAuth(!showAuth)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-white cursor-pointer"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface cursor-pointer"
                   >
                     {showAuth ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -232,24 +232,24 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
             <>
               {/* Command */}
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">Command</label>
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">Command</label>
                 <input
                   type="text"
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
                   placeholder="npx"
                 />
               </div>
 
               {/* Arguments */}
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">Arguments</label>
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">Arguments</label>
                 <input
                   type="text"
                   value={args}
                   onChange={(e) => setArgs(e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
                   placeholder="-y @anthropic/brave-search-mcp"
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">Space-separated arguments</p>
@@ -257,7 +257,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
 
               {/* Environment variables */}
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">
                   Environment Variables
                   <span className="text-on-surface-variant font-normal ml-1">(optional)</span>
                 </label>
@@ -265,7 +265,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                   value={envVars}
                   onChange={(e) => setEnvVars(e.target.value)}
                   rows={2}
-                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-white resize-none"
+                  className="w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm font-mono focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface resize-none"
                   placeholder={"BRAVE_API_KEY=your-key-here\nANOTHER_VAR=value"}
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">One KEY=VALUE per line</p>
@@ -278,14 +278,14 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-on-surface-variant hover:text-white cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface cursor-pointer"
             >
               Cancel
             </button>
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-surface cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 text-sm"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Add & Connect
@@ -327,7 +327,7 @@ function ServerToolList({ serverId }: { serverId: string }) {
         <div key={tool.name} className="flex items-start gap-2 px-2.5 py-1.5 bg-surface-container-low rounded-lg">
           <Wrench className="w-3.5 h-3.5 text-on-surface-variant mt-0.5 shrink-0" />
           <div>
-            <p className="text-sm font-mono font-medium text-white/80">{tool.name}</p>
+            <p className="text-sm font-mono font-medium text-on-surface/80">{tool.name}</p>
             <p className="text-xs text-on-surface-variant leading-tight">{tool.description}</p>
           </div>
         </div>
@@ -423,7 +423,7 @@ export default function MCPPage() {
       case 'error':
         return 'bg-red-900/30 text-red-300';
       default:
-        return 'bg-[#262626] text-on-surface-variant';
+        return 'bg-surface-container-high text-on-surface-variant';
     }
   };
 
@@ -443,7 +443,7 @@ export default function MCPPage() {
         </div>
         <button
           onClick={() => setShowAdd(true)}
-          className="px-4 py-2 bg-primary text-white cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
+          className="px-4 py-2 bg-primary text-on-surface cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
           Add Server
@@ -452,12 +452,12 @@ export default function MCPPage() {
 
       <div className="space-y-3">
         {isLoading ? (
-          <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+          <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
             <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
             Loading...
           </div>
         ) : servers.length === 0 ? (
-          <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
+          <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
             <Cable className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
             <p className="text-on-surface-variant">No MCP servers configured</p>
             <p className="text-sm text-on-surface-variant mt-1">
@@ -468,14 +468,14 @@ export default function MCPPage() {
           servers.map((server) => (
             <div
               key={server.id}
-              className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10"
+              className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10"
             >
               <div className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       onClick={() => toggleExpand(server.id)}
-                      className="text-on-surface-variant hover:text-white shrink-0"
+                      className="text-on-surface-variant hover:text-on-surface shrink-0"
                     >
                       {expanded.has(server.id) ? (
                         <ChevronDown className="w-5 h-5" />
@@ -485,11 +485,11 @@ export default function MCPPage() {
                     </button>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-medium text-white truncate">{server.name}</h3>
+                        <h3 className="font-medium text-on-surface truncate">{server.name}</h3>
                         <span className={cn('px-2 py-0.5 text-[10px] font-medium rounded-full shrink-0', statusColor(server.status))}>
                           {server.status}
                         </span>
-                        <span className="px-1.5 py-0.5 text-[10px] text-on-surface-variant bg-[#262626] rounded font-mono shrink-0">
+                        <span className="px-1.5 py-0.5 text-[10px] text-on-surface-variant bg-surface-container-high rounded font-mono shrink-0">
                           {server.transport}
                         </span>
                         {server.status === 'connected' && server.toolCount > 0 && (
@@ -527,7 +527,7 @@ export default function MCPPage() {
                             'p-1.5 rounded-lg transition-colors cursor-pointer',
                             server.isEnabled
                               ? 'text-green-600 hover:bg-green-900/20'
-                              : 'text-on-surface-variant hover:bg-[#1a1a1a]'
+                              : 'text-on-surface-variant hover:bg-surface-container'
                           )}
                           title={server.isEnabled ? 'Disable' : 'Enable'}
                         >
@@ -549,7 +549,7 @@ export default function MCPPage() {
                         {server.status === 'connected' && (
                           <button
                             onClick={() => handleDisconnect(server.id)}
-                            className="p-1.5 text-on-surface-variant hover:bg-[#1a1a1a] rounded-lg cursor-pointer"
+                            className="p-1.5 text-on-surface-variant hover:bg-surface-container rounded-lg cursor-pointer"
                             title="Disconnect"
                           >
                             <PowerOff className="w-4 h-4" />

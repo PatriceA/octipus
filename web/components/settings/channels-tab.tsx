@@ -60,13 +60,13 @@ export function ChannelsTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-extrabold tracking-tighter text-white">Channels</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Channels</h2>
 
       {/* Link Code Input */}
       <div className="p-6 bg-primary/10 rounded-xs">
         <div className="flex items-center gap-2 mb-2">
           <Link2 className="w-5 h-5 text-primary" />
-          <h3 className="font-medium text-white">Link a Channel</h3>
+          <h3 className="font-medium text-on-surface">Link a Channel</h3>
         </div>
         <p className="text-sm text-on-surface-variant mb-3">
           To link your Telegram, Slack, or WhatsApp account, send <code className="font-mono bg-primary/15 px-1 rounded text-primary">/link</code> to the bot,
@@ -80,7 +80,7 @@ export function ChannelsTab() {
             onChange={(e) => setLinkCode(e.target.value.toUpperCase().slice(0, 6))}
             placeholder="ABC123"
             maxLength={6}
-            className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white font-mono text-center text-lg tracking-widest focus:ring-1 focus:ring-primary uppercase"
+            className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface font-mono text-center text-lg tracking-widest focus:ring-1 focus:ring-primary uppercase"
           />
           <button
             onClick={handleLink}
@@ -144,7 +144,7 @@ export function ChannelsTab() {
                       : '\u{1F310}'}
                   </span>
                   <div>
-                    <p className="text-sm font-medium text-white capitalize">
+                    <p className="text-sm font-medium text-on-surface capitalize">
                       {binding.channelType}
                     </p>
                     <p className="text-xs text-on-surface-variant">
@@ -213,14 +213,14 @@ function ChannelStatusList() {
             key={ch.type}
             className="flex items-center justify-between p-3 bg-surface-container-low rounded-xs"
           >
-            <h4 className="font-medium text-white">{ch.label}</h4>
+            <h4 className="font-medium text-on-surface">{ch.label}</h4>
             <span
               className={`px-2 py-0.5 text-xs rounded-full ${
                 connected
                   ? 'bg-green-900/30 text-green-300'
                   : registered
                   ? 'bg-yellow-900/30 text-yellow-300'
-                  : 'bg-[#262626] text-on-surface-variant'
+                  : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
               {connected ? 'Connected' : registered ? 'Registered' : 'Not configured'}
@@ -277,7 +277,7 @@ function ChannelConfigSection() {
       <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
         <Settings2 className="w-5 h-5 text-on-surface-variant" />
         <div>
-          <h3 className="text-base font-semibold text-white">Channel Configuration</h3>
+          <h3 className="text-base font-semibold text-on-surface">Channel Configuration</h3>
           <p className="text-xs text-on-surface-variant">Bot tokens, webhook URLs, and polling settings</p>
         </div>
       </div>
@@ -307,9 +307,9 @@ function ChannelConfigSection() {
               <div key={group.id} className="border border-outline-variant/10 rounded-lg overflow-hidden">
                 <button
                   onClick={() => toggle(group.id)}
-                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#20201f] transition-colors"
+                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-container-high transition-colors"
                 >
-                  <span className="text-sm font-medium text-white">{group.label}</span>
+                  <span className="text-sm font-medium text-on-surface">{group.label}</span>
                   {isOpen ? (
                     <ChevronDown className="w-4 h-4 text-on-surface-variant" />
                   ) : (

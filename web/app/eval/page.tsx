@@ -175,7 +175,7 @@ export default function EvalPage() {
         <div className="flex gap-2">
           <button
             onClick={fetchResults}
-            className="px-3 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] cursor-pointer"
+            className="px-3 py-2 border border-outline-variant/10 text-on-surface/80 rounded-lg hover:bg-surface-container cursor-pointer"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -185,7 +185,7 @@ export default function EvalPage() {
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
               disabled={runStatus.running}
-              className="px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 text-white/80 rounded-lg text-sm cursor-pointer focus:outline-none focus:border-primary"
+              className="px-3 py-2 bg-surface-container border border-outline-variant/10 text-on-surface/80 rounded-lg text-sm cursor-pointer focus:outline-none focus:border-primary"
               title="Model to run evaluations against (defaults to the DB-configured default)"
             >
               <option value="">Default model</option>
@@ -201,8 +201,8 @@ export default function EvalPage() {
               disabled={runStatus.running}
               className={`px-4 py-2 rounded-lg flex items-center gap-2 cursor-pointer ${
                 runStatus.running
-                  ? 'bg-yellow-600 text-white'
-                  : 'bg-primary text-white hover:bg-primary-dim'
+                  ? 'bg-yellow-600 text-on-surface'
+                  : 'bg-primary text-on-surface hover:bg-primary-dim'
               }`}
             >
               {runStatus.running ? (
@@ -218,17 +218,17 @@ export default function EvalPage() {
               )}
             </button>
             {showRunMenu && !runStatus.running && (
-              <div className="absolute right-0 top-full mt-1 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg shadow-lg z-10 min-w-[160px]">
+              <div className="absolute right-0 top-full mt-1 bg-surface-container border border-outline-variant/10 rounded-lg shadow-lg z-10 min-w-[160px]">
                 <button
                   onClick={() => startEval('eval')}
-                  className="w-full px-4 py-2 text-left text-sm text-white/80 hover:bg-[#1a1a1a] rounded-t-lg cursor-pointer"
+                  className="w-full px-4 py-2 text-left text-sm text-on-surface/80 hover:bg-surface-container rounded-t-lg cursor-pointer"
                 >
                   <FlaskConical className="w-4 h-4 inline mr-2" />
                   Standard Eval
                 </button>
                 <button
                   onClick={() => startEval('red-team')}
-                  className="w-full px-4 py-2 text-left text-sm text-white/80 hover:bg-[#1a1a1a] rounded-b-lg cursor-pointer"
+                  className="w-full px-4 py-2 text-left text-sm text-on-surface/80 hover:bg-surface-container rounded-b-lg cursor-pointer"
                 >
                   <ShieldAlert className="w-4 h-4 inline mr-2" />
                   Red Team
@@ -247,8 +247,8 @@ export default function EvalPage() {
             onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors cursor-pointer ${
               activeTab === tab.id
-                ? 'text-white border-b-2 border-primary -mb-px'
-                : 'text-on-surface-variant hover:text-white hover:bg-[#1a1a1a]'
+                ? 'text-on-surface border-b-2 border-primary -mb-px'
+                : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container'
             }`}
           >
             {tab.icon}
@@ -326,7 +326,7 @@ export default function EvalPage() {
                   <BarChart3 className="w-5 h-5 text-blue-400" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-white">{totalRuns}</p>
+                  <p className="text-2xl font-bold text-on-surface">{totalRuns}</p>
                   <p className="text-xs text-on-surface-variant">Total Runs</p>
                 </div>
               </CardContent>
@@ -338,7 +338,7 @@ export default function EvalPage() {
                   <CheckCircle className="w-5 h-5 text-green-400" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-white">
+                  <p className="text-2xl font-bold text-on-surface">
                     {loading ? '—' : `${Math.round(avgPassRate * 100)}%`}
                   </p>
                   <p className="text-xs text-on-surface-variant">Avg Pass Rate</p>
@@ -364,7 +364,7 @@ export default function EvalPage() {
                   <Hash className="w-5 h-5 text-orange-400" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-white">
+                  <p className="text-2xl font-bold text-on-surface">
                     {formatNumber(totalTests)}
                   </p>
                   <p className="text-xs text-on-surface-variant">Total Tests</p>
@@ -377,14 +377,14 @@ export default function EvalPage() {
           <div className="flex gap-3">
             <Link
               href="/eval/compare"
-              className="flex items-center gap-2 px-4 py-2 border border-outline-variant/10 rounded-lg text-sm text-on-surface-variant hover:bg-[#1a1a1a] transition-colors"
+              className="flex items-center gap-2 px-4 py-2 border border-outline-variant/10 rounded-lg text-sm text-on-surface-variant hover:bg-surface-container transition-colors"
             >
               <GitCompare className="w-4 h-4" />
               Compare Runs
             </Link>
             <Link
               href="/eval/red-team"
-              className="flex items-center gap-2 px-4 py-2 border border-outline-variant/10 rounded-lg text-sm text-on-surface-variant hover:bg-[#1a1a1a] transition-colors"
+              className="flex items-center gap-2 px-4 py-2 border border-outline-variant/10 rounded-lg text-sm text-on-surface-variant hover:bg-surface-container transition-colors"
             >
               <ShieldAlert className="w-4 h-4" />
               Red Team
@@ -393,7 +393,7 @@ export default function EvalPage() {
 
           {/* Results List */}
           <div>
-            <h2 className="text-lg font-semibold text-white mb-3">Recent Results</h2>
+            <h2 className="text-lg font-semibold text-on-surface mb-3">Recent Results</h2>
             {loading ? (
               <div className="flex items-center justify-center py-12">
                 <RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" />
@@ -404,7 +404,7 @@ export default function EvalPage() {
                   <FlaskConical className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
                   <p className="text-on-surface-variant">No evaluation results yet</p>
                   <p className="text-sm text-on-surface-variant mt-1">
-                    Click &quot;Run Eval&quot; above or run from CLI: <code className="bg-[#262626] px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
+                    Click &quot;Run Eval&quot; above or run from CLI: <code className="bg-surface-container-high px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
                   </p>
                 </CardContent>
               </Card>

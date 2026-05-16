@@ -147,8 +147,8 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
       <div className="bg-surface-container rounded-2xl w-full max-w-md ring-1 ring-outline-variant/20 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-outline-variant/10">
-          <h2 className="text-lg font-bold text-white">New Session</h2>
-          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-bold text-on-surface">New Session</h2>
+          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -165,11 +165,11 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                   'flex flex-col items-center gap-2 p-4 rounded-xl cursor-pointer transition-all',
                   !devMode
                     ? 'bg-primary/10 ring-2 ring-primary'
-                    : 'bg-[#1a1a1a] ring-1 ring-outline-variant/10 hover:ring-outline-variant/30'
+                    : 'bg-surface-container ring-1 ring-outline-variant/10 hover:ring-outline-variant/30'
                 )}
               >
                 <MessageSquare className={cn('w-6 h-6', !devMode ? 'text-primary' : 'text-on-surface-variant')} />
-                <span className={cn('text-sm font-medium', !devMode ? 'text-white' : 'text-on-surface-variant')}>Normal</span>
+                <span className={cn('text-sm font-medium', !devMode ? 'text-on-surface' : 'text-on-surface-variant')}>Normal</span>
                 <span className="text-xs text-on-surface-variant text-center">General assistant chat</span>
               </button>
               <button
@@ -178,11 +178,11 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                   'flex flex-col items-center gap-2 p-4 rounded-xl cursor-pointer transition-all',
                   devMode
                     ? 'bg-primary/10 ring-2 ring-primary'
-                    : 'bg-[#1a1a1a] ring-1 ring-outline-variant/10 hover:ring-outline-variant/30'
+                    : 'bg-surface-container ring-1 ring-outline-variant/10 hover:ring-outline-variant/30'
                 )}
               >
                 <Code2 className={cn('w-6 h-6', devMode ? 'text-primary' : 'text-on-surface-variant')} />
-                <span className={cn('text-sm font-medium', devMode ? 'text-white' : 'text-on-surface-variant')}>Development</span>
+                <span className={cn('text-sm font-medium', devMode ? 'text-on-surface' : 'text-on-surface-variant')}>Development</span>
                 <span className="text-xs text-on-surface-variant text-center">Pinned to a project</span>
               </button>
             </div>
@@ -206,12 +206,12 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                       onChange={(e) => setProjectPath(e.target.value)}
                       onFocus={() => setShowDropdown(true)}
                       placeholder={projects.length > 0 ? 'Select a project…' : 'No projects found — add a path in Settings → Integrations'}
-                      className="w-full pl-10 pr-8 py-2.5 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm text-white placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
+                      className="w-full pl-10 pr-8 py-2.5 bg-surface-container border border-outline-variant/10 rounded-lg text-sm text-on-surface placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
                     />
                     {projects.length > 0 && (
                       <button
                         onClick={() => setShowDropdown(!showDropdown)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-on-surface-variant hover:text-white cursor-pointer"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-on-surface-variant hover:text-on-surface cursor-pointer"
                       >
                         <ChevronDown className="w-4 h-4" />
                       </button>
@@ -221,7 +221,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
 
                 {/* Dropdown */}
                 {showDropdown && projects.length > 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                  <div className="absolute z-10 w-full mt-1 bg-surface-container border border-outline-variant/10 rounded-lg shadow-xl max-h-48 overflow-y-auto">
                     {loading ? (
                       <div className="p-3 text-center text-on-surface-variant">
                         <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
@@ -237,11 +237,11 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                               setProjectPath(project.path);
                               setShowDropdown(false);
                             }}
-                            className="w-full px-3 py-2 text-left hover:bg-[#262626] cursor-pointer flex items-center gap-2"
+                            className="w-full px-3 py-2 text-left hover:bg-surface-container-high cursor-pointer flex items-center gap-2"
                           >
                             <FolderOpen className="w-4 h-4 text-on-surface-variant shrink-0" />
                             <div className="min-w-0">
-                              <span className="text-sm text-white block truncate">{project.name}</span>
+                              <span className="text-sm text-on-surface block truncate">{project.name}</span>
                               <span className="text-xs text-on-surface-variant block truncate">{project.path}</span>
                             </div>
                           </button>
@@ -265,7 +265,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                   Create new repository
                 </button>
               ) : (
-                <div className="mt-2 p-3 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg space-y-3">
+                <div className="mt-2 p-3 bg-surface-container border border-outline-variant/10 rounded-lg space-y-3">
                   {/* Repo name input */}
                   <div>
                     <input
@@ -281,7 +281,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                         if (e.key === 'Escape') cancelCreateRepo();
                       }}
                       placeholder="Repository name..."
-                      className="w-full px-3 py-2 bg-[#0e0e0e] border border-outline-variant/10 rounded-lg text-sm text-white placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
+                      className="w-full px-3 py-2 bg-background border border-outline-variant/10 rounded-lg text-sm text-on-surface placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
                     />
                   </div>
 
@@ -325,7 +325,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                     <button
                       onClick={cancelCreateRepo}
                       disabled={creating}
-                      className="px-3 py-1.5 text-xs text-on-surface-variant hover:text-white cursor-pointer disabled:opacity-40"
+                      className="px-3 py-1.5 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-40"
                     >
                       Cancel
                     </button>
@@ -340,7 +340,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
         <div className="flex justify-end gap-3 p-5 border-t border-outline-variant/10">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-on-surface-variant hover:text-white cursor-pointer"
+            className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface cursor-pointer"
           >
             Cancel
           </button>

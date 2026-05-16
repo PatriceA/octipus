@@ -458,7 +458,7 @@ export default function PromptInput({
                 <button
                   type="button"
                   onClick={() => removeAttachment(attachment.id)}
-                  className="rounded p-0.5 text-on-surface-variant hover:bg-surface-container-highest hover:text-white"
+                  className="rounded p-0.5 text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -484,7 +484,7 @@ export default function PromptInput({
           onPaste={handlePaste}
           placeholder={placeholder}
           rows={1}
-          className="flex-1 resize-none bg-transparent text-sm text-white outline-hidden placeholder:text-on-surface-variant"
+          className="flex-1 resize-none bg-transparent text-sm text-on-surface outline-hidden placeholder:text-on-surface-variant"
           style={{ overflowY: 'hidden' }}
           disabled={disabled}
         />
@@ -508,7 +508,7 @@ export default function PromptInput({
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-white"
+          className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface"
           title="Attach files"
         >
           <Paperclip className="h-4 w-4" />
@@ -519,7 +519,7 @@ export default function PromptInput({
           <button
             type="button"
             onClick={toggleVoice}
-            className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-white"
+            className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface"
             title="Voice input"
           >
             <Mic className="h-4 w-4" />
@@ -573,7 +573,7 @@ export default function PromptInput({
           className={cn(
             'rounded-lg p-2 transition-colors',
             canSend
-              ? 'bg-primary text-[#002a6d] hover:bg-primary-container'
+              ? 'bg-primary text-on-primary hover:bg-primary-container'
               : 'bg-surface-container-high text-on-surface-variant'
           )}
           title="Send message"

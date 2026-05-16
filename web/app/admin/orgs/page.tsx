@@ -55,7 +55,7 @@ export default function AdminOrgsPage() {
   if (flagDisabled) {
     return (
       <div className="p-8 text-center text-on-surface-variant">
-        Multi-user orgs are disabled. Enable <code className="text-white">multiuser.orgWorkspaces</code> in settings to manage organizations.
+        Multi-user orgs are disabled. Enable <code className="text-on-surface">multiuser.orgWorkspaces</code> in settings to manage organizations.
       </div>
     );
   }
@@ -65,7 +65,7 @@ export default function AdminOrgsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-extrabold tracking-tighter text-white">Organizations</h2>
+        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Organizations</h2>
         <button
           type="button"
           onClick={() => { setShowCreate(true); setError(null); }}
@@ -78,7 +78,7 @@ export default function AdminOrgsPage() {
 
       {showCreate && (
         <div className="bg-surface-container-low border border-outline-variant/10 rounded-2xl p-4 space-y-3">
-          <div className="text-sm font-bold text-white">New organization</div>
+          <div className="text-sm font-bold text-on-surface">New organization</div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Slug</label>
@@ -87,7 +87,7 @@ export default function AdminOrgsPage() {
                 value={createSlug}
                 onChange={(e) => setCreateSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
                 placeholder="acme"
-                className="mt-1 w-full px-3 py-1.5 bg-[#0e0e0e] border border-outline-variant/20 rounded-lg text-sm text-white"
+                className="mt-1 w-full px-3 py-1.5 bg-background border border-outline-variant/20 rounded-lg text-sm text-on-surface"
               />
             </div>
             <div>
@@ -97,7 +97,7 @@ export default function AdminOrgsPage() {
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
                 placeholder="Acme Inc."
-                className="mt-1 w-full px-3 py-1.5 bg-[#0e0e0e] border border-outline-variant/20 rounded-lg text-sm text-white"
+                className="mt-1 w-full px-3 py-1.5 bg-background border border-outline-variant/20 rounded-lg text-sm text-on-surface"
               />
             </div>
           </div>
@@ -105,7 +105,7 @@ export default function AdminOrgsPage() {
           <div className="flex justify-end gap-2">
             <button
               onClick={() => { setShowCreate(false); setError(null); }}
-              className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-white cursor-pointer"
+              className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-on-surface cursor-pointer"
             >
               Cancel
             </button>
@@ -200,11 +200,11 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
     <div className="bg-surface-container-low border border-outline-variant/10 rounded-2xl overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1a1a1a] cursor-pointer transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-container cursor-pointer transition-colors text-left"
       >
         <Building2 className="w-4 h-4 text-on-surface-variant" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-white truncate">{org.name}</p>
+          <p className="text-sm font-medium text-on-surface truncate">{org.name}</p>
           <p className="text-xs text-on-surface-variant">/{org.slug}</p>
         </div>
         <ChevronRight className={`w-4 h-4 text-on-surface-variant transition-transform ${expanded ? 'rotate-90' : ''}`} />
@@ -236,14 +236,14 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
           </div>
 
           {showAdd && (
-            <div className="bg-[#0e0e0e] border border-outline-variant/20 rounded-lg p-3 space-y-2">
+            <div className="bg-background border border-outline-variant/20 rounded-lg p-3 space-y-2">
               <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
                 <div>
                   <label className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">User</label>
                   <select
                     value={addUserId}
                     onChange={(e) => setAddUserId(e.target.value)}
-                    className="mt-1 w-full px-2 py-1.5 bg-[#1a1a1a] border border-outline-variant/20 rounded text-sm text-white"
+                    className="mt-1 w-full px-2 py-1.5 bg-surface-container border border-outline-variant/20 rounded text-sm text-on-surface"
                   >
                     <option value="">Select user…</option>
                     {candidateUsers.map((u) => (
@@ -256,7 +256,7 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
                   <select
                     value={addRole}
                     onChange={(e) => setAddRole(e.target.value as 'member' | 'org_admin')}
-                    className="mt-1 px-2 py-1.5 bg-[#1a1a1a] border border-outline-variant/20 rounded text-sm text-white"
+                    className="mt-1 px-2 py-1.5 bg-surface-container border border-outline-variant/20 rounded text-sm text-on-surface"
                   >
                     <option value="member">member</option>
                     <option value="org_admin">org_admin</option>
@@ -283,7 +283,7 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
             <ul className="space-y-1">
               {(data?.members ?? []).map((m) => (
                 <li key={m.userId} className="flex items-center justify-between text-sm group">
-                  <span className="text-white">{m.username}</span>
+                  <span className="text-on-surface">{m.username}</span>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-on-surface-variant">{m.role}</span>
                     <button

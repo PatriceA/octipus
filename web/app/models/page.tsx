@@ -117,7 +117,7 @@ export default function ModelsPage() {
             <Cpu className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Models</h1>
+            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Models</h1>
             <p className="text-on-surface-variant">Configure AI model providers and routing. Each model can be assigned to specific topics like coding, research, or orchestration.</p>
           </div>
         </div>

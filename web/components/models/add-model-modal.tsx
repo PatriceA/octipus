@@ -396,7 +396,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
               </button>
             )}
-            <h2 className="text-lg font-semibold text-white">{stepTitle}</h2>
+            <h2 className="text-lg font-semibold text-on-surface">{stepTitle}</h2>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-surface-container-high rounded cursor-pointer">
             <X className="w-5 h-5 text-on-surface-variant" />
@@ -421,7 +421,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     <Cpu className="w-5 h-5 text-primary" />
                   </div>
                   <div>
-                    <div className="font-medium text-white">LiteLLM Proxy</div>
+                    <div className="font-medium text-on-surface">LiteLLM Proxy</div>
                     <div className="text-xs text-on-surface-variant">
                       Select from models configured in your LiteLLM proxy. Includes Ollama, OpenAI, Anthropic, and other providers.
                     </div>
@@ -440,7 +440,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                   <Pencil className="w-5 h-5 text-on-surface-variant" />
                 </div>
                 <div>
-                  <div className="font-medium text-white">Manual / Direct</div>
+                  <div className="font-medium text-on-surface">Manual / Direct</div>
                   <div className="text-xs text-on-surface-variant">
                     Configure a model directly via Ollama, OpenAI, Anthropic, OpenRouter, or any OpenAI-compatible endpoint.
                   </div>
@@ -488,7 +488,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                           onClick={() => handleSelectModel(m)}
                           className="w-full text-left px-3 py-2 rounded-lg hover:bg-surface-container-high flex items-center justify-between group/item transition-colors"
                         >
-                          <span className="font-mono text-sm text-white">{m.id}</span>
+                          <span className="font-mono text-sm text-on-surface">{m.id}</span>
                           <Plus className="w-4 h-4 text-on-surface-variant opacity-0 group-hover/item:opacity-100 transition-opacity" />
                         </button>
                       ))}
@@ -521,7 +521,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g., GPT-4 Turbo"
-                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
               />
             </div>
 
@@ -539,7 +539,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     setOrSearchTotal(0);
                     if (connectionType === 'direct') fetchAvailableModels(p);
                   }}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                 >
                   {Object.entries(PROVIDER_LABELS)
                     .sort(([a], [b]) => {
@@ -574,7 +574,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                         costPerOutputToken: selected?.costPerOutputToken ?? formData.costPerOutputToken,
                       });
                     }}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   >
                     <option value="">Select a model...</option>
                     {availableModels.map((m) => (
@@ -589,7 +589,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     value={formData.modelId}
                     readOnly
                     placeholder="Search below to select..."
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                 ) : (
                   <input
@@ -597,7 +597,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     value={formData.modelId}
                     onChange={(e) => setFormData({ ...formData, modelId: e.target.value })}
                     placeholder={isCli ? 'cli/claude-code' : 'e.g., gpt-4o'}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                 )}
                 {loadingAvailable && (
@@ -623,7 +623,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                       orDebounceRef.current = setTimeout(() => searchOpenRouter(val), 300);
                     }}
                     placeholder="Search OpenRouter models (e.g., claude, gpt, llama)..."
-                    className="w-full pl-9 pr-3 py-2.5 bg-surface-container-high text-white text-sm border-b border-outline-variant/10 focus:outline-hidden focus:border-primary/30"
+                    className="w-full pl-9 pr-3 py-2.5 bg-surface-container-high text-on-surface text-sm border-b border-outline-variant/10 focus:outline-hidden focus:border-primary/30"
                   />
                   {orSearchLoading && (
                     <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-on-surface-variant" />
@@ -653,7 +653,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                         }`}
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="font-mono text-sm text-white truncate">{m.id}</div>
+                          <div className="font-mono text-sm text-on-surface truncate">{m.id}</div>
                           <div className="text-xs text-on-surface-variant flex items-center gap-2 mt-0.5">
                             {m.contextWindow ? <span>{(m.contextWindow / 1000).toFixed(0)}k ctx</span> : null}
                             {m.costPerInputToken ? <span>${m.costPerInputToken.toFixed(2)}/${m.costPerOutputToken?.toFixed(2)}</span> : null}
@@ -703,7 +703,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     <select
                       value={formData.customAuthType}
                       onChange={(e) => setFormData({ ...formData, customAuthType: e.target.value as 'bearer' | 'header' | 'query' })}
-                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                     >
                       <option value="bearer">Bearer token</option>
                       <option value="header">Custom header</option>
@@ -718,7 +718,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                         value={formData.customAuthHeaderName}
                         onChange={(e) => setFormData({ ...formData, customAuthHeaderName: e.target.value })}
                         placeholder="x-api-key"
-                        className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                        className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                       />
                     </div>
                   )}
@@ -730,7 +730,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                         value={formData.customAuthParamName}
                         onChange={(e) => setFormData({ ...formData, customAuthParamName: e.target.value })}
                         placeholder="key"
-                        className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                        className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                       />
                     </div>
                   )}
@@ -742,7 +742,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     <select
                       value={formData.customRequestEnvelope}
                       onChange={(e) => setFormData({ ...formData, customRequestEnvelope: e.target.value as 'standard' | 'gemini-blocks-config' })}
-                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                     >
                       <option value="standard">Standard (native Gemini /v1beta/models/&#123;model&#125;:generateContent)</option>
                       <option value="gemini-blocks-config">Gemini Blocks + Config (Anthropic-style messages, /generate)</option>
@@ -757,7 +757,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     value={formData.customPathOverride}
                     onChange={(e) => setFormData({ ...formData, customPathOverride: e.target.value })}
                     placeholder={formData.provider === 'custom-openai' ? '/v1/chat/completions (default)' : '/generate or /v1beta/models/{model}:generateContent'}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                 </div>
 
@@ -768,7 +768,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     value={formData.customApiKeyRef}
                     onChange={(e) => setFormData({ ...formData, customApiKeyRef: e.target.value })}
                     placeholder="vault entry name, or env:MY_API_KEY"
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                   <p className="text-xs text-on-surface-variant mt-1">
                     Use <code className="text-xs bg-surface-container-high px-1 rounded">env:VAR_NAME</code> for an env var, or a vault entry name. Leave blank to auto-generate.
@@ -793,7 +793,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                       : formData.provider === 'custom-gemini' ? 'e.g., https://api.example.com'
                       : 'e.g., http://192.168.1.100:11434'
                     }
-                    className="flex-1 px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                    className="flex-1 px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                   {connectionType === 'direct' && formData.provider === 'ollama' && formData.endpoint && (
                     <button
@@ -816,7 +816,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                   type="number"
                   value={formData.contextWindow}
                   onChange={(e) => setFormData({ ...formData, contextWindow: parseInt(e.target.value) || 4096 })}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                 />
               </div>
               <div>
@@ -825,7 +825,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                   type="number"
                   value={formData.maxTokens}
                   onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                 />
                 <p className="text-xs text-on-surface-variant mt-0.5">Max tokens per response (check model docs)</p>
               </div>
@@ -870,7 +870,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     step="0.01"
                     value={formData.costPerInputToken}
                     onChange={(e) => setFormData({ ...formData, costPerInputToken: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                   />
                 </div>
                 <div>
@@ -880,7 +880,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     step="0.01"
                     value={formData.costPerOutputToken}
                     onChange={(e) => setFormData({ ...formData, costPerOutputToken: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                   />
                 </div>
               </div>

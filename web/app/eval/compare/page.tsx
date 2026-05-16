@@ -133,7 +133,7 @@ export default function ComparePage() {
       <div>
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white mb-3"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-on-surface mb-3"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
@@ -144,7 +144,7 @@ export default function ComparePage() {
             <GitCompare className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">Compare Evaluations</h1>
+            <h1 className="text-2xl font-bold text-on-surface">Compare Evaluations</h1>
             <p className="text-sm text-on-surface-variant">
               Select 2-5 eval runs to compare side by side
             </p>
@@ -204,7 +204,7 @@ export default function ComparePage() {
                       key={run.id}
                       onClick={() => addRun(run.id)}
                       disabled={selectedIds.length >= 5}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-outline-variant/10 text-on-surface-variant rounded-lg text-xs hover:bg-[#1a1a1a] cursor-pointer disabled:opacity-40"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-outline-variant/10 text-on-surface-variant rounded-lg text-xs hover:bg-surface-container cursor-pointer disabled:opacity-40"
                     >
                       <Plus className="w-3 h-3" />
                       <span className="font-mono">{run.id.slice(5, 24)}</span>
@@ -229,12 +229,12 @@ export default function ComparePage() {
 
       {/* Comparison matrix */}
       {compareData && !loading && (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 overflow-hidden">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-outline-variant/10">
-                  <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant sticky left-0 bg-[#1a1a1a] z-10 min-w-[200px]">
+                  <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant sticky left-0 bg-surface-container z-10 min-w-[200px]">
                     Test ID
                   </th>
                   {compareData.evalRuns.map((run, i) => (
@@ -255,9 +255,9 @@ export default function ComparePage() {
                 {compareData.testIds.map(testId => (
                   <tr
                     key={testId}
-                    className="border-b border-outline-variant/10 hover:bg-[#1a1a1a]/30"
+                    className="border-b border-outline-variant/10 hover:bg-surface-container/30"
                   >
-                    <td className="px-4 py-2.5 text-sm font-mono text-white sticky left-0 bg-[#1a1a1a] z-10">
+                    <td className="px-4 py-2.5 text-sm font-mono text-on-surface sticky left-0 bg-surface-container z-10">
                       {testId}
                     </td>
                     {compareData.evalRuns.map(run => {

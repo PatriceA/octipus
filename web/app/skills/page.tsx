@@ -75,7 +75,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 function getCategoryColor(category: string): string {
-  return CATEGORY_COLORS[category] || 'bg-[#262626] text-on-surface-variant';
+  return CATEGORY_COLORS[category] || 'bg-surface-container-high text-on-surface-variant';
 }
 
 // --- Array field input component ---
@@ -102,7 +102,7 @@ function ArrayFieldInput({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-white/80 mb-1">{label}</label>
+      <label className="block text-sm font-medium text-on-surface/80 mb-1">{label}</label>
       <div className="flex gap-2 mb-2">
         <input
           type="text"
@@ -115,12 +115,12 @@ function ArrayFieldInput({
             }
           }}
           placeholder={`Add ${label.toLowerCase()}...`}
-          className="flex-1 px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+          className="flex-1 px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
         />
         <button
           type="button"
           onClick={handleAdd}
-          className="px-3 py-2 bg-[#262626] text-white/80 rounded-lg text-sm hover:bg-[#20201f] cursor-pointer"
+          className="px-3 py-2 bg-surface-container-high text-on-surface/80 rounded-lg text-sm hover:bg-surface-container-high cursor-pointer"
         >
           Add
         </button>
@@ -128,7 +128,7 @@ function ArrayFieldInput({
       {items.length > 0 && (
         <div className="space-y-1">
           {items.map((item, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-surface-container-low rounded-lg px-3 py-1.5">
+            <div key={i} className="flex items-center gap-2 text-sm text-on-surface/80 bg-surface-container-low rounded-lg px-3 py-1.5">
               <span className="flex-1">{item}</span>
               <button
                 type="button"
@@ -148,13 +148,13 @@ function ArrayFieldInput({
 // --- Mode toggle for Markdown vs Structured ---
 function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onChange: (m: 'markdown' | 'structured') => void }) {
   return (
-    <div className="flex rounded-lg bg-[#262626] p-0.5">
+    <div className="flex rounded-lg bg-surface-container-high p-0.5">
       <button
         type="button"
         onClick={() => onChange('markdown')}
         className={cn(
           'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
-          mode === 'markdown' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
+          mode === 'markdown' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
         )}
       >
         <FileText className="w-3.5 h-3.5" /> Markdown
@@ -164,7 +164,7 @@ function ModeToggle({ mode, onChange }: { mode: 'markdown' | 'structured'; onCha
         onClick={() => onChange('structured')}
         className={cn(
           'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors',
-          mode === 'structured' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
+          mode === 'structured' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
         )}
       >
         <List className="w-3.5 h-3.5" /> Structured
@@ -241,14 +241,14 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Create Skill</h2>
+          <h2 className="text-lg font-semibold text-on-surface">Create Skill</h2>
           <div className="flex items-center gap-3">
             <ModeToggle mode={mode} onChange={setMode} />
-            <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+            <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -263,21 +263,21 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">Name</label>
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Skill name"
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">Category</label>
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
               >
                 {CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
@@ -288,13 +288,13 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">
               Topics
               <span className="ml-2 text-xs font-normal text-on-surface-variant">
                 Controls when this skill is injected into an agent prompt
               </span>
             </label>
-            <div className="grid grid-cols-3 gap-1.5 p-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg max-h-40 overflow-y-auto">
+            <div className="grid grid-cols-3 gap-1.5 p-2 bg-surface-container border border-outline-variant/10 rounded-lg max-h-40 overflow-y-auto">
               {CATEGORIES.map((t) => {
                 const selected = topics.includes(t);
                 return (
@@ -305,8 +305,8 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                     className={cn(
                       'px-2 py-1 text-xs rounded-md text-left cursor-pointer transition-colors',
                       selected
-                        ? 'bg-primary text-white'
-                        : 'bg-[#262626] text-white/70 hover:bg-[#20201f]',
+                        ? 'bg-primary text-on-surface'
+                        : 'bg-surface-container-high text-on-surface/70 hover:bg-surface-container-high',
                     )}
                   >
                     {selected ? '✓ ' : ''}{t}
@@ -317,19 +317,19 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Description</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={mode === 'markdown' ? 'Short description (auto-generated from content if empty)' : 'Skill description'}
-              className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+              className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
             />
           </div>
 
           {mode === 'markdown' ? (
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">
                 Markdown Content
                 <span className="ml-2 text-xs font-normal text-on-surface-variant">Paste a Claude Code skill (.md) or write your own</span>
               </label>
@@ -338,7 +338,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={"# My Skill\n\nInstructions for the AI agent...\n\n## Guidelines\n- Do this\n- Don't do that\n\n## Examples\n..."}
                 rows={16}
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white resize-y font-mono"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface resize-y font-mono"
               />
             </div>
           ) : (
@@ -374,7 +374,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
             >
               Cancel
             </button>
@@ -452,7 +452,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <label className="block text-sm font-medium text-white/80">
+        <label className="block text-sm font-medium text-on-surface/80">
           Attached Topics
           <span className="ml-2 text-xs font-normal text-on-surface-variant">
             Active topics auto-inject this skill into worker prompts
@@ -463,7 +463,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
             type="button"
             onClick={() => handleBulk(true)}
             disabled={pending !== null}
-            className="text-xs px-2 py-1 bg-[#262626] hover:bg-[#20201f] rounded cursor-pointer disabled:opacity-50"
+            className="text-xs px-2 py-1 bg-surface-container-high hover:bg-surface-container-high rounded cursor-pointer disabled:opacity-50"
           >
             Enable all
           </button>
@@ -471,7 +471,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
             type="button"
             onClick={() => handleBulk(false)}
             disabled={pending !== null}
-            className="text-xs px-2 py-1 bg-[#262626] hover:bg-[#20201f] rounded cursor-pointer disabled:opacity-50"
+            className="text-xs px-2 py-1 bg-surface-container-high hover:bg-surface-container-high rounded cursor-pointer disabled:opacity-50"
           >
             Disable all
           </button>
@@ -497,8 +497,8 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
                 }
                 className={cn(
                   'text-xs px-2 py-1.5 rounded border transition-colors cursor-pointer disabled:opacity-50',
-                  state === 'active' && 'bg-primary/40 border-primary-700 text-white',
-                  state === 'attached' && 'bg-[#262626] border-outline-variant/20 text-on-surface-variant',
+                  state === 'active' && 'bg-primary/40 border-primary-700 text-on-surface',
+                  state === 'attached' && 'bg-surface-container-high border-outline-variant/20 text-on-surface-variant',
                   state === 'off' && 'bg-transparent border-outline-variant/10 text-on-surface-variant/50 hover:border-outline-variant/30',
                 )}
               >
@@ -559,14 +559,14 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Edit Skill</h2>
+          <h2 className="text-lg font-semibold text-on-surface">Edit Skill</h2>
           <div className="flex items-center gap-3">
             <ModeToggle mode={mode} onChange={setMode} />
-            <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+            <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -581,21 +581,21 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">Name</label>
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Skill name"
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">Category</label>
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">Category</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
               >
                 {CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
@@ -605,19 +605,19 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Description</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Description</label>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Skill description"
-              className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+              className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
             />
           </div>
 
           {mode === 'markdown' ? (
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">
                 Markdown Content
                 <span className="ml-2 text-xs font-normal text-on-surface-variant">Paste a Claude Code skill (.md) or write your own</span>
               </label>
@@ -626,7 +626,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={"# My Skill\n\nInstructions for the AI agent...\n\n## Guidelines\n- Do this\n- Don't do that"}
                 rows={16}
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white resize-y font-mono"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface resize-y font-mono"
               />
             </div>
           ) : (
@@ -666,7 +666,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
             >
               Cancel
             </button>
@@ -707,12 +707,12 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-md mx-4"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-md mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Delete Skill</h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-semibold text-on-surface">Delete Skill</h2>
+          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -724,21 +724,21 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
             </div>
           )}
 
-          <p className="text-sm text-white/80">
+          <p className="text-sm text-on-surface/80">
             Are you sure you want to delete <strong>{skill.name}</strong>? This action cannot be undone.
           </p>
 
           <div className="flex justify-end gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
             >
               Cancel
             </button>
             <button
               onClick={handleDelete}
               disabled={deleting}
-              className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-red-600 text-on-surface rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
             >
               {deleting ? 'Deleting...' : 'Delete'}
             </button>
@@ -762,7 +762,7 @@ function SkillCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10">
+    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
@@ -773,7 +773,7 @@ function SkillCard({
           </div>
           <BookOpen className="w-5 h-5 text-primary" />
           <div>
-            <h3 className="font-medium text-white">{skill.name}</h3>
+            <h3 className="font-medium text-on-surface">{skill.name}</h3>
             <p className="text-xs text-on-surface-variant mt-0.5">{skill.description}</p>
           </div>
         </div>
@@ -788,7 +788,7 @@ function SkillCard({
             </span>
           )}
           {skill.isSystem && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-[#262626] text-on-surface-variant">
+            <span className="px-2 py-0.5 text-xs rounded-full bg-surface-container-high text-on-surface-variant">
               system
             </span>
           )}
@@ -823,7 +823,7 @@ function SkillCard({
         <div className="border-t border-outline-variant/10 p-4 space-y-4">
           {skill.content?.trim() ? (
             <div>
-              <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+              <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-primary" />
                 Markdown Content
               </h4>
@@ -835,7 +835,7 @@ function SkillCard({
             <>
               {skill.principles.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                     <Lightbulb className="w-4 h-4 text-yellow-500" />
                     Principles
                   </h4>
@@ -851,7 +851,7 @@ function SkillCard({
 
               {skill.bestPractices.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                     <ThumbsUp className="w-4 h-4 text-green-500" />
                     Best Practices
                   </h4>
@@ -867,7 +867,7 @@ function SkillCard({
 
               {skill.antiPatterns.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                     <AlertTriangle className="w-4 h-4 text-red-500" />
                     Anti-Patterns
                   </h4>
@@ -883,7 +883,7 @@ function SkillCard({
 
               {skill.frameworks.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                     <Layers className="w-4 h-4 text-blue-500" />
                     Frameworks
                   </h4>
@@ -975,7 +975,7 @@ export default function SkillsPage() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search skills, principles, frameworks..."
-            className="w-full pl-10 pr-4 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+            className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
           />
         </div>
         <div className="flex gap-1.5 flex-wrap">
@@ -984,8 +984,8 @@ export default function SkillsPage() {
             className={cn(
               'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
               !categoryFilter
-                ? 'bg-primary text-white'
-                : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
+                ? 'bg-primary text-on-surface'
+                : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high'
             )}
           >
             All
@@ -997,8 +997,8 @@ export default function SkillsPage() {
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
                 categoryFilter === cat
-                  ? 'bg-primary text-white'
-                  : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
+                  ? 'bg-primary text-on-surface'
+                  : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high'
               )}
             >
               {cat}
@@ -1009,12 +1009,12 @@ export default function SkillsPage() {
 
       {/* Skills list */}
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <BookOpen className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No skills found</p>
           <p className="text-sm text-on-surface-variant mt-1">Click &quot;Create Skill&quot; to add domain knowledge that agents can use during conversations.</p>

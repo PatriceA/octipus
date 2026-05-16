@@ -89,7 +89,7 @@ export function AgentActivityCard({ agent }: AgentActivityCardProps) {
           {agent.toolCalls.length > 0 && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="flex items-center gap-0.5 text-xs text-on-surface-variant hover:text-white"
+              className="flex items-center gap-0.5 text-xs text-on-surface-variant hover:text-on-surface"
             >
               <span>{agent.toolCalls.length} tools</span>
               {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -141,7 +141,7 @@ export function TeamCard({ teamId, members, status, durationMs }: TeamCardProps)
           )}
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-on-surface-variant hover:text-white"
+            className="text-xs text-on-surface-variant hover:text-on-surface"
           >
             {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
           </button>

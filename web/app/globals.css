@@ -121,7 +121,7 @@ layer(utilities);
   --radius-xl: 0.5rem;   /* 8px */
   --radius-full: 9999px;
 
-  --backdrop-blur-glass: 16px;
+  --backdrop-blur-sm: 16px;
 }
 
 /* ────────────────────────────────────────────────────────────────── */

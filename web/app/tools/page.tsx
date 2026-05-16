@@ -61,9 +61,9 @@ interface MCPTool {
 type PermissionLevel = 'ALLOW' | 'ASK' | 'DENY';
 
 const LEVEL_STYLES: Record<PermissionLevel, { active: string; label: string; icon: typeof Check }> = {
-  ALLOW: { active: 'bg-green-600 text-white', label: 'Allow', icon: Check },
-  ASK: { active: 'bg-yellow-500 text-white', label: 'Ask', icon: HelpCircle },
-  DENY: { active: 'bg-red-600 text-white', label: 'Deny', icon: X },
+  ALLOW: { active: 'bg-green-600 text-on-surface', label: 'Allow', icon: Check },
+  ASK: { active: 'bg-yellow-500 text-on-surface', label: 'Ask', icon: HelpCircle },
+  DENY: { active: 'bg-red-600 text-on-surface', label: 'Deny', icon: X },
 };
 
 function PermissionToggle({
@@ -92,7 +92,7 @@ function PermissionToggle({
               'px-1.5 py-0.5 rounded text-xs font-medium cursor-pointer flex items-center gap-0.5 transition-colors',
               active
                 ? activeStyle
-                : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
+                : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high'
             )}
             title={level}
           >
@@ -103,7 +103,7 @@ function PermissionToggle({
       {isOverride && (
         <button
           onClick={onReset}
-          className="p-0.5 text-on-surface-variant hover:text-white cursor-pointer"
+          className="p-0.5 text-on-surface-variant hover:text-on-surface cursor-pointer"
           title={`Reset to default (${defaultLevel})`}
         >
           <RotateCcw className="w-3 h-3" />
@@ -151,7 +151,7 @@ function ToolModuleCard({
   );
 
   return (
-    <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10">
+    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
@@ -162,7 +162,7 @@ function ToolModuleCard({
           </div>
           <Wrench className={cn('w-5 h-5', module.status === 'active' ? 'text-primary' : module.status === 'degraded' ? 'text-amber-400' : 'text-on-surface-variant')} />
           <div>
-            <h3 className="font-medium text-white">{module.name}</h3>
+            <h3 className="font-medium text-on-surface">{module.name}</h3>
             <p className="text-xs text-on-surface-variant mt-0.5">{module.description}</p>
             {module.status !== 'active' && module.statusReason && (
               <p className={cn('text-xs mt-0.5', module.status === 'degraded' ? 'text-amber-400' : 'text-red-400')}>{module.statusReason}</p>
@@ -189,7 +189,7 @@ function ToolModuleCard({
                 ? 'bg-green-900/30 text-green-300'
                 : module.status === 'degraded'
                 ? 'bg-amber-900/30 text-amber-300'
-                : 'bg-[#262626] text-on-surface-variant'
+                : 'bg-surface-container-high text-on-surface-variant'
             )}
             title={module.statusReason}
           >
@@ -217,7 +217,7 @@ function ToolModuleCard({
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-mono text-white/90">
+                    <span className="text-sm font-mono text-on-surface/90">
                       {permission.action}
                     </span>
                     {permission.dangerous && (
@@ -248,7 +248,7 @@ function ToolModuleCard({
           {unmatchedTools.map((tool) => (
             <div key={tool.name} className="flex items-center justify-between py-2 px-3 rounded-lg bg-surface-container-low">
               <div className="flex-1 min-w-0">
-                <span className="text-sm font-mono text-white/90">{tool.name}</span>
+                <span className="text-sm font-mono text-on-surface/90">{tool.name}</span>
                 <p className="text-xs text-on-surface-variant mt-0.5">{tool.description}</p>
               </div>
               <span className="text-xs text-on-surface-variant italic">inherited</span>
@@ -391,7 +391,7 @@ export default function ToolsPage() {
         <button
           onClick={handleReload}
           disabled={reloading}
-          className="flex items-center gap-2 px-3 py-2 text-sm bg-[#1a1a1a] border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#20201f] disabled:opacity-50 cursor-pointer"
+          className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-container border border-outline-variant/10 text-on-surface/80 rounded-lg hover:bg-surface-container-high disabled:opacity-50 cursor-pointer"
           title="Re-discover extensions from ~/.octipus/extensions and .octipus/extensions"
         >
           {reloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
@@ -402,15 +402,15 @@ export default function ToolsPage() {
       {/* Permission legend */}
       <div className="flex gap-4 text-xs text-on-surface-variant">
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-green-600 text-white"><Check className="w-3 h-3" /></span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-green-600 text-on-surface"><Check className="w-3 h-3" /></span>
           <span>Allow — executes without confirmation</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-yellow-500 text-white"><HelpCircle className="w-3 h-3" /></span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-yellow-500 text-on-surface"><HelpCircle className="w-3 h-3" /></span>
           <span>Ask — requires your confirmation</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-red-600 text-white"><X className="w-3 h-3" /></span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-red-600 text-on-surface"><X className="w-3 h-3" /></span>
           <span>Deny — blocked</span>
         </div>
       </div>
@@ -423,18 +423,18 @@ export default function ToolsPage() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search tools, capabilities, permissions..."
-          className="w-full pl-10 pr-4 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+          className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
         />
       </div>
 
       {/* Tool Modules */}
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filteredModules.length === 0 && filteredMcpTools.length === 0 ? (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <Wrench className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No tools found</p>
           <p className="text-sm text-on-surface-variant mt-1">Tools are loaded from the backend at startup. Check that the server is running.</p>
@@ -460,7 +460,7 @@ export default function ToolsPage() {
             <Cable className="w-4 h-4" />
             MCP Tools
           </h2>
-          <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-4 space-y-2">
+          <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4 space-y-2">
             {filteredMcpTools.map((tool) => (
               <div
                 key={`${tool.serverId}-${tool.name}`}
@@ -469,7 +469,7 @@ export default function ToolsPage() {
                 <Cable className="w-4 h-4 text-purple-400 mt-0.5 shrink-0" />
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-mono text-white/90">{tool.name}</span>
+                    <span className="text-sm font-mono text-on-surface/90">{tool.name}</span>
                     <span className="text-xs text-purple-400">{tool.serverId}</span>
                   </div>
                   <p className="text-xs text-on-surface-variant">{tool.description}</p>

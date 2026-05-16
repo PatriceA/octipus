@@ -253,12 +253,12 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
     });
   };
 
-  const inputCls = 'bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary';
+  const inputCls = 'bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
   const tabCls = (active: boolean) => cn(
     'px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer',
     active
       ? 'bg-primary/10 text-primary'
-      : 'text-on-surface-variant hover:text-white hover:bg-[#20201f]',
+      : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high',
   );
 
   const description = describeCron(value);
@@ -299,10 +299,10 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
                 'text-left px-3 py-2 rounded-lg border text-sm transition-colors cursor-pointer',
                 value === preset.cron
                   ? 'border-primary bg-primary/10'
-                  : 'border-outline-variant/10 hover:border-on-surface-variant/20 hover:bg-[#20201f]',
+                  : 'border-outline-variant/10 hover:border-on-surface-variant/20 hover:bg-surface-container-high',
               )}
             >
-              <div className="font-medium text-white">{preset.label}</div>
+              <div className="font-medium text-on-surface">{preset.label}</div>
               <div className="text-xs text-on-surface-variant mt-0.5">{preset.description}</div>
             </button>
           ))}
@@ -390,7 +390,7 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
                   'w-10 h-10 rounded-lg text-xs font-medium transition-colors cursor-pointer',
                   days.includes(day.value)
                     ? 'bg-primary text-[#0e0e0e] shadow-xs'
-                    : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]',
+                    : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high',
                 )}
                 title={day.label}
               >

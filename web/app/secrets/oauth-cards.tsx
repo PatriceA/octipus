@@ -35,7 +35,7 @@ const SETUP_GUIDES: Record<string, { url: string; steps: string[] }> = {
 export function OAuthCards({ statuses, onStatusChange }: OAuthCardsProps) {
   return (
     <div>
-      <h2 className="text-base font-extrabold tracking-tighter text-white mb-1">
+      <h2 className="text-base font-extrabold tracking-tighter text-on-surface mb-1">
         OAuth Credentials
       </h2>
       <p className="text-sm text-on-surface-variant mb-4">
@@ -104,10 +104,10 @@ function OAuthGroupCard({
   };
 
   return (
-    <div className="p-4 bg-[#1a1a1a] rounded-xs">
+    <div className="p-4 bg-surface-container rounded-xs">
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-sm text-white">{group.title}</span>
+          <span className="font-medium text-sm text-on-surface">{group.title}</span>
           <span
             className={`w-2 h-2 rounded-full ${allSaved ? 'bg-green-500' : 'bg-[#484847]'}`}
             title={allSaved ? 'All configured' : 'Setup required'}
@@ -127,7 +127,7 @@ function OAuthGroupCard({
               value={values[k.vaultName] || ''}
               onChange={(e) => setValues((prev) => ({ ...prev, [k.vaultName]: e.target.value }))}
               placeholder={statuses[k.vaultName] ? 'Saved (enter new to replace)' : k.placeholder || 'Enter value...'}
-              className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+              className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
             />
           </div>
         ))}

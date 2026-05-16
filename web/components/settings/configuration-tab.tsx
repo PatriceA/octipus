@@ -110,7 +110,7 @@ export function ConfigurationTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-extrabold tracking-tighter text-white">System Configuration</h2>
+        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">System Configuration</h2>
         <p className="text-sm text-on-surface-variant mt-1">
           Runtime settings. Changes take effect immediately without restart.
         </p>
@@ -140,7 +140,7 @@ export function ConfigurationTab() {
             <div className="flex items-center gap-3 px-5 py-4 border-b border-outline-variant/10">
               <section.icon className="w-5 h-5 text-on-surface-variant" />
               <div>
-                <h3 className="text-base font-semibold text-white">{section.title}</h3>
+                <h3 className="text-base font-semibold text-on-surface">{section.title}</h3>
                 <p className="text-xs text-on-surface-variant">{section.description}</p>
               </div>
             </div>

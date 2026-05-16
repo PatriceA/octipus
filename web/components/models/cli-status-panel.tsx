@@ -96,7 +96,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
     <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
       <div className="flex items-center gap-2 mb-1">
         <Terminal className="w-5 h-5 text-violet-400" />
-        <h2 className="font-semibold text-white">Detected CLI Tools</h2>
+        <h2 className="font-semibold text-on-surface">Detected CLI Tools</h2>
       </div>
       <p className="text-xs text-on-surface-variant mb-3">
         These vendor CLIs were detected on your system. Billing and quota are vendor-managed —
@@ -116,7 +116,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
                     !tool.available ? 'bg-on-surface-variant' : registered ? 'bg-emerald-400' : 'bg-yellow-400'
                   }`} />
-                  <span className="text-white truncate">{tool.name}</span>
+                  <span className="text-on-surface truncate">{tool.name}</span>
                   {tool.billingInfo && billingBadge(tool.billingInfo.billingMode)}
                   {!tool.available && (
                     <span className="text-xs text-on-surface-variant">(not installed)</span>
@@ -137,7 +137,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                     <button
                       onClick={() => handleQuickAdd(tool)}
                       disabled={adding === tool.name}
-                      className="text-xs px-2 py-1 bg-violet-600 text-white rounded-full hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1"
+                      className="text-xs px-2 py-1 bg-violet-600 text-on-surface rounded-full hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1"
                     >
                       <Plus className="w-3 h-3" />
                       {adding === tool.name ? 'Adding...' : 'Add'}
@@ -154,7 +154,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                       value={currentModel}
                       onChange={(e) => handleModelChange(tool, registered, e.target.value)}
                       disabled={!onUpdate}
-                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-white text-xs flex-1 max-w-xs"
+                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-on-surface text-xs flex-1 max-w-xs"
                     >
                       <option value="">(vendor default)</option>
                       {options.map(opt => (
@@ -172,7 +172,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                       }}
                       disabled={!onUpdate}
                       placeholder="(vendor default)"
-                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-white text-xs flex-1 max-w-xs font-mono"
+                      className="bg-surface-container-low border border-outline-variant/20 rounded px-2 py-1 text-on-surface text-xs flex-1 max-w-xs font-mono"
                     />
                   )}
                   {tool.modelFlag && (

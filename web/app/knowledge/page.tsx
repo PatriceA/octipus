@@ -83,7 +83,7 @@ const SOURCE_TYPE_ICONS: Record<string, typeof FileText> = {
 };
 
 function getSourceTypeColor(sourceType: string): string {
-  return SOURCE_TYPE_COLORS[sourceType] || 'bg-[#262626] text-on-surface-variant';
+  return SOURCE_TYPE_COLORS[sourceType] || 'bg-surface-container-high text-on-surface-variant';
 }
 
 function SourceTypeIcon({ sourceType, className }: { sourceType: string; className?: string }) {
@@ -136,12 +136,12 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Entry Detail</h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-semibold text-on-surface">Entry Detail</h2>
+          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -162,7 +162,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
             {/* Abstract */}
             {entry.abstract && (
               <div>
-                <h4 className="text-sm font-medium text-white/80 mb-1">Abstract</h4>
+                <h4 className="text-sm font-medium text-on-surface/80 mb-1">Abstract</h4>
                 <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
                   {entry.abstract}
                 </p>
@@ -171,7 +171,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
 
             {/* Content */}
             <div>
-              <h4 className="text-sm font-medium text-white/80 mb-1">Content</h4>
+              <h4 className="text-sm font-medium text-on-surface/80 mb-1">Content</h4>
               <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
                 {entry.content}
               </pre>
@@ -179,12 +179,12 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
 
             {/* Metadata table */}
             <div>
-              <h4 className="text-sm font-medium text-white/80 mb-1">Metadata</h4>
+              <h4 className="text-sm font-medium text-on-surface/80 mb-1">Metadata</h4>
               <div className="bg-surface-container-low rounded-lg overflow-hidden">
                 <table className="w-full text-sm">
                   <tbody>
                     <tr className="border-b border-outline-variant/10">
-                      <td className="px-3 py-2 font-medium text-white/80 w-40">Source Type</td>
+                      <td className="px-3 py-2 font-medium text-on-surface/80 w-40">Source Type</td>
                       <td className="px-3 py-2">
                         <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getSourceTypeColor(entry.sourceType))}>
                           {entry.sourceType}
@@ -192,28 +192,28 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
                       </td>
                     </tr>
                     <tr className="border-b border-outline-variant/10">
-                      <td className="px-3 py-2 font-medium text-white/80">Source ID</td>
+                      <td className="px-3 py-2 font-medium text-on-surface/80">Source ID</td>
                       <td className="px-3 py-2 text-on-surface-variant font-mono text-xs break-all">{entry.sourceId}</td>
                     </tr>
                     <tr className="border-b border-outline-variant/10">
-                      <td className="px-3 py-2 font-medium text-white/80">Created</td>
+                      <td className="px-3 py-2 font-medium text-on-surface/80">Created</td>
                       <td className="px-3 py-2 text-on-surface-variant">{formatDate(entry.createdAt)}</td>
                     </tr>
                     {entry.metadata?.filePath && (
                       <tr className="border-b border-outline-variant/10">
-                        <td className="px-3 py-2 font-medium text-white/80">File Path</td>
+                        <td className="px-3 py-2 font-medium text-on-surface/80">File Path</td>
                         <td className="px-3 py-2 text-on-surface-variant font-mono text-xs break-all">{entry.metadata.filePath}</td>
                       </tr>
                     )}
                     {entry.metadata?.language && (
                       <tr className="border-b border-outline-variant/10">
-                        <td className="px-3 py-2 font-medium text-white/80">Language</td>
+                        <td className="px-3 py-2 font-medium text-on-surface/80">Language</td>
                         <td className="px-3 py-2 text-on-surface-variant">{entry.metadata.language}</td>
                       </tr>
                     )}
                     {entry.metadata?.chunkIndex !== undefined && (
                       <tr className="border-b border-outline-variant/10">
-                        <td className="px-3 py-2 font-medium text-white/80">Chunk</td>
+                        <td className="px-3 py-2 font-medium text-on-surface/80">Chunk</td>
                         <td className="px-3 py-2 text-on-surface-variant">
                           {entry.metadata.chunkIndex + 1} of {entry.metadata.totalChunks || '?'}
                         </td>
@@ -221,7 +221,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
                     )}
                     {entry.metadata?.originalLength !== undefined && (
                       <tr>
-                        <td className="px-3 py-2 font-medium text-white/80">Original Length</td>
+                        <td className="px-3 py-2 font-medium text-on-surface/80">Original Length</td>
                         <td className="px-3 py-2 text-on-surface-variant">{entry.metadata.originalLength.toLocaleString()} chars</td>
                       </tr>
                     )}
@@ -234,7 +234,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => { setConfirmDelete(false); onClose(); }}
-                className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+                className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
               >
                 Close
               </button>
@@ -244,7 +244,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
                 className={cn(
                   'px-4 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-50',
                   confirmDelete
-                    ? 'bg-red-600 text-white hover:bg-red-700'
+                    ? 'bg-red-600 text-on-surface hover:bg-red-700'
                     : 'bg-red-900/30 text-red-300 hover:bg-red-900/50'
                 )}
               >
@@ -305,12 +305,12 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-lg mx-4"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Index Files</h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-semibold text-on-surface">Index Files</h2>
+          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -328,25 +328,25 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Path</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Path</label>
             <input
               type="text"
               value={path}
               onChange={(e) => setPath(e.target.value)}
               placeholder="/path/to/file/or/directory"
-              className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white font-mono"
+              className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface font-mono"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Type</label>
-            <div className="flex rounded-lg bg-[#262626] p-0.5">
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Type</label>
+            <div className="flex rounded-lg bg-surface-container-high p-0.5">
               <button
                 type="button"
                 onClick={() => setType('file')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  type === 'file' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
+                  type === 'file' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <File className="w-3.5 h-3.5" /> File
@@ -356,7 +356,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 onClick={() => setType('directory')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  type === 'directory' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
+                  type === 'directory' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <FolderOpen className="w-3.5 h-3.5" /> Directory
@@ -365,14 +365,14 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Source Type</label>
-            <div className="flex rounded-lg bg-[#262626] p-0.5">
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Source Type</label>
+            <div className="flex rounded-lg bg-surface-container-high p-0.5">
               <button
                 type="button"
                 onClick={() => setSourceType('document')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  sourceType === 'document' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
+                  sourceType === 'document' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <FileText className="w-3.5 h-3.5" /> Document
@@ -382,7 +382,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 onClick={() => setSourceType('code')}
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors flex-1 justify-center',
-                  sourceType === 'code' ? 'bg-[#20201f] text-white shadow-xs' : 'text-on-surface-variant'
+                  sourceType === 'code' ? 'bg-surface-container-high text-on-surface shadow-xs' : 'text-on-surface-variant'
                 )}
               >
                 <Code className="w-3.5 h-3.5" /> Code
@@ -392,7 +392,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
 
           {type === 'directory' && (
             <div>
-              <label className="block text-sm font-medium text-white/80 mb-1">
+              <label className="block text-sm font-medium text-on-surface/80 mb-1">
                 Patterns
                 <span className="ml-2 text-xs font-normal text-on-surface-variant">Comma-separated globs</span>
               </label>
@@ -401,7 +401,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
                 value={patterns}
                 onChange={(e) => setPatterns(e.target.value)}
                 placeholder="*.ts, *.md, src/**/*.tsx"
-                className="w-full px-3 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white font-mono"
+                className="w-full px-3 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface font-mono"
               />
             </div>
           )}
@@ -410,7 +410,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
             >
               Cancel
             </button>
@@ -587,15 +587,15 @@ export default function KnowledgePage() {
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
-          <p className="text-2xl font-bold text-white">{stats?.total ?? 0}</p>
+        <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+          <p className="text-2xl font-bold text-on-surface">{stats?.total ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Total Entries</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-blue-400">{stats?.bySourceType?.document ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Documents</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-glass rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
           <p className="text-2xl font-bold text-green-400">{stats?.bySourceType?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
@@ -614,7 +614,7 @@ export default function KnowledgePage() {
                 if (e.key === 'Enter') handleSearch();
               }}
               placeholder="Search knowledge base..."
-              className="w-full pl-10 pr-4 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+              className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
             />
           </div>
 
@@ -623,7 +623,7 @@ export default function KnowledgePage() {
             <select
               value={sourceTypeFilter}
               onChange={(e) => handleFilterChange(e.target.value)}
-              className="appearance-none pl-3 pr-8 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white cursor-pointer"
+              className="appearance-none pl-3 pr-8 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface cursor-pointer"
             >
               <option value="all">All Types</option>
               <option value="document">Document</option>
@@ -645,7 +645,7 @@ export default function KnowledgePage() {
         {/* Mode toggle */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-on-surface-variant">Mode:</span>
-          <div className="flex rounded-lg bg-[#262626] p-0.5">
+          <div className="flex rounded-lg bg-surface-container-high p-0.5">
             {(['hybrid', 'semantic', 'keyword'] as const).map((mode) => (
               <button
                 key={mode}
@@ -654,8 +654,8 @@ export default function KnowledgePage() {
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer transition-colors capitalize',
                   searchMode === mode
-                    ? 'bg-primary text-white shadow-xs'
-                    : 'text-on-surface-variant hover:text-white'
+                    ? 'bg-primary text-on-surface shadow-xs'
+                    : 'text-on-surface-variant hover:text-on-surface'
                 )}
               >
                 {mode}
@@ -665,7 +665,7 @@ export default function KnowledgePage() {
           {activeSearch && (
             <button
               onClick={clearSearch}
-              className="ml-auto flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-white cursor-pointer"
+              className="ml-auto flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
             >
               <X className="w-3 h-3" />
               Clear search
@@ -684,11 +684,11 @@ export default function KnowledgePage() {
       {/* Search results */}
       {searchResults !== null ? (
         <div className="space-y-3">
-          <h3 className="text-sm font-medium text-white/80">
+          <h3 className="text-sm font-medium text-on-surface/80">
             {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &ldquo;{activeSearch}&rdquo;
           </h3>
           {searchResults.length === 0 ? (
-            <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
+            <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
               <Search className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
               <p className="text-on-surface-variant">No results found</p>
             </div>
@@ -697,11 +697,11 @@ export default function KnowledgePage() {
               <button
                 key={result.id}
                 onClick={() => setSelectedEntryId(result.id)}
-                className="w-full text-left bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
+                className="w-full text-left bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white/80 line-clamp-2">
+                    <p className="text-sm text-on-surface/80 line-clamp-2">
                       {result.abstract || result.content.slice(0, 200)}
                     </p>
                     <div className="flex items-center gap-2 mt-2">
@@ -727,12 +727,12 @@ export default function KnowledgePage() {
         /* Browse section */
         <div className="space-y-3">
           {browseLoading && browseOffset === 0 ? (
-            <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+            <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
               <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
               Loading...
             </div>
           ) : displayedEntries.length === 0 ? (
-            <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
+            <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
               <Brain className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
               <p className="text-on-surface-variant">No knowledge entries found</p>
               <p className="text-xs text-on-surface-variant mt-1">Click &quot;Index Files&quot; to add documents or code to the knowledge base for semantic retrieval.</p>
@@ -743,12 +743,12 @@ export default function KnowledgePage() {
                 <button
                   key={entry.id}
                   onClick={() => setSelectedEntryId(entry.id)}
-                  className="w-full text-left bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
+                  className="w-full text-left bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4 hover:ring-primary/30 transition-colors cursor-pointer"
                 >
                   <div className="flex items-start gap-3">
                     <SourceTypeIcon sourceType={entry.sourceType} className="w-4 h-4 text-on-surface-variant mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white/80 line-clamp-2">
+                      <p className="text-sm text-on-surface/80 line-clamp-2">
                         {entry.abstract || entry.sourceId}
                       </p>
                       <div className="flex items-center gap-2 mt-2">
@@ -774,7 +774,7 @@ export default function KnowledgePage() {
                   <button
                     onClick={handleLoadMore}
                     disabled={browseLoading}
-                    className="px-6 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer disabled:opacity-50"
+                    className="px-6 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer disabled:opacity-50"
                   >
                     {browseLoading ? (
                       <>

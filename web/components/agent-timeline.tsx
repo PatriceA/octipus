@@ -43,7 +43,7 @@ const EVENT_CONFIG: Record<string, {
   bgColor: string;
   label: string;
 }> = {
-  thought: { icon: Brain, color: 'text-on-surface-variant', bgColor: 'bg-[#262626]', label: 'Thought' },
+  thought: { icon: Brain, color: 'text-on-surface-variant', bgColor: 'bg-surface-container-high', label: 'Thought' },
   action: { icon: Wrench, color: 'text-blue-400', bgColor: 'bg-blue-900/20', label: 'Action' },
   observation: { icon: Eye, color: 'text-green-400', bgColor: 'bg-green-900/20', label: 'Result' },
   error: { icon: AlertCircle, color: 'text-error', bgColor: 'bg-red-900/20', label: 'Error' },
@@ -95,7 +95,7 @@ function TimelineCard({ event }: TimelineCardProps) {
         {actionHeadline && !expanded && (
           <div className="text-xs text-blue-200 font-mono mb-1 break-all">{actionHeadline}</div>
         )}
-        <pre className="text-xs text-white/80 whitespace-pre-wrap font-mono break-all">
+        <pre className="text-xs text-on-surface/80 whitespace-pre-wrap font-mono break-all">
           {expanded ? dataStr : (actionHeadline ? '' : preview)}
         </pre>
         {hasMore && (

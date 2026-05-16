@@ -58,7 +58,7 @@ export default function SettingsPage() {
               className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                 activeTab === tab.id
                   ? 'bg-primary/10 text-primary'
-                  : 'text-on-surface-variant hover:bg-[#1a1a1a] hover:text-white'
+                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
               }`}
             >
               <tab.icon className="w-4 h-4" />
@@ -67,7 +67,7 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        <div className="flex-1 bg-[#1a1a1a] rounded-xs p-6">
+        <div className="flex-1 bg-surface-container rounded-xs p-6">
           {activeTab === 'general' && <GeneralTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}

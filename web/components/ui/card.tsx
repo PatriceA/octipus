@@ -20,7 +20,7 @@ interface CardProps {
  */
 const variantClasses: Record<CardVariant, string> = {
   default: 'bg-surface-container border border-outline-variant/60 rounded-xs',
-  glass: 'bg-surface-container-low/80 backdrop-blur-glass border border-outline-variant/60 rounded-xs',
+  glass: 'bg-surface-container-low/80 backdrop-blur-sm border border-outline-variant/60 rounded-xs',
   bento: 'bg-surface-container border border-outline-variant rounded-xs',
 };
 

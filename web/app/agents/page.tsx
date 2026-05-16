@@ -78,8 +78,8 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-white">New Agent</h2>
-          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-semibold text-on-surface">New Agent</h2>
+          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -93,7 +93,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
               value={task}
               onChange={e => setTask(e.target.value)}
               rows={3}
-              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
               placeholder="Describe what the agent should do..."
             />
           </div>
@@ -106,7 +106,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
               <select
                 value={role}
                 onChange={e => setRole(e.target.value)}
-                className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
               >
                 <option value="general">General</option>
                 <option value="coding">Coding</option>
@@ -123,7 +123,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
                 type="text"
                 value={model}
                 onChange={e => setModel(e.target.value)}
-                className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-white"
+                className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary/40 focus:border-primary text-on-surface"
                 placeholder="auto"
               />
             </div>
@@ -136,7 +136,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-on-surface-variant hover:text-white"
+              className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface"
             >
               Cancel
             </button>
@@ -204,7 +204,7 @@ export default function AgentsPage() {
             <Bot className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Agents</h1>
+            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Agents</h1>
             <p className="text-on-surface-variant">Monitor and manage running AI agents. View their status, tool calls, iterations, and results.</p>
           </div>
         </div>

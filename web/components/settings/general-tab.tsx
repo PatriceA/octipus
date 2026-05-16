@@ -28,7 +28,7 @@ export function GeneralTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-extrabold tracking-tighter text-white">General Settings</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">General Settings</h2>
 
       {/* Service Status */}
       <div>
@@ -42,7 +42,7 @@ export function GeneralTab() {
                 key={name}
                 className="flex items-center justify-between p-2 bg-surface-container-low rounded-lg"
               >
-                <span className="text-sm text-white capitalize">{name}</span>
+                <span className="text-sm text-on-surface capitalize">{name}</span>
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full ${
                     svc.status === 'healthy'
@@ -67,7 +67,7 @@ export function GeneralTab() {
               type="text"
               value={profile?.username || ''}
               readOnly
-              className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm"
+              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm"
             />
           </div>
           {profile?.email && (
@@ -77,7 +77,7 @@ export function GeneralTab() {
                 type="text"
                 value={profile.email}
                 readOnly
-                className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm"
+                className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm"
               />
             </div>
           )}
@@ -87,7 +87,7 @@ export function GeneralTab() {
               className={`inline-block px-2 py-0.5 text-xs rounded-full ${
                 profile?.isAdmin
                   ? 'bg-purple-900/30 text-purple-300'
-                  : 'bg-[#262626] text-on-surface-variant'
+                  : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
               {profile?.isAdmin ? 'Admin' : 'User'}

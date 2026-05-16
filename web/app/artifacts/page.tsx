@@ -65,7 +65,7 @@ export default function ArtifactsPage() {
         </div>
         <Link
           href="/artifacts/new"
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
+          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-blue-500"
         >
           New artifact
         </Link>
@@ -74,14 +74,14 @@ export default function ArtifactsPage() {
       {items.length === 0 ? (
         <p className="text-on-surface-variant">
           No artifacts yet — create one or have an agent build one with the{' '}
-          <code className="rounded bg-[#1a1a1a] px-1">create_live_artifact</code> tool.
+          <code className="rounded bg-surface-container px-1">create_live_artifact</code> tool.
         </p>
       ) : (
         <ul className="divide-y divide-[#262626] rounded-md border border-[#262626]">
           {items.map((a) => (
             <li
               key={a.id}
-              className="flex items-center justify-between gap-3 p-4 hover:bg-[#1a1a1a]"
+              className="flex items-center justify-between gap-3 p-4 hover:bg-surface-container"
             >
               <div className="min-w-0 flex-1">
                 <Link
@@ -101,7 +101,7 @@ export default function ArtifactsPage() {
                 href={a.outerUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="rounded p-1 text-on-surface-variant hover:bg-[#262626] hover:text-white"
+                className="rounded p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
                 title="Open hosted page"
               >
                 <ExternalLink className="h-4 w-4" />
@@ -111,13 +111,13 @@ export default function ArtifactsPage() {
                   <span className="text-red-400">Delete?</span>
                   <button
                     onClick={() => del.mutate(a.id)}
-                    className="rounded bg-red-600 px-2 py-1 text-white hover:bg-red-500"
+                    className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-red-500"
                   >
                     Yes
                   </button>
                   <button
                     onClick={() => setConfirmId(null)}
-                    className="rounded border border-[#262626] px-2 py-1 hover:bg-[#262626]"
+                    className="rounded border border-[#262626] px-2 py-1 hover:bg-surface-container-high"
                   >
                     No
                   </button>

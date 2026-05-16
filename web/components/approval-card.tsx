@@ -36,11 +36,11 @@ export function ApprovalCard({
             Approval Required
           </h4>
           {summary && (
-            <p className="text-sm text-white/80 mb-2">
+            <p className="text-sm text-on-surface/80 mb-2">
               {summary}
             </p>
           )}
-          <p className="text-sm font-medium text-white mb-3">
+          <p className="text-sm font-medium text-on-surface mb-3">
             {question}
           </p>
 
@@ -50,7 +50,7 @@ export function ApprovalCard({
                 <button
                   key={i}
                   onClick={() => onApprove(requestId, option)}
-                  className="px-3 py-1.5 text-sm bg-[#1a1a1a] border border-outline-variant/10 rounded-lg hover:bg-[#20201f] text-white/80"
+                  className="px-3 py-1.5 text-sm bg-surface-container border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-on-surface/80"
                 >
                   {option}
                 </button>
@@ -66,14 +66,14 @@ export function ApprovalCard({
             <div className="flex gap-2">
               <button
                 onClick={() => onApprove(requestId)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 text-on-surface rounded-lg hover:bg-green-700"
               >
                 <CheckCircle className="w-4 h-4" />
                 Approve
               </button>
               <button
                 onClick={() => onDeny(requestId)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-600 text-on-surface rounded-lg hover:bg-red-700"
               >
                 <XCircle className="w-4 h-4" />
                 Deny

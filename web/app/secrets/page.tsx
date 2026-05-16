@@ -47,9 +47,9 @@ export default function SecretsPage() {
     return (
       <div className="space-y-6">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-[#1a1a1a] rounded-lg w-48" />
-          <div className="h-40 bg-[#1a1a1a] rounded-xl" />
-          <div className="h-40 bg-[#1a1a1a] rounded-xl" />
+          <div className="h-8 bg-surface-container rounded-lg w-48" />
+          <div className="h-40 bg-surface-container rounded-xl" />
+          <div className="h-40 bg-surface-container rounded-xl" />
         </div>
       </div>
     );

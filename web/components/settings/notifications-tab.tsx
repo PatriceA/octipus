@@ -65,7 +65,7 @@ export function NotificationsTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-extrabold tracking-tighter text-white">Notifications</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Notifications</h2>
 
       <div className="space-y-4">
         {NOTIFICATION_SETTINGS.map(ns => (
@@ -78,7 +78,7 @@ export function NotificationsTab() {
               className="w-4 h-4 rounded accent-primary mt-0.5"
             />
             <div>
-              <span className="text-white">{ns.label}</span>
+              <span className="text-on-surface">{ns.label}</span>
               <p className="text-xs text-on-surface-variant mt-0.5">{ns.description}</p>
             </div>
           </label>

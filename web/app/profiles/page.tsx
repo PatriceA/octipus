@@ -79,11 +79,11 @@ const RELATIONSHIP_COLORS: Record<string, string> = {
 };
 
 function getCategoryColor(category: string): string {
-  return CATEGORY_COLORS[category] || 'bg-[#262626] text-on-surface-variant';
+  return CATEGORY_COLORS[category] || 'bg-surface-container-high text-on-surface-variant';
 }
 
 function getRelationshipColor(relationship: string): string {
-  return RELATIONSHIP_COLORS[relationship] || 'bg-[#262626] text-on-surface-variant';
+  return RELATIONSHIP_COLORS[relationship] || 'bg-surface-container-high text-on-surface-variant';
 }
 
 // --- API helpers ---
@@ -171,7 +171,7 @@ function FactEditor({
                   if (e.key === 'Enter') handleUpdate(fact.key);
                   if (e.key === 'Escape') setEditingKey(null);
                 }}
-                className="flex-1 bg-[#262626] border-none rounded-md py-1 px-2 text-white text-sm focus:ring-1 focus:ring-primary"
+                className="flex-1 bg-surface-container-high border-none rounded-md py-1 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 autoFocus
                 disabled={busy}
               />
@@ -191,7 +191,7 @@ function FactEditor({
             </>
           ) : (
             <>
-              <span className="flex-1 text-sm text-white">{fact.value}</span>
+              <span className="flex-1 text-sm text-on-surface">{fact.value}</span>
               <button
                 onClick={() => {
                   setEditingKey(fact.key);
@@ -222,7 +222,7 @@ function FactEditor({
           value={newKey}
           onChange={(e) => setNewKey(e.target.value)}
           placeholder="Key"
-          className="w-[120px] bg-[#262626] border-none rounded-md py-1.5 px-2 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="w-[120px] bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           disabled={busy}
         />
         <input
@@ -233,7 +233,7 @@ function FactEditor({
             if (e.key === 'Enter') handleAdd();
           }}
           placeholder="Value"
-          className="flex-1 bg-[#262626] border-none rounded-md py-1.5 px-2 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           disabled={busy}
         />
         <button
@@ -291,14 +291,14 @@ function CreateProfileDialog({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-md mx-4"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-md mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">
+          <h2 className="text-lg font-semibold text-on-surface">
             {isUserProfile ? 'Set Up Your Profile' : 'Add a Person'}
           </h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -311,13 +311,13 @@ function CreateProfileDialog({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Name</label>
+            <label className="block text-sm font-medium text-on-surface/80 mb-1">Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={isUserProfile ? 'Your name' : 'Person or entity name'}
-              className="w-full bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               autoFocus
             />
           </div>
@@ -325,21 +325,21 @@ function CreateProfileDialog({
           {!isUserProfile && (
             <>
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">Relationship</label>
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">Relationship</label>
                 <input
                   type="text"
                   value={relationship}
                   onChange={(e) => setRelationship(e.target.value)}
                   placeholder="e.g., friend, colleague, mother"
-                  className="w-full bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-white/80 mb-1">Category</label>
+                <label className="block text-sm font-medium text-on-surface/80 mb-1">Category</label>
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  className="w-full bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 >
                   <option value="person">Person</option>
                   <option value="organization">Organization</option>
@@ -353,7 +353,7 @@ function CreateProfileDialog({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
             >
               Cancel
             </button>
@@ -448,7 +448,7 @@ function EditProfileDialog({
   if (isLoading) {
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-        <div className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 p-8 text-center" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-2xl mx-4 p-8 text-center" onClick={(e) => e.stopPropagation()}>
           <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-on-surface-variant" />
           <span className="text-on-surface-variant">Loading profile...</span>
         </div>
@@ -459,9 +459,9 @@ function EditProfileDialog({
   if (!profile) {
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-        <div className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-md mx-4 p-6 text-center" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-md mx-4 p-6 text-center" onClick={(e) => e.stopPropagation()}>
           <p className="text-on-surface-variant">Profile not found.</p>
-          <button onClick={onClose} className="mt-4 px-4 py-2 text-sm bg-[#262626] text-white/80 rounded-lg cursor-pointer">
+          <button onClick={onClose} className="mt-4 px-4 py-2 text-sm bg-surface-container-high text-on-surface/80 rounded-lg cursor-pointer">
             Close
           </button>
         </div>
@@ -474,13 +474,13 @@ function EditProfileDialog({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[#262626] flex items-center justify-center">
+            <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center">
               <CategoryIcon className="w-5 h-5 text-primary" />
             </div>
             <div>
@@ -489,11 +489,11 @@ function EditProfileDialog({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="bg-[#262626] border-none rounded-md py-1 px-2 text-white text-lg font-semibold focus:ring-1 focus:ring-primary"
+                  className="bg-surface-container-high border-none rounded-md py-1 px-2 text-on-surface text-lg font-semibold focus:ring-1 focus:ring-primary"
                   autoFocus
                 />
               ) : (
-                <h2 className="text-lg font-semibold text-white">{profile.name}</h2>
+                <h2 className="text-lg font-semibold text-on-surface">{profile.name}</h2>
               )}
               <div className="flex items-center gap-2 mt-0.5">
                 {profile.isUserProfile && (
@@ -551,7 +551,7 @@ function EditProfileDialog({
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-            <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+            <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -567,7 +567,7 @@ function EditProfileDialog({
                 value={relationship}
                 onChange={(e) => setRelationship(e.target.value)}
                 placeholder="e.g., friend, colleague"
-                className="w-full bg-[#262626] border-none rounded-md py-1.5 px-2 text-white text-sm focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               />
             </div>
             <div className="flex-1">
@@ -575,7 +575,7 @@ function EditProfileDialog({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-[#262626] border-none rounded-md py-1.5 px-2 text-white text-sm focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               >
                 <option value="person">Person</option>
                 <option value="organization">Organization</option>
@@ -621,14 +621,14 @@ function UserProfileCard({
     return (
       <button
         onClick={onClick}
-        className="w-full bg-[#1a1a1a] rounded-xs p-6 border border-dashed border-outline-variant/20 hover:border-primary/40 transition-colors text-left cursor-pointer"
+        className="w-full bg-surface-container rounded-xs p-6 border border-dashed border-outline-variant/20 hover:border-primary/40 transition-colors text-left cursor-pointer"
       >
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-[#262626] flex items-center justify-center">
+          <div className="w-12 h-12 rounded-full bg-surface-container-high flex items-center justify-center">
             <User className="w-6 h-6 text-on-surface-variant" />
           </div>
           <div>
-            <h3 className="text-white font-semibold">Set up your profile</h3>
+            <h3 className="text-on-surface font-semibold">Set up your profile</h3>
             <p className="text-sm text-on-surface-variant mt-0.5">
               Create your profile so agents can personalize responses for you.
             </p>
@@ -642,7 +642,7 @@ function UserProfileCard({
   return (
     <button
       onClick={onClick}
-      className="w-full bg-[#1a1a1a] rounded-xs p-6 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
+      className="w-full bg-surface-container rounded-xs p-6 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
     >
       <div className="flex items-center gap-4">
         <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -650,7 +650,7 @@ function UserProfileCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="text-white font-semibold">{profile.name}</h3>
+            <h3 className="text-on-surface font-semibold">{profile.name}</h3>
             <span className="px-2 py-0.5 text-xs rounded-full bg-primary/20 text-primary font-medium">
               Your Profile
             </span>
@@ -679,14 +679,14 @@ function PersonCard({
   return (
     <button
       onClick={onClick}
-      className="w-full bg-[#1a1a1a] rounded-xs p-5 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
+      className="w-full bg-surface-container rounded-xs p-5 border border-outline-variant/10 hover:border-primary/30 transition-colors text-left cursor-pointer"
     >
       <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-full bg-[#262626] flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center shrink-0">
           <CategoryIcon className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-white font-medium truncate">{profile.name}</h3>
+          <h3 className="text-on-surface font-medium truncate">{profile.name}</h3>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             {profile.relationship && (
               <span className={cn('px-2 py-0.5 text-[10px] rounded-full font-medium', getRelationshipColor(profile.relationship))}>
@@ -716,7 +716,7 @@ function EmptyState({
   onAddPerson: () => void;
 }) {
   return (
-    <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-12 text-center">
+    <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-12 text-center">
       <Users className="w-10 h-10 text-on-surface-variant mx-auto mb-4" />
       <p className="text-on-surface-variant max-w-md mx-auto">
         No profiles yet. Create your own profile to get personalized responses, or add people you interact with regularly.
@@ -730,7 +730,7 @@ function EmptyState({
         </button>
         <button
           onClick={onAddPerson}
-          className="px-5 py-2.5 text-sm bg-[#262626] text-white rounded-full font-bold hover:bg-[#20201f] cursor-pointer"
+          className="px-5 py-2.5 text-sm bg-surface-container-high text-on-surface rounded-full font-bold hover:bg-surface-container-high cursor-pointer"
         >
           Add a Person
         </button>
@@ -785,7 +785,7 @@ export default function ProfilesPage() {
       </div>
 
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading profiles...
         </div>
@@ -837,19 +837,19 @@ export default function ProfilesPage() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search people by name, relationship, or category..."
-                  className="w-full pl-10 pr-4 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+                  className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
                 />
               </div>
             )}
 
             {/* Grid */}
             {filtered.length === 0 && otherProfiles.length > 0 ? (
-              <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-8 text-center">
+              <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-8 text-center">
                 <Search className="w-6 h-6 text-on-surface-variant mx-auto mb-2" />
                 <p className="text-on-surface-variant text-sm">No profiles match your search.</p>
               </div>
             ) : filtered.length === 0 ? (
-              <div className="bg-[#1a1a1a] rounded-xs border border-outline-variant/10 p-8 text-center">
+              <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-8 text-center">
                 <Users className="w-6 h-6 text-on-surface-variant mx-auto mb-2" />
                 <p className="text-on-surface-variant text-sm">
                   No people added yet. Click &quot;Add Person&quot; to get started.

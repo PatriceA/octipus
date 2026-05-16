@@ -35,7 +35,7 @@ export default function AdminAuditPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-extrabold tracking-tighter text-white">Audit log</h2>
+        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Audit log</h2>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -44,19 +44,19 @@ export default function AdminAuditPage() {
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
           placeholder="Filter by action (e.g. user_created)"
-          className="bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
         <input
           type="text"
           value={userIdFilter}
           onChange={(e) => setUserIdFilter(e.target.value)}
           placeholder="Filter by userId (UUID)"
-          className="bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
         <select
           value={limit}
           onChange={(e) => setLimit(parseInt(e.target.value, 10))}
-          className="bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         >
           <option value={50}>50 rows</option>
           <option value={100}>100 rows</option>
@@ -65,7 +65,7 @@ export default function AdminAuditPage() {
         </select>
       </div>
 
-      <div className="overflow-x-auto bg-[#1a1a1a] rounded-lg">
+      <div className="overflow-x-auto bg-surface-container rounded-lg">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-on-surface-variant">
             <tr className="border-b border-outline-variant/10">
@@ -88,7 +88,7 @@ export default function AdminAuditPage() {
                 <td className="px-4 py-2 text-on-surface-variant whitespace-nowrap">
                   {new Date(e.createdAt).toLocaleString()}
                 </td>
-                <td className="px-4 py-2 text-white font-mono text-xs">{e.action}</td>
+                <td className="px-4 py-2 text-on-surface font-mono text-xs">{e.action}</td>
                 <td className="px-4 py-2 text-on-surface-variant font-mono text-xs">
                   {e.userId ? e.userId.slice(0, 8) + '…' : '—'}
                 </td>

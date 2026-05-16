@@ -85,10 +85,10 @@ export function SettingField({
     if (e.key === 'Enter') onSave();
   };
 
-  const inputClasses = 'w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary';
+  const inputClasses = 'w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
 
   return (
-    <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-[#20201f] transition-colors">
+    <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-surface-container-high transition-colors">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <label className="text-xs font-bold text-on-surface-variant uppercase">{shortKey}</label>
@@ -107,7 +107,7 @@ export function SettingField({
               value ? 'bg-primary' : 'bg-[#484847]'
             }`}
           >
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-on-surface transition-transform ${
               value ? 'translate-x-6' : 'translate-x-1'
             }`} />
           </button>
@@ -124,7 +124,7 @@ export function SettingField({
               />
               <button
                 onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-white"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface"
               >
                 {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>

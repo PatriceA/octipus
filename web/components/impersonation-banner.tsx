@@ -68,7 +68,7 @@ export function ImpersonationBanner() {
           type="button"
           onClick={() => stopMutation.mutate()}
           disabled={stopMutation.isPending}
-          className="px-3 py-1 bg-[#0e0e0e] text-yellow-200 rounded text-xs font-bold uppercase tracking-wide hover:bg-black disabled:opacity-50 cursor-pointer shrink-0"
+          className="px-3 py-1 bg-background text-yellow-200 rounded text-xs font-bold uppercase tracking-wide hover:bg-black disabled:opacity-50 cursor-pointer shrink-0"
         >
           {stopMutation.isPending ? 'Stopping…' : 'Stop'}
         </button>

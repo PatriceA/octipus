@@ -101,7 +101,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
           ) : (
             <Cpu className="w-5 h-5 text-primary" />
           )}
-          <h3 className="font-semibold text-white">{model.name}</h3>
+          <h3 className="font-semibold text-on-surface">{model.name}</h3>
           {model.isDefault && (
             <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full flex items-center gap-1 shrink-0">
               <Star className="w-3 h-3" /> Default
@@ -117,16 +117,16 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         </div>
         <div className="flex justify-between">
           <span className="text-on-surface-variant">Model ID</span>
-          <span className="text-white font-mono text-xs">{model.modelId}</span>
+          <span className="text-on-surface font-mono text-xs">{model.modelId}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-on-surface-variant">Context</span>
-          <span className="text-white">{(model.contextWindow / 1000).toFixed(0)}k</span>
+          <span className="text-on-surface">{(model.contextWindow / 1000).toFixed(0)}k</span>
         </div>
         {model.costPerInputToken > 0 && (
           <div className="flex justify-between">
             <span className="text-on-surface-variant">Cost (in/out)</span>
-            <span className="text-white text-xs">
+            <span className="text-on-surface text-xs">
               ${model.costPerInputToken}/${model.costPerOutputToken} /1M
             </span>
           </div>
@@ -139,7 +139,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         )}
         <div className="flex justify-between">
           <span className="text-on-surface-variant">Priority</span>
-          <span className="text-white">{model.priority}</span>
+          <span className="text-on-surface">{model.priority}</span>
         </div>
       </div>
 

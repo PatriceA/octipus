@@ -120,7 +120,7 @@ function OAuthProviderCard({
     <div className="p-4 bg-surface-container-low rounded-xs">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <h4 className="font-medium text-sm text-white">{provider.name}</h4>
+          <h4 className="font-medium text-sm text-on-surface">{provider.name}</h4>
           {isLoading ? (
             <Loader2 className="w-3 h-3 animate-spin text-on-surface-variant" />
           ) : (
@@ -128,7 +128,7 @@ function OAuthProviderCard({
               className={`px-2 py-0.5 text-xs rounded-full ${
                 status?.connected
                   ? 'bg-green-900/30 text-green-300'
-                  : 'bg-[#262626] text-on-surface-variant'
+                  : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
               {status?.connected ? 'Connected' : 'Not connected'}
@@ -161,7 +161,7 @@ function OAuthProviderCard({
       <p className="text-xs text-on-surface-variant">{provider.description}</p>
       {status?.connected && status.email && (
         <p className="text-xs text-on-surface-variant mt-1">
-          Connected as: <span className="text-white">{status.email}</span>
+          Connected as: <span className="text-on-surface">{status.email}</span>
         </p>
       )}
       {error && (

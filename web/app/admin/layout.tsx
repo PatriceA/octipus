@@ -62,8 +62,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
               href={t.href}
               className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                 active
-                  ? 'border-primary text-white'
-                  : 'border-transparent text-on-surface-variant hover:text-white'
+                  ? 'border-primary text-on-surface'
+                  : 'border-transparent text-on-surface-variant hover:text-on-surface'
               }`}
             >
               {t.label}

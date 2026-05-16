@@ -187,7 +187,7 @@ export default function RedTeamPage() {
       <div>
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white mb-3"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-on-surface mb-3"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
@@ -198,7 +198,7 @@ export default function RedTeamPage() {
             <ShieldAlert className="w-5 h-5 text-red-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">Red Team Results</h1>
+            <h1 className="text-2xl font-bold text-on-surface">Red Team Results</h1>
             <p className="text-sm text-on-surface-variant">Security and safety evaluation results</p>
           </div>
         </div>
@@ -216,7 +216,7 @@ export default function RedTeamPage() {
             <ShieldAlert className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
             <p className="text-on-surface-variant">No red-team results found</p>
             <p className="text-sm text-on-surface-variant mt-1">
-              Run red-team eval: <code className="bg-[#262626] px-1.5 py-0.5 rounded text-xs">bun run src/eval/red-team/cli.ts</code>
+              Run red-team eval: <code className="bg-surface-container-high px-1.5 py-0.5 rounded text-xs">bun run src/eval/red-team/cli.ts</code>
             </p>
           </CardContent>
         </Card>
@@ -237,7 +237,7 @@ export default function RedTeamPage() {
                   <CardContent className="py-4">
                     <div className="flex items-center gap-2 mb-2">
                       <Icon className={cn('w-4 h-4', config?.color || 'text-on-surface-variant')} />
-                      <span className="text-sm font-medium text-white capitalize">
+                      <span className="text-sm font-medium text-on-surface capitalize">
                         {config?.label || stat.category}
                       </span>
                     </div>
@@ -267,7 +267,7 @@ export default function RedTeamPage() {
               <div key={category}>
                 <div className="flex items-center gap-2 mb-3">
                   <Icon className={cn('w-5 h-5', config?.color || 'text-on-surface-variant')} />
-                  <h2 className="text-lg font-semibold text-white capitalize">
+                  <h2 className="text-lg font-semibold text-on-surface capitalize">
                     {config?.label || category}
                   </h2>
                   <span className="text-sm text-on-surface-variant">
@@ -283,11 +283,11 @@ export default function RedTeamPage() {
                     return (
                       <div
                         key={test.testId}
-                        className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 overflow-hidden"
+                        className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 overflow-hidden"
                       >
                         <button
                           onClick={() => setExpandedTest(isExpanded ? null : test.testId)}
-                          className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-[#20201f] cursor-pointer"
+                          className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-container-high cursor-pointer"
                         >
                           {test.passed ? (
                             <ShieldCheck className="w-5 h-5 text-green-500 shrink-0" />
@@ -296,7 +296,7 @@ export default function RedTeamPage() {
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-mono text-white">
+                              <span className="text-sm font-mono text-on-surface">
                                 {test.testId}
                               </span>
                               <SeverityBadge severity={severity} />
@@ -318,7 +318,7 @@ export default function RedTeamPage() {
                             {/* Attack prompt */}
                             <div>
                               <p className="text-xs font-medium text-on-surface-variant mb-1">Attack Prompt</p>
-                              <pre className="text-sm text-white/80 whitespace-pre-wrap bg-red-950/10 rounded-lg p-3 border border-red-900/30 max-h-40 overflow-y-auto">
+                              <pre className="text-sm text-on-surface/80 whitespace-pre-wrap bg-red-950/10 rounded-lg p-3 border border-red-900/30 max-h-40 overflow-y-auto">
                                 {test.input}
                               </pre>
                             </div>
@@ -327,7 +327,7 @@ export default function RedTeamPage() {
                             {test.output && (
                               <div>
                                 <p className="text-xs font-medium text-on-surface-variant mb-1">System Response</p>
-                                <pre className="text-sm text-white/80 whitespace-pre-wrap bg-surface-container-low rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
+                                <pre className="text-sm text-on-surface/80 whitespace-pre-wrap bg-surface-container-low rounded-lg p-3 border border-outline-variant/10 max-h-40 overflow-y-auto">
                                   {test.output}
                                 </pre>
                               </div>

@@ -90,7 +90,7 @@ export function MobileTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+        <h2 className="text-lg font-semibold text-on-surface flex items-center gap-2">
           <Smartphone className="w-5 h-5" />
           Mobile App
         </h2>
@@ -100,7 +100,7 @@ export function MobileTab() {
       </div>
 
       <div className="bg-surface-container rounded-xl p-6 border border-outline-variant/10">
-        <h3 className="text-sm font-medium text-white mb-4">Pair Device</h3>
+        <h3 className="text-sm font-medium text-on-surface mb-4">Pair Device</h3>
 
         {!pairing && !loading && (
           <div className="text-center py-8">
@@ -144,7 +144,7 @@ export function MobileTab() {
 
               <button
                 onClick={copyCode}
-                className="text-xs px-2 py-1 rounded bg-surface-container-highest text-on-surface-variant hover:text-white inline-flex items-center gap-1"
+                className="text-xs px-2 py-1 rounded bg-surface-container-highest text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1"
                 title="Copy pairing code"
               >
                 {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
@@ -154,7 +154,7 @@ export function MobileTab() {
 
             <button
               onClick={generateCode}
-              className="text-xs text-on-surface-variant hover:text-white inline-flex items-center gap-1"
+              className="text-xs text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1"
             >
               <RefreshCw className="w-3 h-3" />
               Generate new code
@@ -170,7 +170,7 @@ export function MobileTab() {
       </div>
 
       <div className="bg-surface-container rounded-xl p-6 border border-outline-variant/10">
-        <h3 className="text-sm font-medium text-white mb-2">How to pair</h3>
+        <h3 className="text-sm font-medium text-on-surface mb-2">How to pair</h3>
         <ol className="text-sm text-on-surface-variant space-y-2 list-decimal list-inside">
           <li>Open the mobile app on your Android device</li>
           <li>The app will show a QR scanner on first launch</li>
@@ -181,11 +181,11 @@ export function MobileTab() {
       </div>
 
       <div className="bg-surface-container rounded-xl p-6 border border-outline-variant/10">
-        <h3 className="text-sm font-medium text-white mb-2">Remote Access</h3>
+        <h3 className="text-sm font-medium text-on-surface mb-2">Remote Access</h3>
         <p className="text-sm text-on-surface-variant">
           By default, pairing works over your local network. To use the mobile app outside your home network,
-          set your public URL on the <strong className="text-white">Integrations</strong> tab
-          (field: <strong className="text-white">Public URL for OAuth callbacks</strong>).
+          set your public URL on the <strong className="text-on-surface">Integrations</strong> tab
+          (field: <strong className="text-on-surface">Public URL for OAuth callbacks</strong>).
           The QR code will then include the public URL so the app can connect remotely.
         </p>
       </div>

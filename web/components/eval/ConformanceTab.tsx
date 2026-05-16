@@ -52,7 +52,7 @@ function StatusCell({ status, latencyMs, error }: { status: 'passed' | 'failed' 
     >
       {icon}
       {showTooltip && hasTooltip && (
-        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-20 bg-[#1a1a1a] border border-outline-variant/20 rounded-lg px-2.5 py-1.5 text-xs text-white whitespace-nowrap shadow-lg">
+        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-20 bg-surface-container border border-outline-variant/20 rounded-lg px-2.5 py-1.5 text-xs text-on-surface whitespace-nowrap shadow-lg">
           {latencyMs != null && (
             <div className="flex items-center gap-1 text-on-surface-variant">
               <Clock className="w-3 h-3" />
@@ -112,7 +112,7 @@ function RunRow({ run }: { run: ConformanceRun }) {
             <tbody>
               {models.map(model => (
                 <tr key={model} className="border-t border-outline-variant/10">
-                  <td className="py-2 pr-4 text-white/80 font-mono truncate max-w-[160px]" title={model}>
+                  <td className="py-2 pr-4 text-on-surface/80 font-mono truncate max-w-[160px]" title={model}>
                     {model}
                   </td>
                   {tests.map(test => {
@@ -246,18 +246,18 @@ export function ConformanceTab() {
         <div className="relative" ref={modelPickerRef}>
           <button
             onClick={() => setShowModelPicker(!showModelPicker)}
-            className="px-4 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] text-sm flex items-center gap-2 cursor-pointer"
+            className="px-4 py-2 border border-outline-variant/10 text-on-surface/80 rounded-lg hover:bg-surface-container text-sm flex items-center gap-2 cursor-pointer"
           >
             {selectedModels.length === 0 ? 'All models' : `${selectedModels.length} selected`}
             <ChevronDown className="w-3 h-3" />
           </button>
           {showModelPicker && models.length > 0 && (
-            <div className="absolute top-full mt-1 left-0 z-20 bg-[#1a1a1a] border border-outline-variant/10 rounded-xl shadow-lg min-w-[220px] max-h-60 overflow-y-auto">
+            <div className="absolute top-full mt-1 left-0 z-20 bg-surface-container border border-outline-variant/10 rounded-xl shadow-lg min-w-[220px] max-h-60 overflow-y-auto">
               {models.map(m => {
                 const id = m.name || (m as any).modelId || m.id;
                 const label = m.name || (m as any).modelId || m.id;
                 return (
-                  <label key={id} className="flex items-center gap-2 px-4 py-2 hover:bg-[#222] cursor-pointer text-sm text-white/80">
+                  <label key={id} className="flex items-center gap-2 px-4 py-2 hover:bg-[#222] cursor-pointer text-sm text-on-surface/80">
                     <input
                       type="checkbox"
                       checked={selectedModels.includes(id)}
@@ -276,7 +276,7 @@ export function ConformanceTab() {
           onClick={runConformance}
           disabled={running}
           className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm cursor-pointer ${
-            running ? 'bg-yellow-600 text-white' : 'bg-primary text-white hover:bg-primary-dim'
+            running ? 'bg-yellow-600 text-on-surface' : 'bg-primary text-on-surface hover:bg-primary-dim'
           }`}
         >
           {running ? (
@@ -288,7 +288,7 @@ export function ConformanceTab() {
 
         <button
           onClick={fetchRuns}
-          className="px-3 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] cursor-pointer"
+          className="px-3 py-2 border border-outline-variant/10 text-on-surface/80 rounded-lg hover:bg-surface-container cursor-pointer"
           title="Refresh"
         >
           <RefreshCw className="w-4 h-4" />
@@ -308,7 +308,7 @@ export function ConformanceTab() {
           <CardContent className="p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-sm font-semibold text-white">Latest Run</h3>
+                <h3 className="text-sm font-semibold text-on-surface">Latest Run</h3>
                 <p className="text-xs text-on-surface-variant mt-0.5" suppressHydrationWarning>
                   {formatDate(latest.createdAt)}
                 </p>
@@ -347,7 +347,7 @@ export function ConformanceTab() {
                   <tbody>
                     {latestModels.map(model => (
                       <tr key={model} className="border-t border-outline-variant/10">
-                        <td className="py-2 pr-4 text-white/80 font-mono truncate max-w-[160px]" title={model}>
+                        <td className="py-2 pr-4 text-on-surface/80 font-mono truncate max-w-[160px]" title={model}>
                           {model}
                         </td>
                         {latestTests.map(test => {
@@ -374,7 +374,7 @@ export function ConformanceTab() {
 
       {/* Historical runs */}
       <div>
-        <h2 className="text-sm font-semibold text-white mb-3">Run History</h2>
+        <h2 className="text-sm font-semibold text-on-surface mb-3">Run History</h2>
         {loading ? (
           <div className="flex items-center justify-center py-10">
             <RefreshCw className="w-5 h-5 animate-spin text-on-surface-variant" />

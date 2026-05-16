@@ -121,7 +121,7 @@ function PermissionBanner({
           {argsEntries.length > 0 && (
             <button
               onClick={onToggleExpand}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-white rounded-md hover:bg-surface-container-highest transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-md hover:bg-surface-container-highest transition-colors cursor-pointer"
             >
               {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
               Details
@@ -129,13 +129,13 @@ function PermissionBanner({
           )}
           <button
             onClick={onAllow}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors cursor-pointer"
+            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-600 text-on-surface rounded-lg hover:bg-green-700 transition-colors cursor-pointer"
           >
             <CheckCircle className="w-4 h-4" /> Allow
           </button>
           <button
             onClick={onDeny}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error text-white rounded-lg hover:bg-error/80 transition-colors cursor-pointer"
+            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error text-on-surface rounded-lg hover:bg-error/80 transition-colors cursor-pointer"
           >
             <XCircle className="w-4 h-4" /> Deny
           </button>
@@ -149,7 +149,7 @@ function PermissionBanner({
             {argsEntries.slice(0, 6).map(([key, value]) => (
               <div key={key} className="flex gap-2 text-xs">
                 <span className="font-mono text-on-surface-variant shrink-0">{key}:</span>
-                <span className="font-mono text-white truncate">{String(value).slice(0, 200)}</span>
+                <span className="font-mono text-on-surface truncate">{String(value).slice(0, 200)}</span>
               </div>
             ))}
           </div>
@@ -198,7 +198,7 @@ function ApprovalBanner({
           {approval.question && (
             <button
               onClick={onToggleExpand}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-white rounded-md hover:bg-surface-container-highest transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-md hover:bg-surface-container-highest transition-colors cursor-pointer"
             >
               {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
               Details
@@ -211,7 +211,7 @@ function ApprovalBanner({
                 <button
                   key={i}
                   onClick={() => onApprove(option)}
-                  className="px-3 py-1.5 text-sm font-medium bg-surface-container-highest border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-white transition-colors cursor-pointer"
+                  className="px-3 py-1.5 text-sm font-medium bg-surface-container-highest border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-on-surface transition-colors cursor-pointer"
                 >
                   {option}
                 </button>
@@ -227,13 +227,13 @@ function ApprovalBanner({
             <>
               <button
                 onClick={() => onApprove()}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-600 text-on-surface rounded-lg hover:bg-green-700 transition-colors cursor-pointer"
               >
                 <CheckCircle className="w-4 h-4" /> Approve
               </button>
               <button
                 onClick={onDeny}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error text-white rounded-lg hover:bg-error/80 transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error text-on-surface rounded-lg hover:bg-error/80 transition-colors cursor-pointer"
               >
                 <Square className="w-3 h-3" /> Stop
               </button>
@@ -245,7 +245,7 @@ function ApprovalBanner({
       {/* Expandable details */}
       {isExpanded && approval.question && (
         <div className="border-t border-outline-variant/10 px-4 py-3 bg-surface-container-low">
-          <p className="text-sm text-white">{approval.question}</p>
+          <p className="text-sm text-on-surface">{approval.question}</p>
         </div>
       )}
     </div>

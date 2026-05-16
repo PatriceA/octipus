@@ -167,7 +167,7 @@ export function PipelineGraph({
         width={totalW}
         height={totalH}
         viewBox={`0 0 ${totalW} ${totalH}`}
-        className="text-white"
+        className="text-on-surface"
       >
         <defs>
           <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
@@ -335,7 +335,7 @@ export function PipelineGraph({
                       setDrag({ from: i, targetIdx: i });
                     }}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-6 h-6 rounded text-on-surface-variant hover:bg-white/10 cursor-grab active:cursor-grabbing flex items-center justify-center touch-none"
+                    className="w-6 h-6 rounded text-on-surface-variant hover:bg-on-surface/10 cursor-grab active:cursor-grabbing flex items-center justify-center touch-none"
                   >
                     <GripVertical className="w-4 h-4" />
                   </button>

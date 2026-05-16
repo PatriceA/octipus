@@ -116,7 +116,7 @@ export default function PipelinesPage() {
             <GitBranch className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white">Pipelines</h1>
+            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Pipelines</h1>
             <p className="text-on-surface-variant">Multi-stage agent workflows. Chain specialist agents in sequence with approval gates and automatic QA retries.</p>
           </div>
         </div>
@@ -133,7 +133,7 @@ export default function PipelinesPage() {
       {templates.length === 0 ? (
         <div className="text-center py-16 bg-surface-container rounded-xs border border-outline-variant/10">
           <GitBranch className="w-12 h-12 mx-auto text-on-surface-variant mb-4" />
-          <h3 className="text-lg font-medium text-white mb-2">No pipeline templates</h3>
+          <h3 className="text-lg font-medium text-on-surface mb-2">No pipeline templates</h3>
           <p className="text-sm text-on-surface-variant mb-4">
             Create a template to chain multiple specialist agents in sequence. Each step can have its own topic, prompt, and approval gate.
           </p>
@@ -188,7 +188,7 @@ function TemplateCard({
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <GitBranch className="w-5 h-5 text-primary" />
-            <h3 className="font-medium text-white">{template.name}</h3>
+            <h3 className="font-medium text-on-surface">{template.name}</h3>
             <span className="text-xs bg-surface-container-high text-on-surface-variant px-2 py-0.5 rounded">
               {template.steps.length} step{template.steps.length !== 1 ? 's' : ''}
             </span>
@@ -203,14 +203,14 @@ function TemplateCard({
               <button
                 onClick={() => setView('list')}
                 title="List view"
-                className={`p-1 rounded-full cursor-pointer ${view === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+                className={`p-1 rounded-full cursor-pointer ${view === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
               >
                 <List className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => setView('graph')}
                 title="Graph view"
-                className={`p-1 rounded-full cursor-pointer ${view === 'graph' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+                className={`p-1 rounded-full cursor-pointer ${view === 'graph' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
               >
                 <Network className="w-3.5 h-3.5" />
               </button>
@@ -218,7 +218,7 @@ function TemplateCard({
           )}
           <button
             onClick={() => setExpanded(!expanded)}
-            className="p-1.5 text-on-surface-variant hover:text-white rounded cursor-pointer"
+            className="p-1.5 text-on-surface-variant hover:text-on-surface rounded cursor-pointer"
           >
             {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
@@ -252,7 +252,7 @@ function TemplateCard({
                   <span className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium">
                     {i + 1}
                   </span>
-                  <span className="font-medium text-white">{step.name}</span>
+                  <span className="font-medium text-on-surface">{step.name}</span>
                   <span className="text-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded font-mono">
                     {step.topic}
                   </span>
@@ -389,10 +389,10 @@ function TemplateEditor({
       <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">
+          <h2 className="text-lg font-semibold text-on-surface">
             {template ? 'Edit Template' : 'New Template'}
           </h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -405,7 +405,7 @@ function TemplateEditor({
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Code Review Pipeline"
-              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm text-white"
+              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm text-on-surface"
             />
           </div>
 
@@ -415,7 +415,7 @@ function TemplateEditor({
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder="What does this pipeline do?"
-              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm text-white"
+              className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant/10 rounded-lg text-sm text-on-surface"
             />
           </div>
 
@@ -438,7 +438,7 @@ function TemplateEditor({
                     type="button"
                     onClick={() => setView('list')}
                     title="List view"
-                    className={`p-1 rounded-full cursor-pointer ${view === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+                    className={`p-1 rounded-full cursor-pointer ${view === 'list' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
                   >
                     <List className="w-3.5 h-3.5" />
                   </button>
@@ -446,7 +446,7 @@ function TemplateEditor({
                     type="button"
                     onClick={() => setView('graph')}
                     title="Graph view"
-                    className={`p-1 rounded-full cursor-pointer ${view === 'graph' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-white'}`}
+                    className={`p-1 rounded-full cursor-pointer ${view === 'graph' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:text-on-surface'}`}
                   >
                     <Network className="w-3.5 h-3.5" />
                   </button>
@@ -505,7 +505,7 @@ function TemplateEditor({
                       <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-medium shrink-0">
                         {i + 1}
                       </span>
-                      <span className="text-sm font-medium text-white flex-1 truncate">
+                      <span className="text-sm font-medium text-on-surface flex-1 truncate">
                         {step.name || 'Untitled step'}
                       </span>
                       <span className="text-xs text-on-surface-variant font-mono">{step.topic}</span>
@@ -516,14 +516,14 @@ function TemplateEditor({
                         <button
                           onClick={e => { e.stopPropagation(); moveStep(i, 'up'); }}
                           disabled={i === 0}
-                          className="p-0.5 text-on-surface-variant hover:text-white disabled:opacity-30"
+                          className="p-0.5 text-on-surface-variant hover:text-on-surface disabled:opacity-30"
                         >
                           <ChevronUp className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={e => { e.stopPropagation(); moveStep(i, 'down'); }}
                           disabled={i === steps.length - 1}
-                          className="p-0.5 text-on-surface-variant hover:text-white disabled:opacity-30"
+                          className="p-0.5 text-on-surface-variant hover:text-on-surface disabled:opacity-30"
                         >
                           <ChevronDown className="w-3.5 h-3.5" />
                         </button>
@@ -546,7 +546,7 @@ function TemplateEditor({
                               value={step.name}
                               onChange={e => updateStep(i, { name: e.target.value })}
                               placeholder="e.g. Analyze Code"
-                              className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                              className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                             />
                           </div>
                           <div>
@@ -554,7 +554,7 @@ function TemplateEditor({
                             <select
                               value={step.topic}
                               onChange={e => updateStep(i, { topic: e.target.value })}
-                              className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                              className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                             >
                               {AVAILABLE_TOPICS.map(t => (
                                 <option key={t.value} value={t.value}>{t.label}</option>
@@ -569,7 +569,7 @@ function TemplateEditor({
                             value={step.description ?? ''}
                             onChange={e => updateStep(i, { description: e.target.value })}
                             placeholder="What this step does..."
-                            className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                            className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                           />
                         </div>
 
@@ -580,7 +580,7 @@ function TemplateEditor({
                             onChange={e => updateStep(i, { promptTemplate: e.target.value })}
                             placeholder="Use {{description}} and {{previousOutput}} as variables..."
                             rows={3}
-                            className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white font-mono resize-none"
+                            className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface font-mono resize-none"
                           />
                         </div>
 
@@ -620,7 +620,7 @@ function TemplateEditor({
                                     max={10}
                                     value={step.maxRetries ?? 3}
                                     onChange={e => updateStep(i, { maxRetries: parseInt(e.target.value) || 3 })}
-                                    className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                                    className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                                   />
                                 </div>
                                 <div>
@@ -628,7 +628,7 @@ function TemplateEditor({
                                   <select
                                     value={step.retryTargetStage ?? 0}
                                     onChange={e => updateStep(i, { retryTargetStage: parseInt(e.target.value) })}
-                                    className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-white"
+                                    className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                                   >
                                     {steps.map((s, si) => si !== i ? (
                                       <option key={si} value={si}>
@@ -657,7 +657,7 @@ function TemplateEditor({
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-outline-variant/10">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-on-surface-variant hover:text-white hover:bg-surface-container-high rounded-full"
+            className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-full"
           >
             Cancel
           </button>

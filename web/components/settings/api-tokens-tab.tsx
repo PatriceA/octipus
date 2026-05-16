@@ -130,31 +130,31 @@ export function ApiTokensTab() {
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-extrabold tracking-tighter text-white">API Tokens</h2>
+          <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">API Tokens</h2>
           <p className="text-sm text-on-surface-variant mt-1">
             Personal access tokens for non-browser clients (CI, MCP servers, scripts, the
-            browser extension). Send as <code className="px-1 py-0.5 bg-[#262626] rounded text-xs">Authorization: Bearer octi_…</code>.
+            browser extension). Send as <code className="px-1 py-0.5 bg-surface-container-high rounded text-xs">Authorization: Bearer octi_…</code>.
           </p>
         </div>
       </div>
 
       {/* Create form */}
       <div className="p-4 bg-surface-container-low rounded-lg space-y-3">
-        <h3 className="font-medium text-white text-sm">Generate a new token</h3>
+        <h3 className="font-medium text-on-surface text-sm">Generate a new token</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value.slice(0, 100))}
             placeholder="Token name (e.g. CI deploy bot)"
-            className="md:col-span-2 bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+            className="md:col-span-2 bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           />
           <input
             type="date"
             value={expiresAt}
             onChange={(e) => setExpiresAt(e.target.value)}
             placeholder="Expires (optional)"
-            className="bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+            className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           />
         </div>
         <div className="flex items-center gap-3">
@@ -177,7 +177,7 @@ export function ApiTokensTab() {
 
       {/* Active tokens */}
       <div className="space-y-2">
-        <h3 className="font-medium text-white text-sm flex items-center gap-2">
+        <h3 className="font-medium text-on-surface text-sm flex items-center gap-2">
           <Key className="w-4 h-4" /> Active tokens
           <span className="text-on-surface-variant font-normal">({active.length})</span>
         </h3>
@@ -191,7 +191,7 @@ export function ApiTokensTab() {
           <div key={t.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="font-medium text-white truncate">{t.name}</span>
+                <span className="font-medium text-on-surface truncate">{t.name}</span>
                 <code className="text-xs text-on-surface-variant font-mono">{t.prefix}…</code>
               </div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-on-surface-variant mt-1">
@@ -208,14 +208,14 @@ export function ApiTokensTab() {
                   type="button"
                   onClick={() => revokeMutation.mutate(t.id)}
                   disabled={revokeMutation.isPending}
-                  className="px-3 py-1.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                  className="px-3 py-1.5 text-xs bg-red-600 text-on-surface rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
                 >
                   Confirm
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmRevokeId(null)}
-                  className="px-3 py-1.5 text-xs bg-[#262626] text-on-surface-variant rounded-lg hover:text-white cursor-pointer"
+                  className="px-3 py-1.5 text-xs bg-surface-container-high text-on-surface-variant rounded-lg hover:text-on-surface cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -224,7 +224,7 @@ export function ApiTokensTab() {
               <button
                 type="button"
                 onClick={() => { setConfirmRevokeId(t.id); setError(null); }}
-                className="ml-3 shrink-0 p-2 rounded-lg text-on-surface-variant hover:bg-[#262626] hover:text-red-400 cursor-pointer"
+                className="ml-3 shrink-0 p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-red-400 cursor-pointer"
                 aria-label={`Revoke ${t.name}`}
                 title="Revoke"
               >
@@ -260,19 +260,19 @@ export function ApiTokensTab() {
       {/* One-time plaintext modal — load-bearing UX. */}
       {issued && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="bg-[#1a1a1a] rounded-2xl p-6 max-w-lg w-full space-y-4 border border-primary/20">
+          <div className="bg-surface-container rounded-2xl p-6 max-w-lg w-full space-y-4 border border-primary/20">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-lg font-extrabold tracking-tighter text-white">Token created</h3>
+                <h3 className="text-lg font-extrabold tracking-tighter text-on-surface">Token created</h3>
                 <p className="text-sm text-on-surface-variant mt-1">
-                  Copy it now — <strong className="text-white">it will never be shown again</strong>.
+                  Copy it now — <strong className="text-on-surface">it will never be shown again</strong>.
                   Store it in your secret manager (1Password, GitHub Actions secrets, etc.).
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => { setIssued(null); setCopied(false); }}
-                className="p-1 rounded text-on-surface-variant hover:text-white cursor-pointer"
+                className="p-1 rounded text-on-surface-variant hover:text-on-surface cursor-pointer"
                 aria-label="Close"
               >
                 <X className="w-5 h-5" />
@@ -282,7 +282,7 @@ export function ApiTokensTab() {
             <div className="space-y-2">
               <p className="text-xs text-on-surface-variant uppercase tracking-wide font-bold">{issued.name}</p>
               <div className="flex items-stretch gap-2">
-                <code className="flex-1 px-3 py-3 bg-[#0e0e0e] rounded font-mono text-sm break-all text-white select-all">
+                <code className="flex-1 px-3 py-3 bg-background rounded font-mono text-sm break-all text-on-surface select-all">
                   {issued.token}
                 </code>
                 <button
@@ -290,7 +290,7 @@ export function ApiTokensTab() {
                   onClick={handleCopy}
                   className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 cursor-pointer ${
                     copied
-                      ? 'bg-green-600 text-white'
+                      ? 'bg-green-600 text-on-surface'
                       : 'bg-primary text-[#0e0e0e] hover:bg-primary-container'
                   }`}
                 >
@@ -304,7 +304,7 @@ export function ApiTokensTab() {
               <button
                 type="button"
                 onClick={() => { setIssued(null); setCopied(false); }}
-                className="px-4 py-2 bg-[#262626] text-white rounded-lg hover:bg-[#333] text-sm cursor-pointer"
+                className="px-4 py-2 bg-surface-container-high text-on-surface rounded-lg hover:bg-[#333] text-sm cursor-pointer"
               >
                 I've saved it
               </button>

@@ -166,7 +166,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         <span>{language || 'text'}</span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 hover:text-white transition-colors"
+          className="flex items-center gap-1 hover:text-on-surface transition-colors"
           aria-label="Copy code"
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -288,7 +288,7 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
     return (
       <div className="flex justify-end py-1.5 group">
         <div className="flex flex-col items-end gap-0.5">
-          <div className="bg-linear-to-r from-primary to-primary-container text-[#002a6d] px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs">
+          <div className="bg-linear-to-r from-primary to-primary-container text-on-primary px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs">
             <p className="whitespace-pre-wrap text-sm">{content}</p>
           </div>
           <span className="text-[10px] text-on-surface-variant/60 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -304,11 +304,11 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
     <div className="flex gap-3 py-1.5 group">
       <div className="shrink-0 mt-1">
         <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
-          <Bot className="h-4 w-4 text-[#002a6d]" />
+          <Bot className="h-4 w-4 text-on-primary" />
         </div>
       </div>
       <div className="flex flex-col gap-1 min-w-0 flex-1">
-        <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-white">
+        <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface">
           <MessageContent content={content} />
         </div>
 
@@ -414,7 +414,7 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
         {agent.toolCalls.length > 0 && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-0.5 text-on-surface-variant hover:text-white transition-colors ml-auto"
+            className="flex items-center gap-0.5 text-on-surface-variant hover:text-on-surface transition-colors ml-auto"
           >
             <Wrench className="h-3 w-3" />
             {agent.toolCalls.length}
@@ -586,10 +586,10 @@ function FileChangesInline({ group }: { group: FileChangeGroup }) {
     <div className="ml-9 my-1">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-xs text-on-surface-variant hover:text-white cursor-pointer py-1"
+        className="flex items-center gap-2 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer py-1"
       >
         <FileText className="w-3.5 h-3.5" />
-        <span className="font-medium text-white/70">
+        <span className="font-medium text-on-surface/70">
           {group.agentRole}
         </span>
         <span>{changes.length} file{changes.length !== 1 ? 's' : ''} changed</span>
@@ -609,12 +609,12 @@ function FileChangesInline({ group }: { group: FileChangeGroup }) {
                 <div
                   className={cn(
                     'flex items-center gap-2 text-xs py-0.5',
-                    hasDiff && 'cursor-pointer hover:text-white',
+                    hasDiff && 'cursor-pointer hover:text-on-surface',
                   )}
                   onClick={hasDiff ? () => toggleDiff(change.path) : undefined}
                 >
                   <Icon className={cn('w-3 h-3 shrink-0', info.color)} />
-                  <span className="font-mono text-white/80 truncate" title={change.path}>{shortPath}</span>
+                  <span className="font-mono text-on-surface/80 truncate" title={change.path}>{shortPath}</span>
                   <span className="text-on-surface-variant">({info.label})</span>
                   {hasDiff && (
                     diffOpen
@@ -828,7 +828,7 @@ export default function MessageTimeline({
       {isLoading && (
         <div className="flex items-center gap-2 py-3 px-2">
           <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
-            <Loader2 className="h-4 w-4 text-[#002a6d] animate-spin" />
+            <Loader2 className="h-4 w-4 text-on-primary animate-spin" />
           </div>
           <span className="text-sm text-on-surface-variant animate-pulse">
             {statusMessage || 'Thinking...'}
@@ -843,7 +843,7 @@ export default function MessageTimeline({
       {showScrollBtn && (
         <button
           onClick={scrollToBottom}
-          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container/90 border border-outline-variant/10 shadow-lg text-xs text-on-surface-variant hover:text-white transition-colors backdrop-blur-xs"
+          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container/90 border border-outline-variant/10 shadow-lg text-xs text-on-surface-variant hover:text-on-surface transition-colors backdrop-blur-xs"
         >
           <ChevronDown className="h-3.5 w-3.5" />
           Scroll to bottom

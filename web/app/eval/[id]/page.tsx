@@ -113,7 +113,7 @@ export default function EvalDetailPage() {
       <div className="space-y-4">
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-on-surface"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
@@ -142,7 +142,7 @@ export default function EvalDetailPage() {
       <div>
         <Link
           href="/eval"
-          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-white mb-3"
+          className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-on-surface mb-3"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
@@ -154,7 +154,7 @@ export default function EvalDetailPage() {
               <FlaskConical className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white">
+              <h1 className="text-2xl font-bold text-on-surface">
                 {data.suites.length === 1 ? data.suites[0].suite : `Eval Run`}
               </h1>
               <p className="text-sm text-on-surface-variant" suppressHydrationWarning>
@@ -164,7 +164,7 @@ export default function EvalDetailPage() {
           </div>
           <Link
             href={`/eval/compare?ids=${id}`}
-            className="px-3 py-2 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] flex items-center gap-2 text-sm"
+            className="px-3 py-2 border border-outline-variant/10 text-on-surface/80 rounded-lg hover:bg-surface-container flex items-center gap-2 text-sm"
           >
             <GitCompare className="w-4 h-4" />
             Compare
@@ -176,7 +176,7 @@ export default function EvalDetailPage() {
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-white">{data.summary.totalTests}</p>
+            <p className="text-2xl font-bold text-on-surface">{data.summary.totalTests}</p>
             <p className="text-xs text-on-surface-variant">Tests</p>
           </CardContent>
         </Card>
@@ -200,7 +200,7 @@ export default function EvalDetailPage() {
         </Card>
         <Card>
           <CardContent className="py-3 text-center">
-            <p className="text-2xl font-bold text-white">
+            <p className="text-2xl font-bold text-on-surface">
               {data.suites.reduce((s, suite) => s + (suite.duration || 0), 0) > 1000
                 ? `${(data.suites.reduce((s, suite) => s + (suite.duration || 0), 0) / 1000).toFixed(1)}s`
                 : `${data.suites.reduce((s, suite) => s + (suite.duration || 0), 0)}ms`}
@@ -230,7 +230,7 @@ export default function EvalDetailPage() {
                 'px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer',
                 activeSuite === suite.suite
                   ? 'border-primary text-primary'
-                  : 'border-transparent text-on-surface-variant hover:text-white'
+                  : 'border-transparent text-on-surface-variant hover:text-on-surface'
               )}
             >
               {suite.suite}
@@ -249,7 +249,7 @@ export default function EvalDetailPage() {
 
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-1 bg-[#262626] rounded-lg p-1">
+        <div className="flex items-center gap-1 bg-surface-container-high rounded-lg p-1">
           {(['all', 'passed', 'failed'] as FilterType[]).map(f => (
             <button
               key={f}
@@ -257,8 +257,8 @@ export default function EvalDetailPage() {
               className={cn(
                 'px-3 py-1.5 text-sm rounded-md transition-colors capitalize cursor-pointer',
                 filter === f
-                  ? 'bg-[#20201f] text-white shadow-xs'
-                  : 'text-on-surface-variant hover:text-white'
+                  ? 'bg-surface-container-high text-on-surface shadow-xs'
+                  : 'text-on-surface-variant hover:text-on-surface'
               )}
             >
               {f === 'all' && 'All'}
@@ -276,7 +276,7 @@ export default function EvalDetailPage() {
           <select
             value={assertionTypeFilter}
             onChange={e => setAssertionTypeFilter(e.target.value)}
-            className="px-3 py-1.5 text-sm bg-[#262626] border-0 rounded-lg text-white/80"
+            className="px-3 py-1.5 text-sm bg-surface-container-high border-0 rounded-lg text-on-surface/80"
           >
             <option value="">All assertion types</option>
             {Array.from(assertionTypes).map(type => (

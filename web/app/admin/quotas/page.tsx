@@ -66,12 +66,12 @@ function MeterCell({ current, max, ovrd }: { current: number; max: number; ovrd:
   return (
     <div className="space-y-1">
       <div className="text-xs text-on-surface-variant tabular-nums">
-        <span className="text-white">{fmt(current)}</span>
+        <span className="text-on-surface">{fmt(current)}</span>
         <span className="mx-1">/</span>
         <span>{fmt(max)}</span>
         {ovrd && <span className="ml-1 text-primary" title="Per-user override">*</span>}
       </div>
-      <div className="h-1 w-full bg-[#262626] rounded">
+      <div className="h-1 w-full bg-surface-container-high rounded">
         <div className={`h-1 rounded ${tone}`} style={{ width: `${p}%` }} />
       </div>
     </div>
@@ -110,7 +110,7 @@ export default function AdminQuotasPage() {
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Gauge className="w-5 h-5 text-primary" />
-        <h2 className="text-lg font-extrabold tracking-tighter text-white">Quotas</h2>
+        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Quotas</h2>
         <span className="text-xs text-on-surface-variant">
           (* indicates a per-user override; everything else inherits the global default)
         </span>
@@ -120,7 +120,7 @@ export default function AdminQuotasPage() {
         <div className="p-2 bg-error-dim/10 border border-error-dim/20 rounded text-sm text-error">{error}</div>
       )}
 
-      <div className="overflow-x-auto bg-[#1a1a1a] rounded-lg">
+      <div className="overflow-x-auto bg-surface-container rounded-lg">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-on-surface-variant">
             <tr className="border-b border-outline-variant/10">
@@ -138,7 +138,7 @@ export default function AdminQuotasPage() {
             {!isLoading && rows.map((r) => (
               <tr key={r.userId} className="border-b border-outline-variant/5 last:border-0">
                 <td className="px-4 py-3">
-                  <div className="text-white font-medium">{r.username}</div>
+                  <div className="text-on-surface font-medium">{r.username}</div>
                   <div className="text-xs text-on-surface-variant">{r.userId.slice(0, 8)}…</div>
                 </td>
                 <td className="px-4 py-3 min-w-[160px]">
@@ -166,7 +166,7 @@ export default function AdminQuotasPage() {
                   <button
                     type="button"
                     onClick={() => { setEditing(r); setError(null); }}
-                    className="p-2 rounded text-on-surface-variant hover:bg-[#262626] hover:text-white cursor-pointer"
+                    className="p-2 rounded text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface cursor-pointer"
                     title="Edit overrides"
                   >
                     <Pencil className="w-4 h-4" />
@@ -177,7 +177,7 @@ export default function AdminQuotasPage() {
                     <button
                       type="button"
                       onClick={() => resetAllMutation.mutate(r.userId)}
-                      className="p-2 rounded text-on-surface-variant hover:bg-[#262626] hover:text-white cursor-pointer"
+                      className="p-2 rounded text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface cursor-pointer"
                       title="Clear all overrides for this user"
                     >
                       <RotateCcw className="w-4 h-4" />
@@ -240,10 +240,10 @@ function EditModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="bg-[#1a1a1a] rounded-2xl p-6 max-w-md w-full space-y-4 border border-primary/20">
+      <div className="bg-surface-container rounded-2xl p-6 max-w-md w-full space-y-4 border border-primary/20">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-extrabold tracking-tighter text-white">Quotas — {row.username}</h3>
+            <h3 className="text-lg font-extrabold tracking-tighter text-on-surface">Quotas — {row.username}</h3>
             <p className="text-sm text-on-surface-variant mt-1">
               Leave a field blank to inherit the global default. Set a positive integer to override.
             </p>
@@ -251,7 +251,7 @@ function EditModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded text-on-surface-variant hover:text-white cursor-pointer"
+            className="p-1 rounded text-on-surface-variant hover:text-on-surface cursor-pointer"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -268,7 +268,7 @@ function EditModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-2 bg-[#262626] text-on-surface-variant rounded-lg text-sm hover:text-white cursor-pointer"
+            className="px-3 py-2 bg-surface-container-high text-on-surface-variant rounded-lg text-sm hover:text-on-surface cursor-pointer"
           >
             Cancel
           </button>
@@ -297,7 +297,7 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ''))}
         placeholder="(inherit default)"
-        className="w-full bg-[#262626] border-none rounded-md py-2 px-3 text-white text-sm focus:ring-1 focus:ring-primary"
+        className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
       />
     </div>
   );

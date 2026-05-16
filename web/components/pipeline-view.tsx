@@ -65,7 +65,7 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
               {stage.status === 'awaiting_approval' && onApprove && (
                 <button
                   onClick={() => onApprove(stage.id)}
-                  className="mt-1 px-2 py-0.5 text-xs bg-orange-500 text-white rounded-full hover:bg-orange-600"
+                  className="mt-1 px-2 py-0.5 text-xs bg-orange-500 text-on-surface rounded-full hover:bg-orange-600"
                 >
                   Approve
                 </button>

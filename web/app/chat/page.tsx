@@ -1263,7 +1263,7 @@ export default function ChatPage() {
       {/* Side panel toggle */}
       <button
         onClick={() => setShowSidePanel(!showSidePanel)}
-        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-xs ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-white z-10 cursor-pointer"
+        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-xs ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-on-surface z-10 cursor-pointer"
         title={showSidePanel ? 'Hide panel' : 'Show panel'}
       >
         {showSidePanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}

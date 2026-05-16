@@ -77,10 +77,10 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
   return (
     <div className="space-y-6 max-w-3xl">
       <div className="flex items-center gap-3">
-        <Link href="/admin/orgs" className="text-on-surface-variant hover:text-white">
+        <Link href="/admin/orgs" className="text-on-surface-variant hover:text-on-surface">
           <ArrowLeft className="w-4 h-4" />
         </Link>
-        <h2 className="text-lg font-extrabold tracking-tighter text-white">SSO + SCIM</h2>
+        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">SSO + SCIM</h2>
         {savedToast && <span className="text-xs text-primary">Saved</span>}
       </div>
 
@@ -88,7 +88,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
       <section className="bg-surface-container-low border border-outline-variant/10 rounded-2xl p-5 space-y-4">
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-on-surface-variant" />
-          <h3 className="text-sm font-bold text-white">SAML 2.0</h3>
+          <h3 className="text-sm font-bold text-on-surface">SAML 2.0</h3>
           <label className="ml-auto flex items-center gap-2 text-sm text-on-surface-variant">
             <input
               type="checkbox"
@@ -100,7 +100,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
         </div>
 
         <p className="text-xs text-on-surface-variant leading-relaxed">
-          <strong className="text-white">What this is:</strong> SAML lets users in this org sign in
+          <strong className="text-on-surface">What this is:</strong> SAML lets users in this org sign in
           through your existing identity provider (Okta, Azure AD, Google Workspace, …) instead of
           managing a separate Octipus password. Users land on the IdP's login page, get
           redirected back to Octipus already authenticated. Use this if your company already has
@@ -110,9 +110,9 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
 
         <div className="text-xs text-on-surface-variant space-y-1">
           <p>SP metadata URL — give this to the IdP:</p>
-          <code className="block px-2 py-1 bg-[#0e0e0e] rounded text-white">{metadataUrl}</code>
+          <code className="block px-2 py-1 bg-background rounded text-on-surface">{metadataUrl}</code>
           <p className="mt-2">ACS URL:</p>
-          <code className="block px-2 py-1 bg-[#0e0e0e] rounded text-white">{acsUrl}</code>
+          <code className="block px-2 py-1 bg-background rounded text-on-surface">{acsUrl}</code>
         </div>
 
         <Field
@@ -151,7 +151,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
       <section className="bg-surface-container-low border border-outline-variant/10 rounded-2xl p-5 space-y-4">
         <div className="flex items-center gap-2">
           <KeyRound className="w-4 h-4 text-on-surface-variant" />
-          <h3 className="text-sm font-bold text-white">SCIM 2.0 inbound provisioning</h3>
+          <h3 className="text-sm font-bold text-on-surface">SCIM 2.0 inbound provisioning</h3>
           <label className="ml-auto flex items-center gap-2 text-sm text-on-surface-variant">
             <input
               type="checkbox"
@@ -163,7 +163,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
         </div>
 
         <p className="text-xs text-on-surface-variant leading-relaxed">
-          <strong className="text-white">What this is:</strong> SCIM lets your IdP push user
+          <strong className="text-on-surface">What this is:</strong> SCIM lets your IdP push user
           create/update/delete events into Octipus automatically — so when HR adds someone in Okta
           or Azure AD, they appear here within minutes (and disappear when removed). Pair it with
           SAML above to fully outsource user lifecycle. Without SCIM you'd add and remove people
@@ -173,7 +173,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
 
         <div className="text-xs text-on-surface-variant">
           <p>SCIM endpoint:</p>
-          <code className="block px-2 py-1 bg-[#0e0e0e] rounded text-white mt-1">{baseUrl}/api/scim/v2</code>
+          <code className="block px-2 py-1 bg-background rounded text-on-surface mt-1">{baseUrl}/api/scim/v2</code>
           <p className="mt-2">
             Bearer token is stored in the system vault under the name below. Add the secret first
             via <code>POST /api/vault</code> with <code>systemLevel: true</code>, then paste the
@@ -229,7 +229,7 @@ function Field({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="w-full px-3 py-2 bg-[#0e0e0e] border border-outline-variant/20 rounded-lg text-sm text-white font-mono placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm text-on-surface font-mono placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
         />
       ) : (
         <input
@@ -237,7 +237,7 @@ function Field({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="w-full px-3 py-2 bg-[#0e0e0e] border border-outline-variant/20 rounded-lg text-sm text-white placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm text-on-surface placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
         />
       )}
     </div>

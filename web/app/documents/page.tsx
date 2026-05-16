@@ -62,11 +62,11 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function getCategoryColor(category: string): string {
-  return CATEGORY_COLORS[category] || 'bg-[#262626] text-on-surface-variant';
+  return CATEGORY_COLORS[category] || 'bg-surface-container-high text-on-surface-variant';
 }
 
 function getStatusColor(status: string): string {
-  return STATUS_COLORS[status] || 'bg-[#262626] text-on-surface-variant';
+  return STATUS_COLORS[status] || 'bg-surface-container-high text-on-surface-variant';
 }
 
 function formatSize(bytes: number): string {
@@ -150,12 +150,12 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-lg mx-4"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Upload Documents</h2>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-semibold text-on-surface">Upload Documents</h2>
+          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -196,7 +196,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
           {selectedFiles.length > 0 && (
             <div className="space-y-1.5">
               {selectedFiles.map((file, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm text-white/80 bg-surface-container-low rounded-lg px-3 py-2">
+                <div key={i} className="flex items-center gap-2 text-sm text-on-surface/80 bg-surface-container-low rounded-lg px-3 py-2">
                   <FileText className="w-4 h-4 text-on-surface-variant shrink-0" />
                   <span className="flex-1 truncate">{file.name}</span>
                   <span className="text-xs text-on-surface-variant">{formatSize(file.size)}</span>
@@ -215,7 +215,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-white/80 bg-[#262626] rounded-lg hover:bg-[#20201f] cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface/80 bg-surface-container-high rounded-lg hover:bg-surface-container-high cursor-pointer"
             >
               Cancel
             </button>
@@ -331,13 +331,13 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <h4 className="text-sm font-medium text-white/80 flex items-center gap-1.5">
+        <h4 className="text-sm font-medium text-on-surface/80 flex items-center gap-1.5">
           <Eye className="w-4 h-4 text-primary" />
           Preview
         </h4>
         <button
           onClick={handleDownload}
-          className="text-xs text-on-surface-variant hover:text-white flex items-center gap-1 cursor-pointer"
+          className="text-xs text-on-surface-variant hover:text-on-surface flex items-center gap-1 cursor-pointer"
           title="Download original file"
         >
           <Download className="w-3.5 h-3.5" />
@@ -361,7 +361,7 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
           // eslint-disable-next-line @next/next/no-img-element
           <img src={blobUrl} alt={originalName} className="max-w-full max-h-[60vh] mx-auto block" />
         ) : isPdf && blobUrl ? (
-          <iframe src={blobUrl} title={originalName} className="w-full h-[60vh] bg-white" />
+          <iframe src={blobUrl} title={originalName} className="w-full h-[60vh] bg-on-surface" />
         ) : isText && textContent !== null ? (
           <pre className="text-xs text-on-surface-variant whitespace-pre-wrap font-mono p-3 max-h-[60vh] overflow-auto">
             {textContent}
@@ -386,11 +386,11 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-surface-container rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-white">Document Details</h2>
+          <h2 className="text-lg font-semibold text-on-surface">Document Details</h2>
           <div className="flex items-center gap-2">
             {data && (data.status === 'queued' || data.status === 'processing') && (
               <button
@@ -408,7 +408,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
               <Trash2 className="w-3.5 h-3.5" />
               Delete
             </button>
-            <button onClick={onClose} className="text-on-surface-variant hover:text-white cursor-pointer">
+            <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -425,17 +425,17 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   <FileText className="w-5 h-5 text-primary" />
-                  <h3 className="font-medium text-white">{data.originalName}</h3>
+                  <h3 className="font-medium text-on-surface">{data.originalName}</h3>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="text-sm">
                     <span className="text-on-surface-variant">Type:</span>{' '}
-                    <span className="text-white/80">{data.mimeType}</span>
+                    <span className="text-on-surface/80">{data.mimeType}</span>
                   </div>
                   <div className="text-sm">
                     <span className="text-on-surface-variant">Size:</span>{' '}
-                    <span className="text-white/80">{formatSize(data.size)}</span>
+                    <span className="text-on-surface/80">{formatSize(data.size)}</span>
                   </div>
                   <div className="text-sm">
                     <span className="text-on-surface-variant">Status:</span>{' '}
@@ -453,19 +453,19 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
                   )}
                   <div className="text-sm">
                     <span className="text-on-surface-variant">Created:</span>{' '}
-                    <span className="text-white/80">{formatDate(data.createdAt)}</span>
+                    <span className="text-on-surface/80">{formatDate(data.createdAt)}</span>
                   </div>
                   {data.processedAt && (
                     <div className="text-sm">
                       <span className="text-on-surface-variant">Processed:</span>{' '}
-                      <span className="text-white/80">{formatDate(data.processedAt)}</span>
+                      <span className="text-on-surface/80">{formatDate(data.processedAt)}</span>
                     </div>
                   )}
                 </div>
                 {data.storagePath && (
                   <div className="text-sm">
                     <span className="text-on-surface-variant">Path:</span>{' '}
-                    <span className="text-white/80 font-mono text-xs">{data.storagePath}</span>
+                    <span className="text-on-surface/80 font-mono text-xs">{data.storagePath}</span>
                   </div>
                 )}
               </div>
@@ -478,7 +478,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
 
               {data.summary && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2">Summary</h4>
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2">Summary</h4>
                   <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
                     {data.summary}
                   </p>
@@ -487,7 +487,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
 
               {data.ocrText && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2">OCR Text</h4>
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2">OCR Text</h4>
                   <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-64 overflow-y-auto">
                     {data.ocrText}
                   </pre>
@@ -496,7 +496,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
 
               {data.metadata && Object.keys(data.metadata).length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-white/80 mb-2">Metadata</h4>
+                  <h4 className="text-sm font-medium text-on-surface/80 mb-2">Metadata</h4>
                   <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-48 overflow-y-auto">
                     {JSON.stringify(data.metadata, null, 2)}
                   </pre>
@@ -527,7 +527,7 @@ function DocumentCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10">
+    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
@@ -538,7 +538,7 @@ function DocumentCard({
           </div>
           <FileText className="w-5 h-5 text-primary shrink-0" />
           <div className="min-w-0">
-            <h3 className="font-medium text-white truncate">{document.originalName}</h3>
+            <h3 className="font-medium text-on-surface truncate">{document.originalName}</h3>
             <div className="flex items-center gap-2 text-xs text-on-surface-variant mt-0.5">
               <span className="flex items-center gap-1">
                 <HardDrive className="w-3 h-3" />
@@ -600,7 +600,7 @@ function DocumentCard({
         <div className="border-t border-outline-variant/10 p-4 space-y-4">
           {document.summary && (
             <div>
-              <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+              <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                 <Tag className="w-4 h-4 text-primary" />
                 Summary
               </h4>
@@ -612,7 +612,7 @@ function DocumentCard({
 
           {document.ocrText && (
             <div>
-              <h4 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-1.5">
+              <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-primary" />
                 OCR Text
               </h4>
@@ -624,7 +624,7 @@ function DocumentCard({
 
           {document.metadata && Object.keys(document.metadata).length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-white/80 mb-2">Metadata</h4>
+              <h4 className="text-sm font-medium text-on-surface/80 mb-2">Metadata</h4>
               <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-32 overflow-y-auto">
                 {JSON.stringify(document.metadata, null, 2)}
               </pre>
@@ -735,7 +735,7 @@ export default function DocumentsPage() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search documents by name..."
-            className="w-full pl-10 pr-4 py-2 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+            className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
           />
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
@@ -744,8 +744,8 @@ export default function DocumentsPage() {
             className={cn(
               'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
               !categoryFilter
-                ? 'bg-primary text-white'
-                : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
+                ? 'bg-primary text-on-surface'
+                : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high'
             )}
           >
             All
@@ -757,8 +757,8 @@ export default function DocumentsPage() {
               className={cn(
                 'px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors',
                 categoryFilter === cat
-                  ? 'bg-primary text-white'
-                  : 'bg-[#262626] text-on-surface-variant hover:bg-[#20201f]'
+                  ? 'bg-primary text-on-surface'
+                  : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high'
               )}
             >
               {cat}
@@ -768,7 +768,7 @@ export default function DocumentsPage() {
         <select
           value={statusFilter || ''}
           onChange={(e) => setStatusFilter(e.target.value || null)}
-          className="px-3 py-1.5 bg-[#1a1a1a] border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-white"
+          className="px-3 py-1.5 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
         >
           <option value="">All statuses</option>
           <option value="queued">Queued</option>
@@ -780,12 +780,12 @@ export default function DocumentsPage() {
 
       {/* Documents list */}
       {isLoading ? (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-[#1a1a1a] rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <FileText className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
           <p className="text-on-surface-variant">No documents found</p>
           <p className="text-sm text-on-surface-variant mt-1">Click &quot;Upload&quot; to add files. They will be processed with OCR and indexed automatically.</p>

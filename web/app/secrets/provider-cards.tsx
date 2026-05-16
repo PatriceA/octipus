@@ -13,7 +13,7 @@ interface ProviderCardsProps {
 export function ProviderCards({ statuses, onStatusChange }: ProviderCardsProps) {
   return (
     <div>
-      <h2 className="text-base font-extrabold tracking-tighter text-white mb-1">
+      <h2 className="text-base font-extrabold tracking-tighter text-on-surface mb-1">
         Provider API Keys
       </h2>
       <p className="text-sm text-on-surface-variant mb-4">
@@ -107,7 +107,7 @@ function ProviderCard({
   };
 
   return (
-    <div className="p-4 bg-[#1a1a1a] rounded-xs">
+    <div className="p-4 bg-surface-container rounded-xs">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -115,7 +115,7 @@ function ProviderCard({
               {label[0]}
             </span>
           </div>
-          <span className="font-medium text-sm text-white">{label}</span>
+          <span className="font-medium text-sm text-on-surface">{label}</span>
         </div>
         <span
           className={`w-2.5 h-2.5 rounded-full transition-colors ${
@@ -131,7 +131,7 @@ function ProviderCard({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={isSaved ? 'Saved (enter new to replace)' : placeholder || 'Enter API key...'}
-          className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           onKeyDown={(e) => e.key === 'Enter' && handleSave()}
         />
         <button

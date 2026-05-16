@@ -85,10 +85,10 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
         <div key={r.dataPointId ?? i} className="bg-[#111] border border-outline-variant/10 rounded-lg overflow-hidden">
           <button
             onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
-            className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#1a1a1a] cursor-pointer text-left"
+            className="w-full flex items-center gap-3 px-3 py-2 hover:bg-surface-container cursor-pointer text-left"
           >
             {expandedIdx === i ? <ChevronDown className="w-3 h-3 text-on-surface-variant shrink-0" /> : <ChevronRight className="w-3 h-3 text-on-surface-variant shrink-0" />}
-            <span className="text-xs text-white/80 truncate flex-1">{r.input}</span>
+            <span className="text-xs text-on-surface/80 truncate flex-1">{r.input}</span>
             <div className="flex items-center gap-1 shrink-0">
               {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                 <span key={s.metric} className={`text-[10px] px-1.5 py-0.5 rounded ${
@@ -105,11 +105,11 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
             <div className="px-3 pb-3 space-y-2 text-xs border-t border-outline-variant/10">
               <div className="mt-2">
                 <span className="text-on-surface-variant font-medium">Question:</span>
-                <p className="text-white/80 mt-0.5 whitespace-pre-wrap">{r.input}</p>
+                <p className="text-on-surface/80 mt-0.5 whitespace-pre-wrap">{r.input}</p>
               </div>
               <div>
                 <span className="text-on-surface-variant font-medium">Model Answer:</span>
-                <p className="text-white/80 mt-0.5 whitespace-pre-wrap max-h-40 overflow-y-auto">{r.output || '(empty)'}</p>
+                <p className="text-on-surface/80 mt-0.5 whitespace-pre-wrap max-h-40 overflow-y-auto">{r.output || '(empty)'}</p>
               </div>
               {r.reference && (
                 <div>
@@ -125,7 +125,7 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
                       <span className={`w-2 h-2 rounded-full shrink-0 ${
                         s.status === 'PASS' ? 'bg-green-500' : s.status === 'FAIL' ? 'bg-red-500' : 'bg-gray-500'
                       }`} />
-                      <span className="text-white/70">{s.metric}</span>
+                      <span className="text-on-surface/70">{s.metric}</span>
                       <ScoreBar score={s.score} size="sm" />
                     </div>
                     {s.reasoning && (
@@ -173,7 +173,7 @@ function RunHistoryRow({ run }: { run: EvalRun }) {
         <span className="text-xs text-on-surface-variant shrink-0" suppressHydrationWarning>
           {formatDate(run.createdAt)}
         </span>
-        <span className="text-sm text-white/80 font-mono truncate flex-1 text-left">{run.model}</span>
+        <span className="text-sm text-on-surface/80 font-mono truncate flex-1 text-left">{run.model}</span>
         {run.dataset && (
           <span className="text-xs text-on-surface-variant shrink-0">{run.dataset}</span>
         )}
@@ -194,7 +194,7 @@ function RunHistoryRow({ run }: { run: EvalRun }) {
           {evaluatorKeys.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mt-3">
               {evaluatorKeys.map(k => (
-                <div key={k} className="bg-[#1a1a1a] rounded-lg p-3 border border-outline-variant/10">
+                <div key={k} className="bg-surface-container rounded-lg p-3 border border-outline-variant/10">
                   <p className="text-xs text-on-surface-variant mb-1.5 truncate" title={k}>{k}</p>
                   <ScoreBar score={scores[k].mean} />
                   <div className="flex items-center gap-3 mt-1.5 text-xs text-on-surface-variant">
@@ -333,7 +333,7 @@ export function ModelEvalTab() {
       {/* Run section */}
       <Card>
         <CardContent className="p-5">
-          <h3 className="text-sm font-semibold text-white mb-4">Run Evaluation</h3>
+          <h3 className="text-sm font-semibold text-on-surface mb-4">Run Evaluation</h3>
           <div className="flex flex-wrap items-start gap-4">
             {/* Model selector */}
             <div className="flex flex-col gap-1">
@@ -341,7 +341,7 @@ export function ModelEvalTab() {
               <select
                 value={selectedModel}
                 onChange={e => setSelectedModel(e.target.value)}
-                className="bg-[#1a1a1a] border border-outline-variant/10 rounded-lg px-3 py-2 text-sm text-white min-w-[200px] cursor-pointer"
+                className="bg-surface-container border border-outline-variant/10 rounded-lg px-3 py-2 text-sm text-on-surface min-w-[200px] cursor-pointer"
               >
                 {models.length === 0 && <option value="">No models available</option>}
                 {models.map(m => (
@@ -357,7 +357,7 @@ export function ModelEvalTab() {
                 <select
                   value={selectedDataset}
                   onChange={e => setSelectedDataset(e.target.value)}
-                  className="bg-[#1a1a1a] border border-outline-variant/10 rounded-lg px-3 py-2 text-sm text-white min-w-[180px] cursor-pointer"
+                  className="bg-surface-container border border-outline-variant/10 rounded-lg px-3 py-2 text-sm text-on-surface min-w-[180px] cursor-pointer"
                 >
                   <option value="">Default dataset</option>
                   {datasets.map(d => (
@@ -377,7 +377,7 @@ export function ModelEvalTab() {
                   {evaluators.map(e => (
                     <label
                       key={e.name}
-                      className="flex items-center gap-1.5 text-sm text-white/80 cursor-pointer"
+                      className="flex items-center gap-1.5 text-sm text-on-surface/80 cursor-pointer"
                       title={e.description}
                     >
                       <input
@@ -398,9 +398,9 @@ export function ModelEvalTab() {
                 onClick={runEval}
                 disabled={running || !selectedModel}
                 className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm cursor-pointer ${
-                  running ? 'bg-yellow-600 text-white' :
-                  !selectedModel ? 'bg-[#1a1a1a] text-on-surface-variant cursor-not-allowed' :
-                  'bg-primary text-white hover:bg-primary-dim'
+                  running ? 'bg-yellow-600 text-on-surface' :
+                  !selectedModel ? 'bg-surface-container text-on-surface-variant cursor-not-allowed' :
+                  'bg-primary text-on-surface hover:bg-primary-dim'
                 }`}
               >
                 {running ? (
@@ -425,7 +425,7 @@ export function ModelEvalTab() {
       {runs.length > 0 && runs[0].scores && Object.keys(runs[0].scores).length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-white">Latest Run — {runs[0].model}</h2>
+            <h2 className="text-sm font-semibold text-on-surface">Latest Run — {runs[0].model}</h2>
             <span className="text-xs text-on-surface-variant" suppressHydrationWarning>{formatDate(runs[0].createdAt)}</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -453,7 +453,7 @@ export function ModelEvalTab() {
                     </div>
                     <ScoreBar score={score.mean} size="sm" />
                   </div>
-                  <p className="text-sm font-medium text-white truncate" title={name}>{name}</p>
+                  <p className="text-sm font-medium text-on-surface truncate" title={name}>{name}</p>
                   <div className="flex items-center gap-3 mt-1 text-xs text-on-surface-variant">
                     <span className="flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" />
@@ -472,9 +472,9 @@ export function ModelEvalTab() {
 
           {/* Drill-down panel */}
           {drillTarget?.runId === runs[0].id && drillSamples.length > 0 && (
-            <div className="mt-3 bg-[#1a1a1a] border border-outline-variant/10 rounded-xl p-4">
+            <div className="mt-3 bg-surface-container border border-outline-variant/10 rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-medium text-white">{drillTarget.evaluator} — Sample Results</p>
+                <p className="text-sm font-medium text-on-surface">{drillTarget.evaluator} — Sample Results</p>
                 <button onClick={() => setDrillTarget(null)} className="text-xs text-on-surface-variant underline cursor-pointer">close</button>
               </div>
               <DrillDown samples={drillSamples} />
@@ -488,7 +488,7 @@ export function ModelEvalTab() {
         <div>
           <div className="flex items-center gap-2 mb-3">
             <Layers className="w-4 h-4 text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-white">Cross-Model Comparison</h2>
+            <h2 className="text-sm font-semibold text-on-surface">Cross-Model Comparison</h2>
           </div>
           <Card>
             <CardContent className="p-0 overflow-x-auto">
@@ -506,7 +506,7 @@ export function ModelEvalTab() {
                 <tbody>
                   {summaryModels.map((model, i) => (
                     <tr key={model} className={i > 0 ? 'border-t border-outline-variant/10' : ''}>
-                      <td className="py-2 px-4 text-white/80 font-mono truncate max-w-[176px]" title={model}>
+                      <td className="py-2 px-4 text-on-surface/80 font-mono truncate max-w-[176px]" title={model}>
                         {model}
                       </td>
                       {summaryEvaluators.map(e => (
@@ -524,10 +524,10 @@ export function ModelEvalTab() {
       {/* Historical runs */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-white">Run History</h2>
+          <h2 className="text-sm font-semibold text-on-surface">Run History</h2>
           <button
             onClick={fetchAll}
-            className="px-3 py-1.5 border border-outline-variant/10 text-white/80 rounded-lg hover:bg-[#1a1a1a] cursor-pointer"
+            className="px-3 py-1.5 border border-outline-variant/10 text-on-surface/80 rounded-lg hover:bg-surface-container cursor-pointer"
             title="Refresh"
           >
             <RefreshCw className="w-3.5 h-3.5" />

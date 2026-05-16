@@ -99,13 +99,13 @@ export default function ArtifactDetailPage() {
               href={a.outerUrl}
               target="_blank"
               rel="noreferrer"
-              className="rounded border border-[#262626] px-3 py-1 text-sm hover:bg-[#262626]"
+              className="rounded border border-[#262626] px-3 py-1 text-sm hover:bg-surface-container-high"
             >
               Open
             </a>
             <button
               onClick={() => refresh.mutate()}
-              className="rounded bg-blue-600 px-3 py-1 text-sm text-white hover:bg-blue-500"
+              className="rounded bg-blue-600 px-3 py-1 text-sm text-on-surface hover:bg-blue-500"
             >
               {refresh.isPending ? 'Refreshing…' : 'Refresh now'}
             </button>
@@ -115,13 +115,13 @@ export default function ArtifactDetailPage() {
                 <button
                   onClick={() => del.mutate()}
                   disabled={del.isPending}
-                  className="rounded bg-red-600 px-2 py-1 text-white hover:bg-red-500"
+                  className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-red-500"
                 >
                   Yes
                 </button>
                 <button
                   onClick={() => setConfirmDelete(false)}
-                  className="rounded border border-[#262626] px-2 py-1 hover:bg-[#262626]"
+                  className="rounded border border-[#262626] px-2 py-1 hover:bg-surface-container-high"
                 >
                   No
                 </button>
@@ -184,7 +184,7 @@ export default function ArtifactDetailPage() {
         <Section title="Share links">
           <button
             onClick={() => mintLink.mutate()}
-            className="mb-2 rounded bg-[#1a1a1a] px-3 py-1 text-xs hover:bg-[#262626]"
+            className="mb-2 rounded bg-surface-container px-3 py-1 text-xs hover:bg-surface-container-high"
           >
             Mint share link
           </button>

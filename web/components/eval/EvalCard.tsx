@@ -55,7 +55,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
               )}
             </div>
             <div>
-              <p className="text-sm font-medium text-white">
+              <p className="text-sm font-medium text-on-surface">
                 {suites.length === 1 ? suites[0].suite : `${suites.length} suites`}
               </p>
               <p className="text-xs text-on-surface-variant" suppressHydrationWarning>

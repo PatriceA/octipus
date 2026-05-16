@@ -111,7 +111,7 @@ export default function AgentDetailPage() {
       <div className="space-y-4">
         <button
           onClick={() => router.push('/agents')}
-          className="flex items-center gap-2 text-sm text-on-surface-variant hover:text-white"
+          className="flex items-center gap-2 text-sm text-on-surface-variant hover:text-on-surface"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Agents
@@ -130,12 +130,12 @@ export default function AgentDetailPage() {
         <div>
           <button
             onClick={() => router.push('/agents')}
-            className="flex items-center gap-2 text-sm text-on-surface-variant hover:text-white mb-2"
+            className="flex items-center gap-2 text-sm text-on-surface-variant hover:text-on-surface mb-2"
           >
             <ArrowLeft className="w-4 h-4" />
             Back to Agents
           </button>
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-white flex items-center gap-3">
+          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface flex items-center gap-3">
             <Bot className="w-6 h-6" />
             Agent {agentId.slice(0, 8)}
           </h1>
@@ -171,7 +171,7 @@ export default function AgentDetailPage() {
         {isRunning ? (
           <button
             onClick={handleStop}
-            className="flex items-center gap-2 px-3 py-2 bg-error text-white rounded-full hover:bg-error-dim text-sm cursor-pointer font-medium"
+            className="flex items-center gap-2 px-3 py-2 bg-error text-on-surface rounded-full hover:bg-error-dim text-sm cursor-pointer font-medium"
           >
             <Square className="w-4 h-4" />
             Stop

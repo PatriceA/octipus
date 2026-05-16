@@ -61,12 +61,12 @@ export function SecurityTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-extrabold tracking-tighter text-white">Security</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Security</h2>
 
       <div className="space-y-4">
         <div className="flex items-center justify-between p-4 bg-surface-container-low rounded-lg">
           <div>
-            <h3 className="font-medium text-white">Two-Factor Authentication (TOTP)</h3>
+            <h3 className="font-medium text-on-surface">Two-Factor Authentication (TOTP)</h3>
             <p className="text-sm text-on-surface-variant">
               {profile?.totpEnabled
                 ? 'Your account is protected with 2FA'
@@ -78,7 +78,7 @@ export function SecurityTab() {
               className={`px-2 py-0.5 text-xs rounded-full ${
                 profile?.totpEnabled
                   ? 'bg-green-900/30 text-green-300'
-                  : 'bg-[#262626] text-on-surface-variant'
+                  : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
               {profile?.totpEnabled ? 'Enabled' : 'Disabled'}
@@ -98,24 +98,24 @@ export function SecurityTab() {
         {/* TOTP Setup Flow */}
         {setupData && (
           <div className="p-4 border border-outline-variant/10 rounded-lg space-y-4">
-            <h4 className="font-medium text-white">Scan this QR code with your authenticator app</h4>
+            <h4 className="font-medium text-on-surface">Scan this QR code with your authenticator app</h4>
             {setupData.qrCode && (
-              <div className="flex justify-center p-4 bg-white rounded-lg">
+              <div className="flex justify-center p-4 bg-on-surface rounded-lg">
                 <img src={setupData.qrCode} alt="TOTP QR Code" className="w-48 h-48" />
               </div>
             )}
             <div>
               <p className="text-xs text-on-surface-variant mb-1">Or enter this secret manually:</p>
-              <code className="block px-3 py-2 bg-[#262626] rounded text-sm font-mono break-all text-white">
+              <code className="block px-3 py-2 bg-surface-container-high rounded text-sm font-mono break-all text-on-surface">
                 {setupData.secret}
               </code>
             </div>
             {setupData.backupCodes && setupData.backupCodes.length > 0 && (
               <div>
                 <p className="text-xs text-on-surface-variant mb-1">Save these backup codes somewhere safe:</p>
-                <div className="grid grid-cols-2 gap-1 px-3 py-2 bg-[#262626] rounded font-mono text-sm">
+                <div className="grid grid-cols-2 gap-1 px-3 py-2 bg-surface-container-high rounded font-mono text-sm">
                   {setupData.backupCodes.map((code, i) => (
-                    <span key={i} className="text-white">{code}</span>
+                    <span key={i} className="text-on-surface">{code}</span>
                   ))}
                 </div>
               </div>
@@ -130,12 +130,12 @@ export function SecurityTab() {
                   value={verifyCode}
                   onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   placeholder="000000"
-                  className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-center font-mono text-lg tracking-widest focus:ring-1 focus:ring-primary"
+                  className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-center font-mono text-lg tracking-widest focus:ring-1 focus:ring-primary"
                 />
                 <button
                   onClick={handleVerify}
                   disabled={loading || verifyCode.length !== 6}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  className="px-4 py-2 bg-green-600 text-on-surface rounded-lg hover:bg-green-700 disabled:opacity-50"
                 >
                   Verify
                 </button>
@@ -143,7 +143,7 @@ export function SecurityTab() {
             </div>
             <button
               onClick={() => { setSetupData(null); setVerifyCode(''); }}
-              className="text-sm text-on-surface-variant hover:text-white"
+              className="text-sm text-on-surface-variant hover:text-on-surface"
             >
               Cancel
             </button>
@@ -153,19 +153,19 @@ export function SecurityTab() {
         {/* Disable 2FA */}
         {profile?.totpEnabled && (
           <div className="p-4 bg-surface-container-low rounded-xs">
-            <h4 className="font-medium text-white mb-2">Disable 2FA</h4>
+            <h4 className="font-medium text-on-surface mb-2">Disable 2FA</h4>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={disableCode}
                 onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="Enter TOTP code"
-                className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white font-mono focus:ring-1 focus:ring-primary"
+                className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface font-mono focus:ring-1 focus:ring-primary"
               />
               <button
                 onClick={handleDisable}
                 disabled={loading || disableCode.length !== 6}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                className="px-4 py-2 bg-red-600 text-on-surface rounded-lg hover:bg-red-700 disabled:opacity-50"
               >
                 Disable
               </button>

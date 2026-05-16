@@ -81,7 +81,7 @@ export default function LinkAccountPage() {
   if (!isAuthenticated) {
     return (
       <div className="max-w-xl mx-auto p-8 space-y-3">
-        <h1 className="text-2xl font-extrabold tracking-tighter text-white">Link account</h1>
+        <h1 className="text-2xl font-extrabold tracking-tighter text-on-surface">Link account</h1>
         <p className="text-on-surface-variant">
           Sign in first, then return to this page to enter the code from your channel.
         </p>
@@ -105,15 +105,15 @@ export default function LinkAccountPage() {
           <Link2 className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-2xl font-extrabold tracking-tighter text-white">Link a channel</h1>
+          <h1 className="text-2xl font-extrabold tracking-tighter text-on-surface">Link a channel</h1>
           <p className="text-on-surface-variant text-sm">
             Connect a Telegram chat, Slack DM, WhatsApp number, or Teams account to this user.
           </p>
         </div>
       </div>
 
-      <div className="bg-[#1a1a1a] rounded-2xl p-5 space-y-4">
-        <h2 className="font-medium text-white">Enter the code from your channel</h2>
+      <div className="bg-surface-container rounded-2xl p-5 space-y-4">
+        <h2 className="font-medium text-on-surface">Enter the code from your channel</h2>
         <p className="text-xs text-on-surface-variant">
           The channel sent you a 6-character code along with this page. Codes expire after 15 minutes.
         </p>
@@ -122,7 +122,7 @@ export default function LinkAccountPage() {
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12))}
           placeholder="ABCDEF"
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-center font-mono text-2xl tracking-widest focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-center font-mono text-2xl tracking-widest focus:ring-1 focus:ring-primary"
         />
         <button
           type="button"
@@ -147,14 +147,14 @@ export default function LinkAccountPage() {
       </div>
 
       {data && data.bindings.length > 0 && (
-        <div className="bg-[#1a1a1a] rounded-2xl p-5 space-y-3">
-          <h2 className="font-medium text-white text-sm">Linked channels</h2>
+        <div className="bg-surface-container rounded-2xl p-5 space-y-3">
+          <h2 className="font-medium text-on-surface text-sm">Linked channels</h2>
           <div className="space-y-2">
             {data.bindings.map((b) => (
               <div key={b.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-white capitalize">{b.channelType}</span>
+                    <span className="text-sm font-medium text-on-surface capitalize">{b.channelType}</span>
                     <code className="text-xs text-on-surface-variant font-mono truncate">{b.externalId}</code>
                   </div>
                   {b.externalHandle && (
@@ -164,7 +164,7 @@ export default function LinkAccountPage() {
                 <button
                   type="button"
                   onClick={() => unbindMutation.mutate({ channelType: b.channelType, externalId: b.externalId })}
-                  className="ml-3 p-2 rounded-lg text-on-surface-variant hover:bg-[#262626] hover:text-red-400 cursor-pointer"
+                  className="ml-3 p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-red-400 cursor-pointer"
                   aria-label={`Unbind ${b.channelType}`}
                   title="Unbind"
                 >

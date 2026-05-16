@@ -565,7 +565,7 @@ function TreeNode({
           {hasKids ? (
             <button
               onClick={() => toggleCollapse(node.nodeId)}
-              className="text-on-surface-variant hover:text-white cursor-pointer"
+              className="text-on-surface-variant hover:text-on-surface cursor-pointer"
               title={isCollapsed ? 'Expand' : 'Collapse'}
             >
               {isCollapsed ? (
@@ -633,7 +633,7 @@ function TreeNode({
         <div className="mt-1.5 flex items-center gap-1">
           <button
             onClick={() => onViewBrief(node)}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-on-surface-variant hover:text-white hover:bg-surface-container-high cursor-pointer"
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer"
             title="View task brief"
           >
             <FileText className="w-2.5 h-2.5" />
@@ -641,7 +641,7 @@ function TreeNode({
           </button>
           <button
             onClick={() => onViewResult(node)}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-on-surface-variant hover:text-white hover:bg-surface-container-high cursor-pointer"
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer"
             title="View child result"
           >
             <Eye className="w-2.5 h-2.5" />
@@ -650,7 +650,7 @@ function TreeNode({
           {onViewEvents && (
             <button
               onClick={() => onViewEvents(node.nodeId)}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-on-surface-variant hover:text-white hover:bg-surface-container-high cursor-pointer"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high cursor-pointer"
               title="View agent events"
             >
               events

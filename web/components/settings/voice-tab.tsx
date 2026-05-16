@@ -77,7 +77,7 @@ export function VoiceTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-bold text-white mb-1">Voice & Phone Calls</h2>
+        <h2 className="text-lg font-bold text-on-surface mb-1">Voice & Phone Calls</h2>
         <p className="text-sm text-on-surface-variant">
           Configure telephony providers for making and receiving phone calls.
         </p>
@@ -97,7 +97,7 @@ export function VoiceTab() {
       {/* Credential Status */}
       {currentProvider !== 'disabled' && providerConfig && (
         <div className="bg-surface-container rounded-xl p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
             <Phone className="w-4 h-4" />
             {currentProvider.charAt(0).toUpperCase() + currentProvider.slice(1)} Credentials
           </h3>
@@ -123,7 +123,7 @@ export function VoiceTab() {
       {/* Webhook URL */}
       {currentProvider !== 'disabled' && publicUrl && (
         <div className="bg-surface-container rounded-xl p-4 space-y-2">
-          <h3 className="text-sm font-semibold text-white">Webhook URL</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Webhook URL</h3>
           <p className="text-xs text-on-surface-variant">
             Configure this in your {currentProvider.charAt(0).toUpperCase() + currentProvider.slice(1)} console as the voice webhook URL:
           </p>
@@ -144,12 +144,12 @@ export function VoiceTab() {
       {/* Test Connection */}
       {currentProvider !== 'disabled' && (
         <div className="bg-surface-container rounded-xl p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-white">Connection Test</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Connection Test</h3>
           <div className="flex items-center gap-3">
             <button
               onClick={testConnection}
               disabled={testingHealth}
-              className="px-4 py-2 bg-primary text-[#002a6d] rounded-lg text-sm font-medium hover:bg-primary-container disabled:opacity-50"
+              className="px-4 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium hover:bg-primary-container disabled:opacity-50"
             >
               {testingHealth ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Test Connection'}
             </button>
@@ -167,7 +167,7 @@ export function VoiceTab() {
 
       {/* Setup Guide */}
       <div className="bg-surface-container rounded-xl p-4 space-y-2">
-        <h3 className="text-sm font-semibold text-white">Setup Guide</h3>
+        <h3 className="text-sm font-semibold text-on-surface">Setup Guide</h3>
         <ol className="text-xs text-on-surface-variant space-y-1.5 list-decimal list-inside">
           <li>Choose a provider above (Twilio, Telnyx, or Plivo)</li>
           <li>Store the provider credentials in <a href="/secrets" className="text-primary hover:underline">Secrets (Vault)</a></li>

@@ -78,7 +78,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-extrabold tracking-tighter text-white">
+        <h2 className="text-base font-extrabold tracking-tighter text-on-surface">
           All Vault Entries
         </h2>
         <button
@@ -98,7 +98,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter by name, type, or tag..."
-          className="w-full pl-10 pr-4 py-2 text-sm bg-[#262626] border-none rounded-md text-white placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full pl-10 pr-4 py-2 text-sm bg-surface-container-high border-none rounded-md text-on-surface placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
         />
       </div>
 
@@ -109,7 +109,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
             : 'No secrets match your filter.'}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xs bg-[#1a1a1a]">
+        <div className="overflow-x-auto rounded-xs bg-surface-container">
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-outline-variant/10">
@@ -127,10 +127,10 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                 return (
                   <tr
                     key={cred.id}
-                    className="hover:bg-[#20201f] transition-colors"
+                    className="hover:bg-surface-container-high transition-colors"
                   >
                     <td className="py-2.5 px-4">
-                      <div className="font-medium text-sm text-white">{cred.name}</div>
+                      <div className="font-medium text-sm text-on-surface">{cred.name}</div>
                       {cred.description && (
                         <div className="text-xs text-on-surface-variant mt-0.5">{cred.description}</div>
                       )}
@@ -145,7 +145,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                         {cred.tags?.map((tag) => (
                           <span
                             key={tag}
-                            className="inline-flex px-1.5 py-0.5 text-[10px] rounded bg-[#262626] text-on-surface-variant"
+                            className="inline-flex px-1.5 py-0.5 text-[10px] rounded bg-surface-container-high text-on-surface-variant"
                           >
                             {tag}
                           </span>
@@ -164,14 +164,14 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => setRotateId(cred.id)}
-                          className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-[#20201f] cursor-pointer"
+                          className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"
                           title="Rotate"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => setDeleteId(cred.id)}
-                          className="p-1.5 text-on-surface-variant hover:text-error rounded-md hover:bg-[#20201f] cursor-pointer"
+                          className="p-1.5 text-on-surface-variant hover:text-error rounded-md hover:bg-surface-container-high cursor-pointer"
                           title="Delete"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -213,13 +213,13 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
           <div className="flex justify-end gap-3">
             <button
               onClick={() => setDeleteId(null)}
-              className="px-4 py-2 text-sm text-on-surface-variant hover:bg-[#1a1a1a] rounded-lg cursor-pointer"
+              className="px-4 py-2 text-sm text-on-surface-variant hover:bg-surface-container rounded-lg cursor-pointer"
             >
               Cancel
             </button>
             <button
               onClick={() => deleteId && handleDelete(deleteId)}
-              className="px-4 py-2 text-sm bg-error text-white rounded-lg hover:bg-error-dim cursor-pointer"
+              className="px-4 py-2 text-sm bg-error text-on-surface rounded-lg hover:bg-error-dim cursor-pointer"
             >
               Delete
             </button>
@@ -256,7 +256,7 @@ function AddSecretForm({
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           placeholder="my_api_key"
         />
       </div>
@@ -266,7 +266,7 @@ function AddSecretForm({
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
       </div>
       <div>
@@ -274,7 +274,7 @@ function AddSecretForm({
         <select
           value={credentialType}
           onChange={(e) => setCredentialType(e.target.value as CredentialType)}
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         >
           <option value="api_key">API Key</option>
           <option value="oauth_token">OAuth Token</option>
@@ -290,7 +290,7 @@ function AddSecretForm({
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           placeholder="Optional description"
         />
       </div>
@@ -300,7 +300,7 @@ function AddSecretForm({
           <select
             value={scope}
             onChange={(e) => setScope(e.target.value as 'user' | 'workspace')}
-            className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+            className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           >
             <option value="user">User (visible everywhere)</option>
             <option value="workspace">Workspace ({workspaceName ?? 'current'})</option>
@@ -313,14 +313,14 @@ function AddSecretForm({
           type="text"
           value={tags}
           onChange={(e) => setTags(e.target.value)}
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           placeholder="production, openai"
         />
       </div>
       <div className="flex justify-end gap-3 pt-2">
         <button
           onClick={onCancel}
-          className="px-4 py-2 text-sm text-on-surface-variant hover:bg-[#1a1a1a] rounded-lg"
+          className="px-4 py-2 text-sm text-on-surface-variant hover:bg-surface-container rounded-lg"
         >
           Cancel
         </button>
@@ -362,13 +362,13 @@ function RotateForm({
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
       </div>
       <div className="flex justify-end gap-3">
         <button
           onClick={onCancel}
-          className="px-4 py-2 text-sm text-on-surface-variant hover:bg-[#1a1a1a] rounded-lg"
+          className="px-4 py-2 text-sm text-on-surface-variant hover:bg-surface-container rounded-lg"
         >
           Cancel
         </button>

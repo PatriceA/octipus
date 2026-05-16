@@ -75,11 +75,11 @@ function FormattedResult({ text }: { text: string }) {
 
     // Headings
     if (line.startsWith('### ')) {
-      elements.push(<h4 key={i} className="text-sm font-bold text-white mt-4 mb-1">{line.slice(4)}</h4>);
+      elements.push(<h4 key={i} className="text-sm font-bold text-on-surface mt-4 mb-1">{line.slice(4)}</h4>);
     } else if (line.startsWith('## ')) {
-      elements.push(<h3 key={i} className="text-base font-bold text-white mt-5 mb-2">{line.slice(3)}</h3>);
+      elements.push(<h3 key={i} className="text-base font-bold text-on-surface mt-5 mb-2">{line.slice(3)}</h3>);
     } else if (line.startsWith('# ')) {
-      elements.push(<h2 key={i} className="text-lg font-bold text-white mt-5 mb-2">{line.slice(2)}</h2>);
+      elements.push(<h2 key={i} className="text-lg font-bold text-on-surface mt-5 mb-2">{line.slice(2)}</h2>);
     }
     // Bullet points
     else if (line.match(/^[-*] /)) {
@@ -142,9 +142,9 @@ function renderInline(text: string): React.ReactNode {
     }
 
     if (first === boldMatch) {
-      parts.push(<strong key={key++} className="text-white font-semibold">{first[1]}</strong>);
+      parts.push(<strong key={key++} className="text-on-surface font-semibold">{first[1]}</strong>);
     } else if (first === codeMatch) {
-      parts.push(<code key={key++} className="bg-[#262626] px-1 py-0.5 rounded text-xs font-mono text-primary">{first[1]}</code>);
+      parts.push(<code key={key++} className="bg-surface-container-high px-1 py-0.5 rounded text-xs font-mono text-primary">{first[1]}</code>);
     }
 
     remaining = remaining.slice(idx + first[0].length);
@@ -161,15 +161,15 @@ function ResultDialog({ result, hookName, onClose }: { result: Record<string, un
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-[#1a1a1a] rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
+        className="bg-surface-container rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-outline-variant/10 shrink-0">
           <div>
-            <h2 className="text-base font-bold text-white">Execution Result</h2>
+            <h2 className="text-base font-bold text-on-surface">Execution Result</h2>
             {hookName && <p className="text-xs text-on-surface-variant mt-0.5">{hookName}</p>}
           </div>
-          <button onClick={onClose} className="p-1.5 text-on-surface-variant hover:text-white cursor-pointer rounded-lg hover:bg-[#262626]">
+          <button onClick={onClose} className="p-1.5 text-on-surface-variant hover:text-on-surface cursor-pointer rounded-lg hover:bg-surface-container-high">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -233,7 +233,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
         <div key={exec.id} className="border border-outline-variant/10 rounded-lg overflow-hidden">
           <button
             onClick={() => setExpanded(expanded === exec.id ? null : exec.id)}
-            className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#20201f] text-left cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-2 hover:bg-surface-container-high text-left cursor-pointer"
           >
             {exec.status === 'success' ? (
               <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
@@ -246,7 +246,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
               <div className="flex items-center gap-2">
                 {(() => {
                   const name = exec.hookName || String((exec.triggerContext as Record<string, unknown>)?.hookName || '');
-                  return name ? <span className="text-xs font-medium text-white">{name}</span> : null;
+                  return name ? <span className="text-xs font-medium text-on-surface">{name}</span> : null;
                 })()}
                 <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">
                   {exec.source === 'recurring_task' ? 'task' : exec.source}
@@ -483,10 +483,10 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-[#1a1a1a] rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
+      <div className="bg-surface-container rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-extrabold tracking-tighter text-white">New Automation</h2>
-          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">New Automation</h2>
+          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -499,7 +499,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               placeholder="e.g., GitHub PR Review"
             />
           </div>
@@ -509,7 +509,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               type="text"
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               placeholder="What this hook does"
             />
           </div>
@@ -520,7 +520,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <select
               value={trigger}
               onChange={e => setTrigger(e.target.value)}
-              className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             >
               {TRIGGER_OPTIONS.map(t => (
                 <option key={t.value} value={t.value}>{t.label}</option>
@@ -544,7 +544,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     type="text"
                     value={webhookPath}
                     onChange={e => setWebhookPath(e.target.value)}
-                    className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+                    className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                     placeholder="github"
                   />
                 </div>
@@ -558,13 +558,13 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     type="text"
                     value={webhookSecret}
                     onChange={e => setWebhookSecret(e.target.value)}
-                    className="flex-1 bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm font-mono focus:ring-1 focus:ring-primary"
+                    className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
                     placeholder="Generate or enter a secret..."
                   />
                   <button
                     type="button"
                     onClick={() => setWebhookSecret(crypto.randomUUID().replace(/-/g, ''))}
-                    className="px-3 py-2 text-xs font-medium bg-[#262626] text-white rounded-lg hover:bg-[#20201f] cursor-pointer whitespace-nowrap"
+                    className="px-3 py-2 text-xs font-medium bg-surface-container-high text-on-surface rounded-lg hover:bg-surface-container-high cursor-pointer whitespace-nowrap"
                   >
                     Generate
                   </button>
@@ -595,7 +595,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     onChange={e => setRunOnce(e.target.checked)}
                     className="rounded accent-primary"
                   />
-                  <span className="text-sm text-white">Run once (single event, auto-disables after execution)</span>
+                  <span className="text-sm text-on-surface">Run once (single event, auto-disables after execution)</span>
                 </label>
               )}
             </div>
@@ -608,7 +608,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 type="text"
                 value={messagePattern}
                 onChange={e => setMessagePattern(e.target.value)}
-                className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm font-mono focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
                 placeholder=".*deploy.*"
               />
             </div>
@@ -620,7 +620,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <select
               value={action}
               onChange={e => setAction(e.target.value)}
-              className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             >
               {ACTION_OPTIONS.map(a => (
                 <option key={a.value} value={a.value}>{a.label}</option>
@@ -642,14 +642,14 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   value={agentPrompt}
                   onChange={e => setAgentPrompt(e.target.value)}
                   rows={3}
-                  className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                   placeholder="Review the changes in this PR against our code guidelines..."
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">
                   Use {'{{webhook.body.field}}'} for template variables
                 </p>
               </div>
-              <label className="flex items-center gap-2 text-sm text-white">
+              <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
                   type="checkbox"
                   checked={orchestrated}
@@ -658,7 +658,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 />
                 Route through orchestrator (recommended — enables multi-stage pipelines)
               </label>
-              <label className="flex items-center gap-2 text-sm text-white">
+              <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
                   type="checkbox"
                   checked={notifyOwner}
@@ -673,7 +673,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
           {action === 'notify' && (
             <>
               <div>
-                <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                <label className="flex items-center gap-2 text-sm text-on-surface cursor-pointer">
                   <input
                     type="checkbox"
                     checked={notifyOwner}
@@ -702,7 +702,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     type="text"
                     value={notifyChannels}
                     onChange={e => setNotifyChannels(e.target.value)}
-                    className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+                    className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                     placeholder="telegram:123456, slack:general"
                   />
                   <p className="mt-1 text-xs text-on-surface-variant">Comma-separated, format: type:channelId</p>
@@ -714,7 +714,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   value={notifyMessage}
                   onChange={e => setNotifyMessage(e.target.value)}
                   rows={3}
-                  className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                   placeholder="{{webhook.body.action}} on {{webhook.body.repository.full_name}}"
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
@@ -729,7 +729,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 type="text"
                 value={webhookUrl}
                 onChange={e => setWebhookUrl(e.target.value)}
-                className="w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 placeholder="https://example.com/webhook"
               />
             </div>
@@ -742,7 +742,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm text-on-surface-variant hover:text-white"
+              className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface"
             >
               Cancel
             </button>
@@ -893,14 +893,14 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
     setIsSubmitting(false);
   };
 
-  const inputCls = 'w-full bg-[#262626] border-none rounded-md py-3 px-4 text-white text-sm focus:ring-1 focus:ring-primary';
+  const inputCls = 'w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-[#1a1a1a] rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-surface-container rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-extrabold tracking-tighter text-white">Edit Hook</h2>
-          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-white cursor-pointer">
+          <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Edit Hook</h2>
+          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -919,7 +919,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {/* Trigger (read-only label + config) */}
           <div>
             <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Trigger</label>
-            <div className="bg-[#262626] border-none rounded-md py-3 px-4 text-sm text-white">
+            <div className="bg-surface-container-high border-none rounded-md py-3 px-4 text-sm text-on-surface">
               {TRIGGER_OPTIONS.find(t => t.value === trigger)?.label || trigger}
             </div>
             <p className="mt-1 text-xs text-on-surface-variant">
@@ -941,7 +941,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                 <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Webhook Secret</label>
                 <div className="flex items-center gap-2">
                   <input type="text" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)} className={inputCls + ' font-mono'} placeholder="Enter or generate a secret..." />
-                  <button type="button" onClick={() => setWebhookSecret(crypto.randomUUID().replace(/-/g, ''))} className="px-3 py-2 text-xs font-medium bg-[#262626] text-white rounded-lg hover:bg-[#20201f] cursor-pointer whitespace-nowrap">
+                  <button type="button" onClick={() => setWebhookSecret(crypto.randomUUID().replace(/-/g, ''))} className="px-3 py-2 text-xs font-medium bg-surface-container-high text-on-surface rounded-lg hover:bg-surface-container-high cursor-pointer whitespace-nowrap">
                     Generate
                   </button>
                 </div>
@@ -968,7 +968,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                     onChange={e => setRunOnce(e.target.checked)}
                     className="rounded accent-primary"
                   />
-                  <span className="text-sm text-white">Run once (single event, auto-disables after execution)</span>
+                  <span className="text-sm text-on-surface">Run once (single event, auto-disables after execution)</span>
                 </label>
               )}
             </div>
@@ -983,7 +983,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {/* Action (read-only label + config) */}
           <div>
             <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Action</label>
-            <div className="bg-[#262626] border-none rounded-md py-3 px-4 text-sm text-white">
+            <div className="bg-surface-container-high border-none rounded-md py-3 px-4 text-sm text-on-surface">
               {ACTION_OPTIONS.find(a => a.value === action)?.label || action}
             </div>
             <p className="mt-1 text-xs text-on-surface-variant">
@@ -999,11 +999,11 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                 <textarea value={agentPrompt} onChange={e => setAgentPrompt(e.target.value)} rows={3} className={inputCls} placeholder="Review the changes..." />
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
               </div>
-              <label className="flex items-center gap-2 text-sm text-white">
+              <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />
                 Route through orchestrator
               </label>
-              <label className="flex items-center gap-2 text-sm text-white">
+              <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={notifyOwner} onChange={e => setNotifyOwner(e.target.checked)} className="rounded" />
                 Send result to my linked channels
               </label>
@@ -1023,7 +1023,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {action === 'notify' && (
             <>
               <div>
-                <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                <label className="flex items-center gap-2 text-sm text-on-surface cursor-pointer">
                   <input type="checkbox" checked={notifyOwner} onChange={e => setNotifyOwner(e.target.checked)} className="rounded" />
                   Notify me on my linked channels
                 </label>
@@ -1099,7 +1099,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {error && <p className="text-sm text-error">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-on-surface-variant hover:text-white cursor-pointer">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-on-surface-variant hover:text-on-surface cursor-pointer">
               Cancel
             </button>
             <button
@@ -1220,7 +1220,7 @@ export default function HooksPage() {
               'px-4 py-2 text-sm font-medium border-b-2 -mb-px cursor-pointer',
               activeTab === tab
                 ? 'border-primary text-primary'
-                : 'border-transparent text-on-surface-variant hover:text-white'
+                : 'border-transparent text-on-surface-variant hover:text-on-surface'
             )}
           >
             {tab === 'hooks' && <Webhook className="w-4 h-4 inline mr-1.5" />}
@@ -1233,8 +1233,8 @@ export default function HooksPage() {
       </div>
 
       {activeTab === 'executions' && (
-        <div className="bg-[#1a1a1a] rounded-xs p-4">
-          <h2 className="text-sm font-semibold text-white mb-3">
+        <div className="bg-surface-container rounded-xs p-4">
+          <h2 className="text-sm font-semibold text-on-surface mb-3">
             {viewingExecutions ? 'Hook Executions' : 'All Recent Executions'}
             {viewingExecutions && (
               <button
@@ -1299,7 +1299,7 @@ export default function HooksPage() {
           <div className="space-y-3">
             {/* Server time banner */}
             {serverTime && (
-              <div className="flex items-center gap-2 px-3 py-2 bg-[#1a1a1a] rounded-lg text-xs text-on-surface-variant">
+              <div className="flex items-center gap-2 px-3 py-2 bg-surface-container rounded-lg text-xs text-on-surface-variant">
                 <Globe className="w-3.5 h-3.5" />
                 <span>Server: {serverTime.timezone} ({new Date(serverTime.serverTime).toLocaleTimeString()})</span>
                 <span className="text-on-surface-variant/50">|</span>
@@ -1311,11 +1311,11 @@ export default function HooksPage() {
             <div className="flex items-center justify-between">
               <button
                 onClick={() => setCalendarWeekOffset(o => o - 1)}
-                className="p-2 text-on-surface-variant hover:text-white hover:bg-[#262626] rounded-lg cursor-pointer"
+                className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-lg cursor-pointer"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <div className="text-sm font-medium text-white">
+              <div className="text-sm font-medium text-on-surface">
                 {weekDays[0].toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} — {weekDays[6].toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                 {calendarWeekOffset !== 0 && (
                   <button
@@ -1328,7 +1328,7 @@ export default function HooksPage() {
               </div>
               <button
                 onClick={() => setCalendarWeekOffset(o => o + 1)}
-                className="p-2 text-on-surface-variant hover:text-white hover:bg-[#262626] rounded-lg cursor-pointer"
+                className="p-2 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-lg cursor-pointer"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -1346,7 +1346,7 @@ export default function HooksPage() {
                       'rounded-lg p-2 min-h-[140px] border',
                       today
                         ? 'border-primary/30 bg-primary/5'
-                        : 'border-outline-variant/10 bg-[#1a1a1a]',
+                        : 'border-outline-variant/10 bg-surface-container',
                     )}
                   >
                     <div className="flex items-center justify-between mb-2">
@@ -1429,7 +1429,7 @@ export default function HooksPage() {
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
                   <Lightbulb className="w-5 h-5 text-primary" />
-                  <span className="text-lg font-bold text-white">Ready-to-Use Automations</span>
+                  <span className="text-lg font-bold text-on-surface">Ready-to-Use Automations</span>
                   <span className="text-xs text-on-surface-variant">One click to add. Enable when ready.</span>
                 </div>
                 {categoryOrder.filter(cat => grouped[cat]?.length).map(cat => (
@@ -1437,12 +1437,12 @@ export default function HooksPage() {
                     <h3 className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2 px-1">{categoryLabels[cat] || cat}</h3>
                     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {grouped[cat].map((s) => (
-                        <div key={s.id} className="bg-[#1a1a1a] rounded-lg p-3 border border-outline-variant/10 hover:border-primary/20 transition-colors">
+                        <div key={s.id} className="bg-surface-container rounded-lg p-3 border border-outline-variant/10 hover:border-primary/20 transition-colors">
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-white">{s.name}</p>
+                              <p className="text-sm font-medium text-on-surface">{s.name}</p>
                               <p className="text-xs text-on-surface-variant mt-0.5 line-clamp-2">{s.description}</p>
-                              <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-[#262626] text-on-surface-variant">{s.integration}</span>
+                              <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant">{s.integration}</span>
                             </div>
                             <button
                               onClick={() => applySuggestion(s.id)}
@@ -1462,7 +1462,7 @@ export default function HooksPage() {
 
           {/* Server time info */}
           {serverTime && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-[#1a1a1a] rounded-lg text-xs text-on-surface-variant">
+            <div className="flex items-center gap-2 px-3 py-2 bg-surface-container rounded-lg text-xs text-on-surface-variant">
               <Globe className="w-3.5 h-3.5" />
               <span>Server timezone: {serverTime.timezone}</span>
               <span className="text-on-surface-variant/50">|</span>
@@ -1470,7 +1470,7 @@ export default function HooksPage() {
             </div>
           )}
 
-          <div className="bg-[#1a1a1a] rounded-xs">
+          <div className="bg-surface-container rounded-xs">
             {isLoading ? (
               <div className="p-8 text-center text-on-surface-variant">
                 <Loader2 className="w-5 h-5 animate-spin inline mr-2" />Loading...
@@ -1497,9 +1497,9 @@ export default function HooksPage() {
                 </thead>
                 <tbody className="divide-y divide-outline-variant/10">
                   {hooks.filter(h => h.trigger === 'schedule').map((hook) => (
-                    <tr key={hook.id} className="hover:bg-[#20201f]">
+                    <tr key={hook.id} className="hover:bg-surface-container-high">
                       <td className="px-4 py-3">
-                        <div className="font-medium text-white">{hook.name}</div>
+                        <div className="font-medium text-on-surface">{hook.name}</div>
                         {hook.description && <div className="text-xs text-on-surface-variant mt-0.5">{hook.description}</div>}
                         {hook.lastError && <div className="text-xs text-red-500 mt-0.5">{hook.lastError}</div>}
                       </td>
@@ -1533,7 +1533,7 @@ export default function HooksPage() {
                           'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
                           hook.isEnabled && !hook.lastError ? 'bg-green-900/20 text-green-400' :
                           hook.lastError ? 'bg-error-dim/20 text-error' :
-                          'bg-[#262626] text-on-surface-variant',
+                          'bg-surface-container-high text-on-surface-variant',
                         )}>
                           {!hook.isEnabled ? 'paused' : hook.lastError ? 'error' : 'active'}
                         </span>
@@ -1556,7 +1556,7 @@ export default function HooksPage() {
                           </button>
                           <button
                             onClick={() => handleToggle(hook.id, hook.isEnabled)}
-                            className="p-1 text-on-surface-variant hover:text-white rounded cursor-pointer"
+                            className="p-1 text-on-surface-variant hover:text-on-surface rounded cursor-pointer"
                             title={hook.isEnabled ? 'Pause' : 'Resume'}
                           >
                             {hook.isEnabled ? <ToggleRight className="w-5 h-5 text-green-500" /> : <ToggleLeft className="w-5 h-5" />}
@@ -1580,7 +1580,7 @@ export default function HooksPage() {
       )}
 
       {activeTab === 'hooks' && <>
-      <div className="bg-[#1a1a1a] rounded-xs">
+      <div className="bg-surface-container rounded-xs">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -1613,10 +1613,10 @@ export default function HooksPage() {
                 </tr>
               ) : (
                 hooks.filter(h => h.trigger !== 'schedule').map((hook) => (
-                  <tr key={hook.id} className="border-b border-outline-variant/10 hover:bg-[#20201f]">
+                  <tr key={hook.id} className="border-b border-outline-variant/10 hover:bg-surface-container-high">
                     <td className="px-4 py-3">
                       <div>
-                        <p className="font-medium text-white">{hook.name}</p>
+                        <p className="font-medium text-on-surface">{hook.name}</p>
                         {hook.description && (
                           <p className="text-sm text-on-surface-variant">{hook.description}</p>
                         )}
@@ -1637,7 +1637,7 @@ export default function HooksPage() {
                     <td className="px-4 py-3">
                       <button
                         onClick={() => handleToggle(hook.id, hook.isEnabled)}
-                        className="text-on-surface-variant hover:text-white cursor-pointer"
+                        className="text-on-surface-variant hover:text-on-surface cursor-pointer"
                       >
                         {hook.isEnabled ? (
                           <ToggleRight className="w-6 h-6 text-green-500" />

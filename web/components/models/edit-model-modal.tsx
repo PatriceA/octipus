@@ -173,7 +173,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
           <div>
-            <h2 className="text-lg font-semibold text-white">Edit Model</h2>
+            <h2 className="text-lg font-semibold text-on-surface">Edit Model</h2>
             <p className="text-sm text-on-surface-variant">{model.name} <span className="font-mono text-xs">({model.provider}/{model.modelId})</span></p>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-surface-container-high rounded cursor-pointer">
@@ -190,7 +190,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 value={formData.endpoint}
                 onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
                 placeholder="Leave empty for default"
-                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
               />
             </div>
           )}
@@ -202,7 +202,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 type="number"
                 value={formData.contextWindow}
                 onChange={(e) => setFormData({ ...formData, contextWindow: parseInt(e.target.value) || 0 })}
-                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
               />
             </div>
             <div>
@@ -212,7 +212,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 value={formData.maxTokens}
                 onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 0 })}
                 title="Maximum tokens this model can generate per API call"
-                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
               />
               <p className="text-xs text-on-surface-variant mt-0.5">Bump higher if responses are getting truncated (e.g. thinking models burn tokens before replying).</p>
             </div>
@@ -257,7 +257,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   step="0.01"
                   value={formData.costPerInputToken}
                   onChange={(e) => setFormData({ ...formData, costPerInputToken: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                 />
               </div>
               <div>
@@ -267,7 +267,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   step="0.01"
                   value={formData.costPerOutputToken}
                   onChange={(e) => setFormData({ ...formData, costPerOutputToken: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                 />
               </div>
             </div>
@@ -315,7 +315,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           {/* Custom Provider Settings */}
           {isCustomProvider && (
             <div className="border border-outline-variant/20 rounded-lg p-4 space-y-3 bg-surface-container">
-              <h3 className="text-sm font-semibold text-white">
+              <h3 className="text-sm font-semibold text-on-surface">
                 {model.provider === 'custom-openai' ? 'OpenAI-compatible Settings' : 'Gemini-compatible Settings'}
               </h3>
 
@@ -325,7 +325,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   <select
                     value={formData.customAuthType}
                     onChange={(e) => setFormData({ ...formData, customAuthType: e.target.value as 'bearer' | 'header' | 'query' })}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                   >
                     <option value="bearer">Bearer token</option>
                     <option value="header">Custom header</option>
@@ -340,7 +340,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                       value={formData.customAuthHeaderName}
                       onChange={(e) => setFormData({ ...formData, customAuthHeaderName: e.target.value })}
                       placeholder="x-api-key"
-                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                     />
                   </div>
                 )}
@@ -352,7 +352,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                       value={formData.customAuthParamName}
                       onChange={(e) => setFormData({ ...formData, customAuthParamName: e.target.value })}
                       placeholder="key"
-                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                      className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                     />
                   </div>
                 )}
@@ -364,7 +364,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   <select
                     value={formData.customRequestEnvelope}
                     onChange={(e) => setFormData({ ...formData, customRequestEnvelope: e.target.value as 'standard' | 'gemini-blocks-config' })}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                   >
                     <option value="standard">Standard (native Gemini /v1beta/models/&#123;model&#125;:generateContent)</option>
                     <option value="gemini-blocks-config">Gemini Blocks + Config (Anthropic-style messages, /generate)</option>
@@ -379,7 +379,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   value={formData.customPathOverride}
                   onChange={(e) => setFormData({ ...formData, customPathOverride: e.target.value })}
                   placeholder={model.provider === 'custom-openai' ? '/v1/chat/completions (default)' : '/generate or /v1beta/models/{model}:generateContent'}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
               </div>
 
@@ -390,7 +390,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   value={formData.customApiKeyRef}
                   onChange={(e) => setFormData({ ...formData, customApiKeyRef: e.target.value })}
                   placeholder="vault entry name, or env:MY_API_KEY"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
                 <p className="text-xs text-on-surface-variant mt-1">
                   Use <code className="bg-surface-container-high px-1 rounded">env:VAR_NAME</code> for an env var, or a vault entry name.
@@ -420,7 +420,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   value={formData.cliModel}
                   onChange={(e) => setFormData({ ...formData, cliModel: e.target.value })}
                   placeholder="(vendor default)"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
                 {discoveredCliModels.length > 0 && cliKind && (
                   <datalist id={`cli-models-${cliKind}`}>
@@ -442,7 +442,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <select
                   value={formData.cliPermissionMode}
                   onChange={(e) => setFormData({ ...formData, cliPermissionMode: e.target.value })}
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                 >
                   <option value="">Default</option>
                   {cliKind === 'claude' && <option value="bypassPermissions">Bypass Permissions</option>}
@@ -475,7 +475,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                     value={formData.cliMaxBudgetUsd}
                     onChange={(e) => setFormData({ ...formData, cliMaxBudgetUsd: e.target.value })}
                     placeholder="No limit"
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                   />
                   <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Leave empty for no limit.</p>
                 </div>
@@ -488,7 +488,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   value={formData.cliMcpConfigPath}
                   onChange={(e) => setFormData({ ...formData, cliMcpConfigPath: e.target.value })}
                   placeholder="/path/to/mcp-config.json"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
               </div>
 
@@ -500,7 +500,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                     value={formData.cliAllowedTools}
                     onChange={(e) => setFormData({ ...formData, cliAllowedTools: e.target.value })}
                     placeholder="Bash, Read, Edit, WebSearch"
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white text-sm"
+                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                   />
                   <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Comma-separated. Empty = all tools.</p>
                 </div>
@@ -513,7 +513,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   value={formData.cliExtraArgs}
                   onChange={(e) => setFormData({ ...formData, cliExtraArgs: e.target.value })}
                   placeholder="--no-session-persistence --max-turns 10"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-white font-mono text-sm"
+                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
               </div>
             </div>
