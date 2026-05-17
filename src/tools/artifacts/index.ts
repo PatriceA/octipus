@@ -44,30 +44,31 @@ function diffTemplateAndSources(template: string, sourceNames: string[]): {
 }
 
 const SOURCES_PARAM_DESCRIPTION =
-  'Initial data sources. Array of objects with: ' +
-  '`name` (string, unique per artifact, MUST match every `{{data.<name>.…}}` placeholder in html_template), ' +
-  '`kind` (one of: `http`, `rss`, `tool`, `mcp`, `skill_query`), ' +
-  '`config` (kind-specific object — see below), ' +
-  '`refresh_seconds` (number, default 300). ' +
-  'Config shapes — ' +
-  'http: `{ url, method?, headers? }`. ' +
-  'rss: `{ url }` (exposes `items[]` with title/link/pubDate/summary). ' +
-  'tool: `{ tool: <toolName>, params?: {...} }`. ' +
-  'mcp: `{ server, tool, params? }`. ' +
-  'skill_query: `{ skill, prompt }`. ' +
-  'Example: `[{ "name": "feed", "kind": "rss", "config": { "url": "https://hnrss.org/frontpage" }, "refresh_seconds": 300 }]` paired with a template using `{{data.feed.items.0.title}}`.';
+  'Initial data sources. PREFERRED: pass `{ name, kind: "toolbox", tool_id: "<art_collect_*>", config: <params>, refresh_seconds? }` — ' +
+  'discover ids via `art_toolbox_list({ family: "collect" })` / `art_toolbox_search` / `art_toolbox_describe`. ' +
+  'DEPRECATED inline kinds (kept for back-compat, do not author new artifacts with these): ' +
+  '`http` / `rss` / `tool` / `mcp` / `skill_query` with config matching the legacy shape — see docs/ARTIFACTS.md. ' +
+  'Example: `[{ "name": "feed", "kind": "toolbox", "tool_id": "art_collect_rss", "config": { "url": "https://hnrss.org/frontpage" } }]`. ' +
+  'For widgets (table/list/charts/diagrams) and exports (csv/json/markdown), attach AFTER create with `add_artifact_widget` / `add_artifact_export` so you do not have to author HTML by hand.';
 
 const CREATE_DESCRIPTION =
   'Create a persistent hosted artifact (dashboard, news feed, RSS reader, table). ' +
   'Returns `{ embedUrl, outerUrl, visibility, warnings }`. ' +
+  'RECOMMENDED FLOW (toolbox-first — no hand-authored HTML): ' +
+  '(a) `art_toolbox_search` / `art_toolbox_describe` to pick collector + widget + export tool ids; ' +
+  '(b) call this with `sources: [{ name, kind: "toolbox", tool_id, config }]` and leave `html_template` empty; ' +
+  '(c) after create, call `add_artifact_transform` / `add_artifact_widget` / `add_artifact_export` to fill in the page — widgets without a template render via the default CSS grid; ' +
+  '(d) call `art_toolbox_validate` BEFORE add_* calls to fail fast on bad wiring. ' +
   'IMPORTANT: ' +
-  '(1) If `html_template` uses `{{data.<name>.…}}` placeholders, you MUST pass a matching `sources[]` entry with `name: "<name>"` in the same call — otherwise the rendered page will be blank. ' +
-  '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` if the user wants a shareable link, or `"signed"` to require a share token. ' +
-  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render succeeded.';
+  '(1) If you DO pass `html_template` with `{{data.<name>.…}}` placeholders, every `<name>` MUST exist in `sources[]` or in a transform attached later. ' +
+  '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` for a shareable link or `"signed"` for share-token only. ' +
+  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render.';
 
 const UPDATE_DESCRIPTION =
   'Update an artifact. Body changes (template/css) create a new version. ' +
-  'Same template/source coupling applies as `create_live_artifact` — if you change `html_template` to reference a new `{{data.<name>.…}}`, call `add_artifact_data_source` for that name first (or pass `sources` here is NOT supported — use the dedicated tool).';
+  'For most edits prefer the granular tools — add/remove sources, transforms, widgets, exports — which preserve the existing version and snapshot history. ' +
+  'Use this tool when you genuinely need a new HTML template version. ' +
+  'Same template/source coupling applies as `create_live_artifact` — if you reference a new `{{data.<name>.…}}`, attach the source first via `add_artifact_data_source`.';
 
 async function resolveDefaultWorkspaceId(userId: string): Promise<string> {
   const { getOrgWorkspaceManager } = await import('@/services/org-membership').catch(

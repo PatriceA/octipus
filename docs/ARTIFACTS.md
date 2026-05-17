@@ -5,49 +5,137 @@ schedule and push updates to open browsers in real time. Use them for
 dashboards, news/RSS feeds, status pages, and anything else that should stay
 fresh without a chat loop.
 
-## Mental model
+## Mental model — toolbox edition
+
+Artifacts are now wired as a typed pipeline of four small parts; each part
+is a registered toolbox tool that the agent picks by name via discovery
+(no prompt extension required).
 
 ```
-artifact ──► artifact_versions   (HTML / CSS / JS bundle / schema)
-   │
-   ├─► artifact_data_sources     (kind, config, refresh_seconds, principal)
-   │       │
-   │       ▼ scheduler (recurring + wake-gate)
-   │       ▼ tool-executor / fetch / RSS / MCP
-   │       ▼ artifact_data_snapshots (newest 50 retained)
-   │       ▼ gateway publishEvent("artifact.data_updated")
-   │
-   ▼
-GET /a/:slug/embed   (sandboxed iframe, locked-down CSP)
-   ▼
-octipus-artifact-client.js → WS subscribe → DOM patch on push
+┌──────────┐   ┌────────────┐   ┌─────────┐   ┌──────────┐
+│ COLLECT  │──►│ TRANSFORM  │──►│ WIDGET  │──►│ EXPORT   │
+│ sources  │   │ pure funcs │   │ render  │   │ download │
+└──────────┘   └────────────┘   └─────────┘   └──────────┘
+      │                                            │
+      └─── snapshot store (artifact_data_…) ───────┘
 ```
 
-## Quick start (CLI / agent)
+Storage tables: `artifacts`, `artifact_versions`,
+`artifact_data_sources` (`kind='toolbox'` + `tool_id`),
+`artifact_data_snapshots`, `artifact_transforms`,
+`artifact_widgets`, `artifact_exports`, `artifact_share_links`.
 
-Have an agent create one:
+The page handler (`GET /a/:slug/embed`) calls `buildDataBus()`
+(sources + transforms), then `renderWidgets()` (every widget runs
+through its toolbox tool), then either splices into the template via
+`<x-widget id="..."/>` placeholders or auto-lays-out via
+`renderDefaultLayout()`.
 
-```
+## Quick start — toolbox flow (recommended)
+
+```ts
+// 1. Discover. The agent never invents tool ids.
+art_toolbox_search({ query: "github issues" })
+art_toolbox_describe({ id: "art_collect_http_json" })
+
+// 2. Validate the wiring before creating anything.
+art_toolbox_validate({
+  sources: [
+    { name: "issues", toolId: "art_collect_http_json",
+      params: { url: "https://api.github.com/repos/PatriceA/octipus/issues" },
+      refreshSeconds: 600 },
+  ],
+  transforms: [
+    { name: "by_label", toolId: "art_transform_group_count",
+      inputName: "issues", params: { by: "labels[].name", top: 8 } },
+  ],
+  widgets: [
+    { slot: "labels", toolId: "art_widget_pie_chart",
+      bind: { data: "by_label" } },
+    { slot: "table", toolId: "art_widget_table",
+      bind: { rows: "issues" },
+      params: { columns: ["number", "title", "state"] } },
+  ],
+  exports: [
+    { exportId: "csv", toolId: "art_export_csv", bind: { rows: "issues" } },
+  ],
+})
+
+// 3. Create the shell (no html_template; widgets render via default grid).
 create_live_artifact({
-  slug: "ops-dash",
-  title: "Ops Dashboard",
+  slug: "octipus-issues",
+  title: "Octipus issues",
   type: "dashboard",
   visibility: "workspace",
-  html_template: "<p>Latest: <span data-bind=\"feed\">{{data.feed}}</span></p>",
   sources: [
-    { name: "feed", kind: "rss", config: { url: "https://hnrss.org/frontpage" }, refresh_seconds: 300 }
-  ]
+    { name: "issues", kind: "toolbox", tool_id: "art_collect_http_json",
+      config: { url: "https://api.github.com/repos/PatriceA/octipus/issues" },
+      refresh_seconds: 600 },
+  ],
 })
+
+// 4. Attach the rest — transforms, widgets, exports.
+add_artifact_transform({ artifact_id, name: "by_label",
+  tool_id: "art_transform_group_count", input_name: "issues",
+  params: { by: "labels[].name", top: 8 } })
+
+add_artifact_widget({ artifact_id, slot: "labels",
+  tool_id: "art_widget_pie_chart", bind: { data: "by_label" } })
+add_artifact_widget({ artifact_id, slot: "table",
+  tool_id: "art_widget_table", bind: { rows: "issues" },
+  params: { columns: ["number", "title", "state"], span: 4 } })
+
+add_artifact_export({ artifact_id, export_id: "csv",
+  tool_id: "art_export_csv", bind: { rows: "issues" } })
 ```
 
-The tool returns `{ id, slug, url }`. Open the URL in a browser; the SDK
-attaches over WebSocket and patches `[data-bind="feed"]` whenever the next
-refresh lands.
+Download: `https://artifacts.<host>/a/octipus-issues/export/csv`.
 
-## Source kinds
+## Toolbox catalogue (Phase 3 baseline)
+
+Discovery surface: `art_toolbox_list`, `art_toolbox_search`,
+`art_toolbox_describe`, `art_toolbox_validate`. All four are permission
+tier ALLOW — the agent can browse freely.
+
+| Family    | Tool                                                                 | One-liner |
+|-----------|----------------------------------------------------------------------|-----------|
+| collect   | `art_collect_http_json`                                              | GET/POST JSON; optional JSONPath. |
+| collect   | `art_collect_http_text`                                              | Raw text/HTML/XML/CSV. |
+| collect   | `art_collect_rss`                                                    | RSS / Atom → `{ items: [{title,link,pubDate,summary}] }`. |
+| collect   | `art_collect_octipus_tool`                                           | Invoke any registered Octipus tool by handler name. |
+| collect   | `art_collect_mcp`                                                    | Call a tool on an external MCP server. |
+| collect   | `art_collect_html_scrape`                                            | CSS-subset selector scrape into rows + fields. |
+| transform | `art_transform_jsonpath`                                             | Pluck a sub-tree by dotted path. |
+| transform | `art_transform_filter`                                               | eq/neq/in/gt/lt/contains row filter. |
+| transform | `art_transform_sort`                                                 | Stable sort by path. |
+| transform | `art_transform_top_n`                                                | Slice first N rows. |
+| transform | `art_transform_group_count`                                          | Count by key (with `[]` fanout). |
+| transform | `art_transform_diff`                                                 | added/removed/changed vs previous snapshot. |
+| widget    | `art_widget_table`                                                   | HTML table; picks columns by path. |
+| widget    | `art_widget_list`                                                    | Title + link + summary list. |
+| widget    | `art_widget_kpi_card`                                                | Big number + delta + label. |
+| widget    | `art_widget_markdown`                                                | Safe-subset markdown block. |
+| widget    | `art_widget_json_tree`                                               | Collapsible JSON viewer (debug fallback). |
+| widget    | `art_widget_bar_chart`                                               | CSS bar chart. |
+| widget    | `art_widget_pie_chart`                                               | SVG pie / donut. |
+| widget    | `art_widget_heatmap`                                                 | 2D bucket heatmap. |
+| widget    | `art_widget_mermaid`                                                 | Captures Mermaid source — SVG renderer ships with the bundler. |
+| export    | `art_export_csv`                                                     | RFC4180-ish CSV. |
+| export    | `art_export_json`                                                    | Pretty JSON. |
+| export    | `art_export_markdown`                                                | Markdown table (optional title). |
+
+See `art_toolbox_describe({ id })` for parameters, return shape, examples,
+and tips on any of them.
+
+## Source kinds (legacy)
+
+The original inline-`kind` config is still accepted for back-compat —
+artifacts created before the toolbox shipped keep working. Do not author
+new artifacts with these; use `kind: "toolbox"` + `tool_id` instead.
 
 | Kind         | Config example                                                | Notes |
 |--------------|---------------------------------------------------------------|-------|
+| `toolbox`    | `{ url: … }` (whatever the collector takes)                   | Set `tool_id` to the registered collector. |
 | `tool`       | `{ tool: "websearch__search", params: { query: "..." } }`     | Runs as the source's principal. Vault ACLs apply. |
 | `http`       | `{ url, method, headers?, body?, jsonpath? }`                 | `headers` may use `${vault.<key>}` placeholders. |
 | `rss`        | `{ url }`                                                     | Normalized to `{ items: [{title, link, pubDate, summary}] }`. |
