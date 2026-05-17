@@ -80,6 +80,14 @@ export function renderTemplate(template: string, input: RenderInput): string {
 }
 
 // ── built-in templates ─────────────────────────────────────────────
+/**
+ * Legacy fallback templates used when an artifact has no version template
+ * and no widgets attached. New artifacts should use the toolbox widgets
+ * (art_widget_table / art_widget_list / art_widget_kpi_card / …) which
+ * the page handler auto-lays-out via renderDefaultLayout. These three
+ * stay here for back-compat with phase-1 artifacts created before the
+ * toolbox shipped — do not extend.
+ */
 export const BUILTIN_TEMPLATES: Record<string, string> = {
   dashboard: `<section class="artifact-dashboard">
   <h1>{{title}}</h1>

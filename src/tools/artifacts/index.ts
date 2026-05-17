@@ -44,30 +44,31 @@ function diffTemplateAndSources(template: string, sourceNames: string[]): {
 }
 
 const SOURCES_PARAM_DESCRIPTION =
-  'Initial data sources. Array of objects with: ' +
-  '`name` (string, unique per artifact, MUST match every `{{data.<name>.…}}` placeholder in html_template), ' +
-  '`kind` (one of: `http`, `rss`, `tool`, `mcp`, `skill_query`), ' +
-  '`config` (kind-specific object — see below), ' +
-  '`refresh_seconds` (number, default 300). ' +
-  'Config shapes — ' +
-  'http: `{ url, method?, headers? }`. ' +
-  'rss: `{ url }` (exposes `items[]` with title/link/pubDate/summary). ' +
-  'tool: `{ tool: <toolName>, params?: {...} }`. ' +
-  'mcp: `{ server, tool, params? }`. ' +
-  'skill_query: `{ skill, prompt }`. ' +
-  'Example: `[{ "name": "feed", "kind": "rss", "config": { "url": "https://hnrss.org/frontpage" }, "refresh_seconds": 300 }]` paired with a template using `{{data.feed.items.0.title}}`.';
+  'Initial data sources. PREFERRED: pass `{ name, kind: "toolbox", tool_id: "<art_collect_*>", config: <params>, refresh_seconds? }` — ' +
+  'discover ids via `art_toolbox_list({ family: "collect" })` / `art_toolbox_search` / `art_toolbox_describe`. ' +
+  'DEPRECATED inline kinds (kept for back-compat, do not author new artifacts with these): ' +
+  '`http` / `rss` / `tool` / `mcp` / `skill_query` with config matching the legacy shape — see docs/ARTIFACTS.md. ' +
+  'Example: `[{ "name": "feed", "kind": "toolbox", "tool_id": "art_collect_rss", "config": { "url": "https://hnrss.org/frontpage" } }]`. ' +
+  'For widgets (table/list/charts/diagrams) and exports (csv/json/markdown), attach AFTER create with `add_artifact_widget` / `add_artifact_export` so you do not have to author HTML by hand.';
 
 const CREATE_DESCRIPTION =
   'Create a persistent hosted artifact (dashboard, news feed, RSS reader, table). ' +
   'Returns `{ embedUrl, outerUrl, visibility, warnings }`. ' +
+  'RECOMMENDED FLOW (toolbox-first — no hand-authored HTML): ' +
+  '(a) `art_toolbox_search` / `art_toolbox_describe` to pick collector + widget + export tool ids; ' +
+  '(b) call this with `sources: [{ name, kind: "toolbox", tool_id, config }]` and leave `html_template` empty; ' +
+  '(c) after create, call `add_artifact_transform` / `add_artifact_widget` / `add_artifact_export` to fill in the page — widgets without a template render via the default CSS grid; ' +
+  '(d) call `art_toolbox_validate` BEFORE add_* calls to fail fast on bad wiring. ' +
   'IMPORTANT: ' +
-  '(1) If `html_template` uses `{{data.<name>.…}}` placeholders, you MUST pass a matching `sources[]` entry with `name: "<name>"` in the same call — otherwise the rendered page will be blank. ' +
-  '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` if the user wants a shareable link, or `"signed"` to require a share token. ' +
-  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render succeeded.';
+  '(1) If you DO pass `html_template` with `{{data.<name>.…}}` placeholders, every `<name>` MUST exist in `sources[]` or in a transform attached later. ' +
+  '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` for a shareable link or `"signed"` for share-token only. ' +
+  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render.';
 
 const UPDATE_DESCRIPTION =
   'Update an artifact. Body changes (template/css) create a new version. ' +
-  'Same template/source coupling applies as `create_live_artifact` — if you change `html_template` to reference a new `{{data.<name>.…}}`, call `add_artifact_data_source` for that name first (or pass `sources` here is NOT supported — use the dedicated tool).';
+  'For most edits prefer the granular tools — add/remove sources, transforms, widgets, exports — which preserve the existing version and snapshot history. ' +
+  'Use this tool when you genuinely need a new HTML template version. ' +
+  'Same template/source coupling applies as `create_live_artifact` — if you reference a new `{{data.<name>.…}}`, attach the source first via `add_artifact_data_source`.';
 
 async function resolveDefaultWorkspaceId(userId: string): Promise<string> {
   const { getOrgWorkspaceManager } = await import('@/services/org-membership').catch(
@@ -112,6 +113,12 @@ export class ArtifactsTool extends BaseTool {
         { name: 'add_artifact_data_source', description: 'Attach a data source', parameters: {}, returns: 'source metadata' },
         { name: 'remove_artifact_data_source', description: 'Detach a data source', parameters: {}, returns: 'ok' },
         { name: 'refresh_live_artifact', description: 'Force-refresh all sources', parameters: {}, returns: 'snapshot results' },
+        { name: 'add_artifact_transform', description: 'Attach a toolbox transform', parameters: {}, returns: 'transform metadata' },
+        { name: 'remove_artifact_transform', description: 'Detach a transform by name', parameters: {}, returns: 'ok' },
+        { name: 'add_artifact_widget', description: 'Attach a toolbox widget instance', parameters: {}, returns: 'widget metadata' },
+        { name: 'remove_artifact_widget', description: 'Detach a widget by slot', parameters: {}, returns: 'ok' },
+        { name: 'add_artifact_export', description: 'Register a download exporter', parameters: {}, returns: 'export metadata + url' },
+        { name: 'remove_artifact_export', description: 'Remove an exporter by id', parameters: {}, returns: 'ok' },
       ],
     };
   }
@@ -397,6 +404,170 @@ export class ArtifactsTool extends BaseTool {
         const sources = await artifactsRepository.listSources(a.id);
         const results = await Promise.all(sources.map((s) => refreshSource(s.id)));
         return { refreshed: sources.length, results };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── transforms ──────────────────────────────────────────────
+    this.registerTool(
+      'add_artifact_transform',
+      'Attach a toolbox transform to an artifact. The transform runs at render time over the named upstream source/transform output. Use art_toolbox_search to find a transform id.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        name: { type: 'string', description: 'Unique transform name (data-bus key). Must be a valid identifier.', required: true },
+        tool_id: { type: 'string', description: 'Toolbox transform id, e.g. `art_transform_group_count`.', required: true },
+        input_name: { type: 'string', description: 'Upstream source or transform name to feed in.', required: true },
+        params: { type: 'object', description: 'Transform-specific parameters.' },
+        position: { type: 'number', description: 'Lower runs earlier. Default 0.' },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        const created = await artifactsRepository.createTransform({
+          artifactId: a.id,
+          name: args.name as string,
+          toolId: args.tool_id as string,
+          inputName: args.input_name as string,
+          paramsJson: (args.params as Record<string, unknown>) ?? {},
+          position: (args.position as number) ?? 0,
+        });
+        return { id: created.id, name: created.name, message: 'Transform attached' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'remove_artifact_transform',
+      'Detach a transform by name.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        name: { type: 'string', description: 'Transform name to remove', required: true },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        await artifactsRepository.deleteTransformByName(a.id, args.name as string);
+        return { ok: true, message: 'Transform removed' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── widgets ────────────────────────────────────────────────
+    this.registerTool(
+      'add_artifact_widget',
+      'Attach a toolbox widget instance. The widget renders into a `<x-widget id="<slot>"/>` placeholder in the template, or into the default CSS-grid layout when no template is set. `bind` maps widget param names to data-bus paths like `"issues.items"`.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        slot: { type: 'string', description: 'Unique slot id (matches `<x-widget id="..."/>`). Pattern [a-zA-Z0-9_-]+.', required: true },
+        tool_id: { type: 'string', description: 'Toolbox widget id, e.g. `art_widget_table`.', required: true },
+        bind: { type: 'object', description: 'Map of widget-param-name → data-bus path, e.g. `{ rows: "issues.items" }`.' },
+        params: { type: 'object', description: 'Static widget params merged with resolved binds. Set `span` (1-4) to influence the default layout column span.' },
+        position: { type: 'number', description: 'Order in the default layout. Default 0.' },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        const created = await artifactsRepository.createWidget({
+          artifactId: a.id,
+          slot: args.slot as string,
+          toolId: args.tool_id as string,
+          bindJson: (args.bind as Record<string, string>) ?? {},
+          paramsJson: (args.params as Record<string, unknown>) ?? {},
+          position: (args.position as number) ?? 0,
+        });
+        return { id: created.id, slot: created.slot, message: 'Widget attached' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'remove_artifact_widget',
+      'Detach a widget by slot.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        slot: { type: 'string', description: 'Widget slot to remove', required: true },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        await artifactsRepository.deleteWidgetBySlot(a.id, args.slot as string);
+        return { ok: true, message: 'Widget removed' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── exports ────────────────────────────────────────────────
+    this.registerTool(
+      'add_artifact_export',
+      'Register a download exporter on an artifact. Exposes `GET /a/:slug/export/<export_id>`; data is built fresh from sources + transforms on every request. `bind` maps the exporter\'s param names to data-bus paths.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        export_id: {
+          type: 'string',
+          description: 'Public id used in the URL. Pattern [a-zA-Z0-9_-]+.',
+          required: true,
+        },
+        tool_id: {
+          type: 'string',
+          description: 'Toolbox export id, e.g. `art_export_csv`.',
+          required: true,
+        },
+        bind: {
+          type: 'object',
+          description: 'Map of export-param-name → data-bus path, e.g. `{ rows: "issues.items" }`.',
+        },
+        params: {
+          type: 'object',
+          description: 'Static params merged with resolved binds (filename, columns, etc).',
+        },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        if (!/^[a-zA-Z0-9_-]+$/.test(args.export_id as string)) {
+          return { error: 'export_id must match [a-zA-Z0-9_-]+' };
+        }
+        const created = await artifactsRepository.createExport({
+          artifactId: a.id,
+          exportId: args.export_id as string,
+          toolId: args.tool_id as string,
+          bindJson: (args.bind as Record<string, string>) ?? {},
+          paramsJson: (args.params as Record<string, unknown>) ?? {},
+        });
+        return {
+          id: created.id,
+          exportId: created.exportId,
+          downloadUrl: `${buildArtifactOuterUrl(a.slug)}/export/${created.exportId}`,
+          message: 'Export registered',
+        };
+      },
+      { permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'remove_artifact_export',
+      'Remove a registered export by public id.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        export_id: { type: 'string', description: 'Public export id', required: true },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        await artifactsRepository.deleteExportByPublicId(a.id, args.export_id as string);
+        return { ok: true, message: 'Export removed' };
       },
       { permissionAction: 'write' },
     );

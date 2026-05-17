@@ -19,7 +19,14 @@ import { workspaces } from '@/db/schema/organizations';
 import { getDb } from '@/db/postgres';
 import { eq } from 'drizzle-orm';
 import { buildEmbedCsp } from '@/core/artifacts/csp';
+import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
+import {
+  DEFAULT_LAYOUT_CSS,
+  renderDefaultLayout,
+  renderWidgets,
+  resolveWidgetTags,
+} from '@/core/artifacts/widget-render';
 import { signArtifactToken } from '@/core/artifacts/token';
 import { verifyShareLinkToken } from '@/core/artifacts/share-link';
 import { checkRateLimit } from '@/core/artifacts/rate-limit';
@@ -185,18 +192,28 @@ async function handleEmbed(ctx: HandlerCtx) {
   const version = auth.artifact.currentVersionId
     ? await artifactsRepository.getVersion(auth.artifact.currentVersionId)
     : null;
-  const sources = await artifactsRepository.listSources(auth.artifact.id);
-  const data: Record<string, unknown> = {};
-  for (const s of sources) {
-    const snap = await artifactsRepository.getLatestSnapshot(s.id);
-    data[s.name] = snap?.payloadJson ?? null;
-  }
 
-  const template = version?.htmlTemplate || BUILTIN_TEMPLATES[auth.artifact.type] || BUILTIN_TEMPLATES.dashboard;
-  const css = version?.css ?? '';
+  // Data bus: sources + transforms. Falls back to the legacy direct-snapshot
+  // read when there are no transforms — same shape either way.
+  const bus = await buildDataBus(auth.artifact.id);
+  const data = bus.data;
+
+  // Widgets: render every registered widget, then either splice into the
+  // template (`<x-widget id="..."/>`) or auto-layout when there's no template.
+  const widgetRender = await renderWidgets(auth.artifact.id, data);
+
+  const baseTemplate = version?.htmlTemplate || '';
+  const hasWidgets = Object.keys(widgetRender.bySlot).length > 0;
+  const defaultLayout = hasWidgets ? await renderDefaultLayout(auth.artifact.id, widgetRender.bySlot) : '';
+  const template = baseTemplate
+    || (hasWidgets ? defaultLayout : (BUILTIN_TEMPLATES[auth.artifact.type] || BUILTIN_TEMPLATES.dashboard));
+  const widgetCss = hasWidgets ? `${DEFAULT_LAYOUT_CSS}\n${widgetRender.css}` : '';
+  const css = `${widgetCss}\n${version?.css ?? ''}`.trim();
+
   let body: string;
   try {
-    body = renderTemplate(template, { data, title: auth.artifact.title });
+    const withWidgets = resolveWidgetTags(template, widgetRender.bySlot);
+    body = renderTemplate(withWidgets, { data, title: auth.artifact.title });
   } catch (err) {
     coreLogger.error({ err, artifactId: auth.artifact.id }, 'artifact.render.failed');
     ctx.set.status = 500;
@@ -223,14 +240,97 @@ async function handleEmbed(ctx: HandlerCtx) {
   return buildEmbedHtml({ artifact: auth.artifact, templateBody: body, css, token });
 }
 
+async function handleExport(ctx: HandlerCtx) {
+  const rl = checkRateLimit(`export:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  if (!rl.allowed) {
+    ctx.set.status = 429;
+    ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
+    return 'Too many requests';
+  }
+  const auth = await authorizeForRequest({
+    slug: ctx.params.slug,
+    user: ctx.user ?? null,
+    shareToken: typeof ctx.query.t === 'string' ? ctx.query.t : null,
+  });
+  if (!auth) {
+    ctx.set.status = 404;
+    return 'Not found';
+  }
+
+  const exp = await artifactsRepository.getExportByPublicId(auth.artifact.id, ctx.params.exportId);
+  if (!exp) {
+    ctx.set.status = 404;
+    return 'Export not found';
+  }
+
+  const { ensureToolboxLoaded, getToolboxRegistry } = await import('@/core/artifacts/toolbox');
+  await ensureToolboxLoaded();
+  const tool = getToolboxRegistry().get(exp.toolId);
+  if (!tool || tool.family !== 'export') {
+    coreLogger.error(
+      { artifactId: auth.artifact.id, exportId: exp.exportId, toolId: exp.toolId },
+      'artifact.export.unknown_tool',
+    );
+    ctx.set.status = 500;
+    return 'Export tool not registered';
+  }
+
+  // Build data bus + resolve binds, same pattern as widgets.
+  const bus = await buildDataBus(auth.artifact.id);
+  const resolved: Record<string, unknown> = { ...(exp.paramsJson ?? {}) };
+  for (const [paramName, pathExpr] of Object.entries(exp.bindJson ?? {})) {
+    resolved[paramName] = resolveBusPath(bus.data, pathExpr);
+  }
+
+  let payload: { filename: string; contentType: string; body: string };
+  try {
+    const out = await tool.execute(resolved, {
+      principalId: '',
+      workspaceId: auth.artifact.workspaceId,
+      artifactId: auth.artifact.id,
+      nodeName: exp.exportId,
+    });
+    if (!out || typeof out !== 'object') throw new Error('export tool returned non-object');
+    payload = out as typeof payload;
+    if (typeof payload.body !== 'string') throw new Error('export tool returned no `body` string');
+  } catch (err) {
+    coreLogger.error(
+      { artifactId: auth.artifact.id, exportId: exp.exportId, error: (err as Error).message },
+      'artifact.export.failed',
+    );
+    ctx.set.status = 500;
+    return 'Export failed';
+  }
+
+  ctx.set.headers['content-type'] = payload.contentType;
+  ctx.set.headers['content-disposition'] =
+    `attachment; filename="${payload.filename.replace(/"/g, '')}"`;
+  return payload.body;
+}
+
+function resolveBusPath(root: Record<string, unknown>, expr: string): unknown {
+  if (!expr) return root;
+  const parts = expr.split('.').map((p) => p.trim()).filter(Boolean);
+  let cur: unknown = root;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    if (Array.isArray(cur)) cur = cur[Number(p)];
+    else if (typeof cur === 'object') cur = (cur as Record<string, unknown>)[p];
+    else return undefined;
+  }
+  return cur;
+}
+
 /** Subdomain-mode mount (also catches direct hits to the main host). */
 export const artifactPageRoutes = new Elysia()
   .use(apiContext)
   .get('/a/:slug', handleOuter)
-  .get('/a/:slug/embed', handleEmbed);
+  .get('/a/:slug/embed', handleEmbed)
+  .get('/a/:slug/export/:exportId', handleExport);
 
 /** Path-prefix fallback — works without any DNS configuration. */
 export const artifactPageRoutesFallback = new Elysia({ prefix: '/__artifacts__' })
   .use(apiContext)
   .get('/a/:slug', handleOuter)
-  .get('/a/:slug/embed', handleEmbed);
+  .get('/a/:slug/embed', handleEmbed)
+  .get('/a/:slug/export/:exportId', handleExport);

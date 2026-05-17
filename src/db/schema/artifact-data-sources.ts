@@ -7,6 +7,10 @@ export const artifactSourceKindEnum = pgEnum('artifact_source_kind', [
   'rss',
   'mcp',
   'skill_query',
+  // Toolbox-routed source — see src/core/artifacts/toolbox/. When this kind is
+  // used the `tool_id` column points at a registered collector and the
+  // legacy kind-switch in refresh.ts is bypassed.
+  'toolbox',
 ]);
 
 export const artifactSourceStatusEnum = pgEnum('artifact_source_status', [
@@ -29,6 +33,13 @@ export const artifactDataSources = pgTable(
       .references(() => artifacts.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     kind: artifactSourceKindEnum('kind').notNull(),
+    /**
+     * Toolbox collector id when `kind === 'toolbox'`. NULL for legacy rows
+     * that dispatch via the kind-switch in refresh.ts. Both columns are kept
+     * during the soft-migration window; new code should always set `tool_id`
+     * with `kind = 'toolbox'`.
+     */
+    toolId: text('tool_id'),
     configJson: jsonb('config_json').$type<Record<string, unknown>>().notNull().default({}),
     refreshSeconds: integer('refresh_seconds').notNull().default(300),
     /** Principal whose credentials/ACLs are used at refresh time. Required. */
