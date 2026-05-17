@@ -282,3 +282,8 @@ CREATE UNIQUE INDEX embeddings_dedup_idx
 | `src/db/migrations/0055_vector_hnsw_when_homogeneous.sql` | Auto-pin vector dimension + create HNSW |
 | `src/db/migrations/0056_drop_source_type.sql` | Retired the legacy `source_type` column |
 | `mcp-server/src/tools/knowledge.ts` | External-model MCP bridge |
+| `src/core/memory/{extractor,judge,retrieval,repository}.ts` | Layer 1 — long-term user-fact memory (extract → judge → apply, turn-start retrieve, supersession chain) |
+| `src/db/task-state-listener.ts` | Layer 3 — LISTEN/NOTIFY subscriber for `task_state_<session_id>` fan-out (Postgres only) |
+| `src/core/orchestrator/meta-tools.ts` (`remember_this`) | Agent-callable memory write — only path the LLM uses to promote a fact |
+| `src/api/routes/memory.ts` | Operator REST — list / chain / soft-delete user memories |
+| `web/app/memory/page.tsx` | UI for the same — including supersession-chain view |

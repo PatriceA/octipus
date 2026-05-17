@@ -127,6 +127,49 @@ tier ALLOW — the agent can browse freely.
 See `art_toolbox_describe({ id })` for parameters, return shape, examples,
 and tips on any of them.
 
+## Render pipeline
+
+Every embed page request runs through the same four stages
+(`src/api/routes/artifact-pages.ts:handleEmbed`):
+
+1. **Data bus** — `buildDataBus(artifactId)` reads the newest snapshot
+   per source (plus the second-newest as `previousInput` for diff
+   transforms), then runs `artifact_transforms` rows in `position`
+   order. Transform output lands under its own `name` in the bus.
+   Per-transform errors do not poison the bus; the failing entry is
+   set to `null` and the error message is collected for the slot's
+   error block. (`src/core/artifacts/pipeline.ts`)
+2. **Widgets** — `renderWidgets(artifactId, bus)` looks up each
+   `artifact_widgets` row's `tool_id`, resolves its `bind_json` paths
+   against the bus, merges with `params_json`, and calls the widget's
+   `execute()`. Each return must be `{ html, css? }`; non-conforming
+   widgets render the red `aw-slot-error` block but never crash the
+   page. (`src/core/artifacts/widget-render.ts`)
+3. **Template splicing** — if the version row carries an
+   `htmlTemplate`, `<x-widget id="<slot>"/>` placeholders are replaced
+   by each rendered widget's HTML. If no template exists,
+   `renderDefaultLayout()` emits a CSS-grid layout (`.aw-grid`,
+   `params.span` 1–4) using the same widget HTML. Either way,
+   `renderTemplate()` then resolves any `{{data.<source>.…}}`
+   substitutions and `{{#each …}}` loops, with `<script>` and inline
+   handlers stripped by `sanitizeTemplate()`.
+4. **Export downloads** — `GET /a/:slug/export/:exportId` rebuilds
+   the data bus fresh, resolves the export's binds + params, and
+   calls the export tool. The tool returns
+   `{ filename, contentType, body }`; the route sets
+   `Content-Disposition: attachment` and streams the body.
+   Permission check matches the artifact's visibility (same
+   `authorizeForRequest` flow as the embed page).
+
+The toolbox itself is auto-discovered on first import via folder scan
+of `src/core/artifacts/toolbox/{collectors,transforms,widgets,exports}/`.
+Drop a new tool file in the right folder and it appears in the
+catalogue on next restart — no manual registration. The four
+discovery tools (`art_toolbox_list/search/describe/validate`) are
+the ONLY agent-facing surface for the toolbox; widget and transform
+ids are referenced by name in pipeline JSON, never invoked by the
+LLM directly.
+
 ## Source kinds (legacy)
 
 The original inline-`kind` config is still accepted for back-compat —

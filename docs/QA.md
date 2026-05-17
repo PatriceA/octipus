@@ -897,14 +897,21 @@ loaded via `Bun.resolveSync('tree-sitter-typescript/package.json',
 
 ---
 
-## Live Artifacts (2026-05-10 release)
+## Live Artifacts — Toolbox edition (2026-05 redesign)
 
-End-to-end validation of the Live Artifacts feature. Covers settings, the
-agent tool surface, the REST API, the hosted page (both subdomain and
-local-fallback modes), share links, real-time push, deletion, and cleanup.
+End-to-end validation of the Live Artifacts feature after the toolbox
+redesign (collectors / transforms / widgets / exports as
+auto-discovered tools, replacing the hand-authored HTML flow). Covers
+discovery, validation, create, attach widgets+exports, render path,
+export downloads, share links, real-time push, deletion, and cleanup.
 
 **Prereqs (in addition to the top-of-doc list):**
-- Run migrations once: `bun run db:migrate` (adds `0046_artifacts`).
+- Run migrations once: `bun run db:migrate` — must land
+  `0046_artifacts` through `0059_artifact_exports`. The toolbox
+  migrations are `0057_artifacts_toolbox` (adds `kind='toolbox'` +
+  `tool_id` column), `0058_artifacts_toolbox_phase2` (creates
+  `artifact_transforms` + `artifact_widgets`), and
+  `0059_artifact_exports` (creates `artifact_exports`).
 - The SDK build script has been run at least once:
   `bun run scripts/build-artifact-sdk.ts` (writes the sha256 sidecar).
 - For the subdomain-mode steps: a DNS record for
@@ -920,7 +927,11 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    `artifact.settings.host_active`.
 3. **Expect** `artifact.settings.sdk_sha256.populated_from_disk` if the
    SDK sha256 file existed and the setting was empty.
-4. Open Settings → Configuration → **Live Artifacts**. The five
+4. **Expect** `toolbox.discovery.complete { count: <N> }` on first
+   import — `<N>` matches `src/core/artifacts/toolbox/<family>/*.ts`
+   minus tests + `_shared.ts`. Baseline at this release: 6 collectors,
+   6 transforms, 9 widgets, 3 exports → 24 entries.
+5. Open Settings → Configuration → **Live Artifacts**. The five
    non-secret fields are visible; `tokenSecret` shows masked
    (`••••••••`) confirming it was auto-generated.
 
@@ -936,32 +947,93 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    fallback never goes away. Confirm by hitting both URLs in the
    browser; both render the same artifact.
 
-### C. Create + render via REST
+### C. Toolbox discovery (no execution)
 
-1. `POST /api/artifacts` with body
-   `{ "slug":"qa-dash", "title":"QA", "type":"dashboard",
-   "html_template":"<p>hello {{title}}</p>" }`. **Expect** `201`,
-   response carries `artifact.embedUrl` and `artifact.outerUrl`.
-2. Open `embedUrl` in a browser — page renders "hello QA".
-3. View source: `<meta name="octipus-artifact-token">` is present and
-   the `Content-Security-Policy` includes `default-src 'none'` and a
-   `'sha256-<base64>'` script hash.
-4. Try `/api/artifacts/qa-dash` (slug instead of UUID) → 404, and try
-   the artifact ID from a different workspace → 404 (no existence
-   leak).
+1. In chat, ask the agent: *"list the artifact toolbox tools by family,
+   widget."* The agent calls `art_toolbox_list({ family: "widget" })`
+   (permission tier ALLOW — no prompt).
+2. **Expect** a compact array of `{ id, family, description }` rows.
+   Every id matches the prefix `art_widget_*`.
+3. *"search the toolbox for github issues collectors"* → calls
+   `art_toolbox_search({ query, k })`, returns ranked candidates.
+   `art_collect_http_json` should appear in the top 3.
+4. *"describe art_collect_http_json"* → calls `art_toolbox_describe`.
+   **Expect** the full manifest: params with types, required flag,
+   default permission `ASK`, at least one worked example, tips.
+5. *"describe art_widget_nope"* → 4xx-style error surfaced as
+   `unknown tool — try art_toolbox_search`. Loud failure on missing
+   id (CLAUDE.md house rule #1).
 
-### D. Create via agent
+### D. Validator gate (no artifact written)
 
-1. In chat, send: *"Create a live artifact called 'agent dash' with
-   slug 'agent-dash' showing the latest item from
-   https://hnrss.org/frontpage."*
-2. Agent should call `create_live_artifact` (ASK approval prompt
-   appears). Approve.
-3. Agent then calls `add_artifact_data_source` with `kind: "rss"` and
-   `refresh_seconds: 300`. Approve.
-4. **Expect** the agent to return a URL. Open it — RSS items render.
+1. Ask the agent to validate this wiring (or call directly via the
+   tools endpoint):
+   ```jsonc
+   art_toolbox_validate({
+     sources: [{ name: "issues", toolId: "art_collect_http_json",
+       params: { url: "https://api.github.com/repos/PatriceA/octipus/issues" } }],
+     transforms: [{ name: "by_label", toolId: "art_transform_group_count",
+       inputName: "issues", params: { by: "labels[].name", top: 8 } }],
+     widgets: [{ slot: "labels", toolId: "art_widget_pie_chart",
+       bind: { data: "by_label" } }],
+     exports: [{ exportId: "csv", toolId: "art_export_csv",
+       bind: { rows: "issues" } }],
+   })
+   ```
+   **Expect** `{ ok: true, errors: [], warnings: [] }`.
+2. Swap `toolId` to a typo (`art_widget_pi_chart`) → **expect**
+   `ok:false` with `errors[].path = "widgets[0].toolId"`.
+3. Reference a missing `inputName` (`inputName: "nope"`) → **expect**
+   `errors[].path = "transforms[0].inputName"` saying the name does
+   not resolve.
+4. Drop a required widget param (set the bind to `{}` while the tool
+   requires `data`) → **expect** an error mentioning required param
+   `"data"`.
+5. Duplicate a source name → **expect** an error on `sources[N].name`.
 
-### E. Refresh + snapshot retention
+### E. Create via agent — toolbox flow
+
+1. In chat: *"create a dashboard `qa-issues` showing open issues for
+   octipus repo, with a label-count pie chart and a CSV export."*
+2. The agent's expected sequence (each a separate tool call, each
+   prompts the user for ASK consent on the write tools):
+   - `art_toolbox_search` → `art_toolbox_describe` (no prompt — ALLOW)
+   - `art_toolbox_validate` (no prompt — ALLOW)
+   - `create_live_artifact` with `sources:[{ kind: "toolbox",
+     tool_id: "art_collect_http_json", config: { url: ... } }]`
+   - `add_artifact_transform` with the `group_count` transform
+   - `add_artifact_widget` (pie chart) + `add_artifact_widget` (table)
+   - `add_artifact_export` (csv)
+3. **Expect** the reply to include the outer URL. Open it — the page
+   renders a pie chart + table without any hand-written HTML.
+
+### F. Render path — pipeline + widgets
+
+1. With the artifact from §E open, view the embed page source.
+2. **Expect** `<div class="aw-grid">` containing one `<div class="aw-cell">`
+   per registered widget (default layout, because no html_template).
+3. **Expect** the page CSP header to include the SDK sha256 only —
+   widget CSS arrives inline in `<style>`.
+4. Stop the upstream (block the API URL via /etc/hosts → 127.0.0.1).
+   Refresh once. **Expect** the source row to flip to `status='error'`
+   on `artifact_data_sources.last_error`; the page renders the widget
+   slots' last successful data, and any failing widget shows the
+   `aw-slot-error` block (red text, error message) — not a crashed
+   page.
+
+### G. Export downloads
+
+1. After §E, hit
+   `GET /a/qa-issues/export/csv` (use the outerUrl host). **Expect**
+   `Content-Type: text/csv`, `Content-Disposition: attachment;
+   filename="..."`, and the body is RFC-4180-ish CSV of the bound
+   rows.
+2. Hit `GET /a/qa-issues/export/json-nope` → 404.
+3. Add a markdown export via `add_artifact_export({ export_id: "md",
+   tool_id: "art_export_markdown", bind: { rows: "issues" } })`.
+   `GET /a/qa-issues/export/md` returns a `text/markdown` table.
+
+### H. Refresh + snapshot retention
 
 1. Click **Refresh now** in the detail page; data updates.
 2. Run `psql` and confirm
@@ -970,7 +1042,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
 3. Force the cleanup task to run (or wait an hour) and verify the
    count never exceeds 50 per source.
 
-### F. Live updates via WS push
+### I. Live updates via WS push
 
 1. With the gateway WS configured (`artifacts.gatewayWss`), open the
    embed page. DevTools → Network → WS, look for the gateway
@@ -983,7 +1055,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    `<html>` element gains a `data-octipus-stale` attribute.
 5. Restore connectivity — attribute is removed on the next message.
 
-### G. Share links + revocation
+### J. Share links + revocation
 
 1. On the detail page, click **Mint share link**. A token displays
    once.
@@ -995,7 +1067,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
 5. Confirm Octipus log only shows the *hash* + last 4 chars of the
    token, never the full value.
 
-### H. Delete (UI + agent)
+### K. Delete (UI + agent)
 
 1. From `/artifacts` list, click the trash icon → confirm. Item
    disappears.
@@ -1008,7 +1080,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    `delete_live_artifact` with `purge_now: true`. The row is removed
    from the table.
 
-### I. Visibility — private / workspace / signed / public
+### L. Visibility — private / workspace / signed / public
 
 1. Default `workspace` visibility: a second user in the same
    workspace can view the embed; a user in a different workspace
@@ -1019,7 +1091,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    Hit the URL >30 times in a minute → expect HTTP 429 with
    `retry-after`.
 
-### J. Versioning
+### M. Versioning
 
 1. Update template via `PUT /api/artifacts/:id` with new `htmlTemplate`
    and `changeSummary: "v2"`.
@@ -1029,7 +1101,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    restored content; a third version row is created (the restore is a
    new version that clones the chosen one).
 
-### K. Custom JS bundle (security)
+### N. Custom JS bundle (security)
 
 1. Try `POST` (or via agent) to attach a JS source containing
    `import fs from 'fs'`. **Expect** `bundler: import not allowed: fs`
@@ -1039,7 +1111,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    `data/artifacts/<id>/<vid>/bundle.js`. The embed page's CSP
    `script-src` now contains the new hash.
 
-### L. Hot-reload on settings change
+### O. Hot-reload on settings change
 
 1. Change `artifacts.gatewayWss` in Settings, save.
 2. Reload the embed page. The `<meta name="octipus-gateway-wss">`
@@ -1048,7 +1120,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    secret in the log; previously-issued embed tokens (TTL 5m) get
    rejected at the next refresh; the page rotates them on render.
 
-### M. Cleanup task
+### P. Cleanup task
 
 1. Soft-delete an artifact (step H1). Adjust the system clock OR
    manually `UPDATE artifacts SET deleted_at = now() - interval '31
@@ -1060,7 +1132,7 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
    is gone from `artifacts` (cascade also removes versions, sources,
    snapshots, share-links).
 
-### N. Anti-patterns to verify *don't* happen
+### Q. Anti-patterns to verify *don't* happen
 
 - Cross-workspace embed access via raw artifact UUID → must 404.
 - Subdomain `Host: artifacts.<host>` request to `/api/*` → must NOT
@@ -1072,6 +1144,228 @@ local-fallback modes), share links, real-time push, deletion, and cleanup.
   attach an `http` source with a `${vault.<key>}` header as user A,
   then have user B view the artifact → the vault lookup runs under
   user A's principal (check the log).
+
+---
+
+## 9. Memory + RAG + task_state — the 3-tier system (2026-05 redesign)
+
+End-to-end validation of the memory-redesign trio: long-term
+`memories` (Layer 1), `embeddings` knowledge base (Layer 2), and
+typed `task_state` (Layer 3). Each tier owns a distinct retrieval
+primitive and retention policy — these checks confirm they do not
+leak into each other and that the orchestrator wires all three on
+every turn.
+
+**Prereqs:**
+- Postgres with `pgvector` installed (PGlite mode skips the HNSW +
+  LISTEN/NOTIFY checks below — they're documented per-step).
+- Migrations 0049 through 0056 applied (`bun run db:migrate`).
+- Two models bound in **Settings → Models**:
+  - one to topic `embedding` (e.g. `nomic-embed-text` via Ollama),
+  - one to topic `memory_extraction` (any cheap chat model — the
+    extractor short-circuits without it, so memory tier appears off
+    until you bind one).
+
+### 9.1 RAG — knowledge base self-check
+
+1. On boot, watch the log for either
+   `Knowledge base self-check PASSED` or `... FAILED`. The probe
+   inserts a `purpose='ephemeral'` row + deletes it.
+2. Hit `GET /api/knowledge/readiness` (authenticated) — **expect**
+   `{ ready: true, checks: { db, embeddingModel, vectorWrite } }`.
+3. Unmap the embedding model in Models → re-call `readiness` →
+   **expect** `503` and `checks.embeddingModel.ok = false`. Every
+   write path (`POST /api/knowledge/index`, document upload, agent
+   `index_file`) now returns `503 kb not ready` until the model is
+   rebound. **Loud failure, no silent drops.**
+
+### 9.2 RAG — index, search modes, dedup
+
+1. `POST /api/knowledge/index { path: "<abs path to a .md file>",
+   type: "file", purpose: "document" }`. **Expect** a non-zero
+   `chunksStored` count.
+2. Re-run the same call. **Expect** the row count in
+   `SELECT count(*) FROM embeddings WHERE source_id = '<path>'` is
+   **unchanged** — the
+   `(purpose, source_id, content_sha256)` unique index turns repeat
+   inserts into no-ops.
+3. `POST /api/knowledge/search` three times, varying `mode`:
+   - `hybrid` → BM25 + vector via RRF (default).
+   - `semantic` → vector-only. `minSimilarity` threshold defaults to
+     `0.35`.
+   - `keyword` → BM25 only via `plainto_tsquery`.
+4. For each hit, **expect** `access_count` and `last_accessed_at` to
+   bump on the rows actually returned (LFU signal). Verify with
+   `SELECT id, access_count, last_accessed_at FROM embeddings
+   WHERE id = '<a returned id>'`.
+5. **Structural retrieval**: index a Markdown doc with at least 3
+   heading levels; search a leaf section term. **Expect** the result
+   row to carry a non-empty `sectionPath` (root → leaf titles), and
+   `getAncestorHeadings(id)` (or the embedded `sectionPath`) lets
+   the caller render the parent breadcrumb without a second query.
+
+### 9.3 RAG — retention + cleanup
+
+1. `POST /api/knowledge/cleanup { dryRun: true }` → returns
+   `{ orphanedDocuments, staleAgentOutputs, shortEntries,
+   duplicates, byPurpose, total }`. `duplicates` should always be
+   `0` (the dedup pass was retired when the unique index landed).
+2. **Per-purpose retention**: peek `SELECT * FROM
+   retention_policies` — should list `document`, `code`,
+   `image_description`, `knowledge_artifact`, `message`,
+   `ephemeral`. Insert a synthetic `purpose='ephemeral'` row dated
+   8 days ago and run cleanup non-dry — **expect** that row to be
+   removed in `byPurpose.ephemeral`.
+3. `GET /api/knowledge/cleanup-history` shows the run with
+   `triggered_by`, before/after counts, and `duration_ms`.
+
+### 9.4 RAG — vector dimension & drift gate
+
+1. After at least one row has landed, re-run `bun run db:migrate`.
+   **Expect** the log line
+   `embeddings.embedding pinned at vector(N) and HNSW index created`.
+   `\d embeddings` in psql shows `embedding vector(N)`.
+2. Re-run the migration — **expect** no-op (idempotent).
+3. Force drift: insert a row with a different-dimensioned vector
+   into `embeddings` (test only). Run `bun run db:check-embedding-drift`.
+   **Expect** exit code `1` and a breakdown of distinct
+   `embedding_version` values per table.
+
+### 9.5 Memory — turn-start retrieval + extraction
+
+1. Bind a model to topic `memory_extraction` in **Settings → Models**.
+2. Open a chat. Send: *"I prefer tabs over spaces for indentation."*
+   The reply may be anything; what matters is the background work.
+3. After the turn, query the DB:
+   ```sql
+   SELECT fact_type, content, confidence, agent_scope
+   FROM memories
+   WHERE user_id = '<your-uid>'
+     AND superseded_by IS NULL
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+   **Expect** a row with `fact_type='preference'`, content like
+   *"The user prefers tabs over spaces…"*, `confidence ≥ 0.5`.
+4. **Turn-start injection**: send any follow-up message. In a debug
+   build (or by reading the agent's system context via the
+   trajectories store), confirm the system prompt contains a
+   `Known about the user (long-term memory):` block listing the
+   preference. Sources footer on the reply should include
+   memory items.
+5. **PII redact**: send *"my email is alice@example.com — please
+   remember it."* → the stored row's `content` must contain
+   `[EMAIL]`, NEVER the literal address. Confidence is reduced by
+   0.2 (floor 0.5).
+
+### 9.6 Memory — UPDATE + supersession chain
+
+1. Send *"actually I prefer 4 spaces over tabs."*
+2. The judge runs (top-k vector search + LLM ADD/UPDATE/DELETE/NOOP).
+   **Expect**:
+   - new row inserted (`superseded_by IS NULL`, the new fact).
+   - the prior row's `superseded_by` set to the new row's id.
+   - the two rows form a chain you can walk via
+     `GET /api/memory/<id>/chain`.
+3. `GET /api/memory?includeHistory=true` lists both rows; the
+   default list (no flag) omits the superseded one.
+4. `DELETE /api/memory/<active-id>` — soft delete: sets
+   `valid_until = now()`. Retrieval drops the row on next read; the
+   row stays in the table for audit.
+
+### 9.7 Memory — agent-driven `remember_this`
+
+1. Send *"please remember that I work in CET timezone."*
+2. **Expect** the orchestrator to call the `remember_this` meta-tool
+   (`fact_type: 'profile'`). DB row appears with the corresponding
+   content. Tool returns `{ stored: true, action: 'ADD',
+   memory_id }`.
+3. Repeat the same request → judge returns `NOOP`; no new row.
+
+### 9.8 Memory — extraction cadence config
+
+1. Set `memory.extractionCadence = 'off'` via Settings →
+   Configuration → Memory.
+2. Send a fact-laden message. **Expect** no new `memories` rows.
+3. Set to `'on_compaction'`. Send messages until session
+   compaction kicks in; the extractor fires inside
+   `session-compaction.ts`. Confirm via DB that the row appeared
+   only after compaction.
+4. Reset to `'per_turn'` (the default).
+
+### 9.9 task_state — sibling-agent discovery
+
+1. Send a request that triggers multiple specialists (e.g.
+   *"audit and improve this code"* on a real path → spawns
+   `coding` + `review` workers).
+2. After both finish, query:
+   ```sql
+   SELECT owner_agent, task_kind, status,
+          length(outputs->>'text') AS chars
+   FROM task_state
+   WHERE session_id = '<sid>'
+   ORDER BY created_at DESC LIMIT 10;
+   ```
+   **Expect** one `agent_output` row per non-orchestrator
+   specialist with `status='done'`. `review` rows have
+   `task_kind='review'`, `qa`/`security` rows `task_kind='finding'`.
+3. Orchestrator rows must NOT appear (recorder skips
+   `role='orchestrator'`).
+4. Send a follow-up message; the second-wave agent calls
+   `list_recent_session_tasks` (auto-allowed) and sees the prior
+   outputs. `read_task_state(id)` returns the full
+   inputs+outputs payload.
+5. Cross-session leak check: as the same user, open a new session
+   and call `list_recent_session_tasks` from a spawned agent →
+   **expect** the prior session's tasks NOT to appear (filter is
+   `session_id = ctx.sessionId`).
+
+### 9.10 task_state — LISTEN/NOTIFY (Postgres only)
+
+1. PGlite mode: skip — listener short-circuits to a no-op
+   subscriber.
+2. Postgres mode: in a Node REPL,
+   ```ts
+   import { subscribeTaskState } from '@/db/task-state-listener';
+   const off = await subscribeTaskState('<sid>',
+     (note) => console.log('NOTIFY', note));
+   ```
+3. Trigger a worker completion in that session. **Expect** the
+   handler to fire with `{ id, status, owner, task_kind,
+   updated_at }`. No polling.
+4. Restart Postgres (or kill the socket). The dedicated listener
+   client reconnects and re-issues `LISTEN` for every active
+   channel.
+5. Call `off()` — the channel UNLISTENs once the last subscriber
+   leaves.
+
+### 9.11 task_state — recording toggle + retention
+
+1. Set `AGENT_TASK_RECORDING=false` in `.env` and restart. New
+   specialist completions no longer write to `task_state` (legacy
+   `RAG_AUTO_INDEX` flag is reserved for tests only — agent-output
+   auto-index was removed in Phase B).
+2. Reset to default. Insert a `status='done', updated_at=now() -
+   interval '31 days'` row. Run the cleanup pass (cron or
+   `taskStateRepository.deleteDoneOlderThan(cutoff)`) → row is
+   removed.
+3. `reapOrphans()` removes done/failed/cancelled rows whose
+   parent `session_id` no longer exists in `sessions`.
+
+### 9.12 Tier isolation — no cross-tier leakage
+
+1. `agent_output` is no longer a valid `embeddings.purpose` value
+   (migration 0056 dropped `source_type`; the auto-indexer that
+   used to write agent outputs into RAG was retired in Phase B).
+   `SELECT DISTINCT purpose FROM embeddings` must NOT contain
+   `agent_output`.
+2. Long-term user facts must not surface via knowledge search.
+   `POST /api/knowledge/search { query: "what does the user
+   prefer?" }` returns document/code/message hits — not
+   `memories` rows. Memory recall is the orchestrator's job, not
+   the RAG search surface.
+3. Sibling-agent discovery must use the `task_state` MCP tool, not
+   `search_knowledge`. The `agent_output` tag is gone; cosine
+   similarity over peer outputs is structurally impossible.
 
 ---
 

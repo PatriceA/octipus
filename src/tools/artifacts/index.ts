@@ -167,13 +167,37 @@ export class ArtifactsTool extends BaseTool {
           await artifactsRepository.setCurrentVersion(a.id, v.id);
         }
 
-        const sources = (args.sources as Array<{ name: string; kind: ArtifactSourceKind; config?: Record<string, unknown>; refresh_seconds?: number }> | undefined) ?? [];
+        const sources = (args.sources as Array<{ name: string; kind: ArtifactSourceKind; tool_id?: string; config?: Record<string, unknown>; refresh_seconds?: number }> | undefined) ?? [];
         const sourceIds: string[] = [];
+        let toolboxLoaded = false;
+        const toolboxValidate = async (toolId: string): Promise<string | null> => {
+          if (!toolboxLoaded) {
+            const { ensureToolboxLoaded } = await import('@/core/artifacts/toolbox');
+            await ensureToolboxLoaded();
+            toolboxLoaded = true;
+          }
+          const { getToolboxRegistry } = await import('@/core/artifacts/toolbox');
+          const tool = getToolboxRegistry().get(toolId);
+          if (!tool) return `unknown toolbox tool "${toolId}" — call art_toolbox_search to discover valid ids`;
+          if (tool.family !== 'collect') return `tool "${toolId}" is a ${tool.family} tool, not a collector`;
+          return null;
+        };
         for (const s of sources) {
+          const toolId = typeof s.tool_id === 'string' ? s.tool_id.trim() : '';
+          if (s.kind === 'toolbox') {
+            if (!toolId) {
+              return { error: `source "${s.name}": kind="toolbox" requires tool_id` };
+            }
+            const validationError = await toolboxValidate(toolId);
+            if (validationError) return { error: `source "${s.name}": ${validationError}` };
+          } else if (toolId) {
+            return { error: `source "${s.name}": tool_id is only valid with kind="toolbox"` };
+          }
           const created = await artifactsRepository.createSource({
             artifactId: a.id,
             name: s.name,
             kind: s.kind,
+            toolId: s.kind === 'toolbox' ? toolId : null,
             configJson: s.config ?? {},
             refreshSeconds: s.refresh_seconds ?? 300,
             principalId: context.userId,
@@ -281,27 +305,32 @@ export class ArtifactsTool extends BaseTool {
 
     this.registerTool(
       'add_artifact_data_source',
-      'Attach a data source to an artifact. The `name` you pick is what the template binds to via `{{data.<name>.…}}` — pick something stable and matching the template references.',
+      'Attach a data source to an artifact. The `name` you pick is what templates and transforms bind to (`{{data.<name>.…}}` / `inputName: "<name>"`). PREFERRED: `kind: "toolbox"` + `tool_id` — discover ids via `art_toolbox_list({ family: "collect" })` / `art_toolbox_search` / `art_toolbox_describe`. Legacy inline kinds (`http`/`rss`/`tool`/`mcp`/`skill_query`) still work for back-compat but should not be used for new sources.',
       createParameterSchema({
         artifact_id: { type: 'string', description: 'Artifact id', required: true },
-        name: { type: 'string', description: 'Source name (unique per artifact). Must match the `{{data.<name>.…}}` placeholders in the artifact template.', required: true },
+        name: { type: 'string', description: 'Source name (unique per artifact). Must match the `{{data.<name>.…}}` placeholders in the artifact template, and `inputName` in any transform that feeds off it.', required: true },
         kind: {
           type: 'string',
-          description: 'Source kind.',
+          description: 'Source kind. Prefer `toolbox` and set `tool_id`.',
           required: true,
-          enum: ['tool', 'http', 'rss', 'mcp', 'skill_query'],
+          enum: ['toolbox', 'tool', 'http', 'rss', 'mcp', 'skill_query'],
+        },
+        tool_id: {
+          type: 'string',
+          description: 'Required when `kind = "toolbox"`. Registered collector id, e.g. `art_collect_http_json`, `art_collect_rss`, `art_collect_html_scrape`. Discover via `art_toolbox_list({ family: "collect" })`.',
         },
         config: {
           type: 'object',
           description:
-            'Kind-specific config. ' +
+            'Source params. ' +
+            'toolbox: whatever the collector takes — call `art_toolbox_describe({ id: tool_id })` for the parameter schema and a worked example. ' +
             'http: `{ url, method?, headers? }`. ' +
             'rss: `{ url }` (returns `items[]` with title/link/pubDate/summary). ' +
             'tool: `{ tool, params? }`. ' +
             'mcp: `{ server, tool, params? }`. ' +
             'skill_query: `{ skill, prompt }`.',
         },
-        refresh_seconds: { type: 'number', description: 'Refresh interval (default 300). Refresh only runs while the artifact has recent viewers.' },
+        refresh_seconds: { type: 'number', description: 'Refresh interval in seconds (default 300, minimum 30). Refresh only runs while the artifact has recent viewers.' },
       }),
       async (args, context) => {
         const a = await artifactsRepository.getById(args.artifact_id as string);
@@ -309,16 +338,42 @@ export class ArtifactsTool extends BaseTool {
         const workspaceId = await resolveDefaultWorkspaceId(context.userId);
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
 
+        const kind = args.kind as ArtifactSourceKind;
+        const toolId = typeof args.tool_id === 'string' ? args.tool_id.trim() : '';
+
+        if (kind === 'toolbox') {
+          if (!toolId) {
+            return { error: 'kind="toolbox" requires tool_id (use art_toolbox_search to find a collector)' };
+          }
+          const { ensureToolboxLoaded, getToolboxRegistry } = await import('@/core/artifacts/toolbox');
+          await ensureToolboxLoaded();
+          const tool = getToolboxRegistry().get(toolId);
+          if (!tool) {
+            return { error: `unknown toolbox tool "${toolId}" — call art_toolbox_search to discover valid ids` };
+          }
+          if (tool.family !== 'collect') {
+            return { error: `tool "${toolId}" is a ${tool.family} tool, not a collector — sources require family="collect"` };
+          }
+        } else if (toolId) {
+          return { error: `tool_id is only valid when kind="toolbox" (got kind="${kind}")` };
+        }
+
+        const refreshSeconds = (args.refresh_seconds as number) ?? 300;
+        if (typeof refreshSeconds !== 'number' || refreshSeconds < 30) {
+          return { error: 'refresh_seconds must be a number ≥ 30' };
+        }
+
         const created = await artifactsRepository.createSource({
           artifactId: a.id,
           name: args.name as string,
-          kind: args.kind as ArtifactSourceKind,
+          kind,
+          toolId: kind === 'toolbox' ? toolId : null,
           configJson: (args.config as Record<string, unknown>) ?? {},
-          refreshSeconds: (args.refresh_seconds as number) ?? 300,
+          refreshSeconds,
           principalId: context.userId,
         });
         scheduleArtifactRefresh(created.id).catch(() => {});
-        return { id: created.id, name: created.name, message: 'Data source attached' };
+        return { id: created.id, name: created.name, kind, toolId: created.toolId ?? null, message: 'Data source attached' };
       },
       { permissionAction: 'write' },
     );
