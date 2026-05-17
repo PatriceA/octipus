@@ -22,6 +22,27 @@ describe('discoverToolbox', () => {
     expect(ids).toContain('art_collect_mcp');
   });
 
+  test('registers all Phase 2 transforms', async () => {
+    await discoverToolbox();
+    const ids = getToolboxRegistry().list({ family: 'transform' }).map((e) => e.id);
+    expect(ids).toContain('art_transform_jsonpath');
+    expect(ids).toContain('art_transform_filter');
+    expect(ids).toContain('art_transform_sort');
+    expect(ids).toContain('art_transform_top_n');
+    expect(ids).toContain('art_transform_group_count');
+  });
+
+  test('registers all Phase 2 widgets', async () => {
+    await discoverToolbox();
+    const ids = getToolboxRegistry().list({ family: 'widget' }).map((e) => e.id);
+    expect(ids).toContain('art_widget_table');
+    expect(ids).toContain('art_widget_list');
+    expect(ids).toContain('art_widget_kpi_card');
+    expect(ids).toContain('art_widget_markdown');
+    expect(ids).toContain('art_widget_json_tree');
+    expect(ids).toContain('art_widget_bar_chart');
+  });
+
   test('is idempotent', async () => {
     await discoverToolbox();
     const before = getToolboxRegistry().list().length;

@@ -25,6 +25,16 @@ import {
   artifactShareLinks,
   type NewArtifactShareLink,
 } from '../schema/artifact-share-links';
+import {
+  type ArtifactTransform,
+  artifactTransforms,
+  type NewArtifactTransform,
+} from '../schema/artifact-transforms';
+import {
+  type ArtifactWidget,
+  artifactWidgets,
+  type NewArtifactWidget,
+} from '../schema/artifact-widgets';
 
 export class ArtifactsRepository {
   private get db() {
@@ -236,6 +246,54 @@ export class ArtifactsRepository {
       .where(lt(artifactShareLinks.expiresAt, now))
       .returning({ id: artifactShareLinks.id });
     return result.length;
+  }
+
+  // ── transforms ───────────────────────────────────────────────
+  async createTransform(record: NewArtifactTransform): Promise<ArtifactTransform> {
+    const result = await this.db.insert(artifactTransforms).values(record).returning();
+    return result[0];
+  }
+
+  async listTransforms(artifactId: string): Promise<ArtifactTransform[]> {
+    return this.db
+      .select()
+      .from(artifactTransforms)
+      .where(eq(artifactTransforms.artifactId, artifactId))
+      .orderBy(artifactTransforms.position, artifactTransforms.createdAt);
+  }
+
+  async deleteTransform(id: string): Promise<void> {
+    await this.db.delete(artifactTransforms).where(eq(artifactTransforms.id, id));
+  }
+
+  async deleteTransformByName(artifactId: string, name: string): Promise<void> {
+    await this.db
+      .delete(artifactTransforms)
+      .where(and(eq(artifactTransforms.artifactId, artifactId), eq(artifactTransforms.name, name)));
+  }
+
+  // ── widgets ──────────────────────────────────────────────────
+  async createWidget(record: NewArtifactWidget): Promise<ArtifactWidget> {
+    const result = await this.db.insert(artifactWidgets).values(record).returning();
+    return result[0];
+  }
+
+  async listWidgets(artifactId: string): Promise<ArtifactWidget[]> {
+    return this.db
+      .select()
+      .from(artifactWidgets)
+      .where(eq(artifactWidgets.artifactId, artifactId))
+      .orderBy(artifactWidgets.position, artifactWidgets.createdAt);
+  }
+
+  async deleteWidget(id: string): Promise<void> {
+    await this.db.delete(artifactWidgets).where(eq(artifactWidgets.id, id));
+  }
+
+  async deleteWidgetBySlot(artifactId: string, slot: string): Promise<void> {
+    await this.db
+      .delete(artifactWidgets)
+      .where(and(eq(artifactWidgets.artifactId, artifactId), eq(artifactWidgets.slot, slot)));
   }
 
   // ── soft-delete cleanup ──────────────────────────────────────

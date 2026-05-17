@@ -44,6 +44,12 @@ export interface ToolboxContext {
   artifactId?: string;
   /** Source/transform/widget name within the artifact. */
   nodeName?: string;
+  /**
+   * Upstream input value for transforms — the resolved value of `inputName`
+   * from the data bus. Always undefined for collectors. Widgets receive
+   * their resolved binds via params, not here.
+   */
+  input?: unknown;
 }
 
 export interface ToolboxTool<P = Record<string, unknown>, R = unknown> {

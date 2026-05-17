@@ -172,6 +172,14 @@ export class ArtifactsToolboxTool extends BaseTool {
           description: 'Array of `{ name, toolId, params, refreshSeconds? }`.',
           required: true,
         },
+        transforms: {
+          type: 'array',
+          description: 'Array of `{ name, toolId, inputName, params, position? }`.',
+        },
+        widgets: {
+          type: 'array',
+          description: 'Array of `{ slot, toolId, bind: { paramName: dataBusPath }, params?, position? }`.',
+        },
       }),
       async (args) => {
         await ensureToolboxLoaded();
@@ -180,6 +188,12 @@ export class ArtifactsToolboxTool extends BaseTool {
         }
         const spec: PipelineSpec = {
           sources: args.sources as PipelineSpec['sources'],
+          transforms: Array.isArray(args.transforms)
+            ? (args.transforms as PipelineSpec['transforms'])
+            : undefined,
+          widgets: Array.isArray(args.widgets)
+            ? (args.widgets as PipelineSpec['widgets'])
+            : undefined,
         };
         return validatePipeline(spec);
       },

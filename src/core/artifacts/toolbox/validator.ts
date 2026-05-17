@@ -19,11 +19,28 @@ export interface PipelineSourceSpec {
   refreshSeconds?: number;
 }
 
+export interface PipelineTransformSpec {
+  name: string;
+  toolId: string;
+  inputName: string;
+  params: Record<string, unknown>;
+  position?: number;
+}
+
+export interface PipelineWidgetSpec {
+  slot: string;
+  toolId: string;
+  /** Map of widget-param-name → data-bus path. */
+  bind: Record<string, string>;
+  params?: Record<string, unknown>;
+  position?: number;
+}
+
 export interface PipelineSpec {
   sources: PipelineSourceSpec[];
-  /** Reserved for phase 2/3 — currently ignored. */
-  transforms?: unknown[];
-  widgets?: unknown[];
+  transforms?: PipelineTransformSpec[];
+  widgets?: PipelineWidgetSpec[];
+  /** Reserved for phase 3 — currently ignored. */
   exports?: unknown[];
 }
 
@@ -122,6 +139,107 @@ export function validatePipeline(spec: PipelineSpec): ValidationResult {
         errors.push({
           path: `${base}.refreshSeconds`,
           message: 'refreshSeconds must be a number ≥ 30',
+          severity: 'error',
+        });
+      }
+    }
+  });
+
+  // Transforms — same shape checks, plus inputName must resolve to a
+  // declared source or an earlier transform.
+  const knownNames = new Set<string>(namesSeen);
+  const transformsSorted = [...(spec.transforms ?? [])]
+    .map((t, i) => ({ t, originalIndex: i }))
+    .sort((a, b) => (a.t.position ?? 0) - (b.t.position ?? 0));
+  transformsSorted.forEach(({ t, originalIndex }) => {
+    const base = `transforms[${originalIndex}]`;
+    if (!t.name || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(t.name)) {
+      errors.push({ path: `${base}.name`, message: 'transform.name must be a valid identifier', severity: 'error' });
+      return;
+    }
+    if (knownNames.has(t.name)) {
+      errors.push({ path: `${base}.name`, message: `name "${t.name}" collides with a source or earlier transform`, severity: 'error' });
+    } else {
+      knownNames.add(t.name);
+    }
+    if (!t.toolId) {
+      errors.push({ path: `${base}.toolId`, message: 'transform.toolId is required', severity: 'error' });
+      return;
+    }
+    const tool = registry.get(t.toolId);
+    if (!tool) {
+      errors.push({ path: `${base}.toolId`, message: `unknown toolbox tool "${t.toolId}"`, severity: 'error' });
+      return;
+    }
+    if (tool.family !== 'transform') {
+      errors.push({ path: `${base}.toolId`, message: `tool "${t.toolId}" is a ${tool.family}, expected transform`, severity: 'error' });
+      return;
+    }
+    if (!t.inputName || !knownNames.has(t.inputName)) {
+      errors.push({
+        path: `${base}.inputName`,
+        message: `inputName "${t.inputName}" does not resolve to a declared source or earlier transform`,
+        severity: 'error',
+      });
+    }
+    const params = t.params ?? {};
+    for (const [key, spec] of Object.entries(tool.params)) {
+      const issue = checkParam(`${base}.params.${key}`, params[key], spec);
+      if (issue) (issue.severity === 'error' ? errors : warnings).push(issue);
+    }
+  });
+
+  // Widgets — slot must be unique, bind targets must look valid, params + tool
+  // must match. Bind paths are best-effort: we only check syntactic validity
+  // (top-level name must exist in knownNames); deep paths resolve at render
+  // time.
+  const slotsSeen = new Set<string>();
+  spec.widgets?.forEach((w, i) => {
+    const base = `widgets[${i}]`;
+    if (!w.slot || !/^[a-zA-Z0-9_-]+$/.test(w.slot)) {
+      errors.push({ path: `${base}.slot`, message: 'widget.slot is required and must match [a-zA-Z0-9_-]+', severity: 'error' });
+    } else if (slotsSeen.has(w.slot)) {
+      errors.push({ path: `${base}.slot`, message: `duplicate slot "${w.slot}"`, severity: 'error' });
+    } else {
+      slotsSeen.add(w.slot);
+    }
+    if (!w.toolId) {
+      errors.push({ path: `${base}.toolId`, message: 'widget.toolId is required', severity: 'error' });
+      return;
+    }
+    const tool = registry.get(w.toolId);
+    if (!tool) {
+      errors.push({ path: `${base}.toolId`, message: `unknown toolbox tool "${w.toolId}"`, severity: 'error' });
+      return;
+    }
+    if (tool.family !== 'widget') {
+      errors.push({ path: `${base}.toolId`, message: `tool "${w.toolId}" is a ${tool.family}, expected widget`, severity: 'error' });
+      return;
+    }
+    for (const [paramName, pathExpr] of Object.entries(w.bind ?? {})) {
+      if (typeof pathExpr !== 'string') {
+        errors.push({ path: `${base}.bind.${paramName}`, message: 'bind target must be a string path', severity: 'error' });
+        continue;
+      }
+      const top = pathExpr.split('.')[0];
+      if (!knownNames.has(top)) {
+        warnings.push({
+          path: `${base}.bind.${paramName}`,
+          message: `bind path "${pathExpr}" does not resolve to a declared source/transform (top-level "${top}")`,
+          severity: 'warning',
+        });
+      }
+    }
+    // Required-param check honours binds as well as static params.
+    const allKeys = new Set([
+      ...Object.keys(w.bind ?? {}),
+      ...Object.keys(w.params ?? {}),
+    ]);
+    for (const [key, spec] of Object.entries(tool.params)) {
+      if (spec.required && !allKeys.has(key)) {
+        errors.push({
+          path: `${base}.params.${key}`,
+          message: `required parameter "${key}" is missing (provide in bind or params)`,
           severity: 'error',
         });
       }

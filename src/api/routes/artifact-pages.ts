@@ -19,7 +19,14 @@ import { workspaces } from '@/db/schema/organizations';
 import { getDb } from '@/db/postgres';
 import { eq } from 'drizzle-orm';
 import { buildEmbedCsp } from '@/core/artifacts/csp';
+import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
+import {
+  DEFAULT_LAYOUT_CSS,
+  renderDefaultLayout,
+  renderWidgets,
+  resolveWidgetTags,
+} from '@/core/artifacts/widget-render';
 import { signArtifactToken } from '@/core/artifacts/token';
 import { verifyShareLinkToken } from '@/core/artifacts/share-link';
 import { checkRateLimit } from '@/core/artifacts/rate-limit';
@@ -185,18 +192,28 @@ async function handleEmbed(ctx: HandlerCtx) {
   const version = auth.artifact.currentVersionId
     ? await artifactsRepository.getVersion(auth.artifact.currentVersionId)
     : null;
-  const sources = await artifactsRepository.listSources(auth.artifact.id);
-  const data: Record<string, unknown> = {};
-  for (const s of sources) {
-    const snap = await artifactsRepository.getLatestSnapshot(s.id);
-    data[s.name] = snap?.payloadJson ?? null;
-  }
 
-  const template = version?.htmlTemplate || BUILTIN_TEMPLATES[auth.artifact.type] || BUILTIN_TEMPLATES.dashboard;
-  const css = version?.css ?? '';
+  // Data bus: sources + transforms. Falls back to the legacy direct-snapshot
+  // read when there are no transforms — same shape either way.
+  const bus = await buildDataBus(auth.artifact.id);
+  const data = bus.data;
+
+  // Widgets: render every registered widget, then either splice into the
+  // template (`<x-widget id="..."/>`) or auto-layout when there's no template.
+  const widgetRender = await renderWidgets(auth.artifact.id, data);
+
+  const baseTemplate = version?.htmlTemplate || '';
+  const hasWidgets = Object.keys(widgetRender.bySlot).length > 0;
+  const defaultLayout = hasWidgets ? await renderDefaultLayout(auth.artifact.id, widgetRender.bySlot) : '';
+  const template = baseTemplate
+    || (hasWidgets ? defaultLayout : (BUILTIN_TEMPLATES[auth.artifact.type] || BUILTIN_TEMPLATES.dashboard));
+  const widgetCss = hasWidgets ? `${DEFAULT_LAYOUT_CSS}\n${widgetRender.css}` : '';
+  const css = `${widgetCss}\n${version?.css ?? ''}`.trim();
+
   let body: string;
   try {
-    body = renderTemplate(template, { data, title: auth.artifact.title });
+    const withWidgets = resolveWidgetTags(template, widgetRender.bySlot);
+    body = renderTemplate(withWidgets, { data, title: auth.artifact.title });
   } catch (err) {
     coreLogger.error({ err, artifactId: auth.artifact.id }, 'artifact.render.failed');
     ctx.set.status = 500;

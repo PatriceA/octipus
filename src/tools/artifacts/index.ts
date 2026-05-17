@@ -112,6 +112,10 @@ export class ArtifactsTool extends BaseTool {
         { name: 'add_artifact_data_source', description: 'Attach a data source', parameters: {}, returns: 'source metadata' },
         { name: 'remove_artifact_data_source', description: 'Detach a data source', parameters: {}, returns: 'ok' },
         { name: 'refresh_live_artifact', description: 'Force-refresh all sources', parameters: {}, returns: 'snapshot results' },
+        { name: 'add_artifact_transform', description: 'Attach a toolbox transform', parameters: {}, returns: 'transform metadata' },
+        { name: 'remove_artifact_transform', description: 'Detach a transform by name', parameters: {}, returns: 'ok' },
+        { name: 'add_artifact_widget', description: 'Attach a toolbox widget instance', parameters: {}, returns: 'widget metadata' },
+        { name: 'remove_artifact_widget', description: 'Detach a widget by slot', parameters: {}, returns: 'ok' },
       ],
     };
   }
@@ -397,6 +401,102 @@ export class ArtifactsTool extends BaseTool {
         const sources = await artifactsRepository.listSources(a.id);
         const results = await Promise.all(sources.map((s) => refreshSource(s.id)));
         return { refreshed: sources.length, results };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── transforms ──────────────────────────────────────────────
+    this.registerTool(
+      'add_artifact_transform',
+      'Attach a toolbox transform to an artifact. The transform runs at render time over the named upstream source/transform output. Use art_toolbox_search to find a transform id.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        name: { type: 'string', description: 'Unique transform name (data-bus key). Must be a valid identifier.', required: true },
+        tool_id: { type: 'string', description: 'Toolbox transform id, e.g. `art_transform_group_count`.', required: true },
+        input_name: { type: 'string', description: 'Upstream source or transform name to feed in.', required: true },
+        params: { type: 'object', description: 'Transform-specific parameters.' },
+        position: { type: 'number', description: 'Lower runs earlier. Default 0.' },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        const created = await artifactsRepository.createTransform({
+          artifactId: a.id,
+          name: args.name as string,
+          toolId: args.tool_id as string,
+          inputName: args.input_name as string,
+          paramsJson: (args.params as Record<string, unknown>) ?? {},
+          position: (args.position as number) ?? 0,
+        });
+        return { id: created.id, name: created.name, message: 'Transform attached' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'remove_artifact_transform',
+      'Detach a transform by name.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        name: { type: 'string', description: 'Transform name to remove', required: true },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        await artifactsRepository.deleteTransformByName(a.id, args.name as string);
+        return { ok: true, message: 'Transform removed' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── widgets ────────────────────────────────────────────────
+    this.registerTool(
+      'add_artifact_widget',
+      'Attach a toolbox widget instance. The widget renders into a `<x-widget id="<slot>"/>` placeholder in the template, or into the default CSS-grid layout when no template is set. `bind` maps widget param names to data-bus paths like `"issues.items"`.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        slot: { type: 'string', description: 'Unique slot id (matches `<x-widget id="..."/>`). Pattern [a-zA-Z0-9_-]+.', required: true },
+        tool_id: { type: 'string', description: 'Toolbox widget id, e.g. `art_widget_table`.', required: true },
+        bind: { type: 'object', description: 'Map of widget-param-name → data-bus path, e.g. `{ rows: "issues.items" }`.' },
+        params: { type: 'object', description: 'Static widget params merged with resolved binds. Set `span` (1-4) to influence the default layout column span.' },
+        position: { type: 'number', description: 'Order in the default layout. Default 0.' },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        const created = await artifactsRepository.createWidget({
+          artifactId: a.id,
+          slot: args.slot as string,
+          toolId: args.tool_id as string,
+          bindJson: (args.bind as Record<string, string>) ?? {},
+          paramsJson: (args.params as Record<string, unknown>) ?? {},
+          position: (args.position as number) ?? 0,
+        });
+        return { id: created.id, slot: created.slot, message: 'Widget attached' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'remove_artifact_widget',
+      'Detach a widget by slot.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        slot: { type: 'string', description: 'Widget slot to remove', required: true },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        await artifactsRepository.deleteWidgetBySlot(a.id, args.slot as string);
+        return { ok: true, message: 'Widget removed' };
       },
       { permissionAction: 'write' },
     );
