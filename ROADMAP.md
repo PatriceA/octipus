@@ -8,13 +8,34 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-Nothing currently in flight. The multi-user track and the TUI
-rewrite shipped in May, and the May-carry-over follow-ups
-(workspace pickers, org-shared models/skills, vault workspace
-scope, SCIM, billing hooks, tree-sitter, scrollable history,
-named vim registers, instant workspace reconnect) shipped right
-after — see **Done (recent) → 2026-05 batch (b)** below. New
-work will land here.
+Three infrastructure investments unblocked by the May-17 memory-system
+cleanup arc (PR #27 + #28). Each is a "build new capability"
+project — distinct from the cleanup it follows.
+
+- **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
+  (772 lines) and `src/models/providers/index.ts` are at 0% coverage
+  because they front network IO; meaningful unit tests need a mock
+  provider that speaks the provider interface (complete / embed /
+  stream / error classes), records calls, and returns scripted
+  responses. Once it lands, the existing test files for capability
+  routing, cost tracking, rate limiting, and provider discovery
+  can finally assert on what the client actually does. **Help wanted.**
+
+- **Memory-aware eval harness.** `eval/*.yaml` runs against
+  `classifyMessage` (unit mode) or the running backend (integration
+  mode); neither shape can pre-seed the `memories` table or assert
+  that a response surfaces a known fact. The harness needs a per-test
+  setup hook (`memorySetup: [{ factType, content, agentScope }]`)
+  and a new assertion type (`recalls_memory`). Without it, the
+  memory-redesign Phase D extractor + judge + retrieval pipeline
+  has integration-test coverage on the data layer only.
+
+- **Schema directory grouping.** `src/db/schema/` is 47 flat files.
+  Still searchable, but the next 5-10 additions will start to bite.
+  Proposed grouping: `schema/{auth,orchestration,rag,memory,artifacts,audit,settings}/`.
+  Non-breaking — `index.ts` re-exports preserve the import surface.
+  Worth doing once memory + artifacts each grow another 2-3 tables;
+  not before.
 
 ## Next (months)
 
@@ -102,6 +123,64 @@ work will land here.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-05 batch (c) — memory-redesign cleanup arc
+
+Post-implementation cleanup of the memory-redesign work
+(`b8c9300..56b4262` on main). Audit surfaced 4 critical and 11
+medium-priority defects; a follow-up plan addressed every shipped-
+but-deferred item. Two PRs, sixteen commits, fully landed on main.
+
+- **PR #27 — Phases 1-7 + A-G** (`8058f56`):
+  - Phase B + D delivery gaps: new `task_state` MCP tool exposing
+    sibling-agent outputs to specialists; `AgentContext.workspaceId`
+    threaded end-to-end so `task_state` and `memories` rows carry
+    workspace scope; `agent_scope` wired to classifier topic
+    instead of a constant; `sourceMessageId` + `recentTurns`
+    passed to the extractor; plan-execute and expert paths now
+    retrieve and update memory.
+  - Schema integrity: real FK on `embeddings.doc_id` with
+    `ON DELETE CASCADE`; partial active-memories index; stale
+    Phase 0/4 nullable-userId comments refreshed.
+  - Code quality: parameterised vector literals (no more
+    `sql.raw` interpolation); judge hoists model lookup out of
+    the per-candidate loop; `renderMemoriesBlock` surfaces
+    confidence next to inferred facts; dead `retrieveSemantic`
+    and dead duplicates-cleanup pass deleted.
+  - Memory user-facing: PII filter at the judge boundary;
+    `remember_this` meta-tool for explicit fact promotion;
+    `config.memory.extractionCadence` config option
+    (`per_turn` / `on_compaction` / `off`); new `/memory` web
+    page + API for listing, inspecting supersession chains, and
+    soft-deleting memories.
+  - Architecture: split retention out of `rag/embeddings.ts`
+    into a dedicated `rag/retention-service.ts`;
+    `compactedSummary` writes removed (single source of truth is
+    now `compaction_entries`); repository-pattern exceptions
+    codified in CONTRIBUTING.md.
+  - Test coverage: rate-limiter 0% → 85%, org-membership eager
+    paths 0% → 100%, new SCIM auth-refusal + voice + channel
+    discovery + memory repository integration tests.
+  - Infrastructure: migration 0055 auto-pins vector dimension +
+    creates HNSW when embedding data is homogeneous; root
+    package marked `private`; mcp-server CI runs full build +
+    `npm pack --dry-run` to guarantee `dist/index.js` ships;
+    embedding-drift check script + boot-time warning.
+
+- **PR #28 — legacy `source_type` retirement** (`c9cd2ac`):
+  Migration 0056 drops the `embeddings.source_type` column +
+  its index. Every caller (service, API, MCP tool, web UI,
+  health probe, retention, indexer, document processor,
+  filesystem tool) now uses `purpose` directly. Breaking API
+  rename (single-operator cut). `purposeFromSourceType` shim
+  deleted along with its test.
+
+- **Verification.** Typecheck clean (backend + web), biome
+  clean, 55+ passing tests on the touched surfaces; one
+  pre-existing fail (`embeddings.test.ts`) gated behind
+  `INTEGRATION=1` so the unit suite is green by default.
+
+Three deferred items moved to **Now** above.
 
 ### 2026-05 batch (b) — multi-user + TUI follow-ups
 

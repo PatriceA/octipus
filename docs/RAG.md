@@ -2,155 +2,283 @@
 
 ## Overview
 
-Octipus uses Retrieval-Augmented Generation (RAG) to store and retrieve knowledge. Text is chunked, embedded, and stored in PostgreSQL with pgvector. At query time the system supports hybrid search combining BM25 full-text search with vector cosine similarity, or either mode independently.
+Octipus uses three Postgres-backed surfaces to remember things across
+turns and sessions, all sharing the same pgvector install:
 
-- **Embedding model:** `nomic-embed-text` via Ollama, proxied through LiteLLM
-- **Vector storage:** PostgreSQL with pgvector extension (`vector(768)` column, HNSW cosine index)
-- **Full-text search:** PostgreSQL `tsvector` column with GIN index, BM25 ranking via `ts_rank`
-- **Hybrid search:** Reciprocal Rank Fusion (RRF) merges BM25 and cosine similarity result lists (default)
-- **Chunk size:** 1000 characters per chunk, stored with metadata (filePath, chunkIndex, language)
-- **Tiered content:** Each chunk stores an `abstract` (L0 summary), an `overview` (L1 key points), and full `content` (L2)
+| Surface | What it stores | Schema | Hot files |
+|---|---|---|---|
+| **Knowledge base** | Document chunks, code chunks, message chunks, image captions, agent-flagged knowledge artefacts | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
+| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history | `memories` (+ `memories_active` view) | `src/core/memory/*` |
+| **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
 
-## How Data Gets Indexed
+The original RAG layer (this doc's subject) is the bottom row of the
+trio. The memory and task-state surfaces have their own design
+write-up in `.octipus/memory-redesign.md` (shipped May 2026).
 
-### Automatic Indexing
+- **Embedding model:** anything mapped to topic `embedding` in the
+  model registry (defaults to `nomic-embed-text` via Ollama through
+  LiteLLM). The dimension is auto-detected and pinned by migration
+  0055 once the table has data — see [Vector indexing](#vector-indexing).
+- **Vector storage:** PostgreSQL with pgvector. Column type is
+  `vector` (dimensionless) until 0055 pins it at the prevailing
+  dimension; index is HNSW with cosine ops once pinned.
+- **Full-text search:** PostgreSQL `tsvector` column with GIN index,
+  BM25 ranking via `ts_rank_cd`.
+- **Hybrid search:** Reciprocal Rank Fusion (RRF, `k=60`,
+  `alpha=0.6`) merges BM25 and vector result lists.
+- **Chunk size:** 1000 characters per chunk for flat content; the
+  structural Markdown chunker emits one chunk per heading + one per
+  body block and threads the `section_path` so retrieval can pull
+  the matching clause plus its ancestor headings.
+- **Tiered content:** Each chunk stores an `abstract` (L0, ~1-2
+  sentences, generated async post-indexing), an `overview` (L1, key
+  points), and full `content` (L2).
+- **Per-purpose retention:** rows are tagged with a `purpose` and
+  retention is driven by `retention_policies` (per-purpose age cap
+  + optional LFU). See [Retention](#retention).
 
-Agent outputs are automatically indexed after completion when the output exceeds 100 characters. This is controlled by the `RAG_AUTO_INDEX` environment variable (default: `true`). Indexed with source type `agent_output` and metadata including agentId, role, and sessionId.
+## The `purpose` column
 
-### Manual Indexing
+Every embedding row carries a `purpose` field. This is the single
+categorisation column (the legacy `source_type` was retired in
+PR #28 / migration 0056). Valid values:
 
-1. **Research agents** -- system prompt instructs them to call `index_file` after research and check `search_knowledge` before starting new work.
-2. **Knowledge tool** -- any agent with the `knowledge` tool can call `search_knowledge`, `index_file`, and `index_directory`.
-3. **MCP tools** -- `octipus_index_file` and `octipus_search_knowledge` for external models (Claude Code, Gemini CLI).
-4. **API** -- `POST /api/tools/knowledge/tools/{toolName}/execute` with Bearer token.
+| Purpose | What writes it | Default retention |
+|---|---|---|
+| `document` | Document uploads via `/api/documents/upload` and `index_file(path, 'document')` | Tied to the parent `documents` row (cascade delete via FK) |
+| `code` | Filesystem auto-index on `.ts`, `.py`, `.rs`, etc. and `index_file(path, 'code')` | Re-indexed on change via `content_sha256` upsert; otherwise persistent |
+| `image_description` | Vision-LLM caption + OCR text written by `documents/processor.ts` for image uploads | Tied to the parent `documents` row |
+| `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
+| `message` | Conversation chunks indexed for recall (not currently auto-written; compaction handles long-term recall via `compaction_entries`) | 90 days |
+| `ephemeral` | Health probes, transient observations | 7 days |
 
-## How Data Gets Retrieved
+`agent_output` is no longer a value. Memory-redesign Phase B moved
+sibling-agent results to the typed `task_state` table; specialists
+discover each other's outputs via the `task_state` MCP tool
+(`list_recent_session_tasks`, `read_task_state`), not via cosine
+similarity over `embeddings`.
 
-Agents with the `knowledge` tool call `search_knowledge(query, limit?, source_type?, mode?)`. The `mode` parameter controls the search strategy:
+## How data gets indexed
+
+### Filesystem auto-index
+
+Writes to project files via the `filesystem` tool fire a
+fire-and-forget index for the touched path:
+
+- `.md`, `.txt`, `.rst`, `.csv`, `.log` → `purpose = 'document'`
+- Everything else with an indexable extension → `purpose = 'code'`
+
+### Document uploads
+
+`src/core/documents/processor.ts` handles uploads end-to-end:
+extraction (PDF text, OCR via Tesseract, structural Markdown
+parsing), categorisation, summarisation, and indexing into
+`embeddings` with the right `purpose`. PDFs and DOCX go in at
+`purpose='document'`; standalone image uploads land as
+`purpose='image_description'`. Both populate `doc_id` so the
+ON DELETE CASCADE FK reaps the chunks with the parent.
+
+### Manual indexing
+
+- **Knowledge tool** — any agent with the `knowledge` tool can call
+  `search_knowledge`, `read_knowledge`, `index_file`,
+  `index_directory`, `cleanup_knowledge`, `knowledge_stats`.
+- **API** — `POST /api/knowledge/index` with `{ path, type:
+  'file'|'directory', purpose: 'document'|'code', patterns? }`.
+- **MCP server** — `octipus_index_file` and `octipus_search_knowledge`
+  for external models (Claude Code, Gemini CLI, …).
+
+## How data gets retrieved
+
+`search_knowledge(query, limit?, purpose?, mode?, min_similarity?)`
+runs the chosen mode against the `embeddings` table. The `mode`
+parameter:
 
 | Mode | Description |
 |---|---|
-| `hybrid` | **(default)** Runs BM25 full-text search and vector cosine similarity independently, then merges the ranked lists using Reciprocal Rank Fusion (RRF). Best overall recall. |
-| `fts` | BM25 full-text search only, using PostgreSQL `tsvector` + GIN index. Fast for keyword-heavy queries. |
-| `vector` | Cosine similarity only against the `embedding` column. Original behavior; best for semantic/conceptual queries. |
+| `hybrid` (default) | BM25 + vector cosine via RRF. Best overall recall. |
+| `semantic` | Vector cosine only. Best for conceptual / paraphrased queries. |
+| `keyword` | BM25 only via `plainto_tsquery` + `ts_rank_cd`. Fast for exact-term queries. |
 
-Results include content, score, sourceType, and filePath. By default only the `abstract` (L0) or `overview` (L1) tiers are returned in search results to keep context concise. To load the full text of a specific entry use the `read_knowledge` tool, which returns the complete `content` (L2).
+The `purpose` filter is optional — omit to search the whole base, or
+pass a value (e.g. `'document'`) to narrow the result space.
 
-## Roles with Knowledge Tool Access
+`min_similarity` filters by raw cosine similarity. Defaults: 0.35
+for `semantic`, 0.3 for `hybrid`, 0 for `keyword`. The hybrid mode
+keeps an entry if either similarity passes the bar *or* it had an
+FTS match (keyword presence is its own signal).
 
-| Role | Has Knowledge | Rationale |
-|------|:---:|---|
-| research | Yes | Primary knowledge consumer/producer |
-| coding | Yes | Look up past solutions and patterns |
-| review | Yes | Reference past decisions and standards |
-| general | Yes | General-purpose needs broad access |
-| ai | Yes | RAG system builder, needs access |
-| writing | Yes | Reference existing docs |
-| data | Yes | Look up schemas and patterns |
-| security | Yes | Reference past audits and findings |
-| design | No | Primarily visual, less text-knowledge-dependent |
-| devops | No | Infrastructure-focused |
-| qa | No | Testing-focused |
-| finance | No | Analysis-focused |
-| automation | No | Workflow-focused |
-| pm | No | Planning-focused |
-| communication | No | Messaging-focused |
+Results carry the section path when the structural chunker produced
+them, so callers can render "you are reading under § A / § B"
+context next to a hit without a second query. `getAncestorHeadings`
+remains for callers that want the full ancestor chunk objects.
 
-## Knowledge Base Cleanup
+`read_knowledge(id)` returns the full L2 content + metadata for a
+specific entry.
 
-The knowledge base accumulates entries over time. A cleanup system removes low-value entries automatically and on demand.
+## Roles with `knowledge` tool
 
-### Cleanup Strategies
+Ten roles carry both `knowledge` and `task_state` as of the May
+2026 memory-redesign cleanup. The pairing is intentional —
+specialists that look up documents also look up sibling outputs.
 
-| Strategy | What it removes |
-|---|---|
-| **Orphaned documents** | Embeddings where the source document has been deleted from the database |
-| **Stale agent outputs** | Agent output embeddings older than a configurable threshold (default: 30 days) |
-| **Short entries** | Entries with content shorter than a minimum length (default: 50 chars), excluding structured content starting with `[` |
-| **Duplicates** | Entries with identical source_type + source_id + content, keeping only the newest |
+| Role | `knowledge` | `task_state` | Rationale |
+|---|:---:|:---:|---|
+| research | ✓ | ✓ | Primary knowledge consumer/producer |
+| coding | ✓ | ✓ | Look up past solutions, see peer review findings |
+| review | ✓ | ✓ | Reference past decisions and standards |
+| general | ✓ | ✓ | General-purpose needs broad access |
+| ai | ✓ | ✓ | RAG / model integration work |
+| writing | ✓ | ✓ | Reference existing docs |
+| data | ✓ | ✓ | Look up schemas and patterns |
+| security | ✓ | ✓ | Reference past audits and findings |
+| qa | ✓ | ✓ | Cross-reference test reports |
+| architecture | ✓ | ✓ | Reference design notes + audits |
+| design, devops, finance, automation, pm, communication | ✗ | ✗ | Domain-bounded; lookups come via the orchestrator |
 
-### Automatic Cleanup
+## Retention
 
-A weekly cleanup runs automatically via the cron runner alongside session cleanup. It uses the default settings (30-day agent output cutoff, 50-char minimum content length).
+Per-purpose retention lives in the `retention_policies` table
+(seeded by migration 0051; editable in place). Each row carries an
+age cap and an optional LFU axis:
 
-### Manual Cleanup
+| Purpose | Max age | LFU prune below | After (days) |
+|---|---|---|---|
+| `document` | none | none | (cascade with documents) |
+| `code` | none | none | (re-indexed on change) |
+| `image_description` | none | none | (cascade with documents) |
+| `knowledge_artifact` | 365 | < 1 access | 180 |
+| `message` | 90 | none | — |
+| `ephemeral` | 7 | none | — |
 
-**Via API:**
+The cleanup loop (`src/core/rag/retention-service.ts`) runs four
+passes in order:
+
+1. Per-purpose retention (the table above)
+2. Orphaned `document` rows whose parent is missing
+3. Legacy `ephemeral` sweep (rare; mostly catches probe rows)
+4. Short / low-quality entries (`length(content) < minContentLength`)
+
+A weekly run is wired into the cron runner with default thresholds.
+The audit log lands in `cleanup_audit_log`.
+
+### Manual cleanup
+
 ```bash
-# Dry run — preview what would be removed
 curl -X POST http://localhost:3005/api/knowledge/cleanup \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"dryRun": true}'
-
-# Execute cleanup with custom settings
-curl -X POST http://localhost:3005/api/knowledge/cleanup \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"maxAgeDays": 14, "minContentLength": 100}'
 ```
 
-**Via Agent Tool:**
+Agents can call `cleanup_knowledge(dry_run?, max_age_days?,
+min_content_length?)` via the knowledge tool.
 
-Agents with the `knowledge` tool can call `cleanup_knowledge(dry_run?, max_age_days?, min_content_length?)`. This is useful for automation workers or scheduled cleanup hooks.
+### Embedding-drift check
 
-### Response Format
+Multiple `embedding_version` values in the same table mean cosine
+similarity across them is meaningless. The startup path logs a
+warning when drift is detected; the operator can get the breakdown
+with:
 
-```json
-{
-  "orphanedDocuments": 3,
-  "staleAgentOutputs": 12,
-  "shortEntries": 5,
-  "duplicates": 2,
-  "total": 22
-}
+```bash
+bun run db:check-embedding-drift
 ```
+
+The script exits 1 on drift so a CI gate can pick it up.
+
+## Vector indexing
+
+Migration 0047 made the embedding column dimensionless to support
+embedding-model swaps; the cost was pgvector couldn't build HNSW on
+a dimensionless column. Migration 0055 auto-restores HNSW when
+it's safe:
+
+- **Empty table** → leave dimensionless. HNSW arrives next time the
+  migration runs after data lands.
+- **Single distinct dimension** → `ALTER COLUMN TYPE vector(N)` +
+  `CREATE INDEX USING hnsw (embedding vector_cosine_ops)`. One-time
+  table rewrite, data preserved.
+- **Multiple distinct dimensions** → `RAISE NOTICE` with the drift
+  count and skip. Run the drift-check script for the breakdown.
+
+Both `embeddings.embedding` and `memories.embedding` are handled.
+Re-running the migration after a successful pin is a no-op.
+
+## Dedup
+
+A unique index on `(purpose, source_id, content_sha256)` makes
+re-inserting the same content into the same source a no-op rather
+than a duplicate row. The previous "find duplicates by content
+match" cleanup pass was retired with the index in place.
 
 ## Schema
 
 ```sql
 CREATE TABLE embeddings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  source_type TEXT NOT NULL,      -- 'document', 'code', 'agent_output'
-  source_id TEXT NOT NULL,        -- file path or agent ID
-  content TEXT NOT NULL,          -- L2: full text chunk
-  abstract TEXT,                  -- L0: 2-3 sentence summary
-  overview TEXT,                  -- L1: key points overview
-  embedding vector(768) NOT NULL, -- nomic-embed-text dimension
-  content_tsv TSVECTOR,           -- auto-populated from content, used for BM25 FTS
-  model TEXT NOT NULL,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMP DEFAULT NOW()
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id          text NOT NULL,
+  user_id            uuid,
+  workspace_id       uuid,
+  content            text NOT NULL,
+  embedding          vector NOT NULL,     -- vector(N) once 0055 pins it
+  content_tsv        tsvector,            -- auto-generated for BM25
+  model              text NOT NULL,
+  abstract           text,                -- L0 summary
+  overview           text,                -- L1 key points
+  metadata           jsonb DEFAULT '{}',
+  purpose            text NOT NULL,       -- see "The purpose column"
+  content_sha256     text NOT NULL,       -- dedup key
+  embedding_version  text NOT NULL,       -- "<model>/<dim>" drift detection
+  access_count       integer NOT NULL DEFAULT 0,
+  last_accessed_at   timestamptz,
+  parent_chunk_id    uuid REFERENCES embeddings(id) ON DELETE SET NULL,
+  section_path       text[],              -- root → leaf heading titles
+  heading_level      smallint,            -- 0=body, 1=H1, …
+  doc_id             uuid REFERENCES documents(id) ON DELETE CASCADE,
+  created_at         timestamptz NOT NULL DEFAULT now()
 );
 
--- Indexes
-CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops); -- vector search
-CREATE INDEX ON embeddings USING gin (content_tsv);                   -- full-text search
+CREATE UNIQUE INDEX embeddings_dedup_idx
+  ON embeddings (purpose, source_id, content_sha256);
+-- HNSW + GIN indexes created by 0055 once dimension is homogeneous.
 ```
 
 ## Configuration
 
-| Env Variable | Default | Description |
+| Env / setting | Default | Description |
 |---|---|---|
-| `RAG_AUTO_INDEX` | `true` | Auto-index agent outputs on completion |
+| `memory.extractionCadence` (config) | `per_turn` | When the memory extractor runs: `per_turn` (after every user turn), `on_compaction` (only on session compaction), or `off`. Knowledge-base indexing is unaffected. |
+| `AGENT_TASK_RECORDING` (env) | `true` | Toggle whether completed agents record their outputs to `task_state`. |
+| `RAG_AUTO_INDEX` (env) | `true` | Reserved — agent-output auto-index was removed in Phase B; this flag is now used only by tests. |
 
-## Setup Requirements
+## Setup requirements
 
 1. PostgreSQL with the `pgvector` extension installed.
-2. Pull the embedding model on Ollama: `ollama pull nomic-embed-text`.
-3. Register the model in LiteLLM config with topic `embedding`.
-4. Run migration `0005_rag_setup.sql` to create the embeddings table.
-5. Run migration `0015_hybrid_search.sql` to add the `content_tsv`, `abstract`, and `overview` columns and their indexes.
+2. An embedding model registered in the model registry under topic
+   `embedding`. `ollama pull nomic-embed-text` then create the model
+   row from the Models page is the path of least resistance.
+3. `bun run db:migrate` to run every migration up to 0056.
+4. Optionally bind a model to topic `memory_extraction` to enable
+   the long-term memory pipeline (Phase D); the knowledge-base path
+   is independent.
 
-## Key Files
+## Key files
 
 | File | Purpose |
 |---|---|
-| `src/core/rag/embeddings.ts` | EmbeddingService -- generate, store, `search()` (vector), `ftsSearch()` (BM25), `hybridSearch()` (RRF) |
-| `src/core/rag/indexer.ts` | FileIndexer -- index files and directories |
-| `src/core/rag/auto-indexer.ts` | AutoIndexer -- indexes agent outputs on completion |
-| `src/tools/knowledge/index.ts` | KnowledgeTool -- search_knowledge, index_file, index_directory, cleanup_knowledge |
-| `src/db/schema/embeddings.ts` | Drizzle schema with pgvector custom type |
-| `src/db/migrations/0005_rag_setup.sql` | Migration for embeddings table |
-| `src/db/migrations/0015_hybrid_search.sql` | Migration adding `content_tsv`, `abstract`, `overview` columns and indexes |
-| `mcp-server/src/tools/knowledge.ts` | MCP tools for external models |
+| `src/core/rag/embeddings.ts` | `EmbeddingService` — generate, store, `search()` / `ftsSearch()` / `hybridSearch()` |
+| `src/core/rag/retention-service.ts` | Per-purpose retention + cleanup audit |
+| `src/core/rag/indexer.ts` | `FileIndexer` — single file + directory indexing |
+| `src/core/rag/markdown-chunker.ts` | Structural Markdown chunker (heading hierarchy) |
+| `src/core/rag/health.ts` | Boot-time KB self-check (DB + embedding model + vector write round-trip) |
+| `src/core/documents/processor.ts` | Document upload pipeline (extract → categorise → summarise → index) |
+| `src/tools/knowledge/index.ts` | MCP-style tool — search, read, index, cleanup, stats |
+| `src/tools/task-state/index.ts` | Sibling-agent output discovery (memory-redesign Phase B) |
+| `src/db/schema/embeddings.ts` | Drizzle schema |
+| `src/db/migrations/0049_embeddings_purpose_versioning.sql` | Added `purpose`, dedup unique index, access tracking |
+| `src/db/migrations/0051_retention_policies.sql` | Seeded per-purpose retention defaults |
+| `src/db/migrations/0052_embedding_hierarchy.sql` | Document hierarchy columns (`parent_chunk_id`, `section_path`, `doc_id`) |
+| `src/db/migrations/0055_vector_hnsw_when_homogeneous.sql` | Auto-pin vector dimension + create HNSW |
+| `src/db/migrations/0056_drop_source_type.sql` | Retired the legacy `source_type` column |
+| `mcp-server/src/tools/knowledge.ts` | External-model MCP bridge |
