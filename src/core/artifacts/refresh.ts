@@ -112,9 +112,30 @@ async function dispatch(source: ArtifactDataSource): Promise<unknown> {
       return runMcp(cfg as McpSourceConfig, source.principalId);
     case 'skill_query':
       return runSkillQuery(cfg as SkillQuerySourceConfig, source.principalId);
+    case 'toolbox':
+      return runToolbox(source);
     default:
       throw new Error(`unknown source kind: ${source.kind}`);
   }
+}
+
+// ── toolbox ──────────────────────────────────────────────────────────
+async function runToolbox(source: ArtifactDataSource): Promise<unknown> {
+  if (!source.toolId) {
+    throw new Error(`toolbox source ${source.id}: missing tool_id`);
+  }
+  const { dispatchCollector } = await import('./toolbox');
+  // Workspace id isn't stored on the source row — fetch via the artifact.
+  // Cheap: artifact lookup is a single PK select and refresh runs at most
+  // every 30s per source.
+  const artifact = await artifactsRepository.getById(source.artifactId);
+  if (!artifact) throw new Error(`toolbox source ${source.id}: artifact missing`);
+  return dispatchCollector(source.toolId, source.configJson ?? {}, {
+    principalId: source.principalId,
+    workspaceId: artifact.workspaceId,
+    artifactId: source.artifactId,
+    nodeName: source.name,
+  });
 }
 
 // ── tool ─────────────────────────────────────────────────────────────
@@ -146,7 +167,7 @@ async function runHttp(cfg: HttpSourceConfig): Promise<unknown> {
 }
 
 /** Resolves `${vault.<key>}` placeholders in header values via vault lookup. */
-async function resolveVaultHeaders(
+export async function resolveVaultHeaders(
   headers: Record<string, string>,
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
@@ -161,7 +182,7 @@ async function resolveVaultHeaders(
 }
 
 /** Minimal dotted path: `a.b.0.c`. Returns `undefined` if path misses. */
-function applyJsonPath(data: unknown, path: string): unknown {
+export function applyJsonPath(data: unknown, path: string): unknown {
   let cur: unknown = data;
   for (const part of path.split('.')) {
     if (cur == null) return undefined;
@@ -241,7 +262,7 @@ async function runSkillQuery(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────
-function buildSyntheticContext(principalId: string): import('@/core/types').AgentContext {
+export function buildSyntheticContext(principalId: string): import('@/core/types').AgentContext {
   const now = new Date();
   return {
     id: `artifact-refresh:${principalId}`,
