@@ -7,6 +7,141 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Legacy `source_type` retirement (2026-05-17, PR #28)
+
+Completes the column-retirement flagged after the memory-redesign
+cleanup arc. Phase A (migration 0049) added `purpose` as the
+canonical categorisation column; `source_type` carried alongside
+it during the soft-migration window. This drops `source_type`
+entirely.
+
+**Breaking — single-operator cut. External callers, MCP-tool
+prompts, and the web UI all switch in lockstep.**
+
+- **Schema.** Migration 0056 drops `embeddings_source_type_idx` and
+  the `source_type` column. Idempotent. The Phase A backfill already
+  mirrored every value onto `purpose`, so no information is lost.
+- **Service.** `EmbeddingService.store / indexText / indexStructured /
+  search / ftsSearch / hybridSearch / listAll / readById /
+  deleteBySource` now take or return `purpose: EmbeddingPurpose`
+  instead of `sourceType: string`. `getStats()` returns `byPurpose`.
+  `SearchResult.sourceType` → `purpose`. The `purposeFromSourceType`
+  shim is removed.
+- **API.** `POST /knowledge/search`, `POST /knowledge/index`, and
+  `GET /knowledge` rename the request field `sourceType` → `purpose`.
+- **MCP tool.** `search_knowledge` argument renames `source_type` →
+  `purpose` with an updated description listing the canonical values
+  (`document`, `code`, `message`, `image_description`,
+  `knowledge_artifact`, `ephemeral`). `read_knowledge` return field
+  renames as well.
+- **Web.** `/knowledge` page renames every visible reference — types,
+  state, query strings, the "Source Type" picker label (now
+  "Purpose"), the color/icon registries. New colors for
+  `image_description`, `knowledge_artifact`, and `ephemeral`.
+- **Other callers.** `rag/health.ts` probe row uses
+  `purpose='ephemeral'` + a unique `sourceId` for cleanup;
+  `retention-service.ts` orphaned-doc and legacy-ephemeral filters
+  use `purpose`; `indexer.ts`, `documents/processor.ts`, and
+  `tools/filesystem/index.ts` pass `purpose` directly.
+
+### Memory-redesign cleanup follow-up — Phases A-G (2026-05-16, PR #27)
+
+Seven follow-up phases on top of the original Phase 1-7 audit fixes.
+Plan in `.octipus/memory-redesign.md`; commits `fbf2a8f..e416263`.
+
+- **Phase A — clear desk.** Drop unused `SCIM_PATCH_SCHEMA` (biome
+  lint); gate the Whisper-dependent voice tests on `WHISPER_BINARY`
+  + `WHISPER_MODEL_PATH`; gate the LiteLLMClient-dependent
+  embeddings tests on `INTEGRATION=1` so the unit suite is green
+  by default; mark `.octipus/memory-redesign.md` as shipped;
+  update `docs/QA.md` for the deleted permanent `qa-demo` channel.
+- **Phase B — memory finish-the-job.** `recordAgentCompletion`
+  derives `task_state.task_kind` from the role (`review` → `review`,
+  `qa`/`security` → `finding`, else `agent_output`); new
+  `TaskStateRepository.reapOrphans` drops typed-output rows whose
+  session was deleted; new `scripts/check-embedding-drift.ts` +
+  `db:check-embedding-drift` npm script + boot-time warning when
+  the `embeddings` or `memories` table carries multiple distinct
+  `embedding_version` values.
+- **Phase C — memory user-facing.** PII filter at the judge
+  boundary (redact-not-drop, confidence knocked down 0.2 on
+  redaction); new `remember_this` orchestrator meta-tool for
+  explicit fact promotion through the same judge pipeline; new
+  `config.memory.extractionCadence` (`per_turn` / `on_compaction`
+  / `off`); new `/memory` web page + `GET/DELETE /api/memory`
+  endpoints + supersession-chain viewer + soft-delete (sets
+  `valid_until`, preserves audit trail).
+- **Phase D — architecture cleanup.** Split retention out of
+  `rag/embeddings.ts` (1100+ lines) into
+  `rag/retention-service.ts`; remove `compactedSummary` writes
+  in favour of the `compaction_entries` log; readers fall back
+  to `compactedSummary` only for sessions compacted before this
+  change; mark `SessionContext.compactedSummary` `@deprecated`;
+  codify the repository-pattern exceptions list in
+  `CONTRIBUTING.md`.
+- **Phase E — test coverage.** New `scim.test.ts` (8 auth-refusal
+  tests against every endpoint); `voice.test.ts` (3 tests for
+  unauth + malformed body); `channels/discovery.test.ts` (4 tests
+  verifying the shipped channel folders load + uniqueness).
+- **Phase F — vector index strategy.** Migration 0055 reads the
+  prevailing embedding dimension across `embeddings` and
+  `memories`; if homogeneous, `ALTER COLUMN TYPE vector(N)` +
+  `CREATE INDEX USING hnsw (vector_cosine_ops)`; if empty,
+  no-op; if drifted, `RAISE NOTICE` and skip. Restores HNSW
+  performance without locking the deployment into a specific
+  embedding model.
+- **Phase G — infrastructure & docs.** README documents
+  Bun-only server runtime explicitly; mcp-server CI now runs
+  `bun run build` + asserts `dist/index.js` exists + `npm pack
+  --dry-run` confirms the artefact ships in the tarball.
+
+### Memory-redesign cleanup — Phases 1-7 (2026-05-16, PR #27)
+
+Audit of the just-shipped memory-redesign work surfaced 4 critical
+and 11 medium-priority defects. Phases 1-7 closed them.
+
+- **Phase 1 — Phase B + D delivery gaps.** Phase B shipped writers
+  but no readers — new `task_state` MCP tool
+  (`list_recent_session_tasks`, `read_task_state`) added to the ten
+  roles that already carry `knowledge`. `AgentContext.workspaceId`
+  typed and threaded from orchestrator → swarm → worker so
+  `recordAgentCompletion` finally populates the `workspace_id` FK
+  that was previously NULL on every row; `swarmNodeId = agent.id`
+  filled too. Memory scope wired to `classification.topic` instead
+  of the constant `'orchestrator'`. `updateMemoriesAfterTurn`
+  receives the just-persisted user message id and the last three
+  turns. Plan-execute and expert paths now fire memory.
+- **Phase 2 — schema cleanup.** Migration 0054 adds the real FK on
+  `embeddings.doc_id` with `ON DELETE CASCADE` (Phase C declared the
+  column but not the FK); recreates
+  `memories_user_scope_type_active_idx` as a partial index
+  (`WHERE superseded_by IS NULL`); refreshes the stale Phase 0/4
+  nullable-userId comments on `embeddings`.
+- **Phase 3 — code quality.** Replace `sql.raw` vector-literal
+  splicing with parameterised binds in `memories.searchSimilar` and
+  `rag.hybridSearch`. Memory judge uses the canonical
+  `buildEmbeddingVersion` helper and hoists the embedding-model
+  lookup out of the per-candidate loop. `renderMemoriesBlock`
+  surfaces confidence next to inferred facts (`p<0.9`). Dead
+  `retrieveSemantic` removed (silent factType default violated
+  fail-loud). Dead "duplicates" cleanup pass removed (Phase A unique
+  index makes duplicate inserts impossible).
+  `cosineSimilarity` / `l2Distance` typed `column: AnyPgColumn`.
+- **Phase 4 — test coverage.** 9 integration tests for
+  `MemoryRepository` (supersede atomic, user isolation,
+  `OR(NULL, scope)` filter, retrieveTop ordering, supersession
+  chains, non-finite vector rejection, empty vector early-return);
+  9 unit tests for confidence rendering + extractor boundary cases.
+- **Phase 5 — small cleanup.** Delete dormant
+  `src/channels/qa-demo/`; log on the `discovery.test.ts` teardown
+  failure instead of a bare `catch {}`.
+- **Phase 6 — npm posture.** Root package marked `private: true`
+  with `license` + `repository`; mcp-server now ships `dist/` via
+  `files: ['dist', 'README.md']` and a `prepublishOnly` script;
+  versions synced.
+- **Phase 7 — focused coverage.** `rate-limiter.ts` 0% → 85% via 13
+  unit tests; `org-membership.ts` eager paths 0% → 100% via 5 tests.
+
 ### Memory-redesign — final wiring (2026-05)
 
 Closes the two deferred "ships disabled" pieces left from the phase
