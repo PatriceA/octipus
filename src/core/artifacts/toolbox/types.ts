@@ -50,6 +50,13 @@ export interface ToolboxContext {
    * their resolved binds via params, not here.
    */
   input?: unknown;
+  /**
+   * Previous value of `input` from the prior refresh, when the upstream is
+   * a source (and a previous snapshot exists). Undefined for transform-fed
+   * inputs in phase 3. Lets diff-style transforms compute deltas without
+   * extra DB access.
+   */
+  previousInput?: unknown;
 }
 
 export interface ToolboxTool<P = Record<string, unknown>, R = unknown> {

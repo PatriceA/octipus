@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolboxContext } from '../types';
 import { barChartWidget } from './bar_chart';
+import { heatmapWidget } from './heatmap';
 import { jsonTreeWidget } from './json_tree';
 import { kpiCardWidget } from './kpi_card';
 import { listWidget } from './list';
 import { markdownWidget } from './markdown';
+import { mermaidWidget } from './mermaid';
+import { pieChartWidget } from './pie_chart';
 import { tableWidget } from './table';
 
 const ctx: ToolboxContext = { principalId: '', workspaceId: '' };
@@ -126,5 +129,79 @@ describe('art_widget_bar_chart', () => {
   test('renders empty text', async () => {
     const out = await barChartWidget.execute({ data: [] }, ctx);
     expect(out.html).toContain('No data');
+  });
+});
+
+describe('art_widget_pie_chart', () => {
+  test('renders one slice per datum with tooltips', async () => {
+    const out = await pieChartWidget.execute(
+      { data: [{ key: 'a', value: 3 }, { key: 'b', value: 1 }] },
+      ctx,
+    );
+    expect(out.html.match(/<path /g)?.length).toBe(2);
+    expect(out.html).toContain('<title>a: 3 (75.0%)</title>');
+  });
+  test('donut leaves an inner gap; pie does not', async () => {
+    const donut = await pieChartWidget.execute(
+      { data: [{ key: 'a', value: 1 }, { key: 'b', value: 1 }] },
+      ctx,
+    );
+    const pie = await pieChartWidget.execute(
+      { data: [{ key: 'a', value: 1 }, { key: 'b', value: 1 }], style: 'pie' },
+      ctx,
+    );
+    expect(donut.html).toMatch(/A 28 28/);
+    expect(pie.html).not.toMatch(/A 28 28/);
+  });
+  test('renders empty text on empty data', async () => {
+    const out = await pieChartWidget.execute({ data: [] }, ctx);
+    expect(out.html).toContain('No data');
+  });
+  test('flags all-zero data', async () => {
+    const out = await pieChartWidget.execute({ data: [{ key: 'a', value: 0 }] }, ctx);
+    expect(out.html).toContain('All values are zero');
+  });
+});
+
+describe('art_widget_heatmap', () => {
+  test('renders cells with alpha scaled to the max value', async () => {
+    const out = await heatmapWidget.execute(
+      {
+        data: [
+          { x: 'Mon', y: '09', v: 1 },
+          { x: 'Mon', y: '10', v: 5 },
+          { x: 'Tue', y: '09', v: 3 },
+        ],
+      },
+      ctx,
+    );
+    expect(out.html).toContain('Mon');
+    expect(out.html).toContain('Tue');
+    // The max-value cell should be at full alpha.
+    expect(out.html).toContain('rgba(99,102,241,1.000)');
+  });
+  test('renders empty placeholder', async () => {
+    const out = await heatmapWidget.execute({ data: [] }, ctx);
+    expect(out.html).toContain('No data');
+  });
+});
+
+describe('art_widget_mermaid', () => {
+  test('captures source in a pre with data-mermaid', async () => {
+    const out = await mermaidWidget.execute(
+      { source: 'graph TD;\n  A-->B;', caption: 'cap' },
+      ctx,
+    );
+    expect(out.html).toContain('data-mermaid="true"');
+    expect(out.html).toContain('graph TD');
+    expect(out.html).toContain('cap');
+  });
+  test('escapes source content', async () => {
+    const out = await mermaidWidget.execute({ source: '<script>' }, ctx);
+    expect(out.html).not.toContain('<script>');
+    expect(out.html).toContain('&lt;script&gt;');
+  });
+  test('throws on empty source', async () => {
+    await expect(mermaidWidget.execute({ source: '' }, ctx)).rejects.toThrow(/source/);
   });
 });

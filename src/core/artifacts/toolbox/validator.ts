@@ -36,12 +36,18 @@ export interface PipelineWidgetSpec {
   position?: number;
 }
 
+export interface PipelineExportSpec {
+  exportId: string;
+  toolId: string;
+  bind: Record<string, string>;
+  params?: Record<string, unknown>;
+}
+
 export interface PipelineSpec {
   sources: PipelineSourceSpec[];
   transforms?: PipelineTransformSpec[];
   widgets?: PipelineWidgetSpec[];
-  /** Reserved for phase 3 — currently ignored. */
-  exports?: unknown[];
+  exports?: PipelineExportSpec[];
 }
 
 export interface ValidationIssue {
@@ -234,6 +240,59 @@ export function validatePipeline(spec: PipelineSpec): ValidationResult {
     const allKeys = new Set([
       ...Object.keys(w.bind ?? {}),
       ...Object.keys(w.params ?? {}),
+    ]);
+    for (const [key, spec] of Object.entries(tool.params)) {
+      if (spec.required && !allKeys.has(key)) {
+        errors.push({
+          path: `${base}.params.${key}`,
+          message: `required parameter "${key}" is missing (provide in bind or params)`,
+          severity: 'error',
+        });
+      }
+    }
+  });
+
+  // Exports — same bind / param checks as widgets, scoped to family 'export'.
+  const exportIdsSeen = new Set<string>();
+  spec.exports?.forEach((e, i) => {
+    const base = `exports[${i}]`;
+    if (!e.exportId || !/^[a-zA-Z0-9_-]+$/.test(e.exportId)) {
+      errors.push({ path: `${base}.exportId`, message: 'exportId is required and must match [a-zA-Z0-9_-]+', severity: 'error' });
+    } else if (exportIdsSeen.has(e.exportId)) {
+      errors.push({ path: `${base}.exportId`, message: `duplicate exportId "${e.exportId}"`, severity: 'error' });
+    } else {
+      exportIdsSeen.add(e.exportId);
+    }
+    if (!e.toolId) {
+      errors.push({ path: `${base}.toolId`, message: 'export.toolId is required', severity: 'error' });
+      return;
+    }
+    const tool = registry.get(e.toolId);
+    if (!tool) {
+      errors.push({ path: `${base}.toolId`, message: `unknown toolbox tool "${e.toolId}"`, severity: 'error' });
+      return;
+    }
+    if (tool.family !== 'export') {
+      errors.push({ path: `${base}.toolId`, message: `tool "${e.toolId}" is a ${tool.family}, expected export`, severity: 'error' });
+      return;
+    }
+    for (const [paramName, pathExpr] of Object.entries(e.bind ?? {})) {
+      if (typeof pathExpr !== 'string') {
+        errors.push({ path: `${base}.bind.${paramName}`, message: 'bind target must be a string path', severity: 'error' });
+        continue;
+      }
+      const top = pathExpr.split('.')[0];
+      if (!knownNames.has(top)) {
+        warnings.push({
+          path: `${base}.bind.${paramName}`,
+          message: `bind path "${pathExpr}" does not resolve to a declared source/transform (top-level "${top}")`,
+          severity: 'warning',
+        });
+      }
+    }
+    const allKeys = new Set([
+      ...Object.keys(e.bind ?? {}),
+      ...Object.keys(e.params ?? {}),
     ]);
     for (const [key, spec] of Object.entries(tool.params)) {
       if (spec.required && !allKeys.has(key)) {

@@ -12,17 +12,18 @@ describe('discoverToolbox', () => {
   beforeEach(() => { _resetToolboxRegistryForTests(); });
   afterEach(() => { _resetToolboxRegistryForTests(); });
 
-  test('registers all Phase 1 collectors', async () => {
+  test('registers all collectors (phases 1 + 3)', async () => {
     await discoverToolbox();
-    const ids = getToolboxRegistry().list().map((e) => e.id);
+    const ids = getToolboxRegistry().list({ family: 'collect' }).map((e) => e.id);
     expect(ids).toContain('art_collect_http_json');
     expect(ids).toContain('art_collect_http_text');
     expect(ids).toContain('art_collect_rss');
     expect(ids).toContain('art_collect_octipus_tool');
     expect(ids).toContain('art_collect_mcp');
+    expect(ids).toContain('art_collect_html_scrape');
   });
 
-  test('registers all Phase 2 transforms', async () => {
+  test('registers all transforms (phases 2 + 3)', async () => {
     await discoverToolbox();
     const ids = getToolboxRegistry().list({ family: 'transform' }).map((e) => e.id);
     expect(ids).toContain('art_transform_jsonpath');
@@ -30,9 +31,10 @@ describe('discoverToolbox', () => {
     expect(ids).toContain('art_transform_sort');
     expect(ids).toContain('art_transform_top_n');
     expect(ids).toContain('art_transform_group_count');
+    expect(ids).toContain('art_transform_diff');
   });
 
-  test('registers all Phase 2 widgets', async () => {
+  test('registers all widgets (phases 2 + 3)', async () => {
     await discoverToolbox();
     const ids = getToolboxRegistry().list({ family: 'widget' }).map((e) => e.id);
     expect(ids).toContain('art_widget_table');
@@ -41,6 +43,17 @@ describe('discoverToolbox', () => {
     expect(ids).toContain('art_widget_markdown');
     expect(ids).toContain('art_widget_json_tree');
     expect(ids).toContain('art_widget_bar_chart');
+    expect(ids).toContain('art_widget_pie_chart');
+    expect(ids).toContain('art_widget_heatmap');
+    expect(ids).toContain('art_widget_mermaid');
+  });
+
+  test('registers all exporters (phase 3)', async () => {
+    await discoverToolbox();
+    const ids = getToolboxRegistry().list({ family: 'export' }).map((e) => e.id);
+    expect(ids).toContain('art_export_csv');
+    expect(ids).toContain('art_export_json');
+    expect(ids).toContain('art_export_markdown');
   });
 
   test('is idempotent', async () => {

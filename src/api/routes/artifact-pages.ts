@@ -240,14 +240,97 @@ async function handleEmbed(ctx: HandlerCtx) {
   return buildEmbedHtml({ artifact: auth.artifact, templateBody: body, css, token });
 }
 
+async function handleExport(ctx: HandlerCtx) {
+  const rl = checkRateLimit(`export:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  if (!rl.allowed) {
+    ctx.set.status = 429;
+    ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
+    return 'Too many requests';
+  }
+  const auth = await authorizeForRequest({
+    slug: ctx.params.slug,
+    user: ctx.user ?? null,
+    shareToken: typeof ctx.query.t === 'string' ? ctx.query.t : null,
+  });
+  if (!auth) {
+    ctx.set.status = 404;
+    return 'Not found';
+  }
+
+  const exp = await artifactsRepository.getExportByPublicId(auth.artifact.id, ctx.params.exportId);
+  if (!exp) {
+    ctx.set.status = 404;
+    return 'Export not found';
+  }
+
+  const { ensureToolboxLoaded, getToolboxRegistry } = await import('@/core/artifacts/toolbox');
+  await ensureToolboxLoaded();
+  const tool = getToolboxRegistry().get(exp.toolId);
+  if (!tool || tool.family !== 'export') {
+    coreLogger.error(
+      { artifactId: auth.artifact.id, exportId: exp.exportId, toolId: exp.toolId },
+      'artifact.export.unknown_tool',
+    );
+    ctx.set.status = 500;
+    return 'Export tool not registered';
+  }
+
+  // Build data bus + resolve binds, same pattern as widgets.
+  const bus = await buildDataBus(auth.artifact.id);
+  const resolved: Record<string, unknown> = { ...(exp.paramsJson ?? {}) };
+  for (const [paramName, pathExpr] of Object.entries(exp.bindJson ?? {})) {
+    resolved[paramName] = resolveBusPath(bus.data, pathExpr);
+  }
+
+  let payload: { filename: string; contentType: string; body: string };
+  try {
+    const out = await tool.execute(resolved, {
+      principalId: '',
+      workspaceId: auth.artifact.workspaceId,
+      artifactId: auth.artifact.id,
+      nodeName: exp.exportId,
+    });
+    if (!out || typeof out !== 'object') throw new Error('export tool returned non-object');
+    payload = out as typeof payload;
+    if (typeof payload.body !== 'string') throw new Error('export tool returned no `body` string');
+  } catch (err) {
+    coreLogger.error(
+      { artifactId: auth.artifact.id, exportId: exp.exportId, error: (err as Error).message },
+      'artifact.export.failed',
+    );
+    ctx.set.status = 500;
+    return 'Export failed';
+  }
+
+  ctx.set.headers['content-type'] = payload.contentType;
+  ctx.set.headers['content-disposition'] =
+    `attachment; filename="${payload.filename.replace(/"/g, '')}"`;
+  return payload.body;
+}
+
+function resolveBusPath(root: Record<string, unknown>, expr: string): unknown {
+  if (!expr) return root;
+  const parts = expr.split('.').map((p) => p.trim()).filter(Boolean);
+  let cur: unknown = root;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    if (Array.isArray(cur)) cur = cur[Number(p)];
+    else if (typeof cur === 'object') cur = (cur as Record<string, unknown>)[p];
+    else return undefined;
+  }
+  return cur;
+}
+
 /** Subdomain-mode mount (also catches direct hits to the main host). */
 export const artifactPageRoutes = new Elysia()
   .use(apiContext)
   .get('/a/:slug', handleOuter)
-  .get('/a/:slug/embed', handleEmbed);
+  .get('/a/:slug/embed', handleEmbed)
+  .get('/a/:slug/export/:exportId', handleExport);
 
 /** Path-prefix fallback — works without any DNS configuration. */
 export const artifactPageRoutesFallback = new Elysia({ prefix: '/__artifacts__' })
   .use(apiContext)
   .get('/a/:slug', handleOuter)
-  .get('/a/:slug/embed', handleEmbed);
+  .get('/a/:slug/embed', handleEmbed)
+  .get('/a/:slug/export/:exportId', handleExport);

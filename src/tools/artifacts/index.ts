@@ -116,6 +116,8 @@ export class ArtifactsTool extends BaseTool {
         { name: 'remove_artifact_transform', description: 'Detach a transform by name', parameters: {}, returns: 'ok' },
         { name: 'add_artifact_widget', description: 'Attach a toolbox widget instance', parameters: {}, returns: 'widget metadata' },
         { name: 'remove_artifact_widget', description: 'Detach a widget by slot', parameters: {}, returns: 'ok' },
+        { name: 'add_artifact_export', description: 'Register a download exporter', parameters: {}, returns: 'export metadata + url' },
+        { name: 'remove_artifact_export', description: 'Remove an exporter by id', parameters: {}, returns: 'ok' },
       ],
     };
   }
@@ -497,6 +499,74 @@ export class ArtifactsTool extends BaseTool {
         if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
         await artifactsRepository.deleteWidgetBySlot(a.id, args.slot as string);
         return { ok: true, message: 'Widget removed' };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── exports ────────────────────────────────────────────────
+    this.registerTool(
+      'add_artifact_export',
+      'Register a download exporter on an artifact. Exposes `GET /a/:slug/export/<export_id>`; data is built fresh from sources + transforms on every request. `bind` maps the exporter\'s param names to data-bus paths.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        export_id: {
+          type: 'string',
+          description: 'Public id used in the URL. Pattern [a-zA-Z0-9_-]+.',
+          required: true,
+        },
+        tool_id: {
+          type: 'string',
+          description: 'Toolbox export id, e.g. `art_export_csv`.',
+          required: true,
+        },
+        bind: {
+          type: 'object',
+          description: 'Map of export-param-name → data-bus path, e.g. `{ rows: "issues.items" }`.',
+        },
+        params: {
+          type: 'object',
+          description: 'Static params merged with resolved binds (filename, columns, etc).',
+        },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        if (!/^[a-zA-Z0-9_-]+$/.test(args.export_id as string)) {
+          return { error: 'export_id must match [a-zA-Z0-9_-]+' };
+        }
+        const created = await artifactsRepository.createExport({
+          artifactId: a.id,
+          exportId: args.export_id as string,
+          toolId: args.tool_id as string,
+          bindJson: (args.bind as Record<string, string>) ?? {},
+          paramsJson: (args.params as Record<string, unknown>) ?? {},
+        });
+        return {
+          id: created.id,
+          exportId: created.exportId,
+          downloadUrl: `${buildArtifactOuterUrl(a.slug)}/export/${created.exportId}`,
+          message: 'Export registered',
+        };
+      },
+      { permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'remove_artifact_export',
+      'Remove a registered export by public id.',
+      createParameterSchema({
+        artifact_id: { type: 'string', description: 'Artifact id', required: true },
+        export_id: { type: 'string', description: 'Public export id', required: true },
+      }),
+      async (args, context) => {
+        const a = await artifactsRepository.getById(args.artifact_id as string);
+        if (!a) return { error: 'not found' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        await artifactsRepository.deleteExportByPublicId(a.id, args.export_id as string);
+        return { ok: true, message: 'Export removed' };
       },
       { permissionAction: 'write' },
     );

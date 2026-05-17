@@ -37,17 +37,20 @@ export async function buildDataBus(
   await ensureToolboxLoaded();
 
   const data: Record<string, unknown> = {};
+  const previousBySource: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
 
-  // 1. Sources — pull latest snapshot (or override) for each.
+  // 1. Sources — pull latest + second-newest snapshot (or override) per source.
+  //    The previous snapshot powers diff-style transforms.
   const sources = await artifactsRepository.listSources(artifactId);
   for (const source of sources) {
     if (options.sourceOverrides && source.name in options.sourceOverrides) {
       data[source.name] = options.sourceOverrides[source.name];
       continue;
     }
-    const snap = await artifactsRepository.getLatestSnapshot(source.id);
-    data[source.name] = snap?.payloadJson ?? null;
+    const recent = await artifactsRepository.getRecentSnapshots(source.id, 2);
+    data[source.name] = recent[0]?.payloadJson ?? null;
+    if (recent[1]) previousBySource[source.name] = recent[1].payloadJson;
   }
 
   // 2. Transforms — run in position order; later transforms see earlier outputs.
@@ -87,6 +90,7 @@ export async function buildDataBus(
         artifactId,
         nodeName: t.name,
         input: data[t.inputName],
+        previousInput: previousBySource[t.inputName],
       });
     } catch (err) {
       const message = (err as Error).message ?? String(err);

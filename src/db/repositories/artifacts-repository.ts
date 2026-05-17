@@ -35,6 +35,11 @@ import {
   artifactWidgets,
   type NewArtifactWidget,
 } from '../schema/artifact-widgets';
+import {
+  type ArtifactExport,
+  artifactExports,
+  type NewArtifactExport,
+} from '../schema/artifact-exports';
 
 export class ArtifactsRepository {
   private get db() {
@@ -193,6 +198,16 @@ export class ArtifactsRepository {
     return result[0] ?? null;
   }
 
+  /** Latest N snapshots, newest first. Used by diff-style transforms. */
+  async getRecentSnapshots(sourceId: string, n: number): Promise<ArtifactDataSnapshot[]> {
+    return this.db
+      .select()
+      .from(artifactDataSnapshots)
+      .where(eq(artifactDataSnapshots.sourceId, sourceId))
+      .orderBy(desc(artifactDataSnapshots.capturedAt))
+      .limit(n);
+  }
+
   /** Delete snapshots beyond `keep` newest per source. Returns deleted count. */
   async pruneSnapshots(sourceId: string, keep: number): Promise<number> {
     const all = await this.db
@@ -294,6 +309,35 @@ export class ArtifactsRepository {
     await this.db
       .delete(artifactWidgets)
       .where(and(eq(artifactWidgets.artifactId, artifactId), eq(artifactWidgets.slot, slot)));
+  }
+
+  // ── exports ──────────────────────────────────────────────────
+  async createExport(record: NewArtifactExport): Promise<ArtifactExport> {
+    const result = await this.db.insert(artifactExports).values(record).returning();
+    return result[0];
+  }
+
+  async listExports(artifactId: string): Promise<ArtifactExport[]> {
+    return this.db
+      .select()
+      .from(artifactExports)
+      .where(eq(artifactExports.artifactId, artifactId))
+      .orderBy(artifactExports.createdAt);
+  }
+
+  async getExportByPublicId(artifactId: string, exportId: string): Promise<ArtifactExport | null> {
+    const result = await this.db
+      .select()
+      .from(artifactExports)
+      .where(and(eq(artifactExports.artifactId, artifactId), eq(artifactExports.exportId, exportId)))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
+  async deleteExportByPublicId(artifactId: string, exportId: string): Promise<void> {
+    await this.db
+      .delete(artifactExports)
+      .where(and(eq(artifactExports.artifactId, artifactId), eq(artifactExports.exportId, exportId)));
   }
 
   // ── soft-delete cleanup ──────────────────────────────────────

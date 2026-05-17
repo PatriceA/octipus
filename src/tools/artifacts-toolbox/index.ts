@@ -180,6 +180,10 @@ export class ArtifactsToolboxTool extends BaseTool {
           type: 'array',
           description: 'Array of `{ slot, toolId, bind: { paramName: dataBusPath }, params?, position? }`.',
         },
+        exports: {
+          type: 'array',
+          description: 'Array of `{ exportId, toolId, bind, params? }`.',
+        },
       }),
       async (args) => {
         await ensureToolboxLoaded();
@@ -193,6 +197,9 @@ export class ArtifactsToolboxTool extends BaseTool {
             : undefined,
           widgets: Array.isArray(args.widgets)
             ? (args.widgets as PipelineSpec['widgets'])
+            : undefined,
+          exports: Array.isArray(args.exports)
+            ? (args.exports as PipelineSpec['exports'])
             : undefined,
         };
         return validatePipeline(spec);
