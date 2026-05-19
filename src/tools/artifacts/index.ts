@@ -8,7 +8,7 @@ import type { ToolManifest } from '@/core/types';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactSourceKind } from '@/db/schema/artifact-data-sources';
 import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
-import { buildArtifactEmbedUrl, buildArtifactOuterUrl } from '@/core/artifacts/host';
+import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, pickShareableUrl } from '@/core/artifacts/host';
 import { refreshSource } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
@@ -53,7 +53,8 @@ const SOURCES_PARAM_DESCRIPTION =
 
 const CREATE_DESCRIPTION =
   'Create a persistent hosted artifact (dashboard, news feed, RSS reader, table). ' +
-  'Returns `{ embedUrl, outerUrl, visibility, warnings }`. ' +
+  'Returns `{ embedUrl, outerUrl, appUrl, shareUrl, visibility, warnings }`. ' +
+  '`shareUrl` is the link to hand the user: `outerUrl` for `public` / `signed`, in-app `appUrl` for `workspace` / `private` (those 404 anonymously). ' +
   'RECOMMENDED FLOW (toolbox-first — no hand-authored HTML): ' +
   '(a) `art_toolbox_search` / `art_toolbox_describe` to pick collector + widget + export tool ids; ' +
   '(b) call this with `sources: [{ name, kind: "toolbox", tool_id, config }]` and leave `html_template` empty; ' +
@@ -219,9 +220,9 @@ export class ArtifactsTool extends BaseTool {
             warnings.push(`Sources [${unusedSources.join(', ')}] are attached but unused by the template.`);
           }
         }
-        if (visibility === 'workspace') {
+        if (visibility === 'workspace' || visibility === 'private') {
           warnings.push(
-            'visibility is `workspace` — the outerUrl returns 404 to anonymous viewers. Pass visibility:"public" if the user wants a shareable link.',
+            `visibility is "${visibility}" — share the in-app appUrl (the outerUrl returns 404 to anonymous viewers). Pass visibility:"public" for an anon-shareable link.`,
           );
         }
 
@@ -238,6 +239,8 @@ export class ArtifactsTool extends BaseTool {
           visibility,
           embedUrl: buildArtifactEmbedUrl(a.slug),
           outerUrl: buildArtifactOuterUrl(a.slug),
+          appUrl: buildArtifactAppUrl(a.id),
+          shareUrl: pickShareableUrl({ visibility, slug: a.slug, id: a.id }),
           sourceIds,
           warnings,
           message: `Artifact "${a.title}" created`,
@@ -439,6 +442,8 @@ export class ArtifactsTool extends BaseTool {
             type: a.type,
             visibility: a.visibility,
             url: buildArtifactEmbedUrl(a.slug),
+            appUrl: buildArtifactAppUrl(a.id),
+            shareUrl: pickShareableUrl({ visibility: a.visibility, slug: a.slug, id: a.id }),
             updatedAt: a.updatedAt,
           })),
         };
@@ -486,6 +491,8 @@ export class ArtifactsTool extends BaseTool {
             currentVersionId: a.currentVersionId,
             embedUrl: buildArtifactEmbedUrl(a.slug),
             outerUrl: buildArtifactOuterUrl(a.slug),
+            appUrl: buildArtifactAppUrl(a.id),
+            shareUrl: pickShareableUrl({ visibility: a.visibility, slug: a.slug, id: a.id }),
             createdAt: a.createdAt,
             updatedAt: a.updatedAt,
           },

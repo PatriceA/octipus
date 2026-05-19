@@ -11,7 +11,8 @@ import type { Artifact } from '@/db/schema/artifacts';
 import { mintShareLink } from '@/core/artifacts/share-link';
 import { refreshSource } from '@/core/artifacts/refresh';
 import { renderRssFeed } from '@/core/artifacts/render';
-import { buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode } from '@/core/artifacts/host';
+import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, getArtifactsHostMode, pickShareableUrl } from '@/core/artifacts/host';
+import type { ArtifactVisibility as ArtifactVisibilityType } from '@/db/schema/artifacts';
 import { coreLogger } from '@/utils/logger';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -71,6 +72,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
           ...a,
           embedUrl: buildArtifactEmbedUrl(a.slug),
           outerUrl: buildArtifactOuterUrl(a.slug),
+          appUrl: buildArtifactAppUrl(a.id),
+          shareUrl: pickShareableUrl({ visibility: a.visibility as ArtifactVisibilityType, slug: a.slug, id: a.id }),
         })),
       };
     },
@@ -176,6 +179,8 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
         currentVersionId: a.currentVersionId,
         embedUrl: buildArtifactEmbedUrl(a.slug),
         outerUrl: buildArtifactOuterUrl(a.slug),
+        appUrl: buildArtifactAppUrl(a.id),
+        shareUrl: pickShareableUrl({ visibility: a.visibility as ArtifactVisibilityType, slug: a.slug, id: a.id }),
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
       },
@@ -239,7 +244,13 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
     }
     const version = a.currentVersionId ? await artifactsRepository.getVersion(a.currentVersionId) : null;
     return {
-      artifact: { ...a, embedUrl: buildArtifactEmbedUrl(a.slug), outerUrl: buildArtifactOuterUrl(a.slug) },
+      artifact: {
+        ...a,
+        embedUrl: buildArtifactEmbedUrl(a.slug),
+        outerUrl: buildArtifactOuterUrl(a.slug),
+        appUrl: buildArtifactAppUrl(a.id),
+        shareUrl: pickShareableUrl({ visibility: a.visibility as ArtifactVisibilityType, slug: a.slug, id: a.id }),
+      },
       currentVersion: version,
     };
   })

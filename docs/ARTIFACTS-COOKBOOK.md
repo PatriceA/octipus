@@ -383,6 +383,23 @@ For **public repos** none of this matters — anonymous works (60/hr core, 10/mi
 
 ---
 
+## 7.5 Which URL to share
+
+Every create / get / list response now includes four URLs:
+
+| Field | What it is | When to use |
+|---|---|---|
+| `embedUrl` | `/a/<slug>/embed` — the inner iframe surface | Embedding in third-party sites |
+| `outerUrl` | `/a/<slug>` — anon-shareable rendered page | `visibility: "public"` or `"signed"` (token-bearing recipient) |
+| `appUrl` | `/artifacts/<id>` in the web app (behind auth) | `visibility: "workspace"` or `"private"` — only signed-in members can load it |
+| `shareUrl` | The right one of the above, picked from `visibility` | Just use this — saves the agent from a decision |
+
+`appUrl` honours the `PUBLIC_URL` / `oauth.publicUrl` setting for the absolute base; falls back to a relative path that still works inside the web UI.
+
+Rule of thumb: if you're sending a link in chat to the workspace owner, `shareUrl` is correct. If you're handing it to an external recipient, only `public` / `signed` visibilities produce a working link.
+
+---
+
 ## 8. Debugging an existing artifact
 
 Use the agent path:
