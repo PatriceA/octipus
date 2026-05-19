@@ -406,7 +406,8 @@ export class ModelRegistry {
         isEnabled: true,
         isDefault: false,
       },
-      // CLI subscription models (free tokens from subscriptions)
+      // CLI models — billing is governed by the user's subscription / provider
+      // pricing for the underlying CLI (Claude Code, etc.). Do not assume free.
       {
         name: 'cli/claude-code',
         provider: 'cli',

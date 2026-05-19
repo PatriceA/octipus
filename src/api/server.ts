@@ -37,6 +37,7 @@ import { gatewayRoutes } from './routes/gateway';
 import { healthRoutes } from './routes/health';
 import { hookRoutes } from './routes/hooks';
 import { knowledgeRoutes } from './routes/knowledge';
+import { logRoutes } from './routes/logs';
 import { mcpRoutes } from './routes/mcp';
 import { memoryRoutes } from './routes/memory';
 import { modelRoutes } from './routes/models';
@@ -341,6 +342,7 @@ export function createServer() {
         .use(evaluationRoutes)
         .use(documentRoutes)
         .use(knowledgeRoutes)
+        .use(logRoutes)
         .use(memoryRoutes)
         .use(pluginRoutes)
         .use(searchRoutes)

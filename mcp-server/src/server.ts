@@ -23,10 +23,11 @@ import { registerSettingTools } from './tools/settings.js';
 import { registerGatewayTools } from './tools/gateway.js';
 import { registerHealthTools } from './tools/health.js';
 import { registerAuditTools } from './tools/audit.js';
+import { registerArtifactTools } from './tools/artifacts.js';
 
 export function createServer(octiUrl: string): McpServer {
   const server = new McpServer({
-    name: 'assistant',
+    name: 'octipus',
     version: '1.0.0',
   });
 
@@ -52,6 +53,7 @@ export function createServer(octiUrl: string): McpServer {
   registerGatewayTools(server, client);
   registerHealthTools(server, client);
   registerAuditTools(server, client);
+  registerArtifactTools(server, client);
 
   return server;
 }

@@ -110,6 +110,7 @@ export class ArtifactsTool extends BaseTool {
         { name: 'update_live_artifact', description: 'Update an artifact (creates new version)', parameters: {}, returns: 'artifact metadata' },
         { name: 'delete_live_artifact', description: 'Soft-delete (or hard-purge) an artifact', parameters: {}, returns: 'ok' },
         { name: 'list_live_artifacts', description: 'List artifacts in the current workspace', parameters: {}, returns: 'artifact list' },
+        { name: 'get_live_artifact', description: 'Fetch the full pipeline spec of one artifact (sources/transforms/widgets/exports)', parameters: {}, returns: 'artifact spec' },
         { name: 'add_artifact_data_source', description: 'Attach a data source', parameters: {}, returns: 'source metadata' },
         { name: 'remove_artifact_data_source', description: 'Detach a data source', parameters: {}, returns: 'ok' },
         { name: 'refresh_live_artifact', description: 'Force-refresh all sources', parameters: {}, returns: 'snapshot results' },
@@ -138,7 +139,7 @@ export class ArtifactsTool extends BaseTool {
         },
         html_template: { type: 'string', description: 'Template body. Use `{{data.<sourceName>.<path>}}` to bind to a data source — every `<sourceName>` referenced must appear in `sources[]`.' },
         css: { type: 'string', description: 'Optional CSS' },
-        sources: { type: 'array', description: SOURCES_PARAM_DESCRIPTION },
+        sources: { type: 'array', description: SOURCES_PARAM_DESCRIPTION, items: { type: 'object' } },
       }),
       async (args, context) => {
         if (!SLUG_RE.test(args.slug as string)) {
@@ -439,6 +440,97 @@ export class ArtifactsTool extends BaseTool {
             visibility: a.visibility,
             url: buildArtifactEmbedUrl(a.slug),
             updatedAt: a.updatedAt,
+          })),
+        };
+      },
+      { permissionAction: 'read' },
+    );
+
+    this.registerTool(
+      'get_live_artifact',
+      'Read the full pipeline spec of one artifact in the current workspace. ' +
+        'Pass `slug` (preferred) or `id`. Returns the artifact metadata together with its ' +
+        'current `sources`, `transforms`, `widgets`, `exports`, and the active version body ' +
+        '(`html_template`, `css`). Use this BEFORE `art_toolbox_validate` when validating an ' +
+        'existing artifact — feed the returned arrays back to the validator verbatim. ' +
+        'Returns `{ error: "not found" }` when slug/id does not resolve in the workspace.',
+      createParameterSchema({
+        slug: { type: 'string', description: 'Artifact slug (preferred — stable, user-facing)' },
+        id: { type: 'string', description: 'Artifact UUID (alternative to slug)' },
+      }),
+      async (args, context) => {
+        const slug = (args.slug as string | undefined)?.trim();
+        const id = (args.id as string | undefined)?.trim();
+        if (!slug && !id) return { error: 'slug or id is required' };
+        const workspaceId = await resolveDefaultWorkspaceId(context.userId);
+        const a = id
+          ? await artifactsRepository.getById(id)
+          : await artifactsRepository.getBySlug(workspaceId, slug as string);
+        if (!a) return { error: 'not found' };
+        if (a.workspaceId !== workspaceId) return { error: 'not authorized' };
+        const [sources, transforms, widgets, exports_, version] = await Promise.all([
+          artifactsRepository.listSources(a.id),
+          artifactsRepository.listTransforms(a.id),
+          artifactsRepository.listWidgets(a.id),
+          artifactsRepository.listExports(a.id),
+          a.currentVersionId ? artifactsRepository.getVersion(a.currentVersionId) : null,
+        ]);
+        return {
+          artifact: {
+            id: a.id,
+            slug: a.slug,
+            title: a.title,
+            type: a.type,
+            visibility: a.visibility,
+            workspaceId: a.workspaceId,
+            currentVersionId: a.currentVersionId,
+            embedUrl: buildArtifactEmbedUrl(a.slug),
+            outerUrl: buildArtifactOuterUrl(a.slug),
+            createdAt: a.createdAt,
+            updatedAt: a.updatedAt,
+          },
+          version: version
+            ? {
+                id: version.id,
+                html_template: version.htmlTemplate,
+                css: version.css,
+                change_summary: version.changeSummary,
+                created_at: version.createdAt,
+              }
+            : null,
+          sources: sources.map((s) => ({
+            id: s.id,
+            name: s.name,
+            kind: s.kind,
+            tool_id: s.toolId,
+            config: s.configJson,
+            refresh_seconds: s.refreshSeconds,
+            last_status: s.lastStatus,
+            last_error: s.lastError,
+            last_run_at: s.lastRunAt,
+          })),
+          transforms: transforms.map((t) => ({
+            id: t.id,
+            name: t.name,
+            tool_id: t.toolId,
+            input_name: t.inputName,
+            params: t.paramsJson,
+            position: t.position,
+          })),
+          widgets: widgets.map((w) => ({
+            id: w.id,
+            slot: w.slot,
+            tool_id: w.toolId,
+            bind: w.bindJson,
+            params: w.paramsJson,
+            position: w.position,
+          })),
+          exports: exports_.map((e) => ({
+            id: e.id,
+            export_id: e.exportId,
+            tool_id: e.toolId,
+            bind: e.bindJson,
+            params: e.paramsJson,
           })),
         };
       },

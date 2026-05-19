@@ -526,4 +526,72 @@ export class OctiClient {
   async listAuditLog(limit = 50): Promise<any> {
     return this.request(`/api/audit?limit=${limit}`);
   }
+
+  // ─── Artifacts ───
+
+  async listArtifacts(): Promise<any> {
+    return this.request('/api/artifacts');
+  }
+
+  async getArtifact(id: string): Promise<any> {
+    return this.request(`/api/artifacts/${id}`);
+  }
+
+  async getArtifactSpec(slugOrId: string): Promise<any> {
+    return this.request(`/api/artifacts/spec/${encodeURIComponent(slugOrId)}`);
+  }
+
+  async createArtifact(params: {
+    slug: string;
+    title: string;
+    type: 'dashboard' | 'table' | 'rss' | 'news' | 'html';
+    visibility?: 'workspace' | 'public' | 'private';
+    htmlTemplate?: string;
+    css?: string;
+    createdByAgentId?: string;
+  }): Promise<any> {
+    return this.request('/api/artifacts', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async updateArtifact(id: string, params: {
+    title?: string;
+    visibility?: 'workspace' | 'public' | 'private';
+    htmlTemplate?: string;
+    css?: string;
+    changeSummary?: string;
+  }): Promise<any> {
+    return this.request(`/api/artifacts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async deleteArtifact(id: string): Promise<any> {
+    return this.request(`/api/artifacts/${id}`, { method: 'DELETE' });
+  }
+
+  async listArtifactVersions(id: string): Promise<any> {
+    return this.request(`/api/artifacts/${id}/versions`);
+  }
+
+  async refreshArtifact(id: string): Promise<any> {
+    return this.request(`/api/artifacts/${id}/refresh`, { method: 'POST' });
+  }
+
+  async listArtifactShareLinks(id: string): Promise<any> {
+    return this.request(`/api/artifacts/${id}/share-links`);
+  }
+
+  async mintArtifactShareLink(
+    id: string,
+    params: { ttlSeconds?: number; scope?: Record<string, unknown> } = {},
+  ): Promise<any> {
+    return this.request(`/api/artifacts/${id}/share-links`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
 }

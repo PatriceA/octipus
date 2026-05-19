@@ -57,6 +57,14 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'authentication flow', 'access control', 'encryption',
     'security review', 'cve', 'exploit', 'hardening',
   ],
+  qa: [
+    'qa', 'qa/validate', 'qa validate',
+    'validate', 'validate wiring', 'validate pipeline', 'validate artifact',
+    'art_toolbox_validate',
+    'run tests', 'run the tests', 'test suite', 'unit tests',
+    'integration tests', 'e2e tests', 'verify', 'verification',
+    'sanity check', 'sanity-check',
+  ],
   data: [
     'database schema', 'data model', 'data pipeline', 'etl',
     'sql query', 'migration', 'row-level security', 'multi-tenant',
@@ -64,6 +72,16 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'postgresql', 'mysql', 'mongodb', 'redis schema',
     'live artifact', 'create artifact', 'dashboard', 'rss feed',
     'data source', 'hosted dashboard', 'news feed',
+    'artifact toolbox', 'toolbox tool', 'art_collect', 'art_widget',
+    'art_transform', 'art_export', 'art_toolbox_list',
+    'art_toolbox_describe', 'art_toolbox_search', 'describe artifact',
+    'list artifact tools', 'list the artifact', 'artifact tools',
+    // Dashboard / chart / export wording — strong "build an artifact"
+    // signal that QA would never legitimately own.
+    'create a dashboard', 'create a artifact', 'create an artifact',
+    'dashboard artifact', 'pie chart', 'bar chart', 'line chart',
+    'csv export', 'export csv', 'label count', 'label-count',
+    'group by label',
   ],
   writing: [
     'documentation', 'api documentation', 'write docs', 'readme',
@@ -151,7 +169,12 @@ function scoreComplexity(message: string): 'simple' | 'moderate' | 'complex' {
  * Returns 'ambiguous' when confidence is too low for a definitive answer.
  */
 export function classifyMessage(message: string): MessageClassification {
-  const normalized = message.trim().toLowerCase();
+  // Strip backticked identifiers before keyword matching. Names like
+  // `qa-issues` are user-chosen labels, not intent — without this the bare
+  // `qa` keyword (and other short tokens) get spurious matches inside
+  // arbitrary identifiers and pull routing to the wrong specialist.
+  const stripped = message.replace(/`[^`]*`/g, ' ');
+  const normalized = stripped.trim().toLowerCase();
   const complexity = scoreComplexity(message);
 
   // Check for approval/denial responses

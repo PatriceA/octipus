@@ -34,7 +34,7 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -90,8 +90,12 @@ export interface SwarmTreeEvent {
 
 export interface SwarmTreeProps {
   sessionId: string | null;
-  /** Latest swarm event from the WS stream. Parent pumps this in. */
-  latestEvent?: SwarmTreeEvent | null;
+  /** Append-only queue of swarm events from the WS stream. The component
+   *  tracks how many it has already consumed via a ref; the parent only
+   *  needs to append. A queue (rather than a single "latest" event) avoids
+   *  losing intermediate events when React 18 batches multiple parent
+   *  setState calls into one render. */
+  events?: SwarmTreeEvent[];
   /** Called when the user clicks "view events" on a node. */
   onViewEvents?: (nodeId: string) => void;
   /** Called once REST hydration finishes with the snapshot totals. Lets the
@@ -195,7 +199,7 @@ function apiNodeToTreeNode(n: ApiSwarmNode): SwarmTreeNode {
 
 export default function SwarmTree({
   sessionId,
-  latestEvent,
+  events,
   onViewEvents,
   onHydratedTotals,
 }: SwarmTreeProps) {
@@ -205,9 +209,17 @@ export default function SwarmTree({
   const [detailNode, setDetailNode] = useState<SwarmTreeNode | null>(null);
   const [detailMode, setDetailMode] = useState<'brief' | 'result' | null>(null);
   const [loading, setLoading] = useState(false);
+  // Index into the parent's events queue for what we've already folded into
+  // `nodes`. Survives batched parent updates: if the queue grows by N entries
+  // between renders, the next effect run consumes all N at once.
+  const processedIdxRef = useRef(0);
 
   // Hydrate from REST when the session changes (covers WS replay gap).
   useEffect(() => {
+    // New session: forget how far we've drained the parent's event queue.
+    // Without this reset, switching sessions would skip over fresh events
+    // because the index still pointed past them.
+    processedIdxRef.current = 0;
     if (!sessionId) {
       setNodes(new Map());
       return;
@@ -289,19 +301,58 @@ export default function SwarmTree({
     return () => clearInterval(interval);
   }, [sessionId, nodes]);
 
-  // Ingest incoming WS events — incremental, no refetch.
+  // Drain incoming WS events from the parent's queue. The parent always
+  // appends, so on each render we process indices [processedIdxRef, length).
+  // Folding every new event in a single `setNodes` call means rapid bursts
+  // get applied atomically — earlier renders that batched multiple parent
+  // setStates used to drop intermediate spawns.
   useEffect(() => {
-    if (!latestEvent || !sessionId) return;
-    if (latestEvent.payload.rootSessionId !== sessionId) return;
+    if (!sessionId || !events) return;
+    // Parent may trim the queue when it grows past its cap; if the length
+    // shrank below our cursor, treat it as a fresh queue. Reprocessing is
+    // safe because spawn/complete updates are keyed by nodeId and idempotent.
+    if (events.length < processedIdxRef.current) processedIdxRef.current = 0;
+    if (events.length <= processedIdxRef.current) return;
+
+    const fresh = events.slice(processedIdxRef.current);
+    processedIdxRef.current = events.length;
 
     setNodes((prev) => {
-      const p = latestEvent.payload;
       const next = new Map(prev);
-      const existing = next.get(p.nodeId);
+      for (const evt of fresh) {
+        const p = evt.payload;
+        if (p.rootSessionId !== sessionId) continue;
+        const existing = next.get(p.nodeId);
 
-      if (latestEvent.type === 'swarm.node_spawned') {
-        next.set(p.nodeId, {
-          ...(existing ?? {
+        if (evt.type === 'swarm.node_spawned') {
+          next.set(p.nodeId, {
+            ...(existing ?? {
+              nodeId: p.nodeId,
+              parentNodeId: p.parentNodeId,
+              kind: p.kind,
+              depth: p.depth,
+              topicPath: p.topicPath,
+              role: p.role,
+              model: p.model || '',
+              startedAt: Date.now(),
+            }),
+            parentNodeId: p.parentNodeId,
+            kind: p.kind,
+            depth: p.depth,
+            topicPath: p.topicPath,
+            role: p.role,
+            expertId: p.expertId ?? existing?.expertId,
+            model: p.model || existing?.model || '',
+            status: p.status || 'running',
+            tokenCap: p.budgets?.tokens?.cap ?? existing?.tokenCap,
+            startedAt: existing?.startedAt ?? Date.now(),
+            taskBriefPreview: p.taskBriefPreview ?? existing?.taskBriefPreview,
+          });
+        } else if (evt.type === 'swarm.node_completed') {
+          // Always build a full `SwarmTreeNode` so property accesses below
+          // compile without a fallback-vs-existing union. Unknown optionals
+          // default to undefined; `existing` values win when present.
+          const base: SwarmTreeNode = existing ?? {
             nodeId: p.nodeId,
             parentNodeId: p.parentNodeId,
             kind: p.kind,
@@ -309,48 +360,23 @@ export default function SwarmTree({
             topicPath: p.topicPath,
             role: p.role,
             model: p.model || '',
+            status: p.status || 'running',
             startedAt: Date.now(),
-          }),
-          parentNodeId: p.parentNodeId,
-          kind: p.kind,
-          depth: p.depth,
-          topicPath: p.topicPath,
-          role: p.role,
-          expertId: p.expertId ?? existing?.expertId,
-          model: p.model || existing?.model || '',
-          status: p.status || 'running',
-          tokenCap: p.budgets?.tokens?.cap ?? existing?.tokenCap,
-          startedAt: existing?.startedAt ?? Date.now(),
-          taskBriefPreview: p.taskBriefPreview ?? existing?.taskBriefPreview,
-        });
-      } else if (latestEvent.type === 'swarm.node_completed') {
-        // Always build a full `SwarmTreeNode` so property accesses below
-        // compile without a fallback-vs-existing union. Unknown optionals
-        // default to undefined; `existing` values win when present.
-        const base: SwarmTreeNode = existing ?? {
-          nodeId: p.nodeId,
-          parentNodeId: p.parentNodeId,
-          kind: p.kind,
-          depth: p.depth,
-          topicPath: p.topicPath,
-          role: p.role,
-          model: p.model || '',
-          status: p.status || 'running',
-          startedAt: Date.now(),
-        };
-        next.set(p.nodeId, {
-          ...base,
-          status: p.status || 'completed',
-          tokensUsed: p.usedTokens ?? base.tokensUsed,
-          durationMs: p.durationMs ?? base.durationMs,
-          completedAt: Date.now(),
-          result: p.output ?? base.result,
-          error: p.error ?? base.error,
-        });
+          };
+          next.set(p.nodeId, {
+            ...base,
+            status: p.status || 'completed',
+            tokensUsed: p.usedTokens ?? base.tokensUsed,
+            durationMs: p.durationMs ?? base.durationMs,
+            completedAt: Date.now(),
+            result: p.output ?? base.result,
+            error: p.error ?? base.error,
+          });
+        }
       }
       return next;
     });
-  }, [latestEvent, sessionId]);
+  }, [events, sessionId]);
 
   // Build parent-id index once per render. O(n) on nodes — fine for trees
   // of the target size (fan-out cap × depth ≤ 2 = O(100) max).

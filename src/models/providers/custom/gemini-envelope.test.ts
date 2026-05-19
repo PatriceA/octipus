@@ -5,6 +5,7 @@ import {
   buildGeminiContents,
   buildStandardEnvelope,
   extractSystemInstruction,
+  sanitizeSchemaForGemini,
   type GenericGeminiRequest,
 } from './gemini-envelope';
 
@@ -119,6 +120,57 @@ describe('buildStandardEnvelope', () => {
   });
 });
 
+describe('sanitizeSchemaForGemini', () => {
+  it('injects items:{type:"string"} for arrays missing items', () => {
+    const out = sanitizeSchemaForGemini({
+      type: 'object',
+      properties: { tags: { type: 'array', description: 'list' } },
+    }) as any;
+    expect(out.properties.tags.items).toEqual({ type: 'string' });
+  });
+
+  it('preserves existing items', () => {
+    const out = sanitizeSchemaForGemini({
+      type: 'object',
+      properties: { ids: { type: 'array', items: { type: 'number' } } },
+    }) as any;
+    expect(out.properties.ids.items).toEqual({ type: 'number' });
+  });
+
+  it('injects properties:{} for objects missing properties', () => {
+    const out = sanitizeSchemaForGemini({ type: 'object' }) as any;
+    expect(out.properties).toEqual({});
+  });
+
+  it('strips unsupported keywords (default, additionalProperties)', () => {
+    const out = sanitizeSchemaForGemini({
+      type: 'object',
+      additionalProperties: false,
+      properties: { x: { type: 'string', default: 'hi' } },
+    }) as any;
+    expect(out.additionalProperties).toBeUndefined();
+    expect(out.properties.x.default).toBeUndefined();
+    expect(out.properties.x.type).toBe('string');
+  });
+
+  it('recurses through nested array items', () => {
+    const out = sanitizeSchemaForGemini({
+      type: 'object',
+      properties: {
+        wrap: { type: 'array', items: { type: 'array', description: 'nested' } },
+      },
+    }) as any;
+    expect(out.properties.wrap.items.items).toEqual({ type: 'string' });
+  });
+
+  it('does not mutate input', () => {
+    const input = { type: 'array' as const };
+    const out = sanitizeSchemaForGemini(input) as any;
+    expect((input as any).items).toBeUndefined();
+    expect(out.items).toEqual({ type: 'string' });
+  });
+});
+
 describe('buildBlocksConfigEnvelope', () => {
   const base: GenericGeminiRequest = {
     model: 'gemini-3-flash-preview',
@@ -159,6 +211,28 @@ describe('buildBlocksConfigEnvelope', () => {
   it('emits thinkingConfig.thinkingBudget=0 when disableThinking is true', () => {
     const body = buildBlocksConfigEnvelope({ ...base, disableThinking: true });
     expect((body.config as any).thinkingConfig).toEqual({ thinkingBudget: 0 });
+  });
+
+  it('sanitizes array params without `items` before sending', () => {
+    const body = buildBlocksConfigEnvelope({
+      ...base,
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'create_live_artifact',
+          description: 'd',
+          parameters: {
+            type: 'object',
+            properties: {
+              sources: { type: 'array', description: 'srcs' },
+            },
+            required: [],
+          },
+        },
+      }],
+    });
+    const sources = ((body.config as any).tools[0].parameters as any).properties.sources;
+    expect(sources.items).toEqual({ type: 'string' });
   });
 
   it('flattens tools into config.tools (Gemini-style schema)', () => {

@@ -3,6 +3,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { humanizeProviderError } from '@/core/errors/humanize';
+import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import { type AgentNode, LEVEL_DEFAULT } from '@/core/swarm/types';
@@ -821,10 +822,16 @@ export class OrchestratorService {
       return { response: finalResponse, agentId, sources };
     } catch (error) {
       this._lastWorkerResult = null;
-      coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
 
       const errMsg = (error as Error).message || '';
       const wasStopped = errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped';
+      // Admin cancel / cascaded abort is an intentional outcome — don't log it
+      // as `error`. The status downstream is already 'stopped'/'cancelled'.
+      if (wasStopped || isCancellationError(error)) {
+        coreLogger.info({ agentId, reason: errMsg }, 'Orchestrator agent cancelled');
+      } else {
+        coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
+      }
 
       this.emit({
         type: 'worker_completed',

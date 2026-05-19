@@ -24,6 +24,13 @@ async function main() {
   logger.info('Starting Octipus...');
 
   try {
+    // Initialize vault first — gateway.start() runs the KB self-check which
+    // exercises the embedding provider, and that provider needs the vault to
+    // resolve API keys. If vault is not initialized yet, getByName throws and
+    // providers fall back with a misleading "API key not configured" error.
+    await initializeVault();
+    logger.info('Vault initialized');
+
     // Initialize gateway (database, redis, etc.) — uses bootstrap config from .env
     const gateway = getGateway();
     await gateway.start();
@@ -36,10 +43,6 @@ async function main() {
     await seedRoles();
     await loadRolesFromDb();
     logger.info('System data seeded');
-
-    // Initialize vault (needs master key from .env)
-    await initializeVault();
-    logger.info('Vault initialized');
 
     // One-time migration: move .env values into DB settings + vault
     await migrateEnvToDb();

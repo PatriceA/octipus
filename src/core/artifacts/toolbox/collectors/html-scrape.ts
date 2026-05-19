@@ -88,7 +88,7 @@ export const htmlScrapeCollector: ToolboxTool<Params, Result> = {
     'Returned values are HTML-decoded (entities like &amp; become &) and whitespace-collapsed.',
   ],
 
-  async execute(params) {
+  async execute(params, ctx) {
     if (!params.url) throw new Error('art_collect_html_scrape: missing `url`');
     if (!params.row) throw new Error('art_collect_html_scrape: missing `row`');
     if (!params.fields || typeof params.fields !== 'object') {
@@ -96,7 +96,10 @@ export const htmlScrapeCollector: ToolboxTool<Params, Result> = {
     }
     const limit = Math.max(1, Math.min(500, params.limit ?? 100));
 
-    const headers = await resolveVaultHeaders(params.headers ?? {});
+    const headers = await resolveVaultHeaders(params.headers ?? {}, {
+      principalId: ctx.principalId,
+      workspaceId: ctx.workspaceId,
+    });
     if (!headers.accept) headers.accept = 'text/html, application/xhtml+xml';
     const res = await fetch(params.url, { headers });
     if (!res.ok) throw new Error(`html_scrape ${res.status}: ${res.statusText}`);

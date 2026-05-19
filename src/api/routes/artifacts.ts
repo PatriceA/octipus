@@ -32,6 +32,21 @@ async function loadArtifactScoped(
   return a;
 }
 
+/** Resolve by slug *or* id within a workspace. UUID-shaped ids try id first; otherwise slug. */
+async function resolveArtifactScoped(
+  slugOrId: string,
+  workspaceId: string,
+): Promise<Artifact | null> {
+  const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    slugOrId,
+  );
+  if (looksLikeUuid) {
+    const byId = await loadArtifactScoped(slugOrId, workspaceId);
+    if (byId) return byId;
+  }
+  return artifactsRepository.getBySlug(workspaceId, slugOrId);
+}
+
 export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
   .use(apiContext)
 
@@ -126,6 +141,89 @@ export const artifactRoutes = new Elysia({ prefix: '/artifacts' })
       }),
     },
   )
+
+  // ── full pipeline spec (by slug or id) ───────────────────────
+  // GET /api/artifacts/spec/:slugOrId
+  // Returns the full wiring needed to drive `art_toolbox_validate`:
+  // { artifact, version, sources, transforms, widgets, exports }.
+  // Used by agents (QA Path A) and the MCP server.
+  .get('/spec/:slugOrId', async ({ params, user, principal, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'unauthenticated' };
+    }
+    const wid = ensureWorkspace(principal);
+    const a = await resolveArtifactScoped(params.slugOrId, wid);
+    if (!a) {
+      set.status = 404;
+      return { error: 'not found' };
+    }
+    const [sources, transforms, widgets, exports_, version] = await Promise.all([
+      artifactsRepository.listSources(a.id),
+      artifactsRepository.listTransforms(a.id),
+      artifactsRepository.listWidgets(a.id),
+      artifactsRepository.listExports(a.id),
+      a.currentVersionId ? artifactsRepository.getVersion(a.currentVersionId) : null,
+    ]);
+    return {
+      artifact: {
+        id: a.id,
+        slug: a.slug,
+        title: a.title,
+        type: a.type,
+        visibility: a.visibility,
+        workspaceId: a.workspaceId,
+        currentVersionId: a.currentVersionId,
+        embedUrl: buildArtifactEmbedUrl(a.slug),
+        outerUrl: buildArtifactOuterUrl(a.slug),
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      },
+      version: version
+        ? {
+            id: version.id,
+            html_template: version.htmlTemplate,
+            css: version.css,
+            change_summary: version.changeSummary,
+            created_at: version.createdAt,
+          }
+        : null,
+      sources: sources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        kind: s.kind,
+        tool_id: s.toolId,
+        config: s.configJson,
+        refresh_seconds: s.refreshSeconds,
+        last_status: s.lastStatus,
+        last_error: s.lastError,
+        last_run_at: s.lastRunAt,
+      })),
+      transforms: transforms.map((t) => ({
+        id: t.id,
+        name: t.name,
+        tool_id: t.toolId,
+        input_name: t.inputName,
+        params: t.paramsJson,
+        position: t.position,
+      })),
+      widgets: widgets.map((w) => ({
+        id: w.id,
+        slot: w.slot,
+        tool_id: w.toolId,
+        bind: w.bindJson,
+        params: w.paramsJson,
+        position: w.position,
+      })),
+      exports: exports_.map((e) => ({
+        id: e.id,
+        export_id: e.exportId,
+        tool_id: e.toolId,
+        bind: e.bindJson,
+        params: e.paramsJson,
+      })),
+    };
+  })
 
   // ── single ───────────────────────────────────────────────────
   .get('/:id', async ({ params, user, principal, set }) => {

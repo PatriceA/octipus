@@ -57,7 +57,11 @@ interface SidePanelProps {
   onPresetChange: (presetId: string | null) => void;
   /** Swarm tree lives under Session Stats as the third section. */
   swarmSessionId: string | null;
-  latestSwarmEvent?: SwarmTreeEvent | null;
+  /** Append-only queue of swarm events. SwarmTree tracks its own consumed
+   *  index; we use a queue instead of a single "latest" event because React
+   *  18 batches rapid setState calls and would otherwise drop intermediate
+   *  spawns when several arrive in the same render. */
+  swarmEvents?: SwarmTreeEvent[];
   /** Cumulative wall-clock across all completed swarm nodes (ms). */
   swarmDurationMs?: number;
   /** Called after SwarmTree hydrates from REST with aggregate totals. */
@@ -275,7 +279,7 @@ export default function SidePanel({
   presets,
   onPresetChange,
   swarmSessionId,
-  latestSwarmEvent,
+  swarmEvents,
   swarmDurationMs = 0,
   onSwarmHydratedTotals,
 }: SidePanelProps) {
@@ -419,7 +423,7 @@ export default function SidePanel({
       <CollapsibleSection title="Swarm" icon={Layers} defaultOpen={true}>
         <SwarmTree
           sessionId={swarmSessionId}
-          latestEvent={latestSwarmEvent}
+          events={swarmEvents}
           onHydratedTotals={onSwarmHydratedTotals}
         />
       </CollapsibleSection>

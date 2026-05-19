@@ -13,7 +13,7 @@ import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
-import { api, createWebSocket } from '@/lib/api';
+import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import { useWorkspace } from '@/lib/workspace-context';
 
@@ -104,7 +104,13 @@ export default function ChatPage() {
   const [showSidePanel, setShowSidePanel] = useState(true);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
-  const [latestSwarmEvent, setLatestSwarmEvent] = useState<SwarmTreeEvent | null>(null);
+  // Append-only queue of swarm events from the WS stream. We used to hold the
+  // single "latest" event in state, but React 18 batches multiple state
+  // updates inside an onmessage burst — when two swarm events arrived in the
+  // same render, only the most recent one survived, so the first spawn went
+  // unrendered. The SwarmTree consumer tracks its own processed index, so a
+  // queue never loses events even under batching.
+  const [swarmEvents, setSwarmEvents] = useState<SwarmTreeEvent[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Active session state
@@ -358,13 +364,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!mounted) return;
-    const token = api.getToken();
-    if (!token) return;
 
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
 
-    const connect = () => {
+    const connect = async () => {
       if (cancelled) return;
 
       if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) {
@@ -378,7 +382,11 @@ export default function ChatPage() {
 
       let ws: WebSocket;
       try {
-        ws = createWebSocket('/ws');
+        ws = await createAuthenticatedWebSocket('/ws');
+        if (cancelled) {
+          try { ws.close(); } catch { /* ignore */ }
+          return;
+        }
         wsInstance = ws;
         wsRef.current = ws;
         ws.onopen = () => {
@@ -580,10 +588,16 @@ export default function ChatPage() {
           if (eventSessionId && !activeSessionId) {
             setActiveSessionId(eventSessionId);
           }
-          setLatestSwarmEvent({
-            type: data.event,
-            payload: data.payload,
-          } as SwarmTreeEvent);
+          setSwarmEvents((prev) => {
+            const next = prev.concat({
+              type: data.event,
+              payload: data.payload,
+            } as SwarmTreeEvent);
+            // Cap so a long-running session doesn't grow the array forever.
+            // SwarmTree tracks its consumed index relative to length, so we
+            // only trim when well past anything still relevant.
+            return next.length > 1000 ? next.slice(-500) : next;
+          });
 
           const p = data.payload as {
             nodeId: string;
@@ -1149,23 +1163,38 @@ export default function ChatPage() {
       // WS — surfacing a scary "backend is running?" toast in that case just
       // confuses the user.
       //
-      // Give the WS a short grace window (500ms) after the REST failure
-      // before deciding the backend is unreachable. Previously the check
-      // ran the moment REST rejected, before the reconnect handshake
-      // finished — so a user with a flaky WS would see a transient error
-      // pop in seconds before the real answer arrived from the WS that
-      // came alive right after.
+      // Two-stage suppression:
+      //   1. Wait up to 2500ms for the WS to reconnect (initial backoff is
+      //      1000ms, handshake adds ~200–500ms, plus slack for slow networks).
+      //   2. If WS still hasn't recovered, probe /health. A 200 means the
+      //      backend is reachable and the REST failure was a transient
+      //      proxy/timeout issue — the WS will deliver the real answer when
+      //      it reconnects, so swallow the toast.
       const wsAlive = await new Promise<boolean>((resolve) => {
         const startedAt = Date.now();
         const tick = () => {
           const ws = wsRef.current;
           if (ws && ws.readyState === WebSocket.OPEN) return resolve(true);
-          if (Date.now() - startedAt >= 500) return resolve(false);
+          if (Date.now() - startedAt >= 2500) return resolve(false);
           setTimeout(tick, 50);
         };
         tick();
       });
-      if (sid && !wsAlive) {
+
+      let backendReachable = wsAlive;
+      if (!backendReachable) {
+        try {
+          const res = await fetch(`${getApiUrl()}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(1500),
+          });
+          backendReachable = res.ok;
+        } catch {
+          backendReachable = false;
+        }
+      }
+
+      if (sid && !backendReachable) {
         updateSessionState(sid, (prev) => ({
           ...prev,
           messages: [...prev.messages, {
@@ -1243,7 +1272,7 @@ export default function ChatPage() {
             presets={presets}
             onPresetChange={setSelectedPresetId}
             swarmSessionId={activeSessionId}
-            latestSwarmEvent={latestSwarmEvent}
+            swarmEvents={swarmEvents}
             swarmDurationMs={swarmDurationMs}
             onSwarmHydratedTotals={(totals) => {
               if (!activeSessionId) return;

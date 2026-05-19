@@ -114,18 +114,54 @@ class ApiClient {
 
 export const api = new ApiClient();
 
+function buildWsBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/^http/, 'ws').replace('/api', '');
+  }
+  if (typeof window !== 'undefined') {
+    const { hostname } = window.location;
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${hostname}:${API_PORT}`;
+  }
+  return `ws://localhost:${API_PORT}`;
+}
+
+/**
+ * Get a token usable for the WebSocket handshake (`?token=` URL param).
+ *
+ * Two paths:
+ *   1. `localStorage.auth_token` — populated when the login response echoes
+ *      a bearer token. This codebase uses HttpOnly cookies and does NOT
+ *      echo, so this is almost always empty in the browser.
+ *   2. `/api/auth/ws-ticket` — exchanges the HttpOnly cookie session for a
+ *      short-lived bearer ticket. This is the path that lets WS work in
+ *      the cookie-only setup. The fetch goes through Next.js's same-origin
+ *      proxy so the cookie travels even though the WS itself is cross-origin.
+ */
+async function getWsToken(): Promise<string | null> {
+  const stored = api.getToken();
+  if (stored) return stored;
+  try {
+    const res = await api.get<{ token?: string }>('/auth/ws-ticket');
+    return res.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // WebSocket connection (direct to backend — can't be proxied through Next.js rewrites)
 export function createWebSocket(path: string = '/ws'): WebSocket {
   const token = api.getToken();
-  let wsUrl: string;
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    wsUrl = process.env.NEXT_PUBLIC_API_URL.replace(/^http/, 'ws').replace('/api', '');
-  } else if (typeof window !== 'undefined') {
-    const { hostname } = window.location;
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    wsUrl = `${wsProtocol}//${hostname}:${API_PORT}`;
-  } else {
-    wsUrl = `ws://localhost:${API_PORT}`;
-  }
-  return new WebSocket(`${wsUrl}${path}?token=${token}`);
+  return new WebSocket(`${buildWsBase()}${path}?token=${token ?? ''}`);
+}
+
+/**
+ * Like `createWebSocket` but fetches a fresh ticket when no long-lived
+ * bearer is stored in localStorage. Use this everywhere the legacy
+ * `createWebSocket` was used from the browser — call sites that ran in
+ * Node (tests, SSR) keep the sync entry point.
+ */
+export async function createAuthenticatedWebSocket(path: string = '/ws'): Promise<WebSocket> {
+  const token = await getWsToken();
+  return new WebSocket(`${buildWsBase()}${path}?token=${token ?? ''}`);
 }

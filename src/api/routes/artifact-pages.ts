@@ -22,6 +22,8 @@ import { buildEmbedCsp } from '@/core/artifacts/csp';
 import { buildDataBus } from '@/core/artifacts/pipeline';
 import { BUILTIN_TEMPLATES, escapeHtml, renderTemplate } from '@/core/artifacts/render';
 import {
+  ARTIFACT_BASE_CSS,
+  ARTIFACT_OUTER_CSS,
   DEFAULT_LAYOUT_CSS,
   renderDefaultLayout,
   renderWidgets,
@@ -136,10 +138,17 @@ function buildOuterHtml(artifact: Artifact, embedSrc: string): string {
   return `<!doctype html>
 <html><head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(artifact.title)}</title>
+<style>${ARTIFACT_OUTER_CSS}</style>
 </head><body>
-<header><h1>${escapeHtml(artifact.title)}</h1></header>
-<iframe sandbox="allow-scripts" src="${escapeHtml(embedSrc)}" style="width:100%;height:90vh;border:0"></iframe>
+<div class="octi-outer">
+  <header class="octi-outer-header">
+    <h1>${escapeHtml(artifact.title)}</h1>
+    <span class="octi-outer-brand">Octipus</span>
+  </header>
+  <iframe class="octi-outer-frame" sandbox="allow-scripts" src="${escapeHtml(embedSrc)}"></iframe>
+</div>
 </body></html>`;
 }
 
@@ -208,7 +217,11 @@ async function handleEmbed(ctx: HandlerCtx) {
   const template = baseTemplate
     || (hasWidgets ? defaultLayout : (BUILTIN_TEMPLATES[auth.artifact.type] || BUILTIN_TEMPLATES.dashboard));
   const widgetCss = hasWidgets ? `${DEFAULT_LAYOUT_CSS}\n${widgetRender.css}` : '';
-  const css = `${widgetCss}\n${version?.css ?? ''}`.trim();
+  // Base CSS first so user-supplied CSS can override tokens / element styles.
+  // Without this baseline, artifacts rendered on the bare artifact subdomain
+  // (which doesn't load the web app's global stylesheet) looked unstyled —
+  // just black serif text on white. Always inject; cost is ~3KB gzipped.
+  const css = `${ARTIFACT_BASE_CSS}\n${widgetCss}\n${version?.css ?? ''}`.trim();
 
   let body: string;
   try {

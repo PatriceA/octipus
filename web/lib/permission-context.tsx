@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { createWebSocket } from './api';
+import { createAuthenticatedWebSocket } from './api';
 import { useAuth } from './auth-context';
 import { api } from './api';
 
@@ -133,16 +133,18 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
   // /ws/permissions connection — handles tool permission requests
   useEffect(() => {
     if (!isAuthenticated) return;
-    const token = api.getToken();
-    if (!token) return;
 
     let cancelled = false;
 
-    const connect = () => {
+    const connect = async () => {
       if (cancelled) return;
 
       try {
-        const ws = createWebSocket('/ws/permissions');
+        const ws = await createAuthenticatedWebSocket('/ws/permissions');
+        if (cancelled) {
+          try { ws.close(); } catch { /* ignore */ }
+          return;
+        }
         permWsRef.current = ws;
 
         ws.onopen = () => {
@@ -166,6 +168,20 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
                   const existingIds = new Set(prev.map(p => p.requestId));
                   const newReqs = reqs.filter(r => !existingIds.has(r.requestId));
                   return newReqs.length > 0 ? [...prev, ...newReqs] : prev;
+                });
+              }
+            } else if (data.type === 'permission_request') {
+              // Live request emitted while we were already connected
+              const req: PermissionRequest = {
+                requestId: data.requestId,
+                skillId: data.skillId || data.toolId || '',
+                action: data.action || data.toolName || '',
+                args: data.args,
+              };
+              if (req.requestId) {
+                setPermissions(prev => {
+                  if (prev.some(p => p.requestId === req.requestId)) return prev;
+                  return [...prev, req];
                 });
               }
             } else if (data.type === 'response_recorded') {

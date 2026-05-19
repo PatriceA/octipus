@@ -18,6 +18,7 @@ import {
   ChildTimeoutError,
   classifyChildError,
   DuplicateSpawnError,
+  isCancellationError,
 } from './errors';
 import { swarmNodeRepository } from './node-repository';
 import {
@@ -675,10 +676,18 @@ export class SwarmSpawner {
         }
         status = s;
         notes = msg;
-        coreLogger.warn(
-          { parentNodeId: opts.parent.id, childId, status, error: msg },
-          'Swarm child failed',
-        );
+        if (s === 'cancelled' || isCancellationError(err)) {
+          // Admin cancel / cascaded abort — expected outcome, not a failure.
+          coreLogger.info(
+            { parentNodeId: opts.parent.id, childId, status, reason: msg },
+            'Swarm child cancelled',
+          );
+        } else {
+          coreLogger.warn(
+            { parentNodeId: opts.parent.id, childId, status, error: msg },
+            'Swarm child failed',
+          );
+        }
         break;
       }
     }

@@ -105,7 +105,7 @@ async function dispatch(source: ArtifactDataSource): Promise<unknown> {
     case 'tool':
       return runTool(cfg as ToolSourceConfig, source.principalId);
     case 'http':
-      return runHttp(cfg as HttpSourceConfig);
+      return runHttp(source);
     case 'rss':
       return runRss(cfg as RssSourceConfig);
     case 'mcp':
@@ -152,9 +152,15 @@ async function runTool(cfg: ToolSourceConfig, principalId: string): Promise<unkn
 }
 
 // ── http ─────────────────────────────────────────────────────────────
-async function runHttp(cfg: HttpSourceConfig): Promise<unknown> {
+async function runHttp(source: ArtifactDataSource): Promise<unknown> {
+  const cfg = (source.configJson ?? {}) as HttpSourceConfig;
   if (!cfg.url) throw new Error('http source: missing config.url');
-  const headers = await resolveVaultHeaders(cfg.headers ?? {});
+  const artifact = await artifactsRepository.getById(source.artifactId);
+  if (!artifact) throw new Error(`http source ${source.id}: artifact missing`);
+  const headers = await resolveVaultHeaders(cfg.headers ?? {}, {
+    principalId: source.principalId,
+    workspaceId: artifact.workspaceId,
+  });
   const res = await fetch(cfg.url, {
     method: cfg.method ?? 'GET',
     headers,
@@ -166,17 +172,71 @@ async function runHttp(cfg: HttpSourceConfig): Promise<unknown> {
   return cfg.jsonpath ? applyJsonPath(data, cfg.jsonpath) : data;
 }
 
-/** Resolves `${vault.<key>}` placeholders in header values via vault lookup. */
+export interface VaultResolveContext {
+  /** Owning principal — used as the vault tenant key. Required. */
+  principalId: string;
+  /** Workspace the artifact lives in. Lets workspace-scoped secrets override. */
+  workspaceId?: string | null;
+}
+
+const VAULT_PLACEHOLDER_RE = /\$\{vault\.([^}]+)\}/g;
+
+/**
+ * Resolve `${vault.<key>}` placeholders in header values via a real vault
+ * lookup. Throws if any referenced key is unknown / unreadable for the
+ * principal — fail loud, per the house rules. Header values may contain
+ * multiple placeholders; all are resolved before fetch.
+ */
 export async function resolveVaultHeaders(
   headers: Record<string, string>,
+  ctx: VaultResolveContext,
 ): Promise<Record<string, string>> {
+  if (!ctx?.principalId) {
+    throw new Error('resolveVaultHeaders: missing principalId — refusing to resolve vault placeholders without an owning principal');
+  }
+  // Collect every distinct key referenced across all headers so we only
+  // hit the vault once per name even if reused (e.g. same token in two
+  // headers).
+  const keys = new Set<string>();
+  for (const v of Object.values(headers)) {
+    if (typeof v !== 'string') continue;
+    for (const m of v.matchAll(VAULT_PLACEHOLDER_RE)) {
+      const name = m[1]?.trim();
+      if (name) keys.add(name);
+    }
+  }
+
+  if (keys.size === 0) {
+    // Nothing to resolve — return headers as-is (but still typed Record<string,string>).
+    return { ...headers };
+  }
+
+  const { getVault } = await import('@/security/vault');
+  const vault = getVault();
+  const resolved: Record<string, string> = {};
+  await Promise.all(
+    [...keys].map(async (name) => {
+      const value = await vault.getByName(ctx.principalId, name, {
+        workspaceId: ctx.workspaceId ?? null,
+      });
+      if (value == null) {
+        throw new Error(
+          `vault: secret "${name}" not found for principal ${ctx.principalId}` +
+            (ctx.workspaceId ? ` (workspace ${ctx.workspaceId})` : '') +
+            ' — store it via the vault API or fix the placeholder name',
+        );
+      }
+      resolved[name] = value;
+    }),
+  );
+
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
-    out[k] = v.replace(/\$\{vault\.([^}]+)\}/g, (_, _key) => {
-      // Vault lookup is wired in step 13 (per-principal). For now: leave
-      // placeholder so misconfigurations are visible in request logs.
-      return _key ? `__vault_unresolved:${_key}__` : '';
-    });
+    if (typeof v !== 'string') {
+      out[k] = v;
+      continue;
+    }
+    out[k] = v.replace(VAULT_PLACEHOLDER_RE, (_, name) => resolved[(name as string).trim()] ?? '');
   }
   return out;
 }

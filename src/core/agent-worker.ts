@@ -42,6 +42,21 @@ export class AgentWorker extends BaseAgentWorker {
   private lastToolNames: string = '';
   private consecutiveSameNameCount: number = 0;
   private static MAX_SAME_NAME_REPEATS = 2;
+  /**
+   * Tools that are LEGITIMATELY called many times in a row by their owner
+   * role. The same-tool-name guard above (intended for chatty
+   * `send_status_update` spammers) used to trip on these and disable the
+   * orchestrator after two `spawn_child` calls — but spawning multiple
+   * children sequentially across iterations is the orchestrator's
+   * primary job. The guard remains active for any other tool name.
+   */
+  private static REPEAT_ALLOWED_TOOLS = new Set<string>([
+    'spawn_child',
+    'collect_children',
+    'create_pipeline',
+    'list_pipeline_templates',
+    'request_user_approval',
+  ]);
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
@@ -479,7 +494,7 @@ export class AgentWorker extends BaseAgentWorker {
   /**
    * Race a promise against the agent timeout.
    */
-  private raceTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  private async raceTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
     if (this.config.timeout <= 0) return promise;
     const remaining = this.config.timeout - this.elapsed();
     if (remaining <= 0) {
@@ -491,20 +506,27 @@ export class AgentWorker extends BaseAgentWorker {
       }, msg);
       throw new Error(msg);
     }
-    return Promise.race([
-      promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          const msg = `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s) during ${label}`;
-          agentLogger.error({
-            agentId: this.context.id, sessionId: this.context.sessionId,
-            iteration: this.iteration, elapsedMs: this.elapsed(),
-            phase: label, timeoutMs: this.config.timeout,
-          }, msg);
-          reject(new Error(msg));
-        }, remaining),
-      ),
-    ]);
+    // Clear the timer when the inner promise wins; otherwise every raceTimeout
+    // call in the loop leaks a setTimeout that fires at the absolute deadline
+    // and emits a duplicate "Agent timeout exceeded" log. With N iterations ×
+    // M race sites this produces N×M identical errors in the same millisecond.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const msg = `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s) during ${label}`;
+        agentLogger.error({
+          agentId: this.context.id, sessionId: this.context.sessionId,
+          iteration: this.iteration, elapsedMs: this.elapsed(),
+          phase: label, timeoutMs: this.config.timeout,
+        }, msg);
+        reject(new Error(msg));
+      }, remaining);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async loop(): Promise<string> {
@@ -791,7 +813,12 @@ export class AgentWorker extends BaseAgentWorker {
         // messages — the per-signature loop above misses them because args
         // differ every call.
         const toolNameSignature = [...completion.toolCalls].map(tc => tc.name).sort().join(',');
-        if (toolNameSignature === this.lastToolNames) {
+        // Skip the guard entirely when every tool call this iteration is on
+        // the allowed-repeat list (orchestrator meta-tools). Calling
+        // `spawn_child` ten times in a row is the orchestrator delegating to
+        // ten specialists — exactly what we want.
+        const callsAllowList = completion.toolCalls.every(tc => AgentWorker.REPEAT_ALLOWED_TOOLS.has(tc.name));
+        if (!callsAllowList && toolNameSignature === this.lastToolNames) {
           this.consecutiveSameNameCount++;
           if (this.consecutiveSameNameCount >= AgentWorker.MAX_SAME_NAME_REPEATS) {
             agentLogger.warn({

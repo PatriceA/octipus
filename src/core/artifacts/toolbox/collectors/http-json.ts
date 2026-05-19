@@ -59,9 +59,12 @@ export const httpJsonCollector: ToolboxTool<Params, unknown> = {
     'Vault placeholders in headers are resolved at fetch time; never commit raw tokens in `headers`.',
   ],
 
-  async execute(params) {
+  async execute(params, ctx) {
     if (!params.url) throw new Error('art_collect_http_json: missing `url`');
-    const headers = await resolveVaultHeaders(params.headers ?? {});
+    const headers = await resolveVaultHeaders(params.headers ?? {}, {
+      principalId: ctx.principalId,
+      workspaceId: ctx.workspaceId,
+    });
     const res = await fetch(params.url, {
       method: params.method ?? 'GET',
       headers,

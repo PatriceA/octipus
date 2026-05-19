@@ -134,7 +134,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
         {model.provider === 'cli' && (
           <div className="flex justify-between">
             <span className="text-on-surface-variant">Cost</span>
-            <span className="text-tertiary text-xs font-medium">Free (subscription)</span>
+            <span className="text-tertiary text-xs font-medium">Subscription/Provider pricing</span>
           </div>
         )}
         <div className="flex justify-between">

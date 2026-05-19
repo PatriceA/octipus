@@ -45,9 +45,12 @@ export const httpTextCollector: ToolboxTool<Params, Result> = {
   ],
   tips: ['For JSON endpoints prefer `art_collect_http_json` so callers get a parsed object.'],
 
-  async execute(params) {
+  async execute(params, ctx) {
     if (!params.url) throw new Error('art_collect_http_text: missing `url`');
-    const headers = await resolveVaultHeaders(params.headers ?? {});
+    const headers = await resolveVaultHeaders(params.headers ?? {}, {
+      principalId: ctx.principalId,
+      workspaceId: ctx.workspaceId,
+    });
     const res = await fetch(params.url, {
       method: params.method ?? 'GET',
       headers,

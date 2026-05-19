@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Octipus — Log Health</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121822;
+    --panel-2: #182232;
+    --border: #1f2a3a;
+    --fg: #d6dde8;
+    --muted: #7a8aa0;
+    --accent: #58a6ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+    --fatal: #ff6b6b;
+    --debug: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.45 ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    background: var(--bg); color: var(--fg);
+    display: grid; grid-template-rows: auto auto 1fr; min-height: 100vh;
+  }
+  header {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: var(--panel);
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  header .conn-ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  header .conn-bad { background: var(--err); box-shadow: 0 0 6px var(--err); }
+  header label { color: var(--muted); font-size: 12px; }
+  header input, header select {
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 8px; font: inherit;
+  }
+  header input[type="search"] { width: 220px; }
+  header button {
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; cursor: pointer;
+  }
+  header button:hover { background: #1e2a3e; }
+  header .spacer { flex: 1; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px; padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .stat {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+  }
+  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat .v { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .stat.err .v { color: var(--err); }
+  .stat.warn .v { color: var(--warn); }
+  .stat.ok .v { color: var(--ok); }
+  .stat.health.good { border-color: var(--ok); }
+  .stat.health.warn { border-color: var(--warn); }
+  .stat.health.bad { border-color: var(--err); }
+
+  main {
+    overflow: hidden; display: grid;
+    grid-template-columns: 1fr 280px; min-height: 0;
+  }
+  #logs {
+    overflow: auto; padding: 8px 12px; background: var(--bg);
+    font-size: 12px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 80px 60px 90px 1fr;
+    gap: 8px; padding: 2px 4px; border-bottom: 1px solid #11161e;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .row:hover { background: #0f141c; }
+  .row .t { color: var(--muted); }
+  .row .lvl { font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  .row .comp { color: var(--accent); }
+  .row.fatal .lvl { color: var(--fatal); }
+  .row.error .lvl { color: var(--err); }
+  .row.warn .lvl  { color: var(--warn); }
+  .row.info .lvl  { color: var(--ok); }
+  .row.debug .lvl { color: var(--debug); }
+  .row.trace .lvl { color: var(--debug); }
+  .row pre { margin: 2px 0 0; color: var(--muted); font: inherit; }
+
+  aside {
+    border-left: 1px solid var(--border); background: var(--panel);
+    padding: 12px; overflow: auto;
+  }
+  aside h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; text-transform: uppercase; letter-spacing: .5px; }
+  .breakdown { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+  .bar { display: grid; grid-template-columns: 80px 1fr 40px; gap: 8px; align-items: center; font-size: 12px; }
+  .bar .label { color: var(--muted); }
+  .bar .track { background: var(--panel-2); height: 8px; border-radius: 4px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--accent); }
+  .bar .fill.err { background: var(--err); }
+  .bar .fill.warn { background: var(--warn); }
+  .bar .fill.info { background: var(--ok); }
+  .bar .fill.debug { background: var(--debug); }
+  .bar .n { text-align: right; color: var(--fg); }
+
+  footer { padding: 6px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; background: var(--panel); }
+</style>
+</head>
+<body>
+<header>
+  <h1>OCTIPUS · LOG HEALTH</h1>
+  <span><span id="connDot" class="dot conn-bad"></span><span id="connText">disconnected</span></span>
+  <span class="spacer"></span>
+  <label>API
+    <input id="apiBase" type="text" value="" placeholder="http://localhost:3005" size="22" />
+  </label>
+  <label>level
+    <select id="minLevel">
+      <option value="trace">trace+</option>
+      <option value="debug">debug+</option>
+      <option value="info" selected>info+</option>
+      <option value="warn">warn+</option>
+      <option value="error">error+</option>
+    </select>
+  </label>
+  <label>filter
+    <input id="filter" type="search" placeholder="component or msg" />
+  </label>
+  <label><input id="autoscroll" type="checkbox" checked /> autoscroll</label>
+  <button id="pauseBtn">Pause</button>
+  <button id="clearBtn">Clear</button>
+</header>
+
+<section class="stats" id="stats">
+  <div class="stat health" id="healthCard"><div class="k">Health</div><div class="v" id="health">—</div></div>
+  <div class="stat err"><div class="k">Errors / min</div><div class="v" id="errMin">0</div></div>
+  <div class="stat warn"><div class="k">Warns total</div><div class="v" id="warnTot">0</div></div>
+  <div class="stat ok"><div class="k">Logs / sec</div><div class="v" id="lps">0</div></div>
+  <div class="stat"><div class="k">Total</div><div class="v" id="total">0</div></div>
+  <div class="stat"><div class="k">Buffer</div><div class="v" id="buf">0</div></div>
+  <div class="stat"><div class="k">Uptime</div><div class="v" id="up">0s</div></div>
+  <div class="stat"><div class="k">Visible</div><div class="v" id="vis">0</div></div>
+</section>
+
+<main>
+  <div id="logs"></div>
+  <aside>
+    <h2>By Level</h2>
+    <div class="breakdown" id="byLevel"></div>
+    <h2>By Component</h2>
+    <div class="breakdown" id="byComp"></div>
+    <h2>Streams</h2>
+    <div id="streams" style="font-size:12px;color:var(--muted);line-height:1.6">
+      <div><span id="sseDot" class="dot conn-bad"></span>SSE <code>/api/logs/stream</code></div>
+      <div><span id="statDot" class="dot conn-bad"></span>Stats poll <code>/api/logs/stats</code></div>
+      <div><span id="hDot"   class="dot conn-bad"></span>Health <code>/api/health/detailed</code></div>
+    </div>
+  </aside>
+</main>
+
+<footer>Cookies from your authenticated web session are sent automatically. Admin role required.</footer>
+
+<script>
+(() => {
+  const LEVELS = { trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60 };
+  const $ = (id) => document.getElementById(id);
+
+  const url = new URL(window.location.href);
+  const defaultBase =
+    url.searchParams.get('api') ||
+    (url.port === '3007' ? `${url.protocol}//${url.hostname}:3005` : url.origin);
+  $('apiBase').value = defaultBase;
+
+  let evtSrc = null;
+  let paused = false;
+  let visible = 0;
+  const MAX_ROWS = 1500;
+  const logsEl = $('logs');
+
+  function fmtTime(t) {
+    if (!t) return '';
+    const d = typeof t === 'number' ? new Date(t) : new Date(t);
+    return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  }
+
+  function setConn(ok) {
+    $('connDot').className = 'dot ' + (ok ? 'conn-ok' : 'conn-bad');
+    $('connText').textContent = ok ? 'live' : 'disconnected';
+    $('sseDot').className = 'dot ' + (ok ? 'conn-ok' : 'conn-bad');
+  }
+
+  function passesFilter(rec) {
+    const min = LEVELS[$('minLevel').value] || 0;
+    if ((LEVELS[rec.level] || 0) < min) return false;
+    const q = $('filter').value.trim().toLowerCase();
+    if (!q) return true;
+    const blob = ((rec.msg || '') + ' ' + (rec.component || '') + ' ' + JSON.stringify(rec)).toLowerCase();
+    return blob.includes(q);
+  }
+
+  function renderRow(rec) {
+    if (paused || !passesFilter(rec)) return;
+    const row = document.createElement('div');
+    row.className = 'row ' + rec.level;
+    const extras = { ...rec };
+    delete extras.time; delete extras.level; delete extras.msg;
+    delete extras.component; delete extras.service; delete extras.pid; delete extras.hostname;
+    const extraStr = Object.keys(extras).length ? JSON.stringify(extras) : '';
+    row.innerHTML =
+      `<span class="t">${fmtTime(rec.time)}</span>` +
+      `<span class="lvl">${rec.level || ''}</span>` +
+      `<span class="comp">${rec.component || ''}</span>` +
+      `<span class="msg">${escapeHtml(rec.msg || '')}${extraStr ? `<pre>${escapeHtml(extraStr)}</pre>` : ''}</span>`;
+    logsEl.appendChild(row);
+    visible++;
+    while (logsEl.childElementCount > MAX_ROWS) logsEl.removeChild(logsEl.firstChild);
+    if ($('autoscroll').checked) logsEl.scrollTop = logsEl.scrollHeight;
+    $('vis').textContent = visible;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  function connect() {
+    if (evtSrc) try { evtSrc.close(); } catch {}
+    const base = $('apiBase').value.replace(/\/$/, '');
+    evtSrc = new EventSource(base + '/api/logs/stream', { withCredentials: true });
+    evtSrc.onopen = () => setConn(true);
+    evtSrc.onerror = () => setConn(false);
+    evtSrc.onmessage = (e) => {
+      try { renderRow(JSON.parse(e.data)); } catch {}
+    };
+  }
+
+  function bar(container, label, n, max, cls) {
+    const pct = max > 0 ? Math.max(2, Math.round((n / max) * 100)) : 0;
+    const el = document.createElement('div');
+    el.className = 'bar';
+    el.innerHTML =
+      `<span class="label">${escapeHtml(label)}</span>` +
+      `<span class="track"><span class="fill ${cls || ''}" style="width:${pct}%"></span></span>` +
+      `<span class="n">${n}</span>`;
+    container.appendChild(el);
+  }
+
+  async function refreshStats() {
+    const base = $('apiBase').value.replace(/\/$/, '');
+    try {
+      const r = await fetch(base + '/api/logs/stats', { credentials: 'include' });
+      if (!r.ok) throw new Error('stats ' + r.status);
+      const s = await r.json();
+      $('statDot').className = 'dot conn-ok';
+
+      $('total').textContent = s.total;
+      $('buf').textContent = s.bufferSize;
+      $('errMin').textContent = s.errorsLastMinute;
+      $('warnTot').textContent = s.byLevel?.warn ?? 0;
+      $('lps').textContent = (s.logsPerSecond || 0).toFixed(2);
+      $('up').textContent = humanUptime(s.uptimeSec);
+
+      // Health verdict
+      const hc = $('healthCard');
+      const hv = $('health');
+      hc.classList.remove('good', 'warn', 'bad');
+      if (s.errorsLastMinute === 0) { hc.classList.add('good'); hv.textContent = 'HEALTHY'; hv.style.color = 'var(--ok)'; }
+      else if (s.errorsLastMinute < 5) { hc.classList.add('warn'); hv.textContent = 'DEGRADED'; hv.style.color = 'var(--warn)'; }
+      else { hc.classList.add('bad'); hv.textContent = 'UNHEALTHY'; hv.style.color = 'var(--err)'; }
+
+      const byLevel = $('byLevel'); byLevel.innerHTML = '';
+      const lvlMax = Math.max(1, ...Object.values(s.byLevel || {}));
+      for (const [lvl, n] of Object.entries(s.byLevel || {})) {
+        bar(byLevel, lvl, n, lvlMax, lvl);
+      }
+      const byComp = $('byComp'); byComp.innerHTML = '';
+      const entries = Object.entries(s.byComponent || {}).sort((a,b)=>b[1]-a[1]).slice(0,15);
+      const cMax = Math.max(1, ...entries.map(e=>e[1]));
+      for (const [c, n] of entries) bar(byComp, c, n, cMax);
+    } catch (e) {
+      $('statDot').className = 'dot conn-bad';
+    }
+
+    // Backend overall health probe
+    try {
+      const r = await fetch(base + '/api/health/detailed', { credentials: 'include' });
+      $('hDot').className = 'dot ' + (r.ok ? 'conn-ok' : 'conn-bad');
+    } catch { $('hDot').className = 'dot conn-bad'; }
+  }
+
+  function humanUptime(s) {
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+    if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+    return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
+  }
+
+  $('pauseBtn').onclick = () => {
+    paused = !paused;
+    $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+  };
+  $('clearBtn').onclick = () => { logsEl.innerHTML = ''; visible = 0; $('vis').textContent = 0; };
+  $('apiBase').onchange = connect;
+  $('minLevel').onchange = () => {};
+  $('filter').oninput = () => {};
+
+  connect();
+  refreshStats();
+  setInterval(refreshStats, 2000);
+})();
+</script>
+</body>
+</html>

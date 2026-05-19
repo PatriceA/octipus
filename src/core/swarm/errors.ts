@@ -84,6 +84,22 @@ export class CascadedCancellationError extends ClassifiedError {
   }
 }
 
+/**
+ * True for any error that represents intentional termination — admin cancel,
+ * parent abort cascading down, AbortSignal trips. These are expected outcomes,
+ * not failures, so callers should log them at info/debug rather than error.
+ */
+export function isCancellationError(err: unknown): boolean {
+  if (err instanceof CascadedCancellationError) return true;
+  if (err instanceof DuplicateSpawnError) return true;
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return true;
+    const msg = err.message || '';
+    if (/abort|cancel|stopped/i.test(msg)) return true;
+  }
+  return false;
+}
+
 /** Map any thrown error into a `ChildResult.status` via the `ClassifiedError` taxonomy. */
 export function classifyChildError(err: unknown): ChildResultStatus {
   // Direct matches on our own classes (fast path).

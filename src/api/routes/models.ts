@@ -466,8 +466,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Update model (admin only)
   .patch(
     '/:name',
-    async ({ user, params, body }) => {
+    async ({ user, params, body, set }) => {
       if (!user?.isAdmin) {
+        set.status = 403;
         return { error: 'Admin access required' };
       }
 
@@ -477,17 +478,28 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       // This ensures capability presets remain the single source of truth.
       const { supportsTools: _t, supportsVision: _v, supportsStreaming: _s, ...safeUpdate } = body as any;
 
-      const registry = getModelRegistry();
-      const model = await registry.updateModel(params.name, safeUpdate as Partial<NewModelConfigEntry>);
+      try {
+        const registry = getModelRegistry();
+        const model = await registry.updateModel(params.name, safeUpdate as Partial<NewModelConfigEntry>);
 
-      if (!model) {
-        return { error: 'Model not found' };
+        if (!model) {
+          set.status = 404;
+          return { error: 'Model not found' };
+        }
+
+        return {
+          ...model,
+          capabilities: getCapabilitiesForModel(model),
+        };
+      } catch (err) {
+        // Without this catch, any DB-side failure (constraint, type mismatch,
+        // unknown column from a stale schema) bubbled up to Elysia's default
+        // handler as an opaque 500 with no error body. Logging + surfacing
+        // the message lets the UI show the user what actually broke.
+        coreLogger.error({ err, model: params.name, update: safeUpdate }, 'updateModel failed');
+        set.status = 400;
+        return { error: 'Failed to update model', details: (err as Error).message };
       }
-
-      return {
-        ...model,
-        capabilities: getCapabilitiesForModel(model),
-      };
     },
     {
       params: t.Object({

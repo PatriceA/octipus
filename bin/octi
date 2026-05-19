@@ -173,6 +173,46 @@ MCPEOF
       -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
       ${_mcp_key:+-e "OCTIPUS_API_KEY=${_mcp_key}"} >/dev/null 2>&1 || true
   fi
+
+  sync_codex_mcp_config "$_mcp_entry" "$_mcp_key"
+}
+
+# Sync the Octipus MCP entry in Codex's config (~/.codex/config.toml).
+# Codex MCP discovery is static — without this, a project rename or key
+# rotation leaves the codex CLI pointing at stale paths. Best effort: only
+# touches the file if Codex has been installed (config dir exists).
+sync_codex_mcp_config() {
+  local _entry="$1"
+  local _key="$2"
+  local _codex_config="$HOME/.codex/config.toml"
+  [[ -d "$HOME/.codex" ]] || return 0
+
+  # Ensure the file exists so the rewrite step has something to read.
+  touch "$_codex_config"
+
+  # Strip any prior octipus / legacy assistant blocks (header + body, up to
+  # next TOML header or EOF), then append a fresh block.
+  awk '
+    /^\[mcp_servers\.(octipus|assistant)(\.[a-zA-Z0-9_]+)?\]/ { skip = 1; next }
+    /^\[/ { skip = 0 }
+    !skip { print }
+  ' "$_codex_config" > "${_codex_config}.tmp"
+
+  # Drop trailing blank lines, then append our block.
+  sed -i -e :a -e '/^\s*$/{$d;N;ba' -e '}' "${_codex_config}.tmp" 2>/dev/null || true
+
+  {
+    [[ -s "${_codex_config}.tmp" ]] && echo ""
+    echo "[mcp_servers.octipus]"
+    echo "command = \"node\""
+    echo "args = [\"${_entry}\"]"
+    echo ""
+    echo "[mcp_servers.octipus.env]"
+    echo "OCTIPUS_URL = \"http://127.0.0.1:${API_PORT}\""
+    [[ -n "$_key" ]] && echo "OCTIPUS_API_KEY = \"${_key}\""
+  } >> "${_codex_config}.tmp"
+
+  mv "${_codex_config}.tmp" "$_codex_config"
 }
 
 wait_for_health() {

@@ -1,3 +1,4 @@
+import { isCancellationError } from '@/core/swarm/errors';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getPermissionManager } from '@/security/permissions';
@@ -416,10 +417,20 @@ export class ToolExecutor {
           }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in tool-executor'));
         } catch { /* hooks not ready */ }
       } catch (error) {
-        agentLogger.error(
-          { error, agentId: this.context.id, tool: toolCall.name },
-          'Tool execution failed'
-        );
+        if (isCancellationError(error)) {
+          // Tool aborted because the agent (or an ancestor) was cancelled.
+          // Not a real tool failure — log at info so cancelling a swarm
+          // doesn't fill the dashboard with red error rows.
+          agentLogger.info(
+            { agentId: this.context.id, tool: toolCall.name, reason: (error as Error).message },
+            'Tool execution cancelled'
+          );
+        } else {
+          agentLogger.error(
+            { error, agentId: this.context.id, tool: toolCall.name },
+            'Tool execution failed'
+          );
+        }
 
         results.push({
           toolCallId: toolCall.id,

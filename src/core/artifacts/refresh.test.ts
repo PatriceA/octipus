@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'bun:test';
-import { parseRss } from './refresh';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { spyOn } from 'bun:test';
+import { Vault } from '@/security/vault';
+import { parseRss, resolveVaultHeaders } from './refresh';
 
 describe('parseRss', () => {
   test('extracts items from RSS 2.0', () => {
@@ -29,5 +31,73 @@ describe('parseRss', () => {
 
   test('returns [] on garbage', () => {
     expect(parseRss('<not-a-feed/>')).toEqual([]);
+  });
+});
+
+describe('resolveVaultHeaders', () => {
+  const getByNameSpy = spyOn(Vault.prototype, 'getByName');
+
+  beforeEach(() => {
+    getByNameSpy.mockReset();
+  });
+
+  afterEach(() => {
+    getByNameSpy.mockReset();
+  });
+
+  test('passes through headers with no placeholders', async () => {
+    const out = await resolveVaultHeaders({ accept: 'application/json' }, {
+      principalId: 'user-1',
+      workspaceId: 'ws-1',
+    });
+    expect(out).toEqual({ accept: 'application/json' });
+    expect(getByNameSpy).not.toHaveBeenCalled();
+  });
+
+  test('resolves a single placeholder via the vault', async () => {
+    getByNameSpy.mockResolvedValueOnce('gho_realtoken');
+    const out = await resolveVaultHeaders(
+      { authorization: 'Bearer ${vault.github_token}' },
+      { principalId: 'user-1', workspaceId: 'ws-1' },
+    );
+    expect(out.authorization).toBe('Bearer gho_realtoken');
+    expect(getByNameSpy).toHaveBeenCalledWith('user-1', 'github_token', { workspaceId: 'ws-1' });
+  });
+
+  test('deduplicates lookups when the same key is referenced twice', async () => {
+    getByNameSpy.mockResolvedValueOnce('tok');
+    const out = await resolveVaultHeaders(
+      { authorization: 'Bearer ${vault.k}', 'x-other': 'pre-${vault.k}-post' },
+      { principalId: 'p', workspaceId: null },
+    );
+    expect(out).toEqual({ authorization: 'Bearer tok', 'x-other': 'pre-tok-post' });
+    expect(getByNameSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('throws when the secret is missing', async () => {
+    getByNameSpy.mockResolvedValueOnce(null);
+    await expect(
+      resolveVaultHeaders(
+        { authorization: 'Bearer ${vault.missing}' },
+        { principalId: 'user-1', workspaceId: null },
+      ),
+    ).rejects.toThrow(/vault: secret "missing" not found/);
+  });
+
+  test('refuses to run without a principalId', async () => {
+    await expect(
+      resolveVaultHeaders({ authorization: 'Bearer ${vault.x}' }, { principalId: '' }),
+    ).rejects.toThrow(/missing principalId/);
+    expect(getByNameSpy).not.toHaveBeenCalled();
+  });
+
+  test('handles multiple distinct keys in one call', async () => {
+    getByNameSpy.mockImplementation(async (_uid, name) => (name === 'a' ? 'AA' : 'BB'));
+    const out = await resolveVaultHeaders(
+      { h1: 'x ${vault.a}', h2: 'y ${vault.b}' },
+      { principalId: 'p', workspaceId: 'w' },
+    );
+    expect(out).toEqual({ h1: 'x AA', h2: 'y BB' });
+    expect(getByNameSpy).toHaveBeenCalledTimes(2);
   });
 });

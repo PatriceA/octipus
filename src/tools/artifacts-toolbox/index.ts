@@ -171,18 +171,22 @@ export class ArtifactsToolboxTool extends BaseTool {
           type: 'array',
           description: 'Array of `{ name, toolId, params, refreshSeconds? }`.',
           required: true,
+          items: { type: 'object' },
         },
         transforms: {
           type: 'array',
           description: 'Array of `{ name, toolId, inputName, params, position? }`.',
+          items: { type: 'object' },
         },
         widgets: {
           type: 'array',
           description: 'Array of `{ slot, toolId, bind: { paramName: dataBusPath }, params?, position? }`.',
+          items: { type: 'object' },
         },
         exports: {
           type: 'array',
           description: 'Array of `{ exportId, toolId, bind, params? }`.',
+          items: { type: 'object' },
         },
       }),
       async (args) => {

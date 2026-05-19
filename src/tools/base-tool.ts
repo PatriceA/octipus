@@ -1,4 +1,5 @@
 import type { ToolHandler } from '@/core/agent-worker';
+import { isCancellationError } from '@/core/swarm/errors';
 import type { AgentContext, ToolManifest, } from '@/core/types';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets } from '@/security/secret-injector';
@@ -111,7 +112,16 @@ export abstract class BaseTool {
     } catch { /* config not loaded — fall through to legacy behavior */ }
 
     const skipForSystem = isSystemUser && !enforce;
-    if (options?.requiresPermission !== false && !skipForSystem) {
+    // Autonomous workers (any role spawned by the orchestrator, i.e. not the
+    // orchestrator itself) cannot prompt a human. `tool-executor.ts` already
+    // gates and auto-approves ASK-level tools for these workers before
+    // dispatch; without this mirror check, base-tool re-runs the check and
+    // re-requests approval — the request blocks forever because the orchestrator
+    // never relays it to the user. Keep this in sync with the autonomous-worker
+    // policy in `src/core/tool-executor.ts`.
+    const isAutonomousWorker = !!context.role && context.role !== 'orchestrator';
+    const skipForAutonomousWorker = isAutonomousWorker;
+    if (options?.requiresPermission !== false && !skipForSystem && !skipForAutonomousWorker) {
       const permissionManager = getPermissionManager();
       const action = options?.permissionAction || toolName;
 
@@ -161,13 +171,29 @@ export abstract class BaseTool {
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
       return result;
     } catch (error) {
-      toolLogger.error({ error, toolId: this.id, tool: toolName }, 'Tool execution failed');
+      if (isCancellationError(error)) {
+        // Aborted by the agent's cancellation — not a real failure.
+        toolLogger.info(
+          { toolId: this.id, tool: toolName, reason: (error as Error).message },
+          'Tool execution cancelled'
+        );
+      } else {
+        toolLogger.error({ error, toolId: this.id, tool: toolName }, 'Tool execution failed');
+      }
       throw error;
     }
   }
 
   /**
-   * Inject secrets in tool arguments
+   * Inject secrets in tool arguments.
+   *
+   * Walks arbitrarily nested objects/arrays. Arrays must be detected before
+   * the generic object branch — `typeof [] === 'object'` is true, so without
+   * the explicit `Array.isArray` check the old code rebuilt arrays as plain
+   * objects keyed by numeric strings. That mangling silently turned every
+   * array param into `{ "0": ..., "1": ... }`, so downstream validators
+   * (e.g. `art_toolbox_validate`'s `sources must be an array` guard) saw a
+   * non-array and rejected the call.
    */
   private async injectSecretsInArgs(
     args: Record<string, unknown>,
@@ -176,17 +202,24 @@ export abstract class BaseTool {
     const result: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(args)) {
-      if (typeof value === 'string') {
-        const { content } = await injectSecrets(value, { userId, toolId: this.id });
-        result[key] = content;
-      } else if (typeof value === 'object' && value !== null) {
-        result[key] = await this.injectSecretsInArgs(value as Record<string, unknown>, userId);
-      } else {
-        result[key] = value;
-      }
+      result[key] = await this.injectIntoValue(value, userId);
     }
 
     return result;
+  }
+
+  private async injectIntoValue(value: unknown, userId: string): Promise<unknown> {
+    if (typeof value === 'string') {
+      const { content } = await injectSecrets(value, { userId, toolId: this.id });
+      return content;
+    }
+    if (Array.isArray(value)) {
+      return Promise.all(value.map((item) => this.injectIntoValue(item, userId)));
+    }
+    if (typeof value === 'object' && value !== null) {
+      return this.injectSecretsInArgs(value as Record<string, unknown>, userId);
+    }
+    return value;
   }
 
   /**
@@ -220,17 +253,29 @@ export function createParameterSchema(params: Record<string, {
   required?: boolean;
   default?: unknown;
   enum?: unknown[];
+  /**
+   * Element schema for `type: 'array'`. REQUIRED for Gemini compatibility —
+   * the gemini-envelope sanitizer will inject a `{ type: 'string' }` default
+   * if you omit it, but authors should set it explicitly when the element
+   * shape is known (object, number, etc.).
+   */
+  items?: Record<string, unknown>;
+  /** Nested property schema for `type: 'object'`. */
+  properties?: Record<string, unknown>;
 }>): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
 
   for (const [name, config] of Object.entries(params)) {
-    properties[name] = {
+    const prop: Record<string, unknown> = {
       type: config.type,
       description: config.description,
-      ...(config.default !== undefined && { default: config.default }),
-      ...(config.enum && { enum: config.enum }),
     };
+    if (config.default !== undefined) prop.default = config.default;
+    if (config.enum) prop.enum = config.enum;
+    if (config.items) prop.items = config.items;
+    if (config.properties) prop.properties = config.properties;
+    properties[name] = prop;
 
     if (config.required) {
       required.push(name);

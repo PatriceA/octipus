@@ -80,15 +80,22 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const permissionManager = getPermissionManager();
 
     const unsubPerm = permissionManager.onRequest((request: any) => {
+      // Field names must match `PermissionManager.emitRequest` in
+      // `src/security/permissions.ts` — the emitter sends `requestId`,
+      // `toolName`, and `args`. Reading `request.id`/`request.context` here
+      // produced undefined values, leaving the TUI permission prompt with
+      // an empty requestId so users could never approve/deny.
       hub.publishEvent({
         type: 'permission.request',
         source: `agent:${request.agentId}`,
         userId: request.userId,
+        sessionId: request.sessionId,
         payload: {
-          requestId: request.id,
+          requestId: request.requestId,
           toolId: request.toolId,
           action: request.action,
-          context: request.context,
+          toolName: request.toolName,
+          args: request.args,
         },
       });
     });

@@ -388,6 +388,29 @@ export function setupWebSocket(app: Elysia): void {
         requests: pendingRequests,
       }));
 
+      // Live forwarding: without this subscription, only requests that already
+      // existed at connect time reached this endpoint. New `permission_request`
+      // events fired during the session were dropped, so the global permission
+      // banner on non-chat pages never lit up.
+      const unsubscribe = permissionManager.onRequest?.((request: Record<string, unknown>) => {
+        if (request.userId !== session.userId) return;
+        try {
+          ws.send(JSON.stringify({
+            type: 'permission_request',
+            requestId: request.requestId,
+            toolId: request.toolId,
+            action: request.action,
+            toolName: request.toolName,
+            args: request.args,
+            agentId: request.agentId,
+            sessionId: request.sessionId,
+          }));
+        } catch (err) {
+          apiLogger.warn({ err }, 'permission live-forward send failed');
+        }
+      });
+      wsData(ws).unsubscribePermissions = unsubscribe;
+
       apiLogger.info({ userId: session.userId }, 'Permission WS connected');
     },
 
@@ -424,6 +447,9 @@ export function setupWebSocket(app: Elysia): void {
 
     close(ws) {
       const data = wsData(ws);
+      if (data.unsubscribePermissions) {
+        try { data.unsubscribePermissions(); } catch { /* ignore */ }
+      }
       apiLogger.info({ userId: data.userId }, 'Permission WS disconnected');
     },
   });

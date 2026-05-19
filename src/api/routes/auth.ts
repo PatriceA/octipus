@@ -5,6 +5,7 @@ import { userRepository } from '@/db/repositories/user-repository';
 import { getPasskeyAuth } from '@/security/auth/passkey';
 import { getSessionManager } from '@/security/auth/session';
 import { getTOTPAuth } from '@/security/auth/totp';
+import { isAuthenticated } from '@/security/principal';
 import { getRateLimiter } from '@/security/rate-limiter';
 import { hashPassword, verifyPassword } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
@@ -177,6 +178,38 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         actorUserId,
         actorUsername,
       };
+    },
+    { detail: { tags: ['auth'] } }
+  )
+
+  // WebSocket auth ticket — exchange the HttpOnly session cookie for a
+  // short-lived (60s) bearer token usable in the WS handshake URL
+  // (`ws://.../ws?token=<ticket>`). The web client can't read the
+  // HttpOnly session cookie, and SameSite=Strict prevents the cookie from
+  // travelling on cross-origin WS handshakes (web at :3007, backend WS at
+  // :3005). Without this endpoint the WS never authenticates and chat
+  // silently falls back to REST.
+  //
+  // Security trade-off vs echoing the long-lived token: the ticket is
+  // ephemeral, scoped to the same userId, and burns down within a minute
+  // even if an XSS exfiltrates it.
+  .get(
+    '/ws-ticket',
+    async (ctx: any) => {
+      const { user, principal, request, set } = ctx;
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const sessionManager = getSessionManager();
+      const { token, session } = await sessionManager.create(user.id, {
+        channelType: 'web',
+        channelId: 'ws-ticket',
+        ipAddress: request.headers.get('x-forwarded-for') || undefined,
+        userAgent: request.headers.get('user-agent') || undefined,
+        ttlMs: 60_000,
+      });
+      return { token, expiresAt: session.expiresAt };
     },
     { detail: { tags: ['auth'] } }
   )

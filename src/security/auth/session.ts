@@ -41,6 +41,11 @@ export class SessionManager {
       channelId?: string;
       ipAddress?: string;
       userAgent?: string;
+      /** Override the session lifetime (ms). Defaults to the configured
+       *  `sessionMaxAge`. Use a small value (e.g. 60_000) for short-lived
+       *  tickets — WS-handshake tickets where the long-lived auth is held
+       *  in an HttpOnly cookie that the browser can't put in the WS URL. */
+      ttlMs?: number;
     }
   ): Promise<{ token: string; session: SessionData }> {
     const user = await userRepository.findById(userId);
@@ -63,6 +68,7 @@ export class SessionManager {
     const token = generateToken(32);
     const tokenHash = sha256(token);
     const now = new Date();
+    const ttlMs = options?.ttlMs ?? this.maxAge;
 
     const session: SessionData = {
       userId,
@@ -73,12 +79,12 @@ export class SessionManager {
       ipAddress: options?.ipAddress,
       userAgent: options?.userAgent,
       createdAt: now,
-      expiresAt: new Date(now.getTime() + this.maxAge),
+      expiresAt: new Date(now.getTime() + ttlMs),
       lastActivityAt: now,
     };
 
     // Store session
-    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.maxAge / 1000);
+    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, ttlMs / 1000);
 
     // Track user's sessions
     const userSessionsKey = `${USER_SESSIONS_PREFIX}${userId}`;
@@ -86,7 +92,7 @@ export class SessionManager {
     userSessions.push(tokenHash);
     await this.cache.set(userSessionsKey, userSessions, this.maxAge / 1000);
 
-    securityLogger.info({ userId, channelType: options?.channelType }, 'Session created');
+    securityLogger.info({ userId, channelType: options?.channelType, ttlMs }, 'Session created');
 
     return { token, session };
   }

@@ -93,6 +93,59 @@ function parseToolContent(content: string): unknown {
   try { return JSON.parse(content); } catch { return { result: content }; }
 }
 
+/**
+ * Recursively sanitize a JSON Schema fragment for Gemini's strict
+ * `function_declarations` validator. OpenAI tolerates minor omissions
+ * (array without `items`, object without `properties`); Gemini rejects
+ * the entire request with `* GenerateContentRequest.tools[0].function_declarations[N]
+ * .parameters.properties[X].items: missing field`. We:
+ *
+ *   - inject `items: { type: 'string' }` when an `array` schema has no `items`
+ *   - inject `properties: {}` when an `object` schema has no `properties`
+ *   - drop JSON Schema fields Gemini doesn't recognize (`default`,
+ *     `additionalProperties`) — silently, so existing call sites don't break
+ *
+ * The result is a *copy*; the input is not mutated.
+ */
+export function sanitizeSchemaForGemini(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => sanitizeSchemaForGemini(entry));
+  }
+  if (schema === null || typeof schema !== 'object') {
+    return schema;
+  }
+  const src = schema as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(src)) {
+    // Gemini rejects unknown keywords; strip the ones we know are unsupported.
+    if (k === 'default' || k === 'additionalProperties') continue;
+    if (k === 'properties' && v && typeof v === 'object') {
+      const props: Record<string, unknown> = {};
+      for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
+        props[pk] = sanitizeSchemaForGemini(pv);
+      }
+      out[k] = props;
+      continue;
+    }
+    if (k === 'items') {
+      out[k] = sanitizeSchemaForGemini(v);
+      continue;
+    }
+    out[k] = sanitizeSchemaForGemini(v);
+  }
+  const type = out.type;
+  if (type === 'array' && out.items === undefined) {
+    // Best-effort default — Gemini just needs *some* shape. Most agent-facing
+    // arrays in this codebase are arrays of strings or arrays of opaque
+    // objects; the model still gets the param description to clarify intent.
+    out.items = { type: 'string' };
+  }
+  if (type === 'object' && out.properties === undefined) {
+    out.properties = {};
+  }
+  return out;
+}
+
 /** Translate OpenAI tool schema → Gemini tool schema (`functionDeclarations`) */
 export function buildGeminiTools(tools: ChatCompletionTool[]): Array<Record<string, unknown>> {
   return [{
@@ -103,7 +156,7 @@ export function buildGeminiTools(tools: ChatCompletionTool[]): Array<Record<stri
       return {
         name: t.function.name,
         description: t.function.description,
-        parameters: t.function.parameters,
+        parameters: sanitizeSchemaForGemini(t.function.parameters) as Record<string, unknown>,
       };
     }),
   }];
@@ -182,7 +235,7 @@ export function buildBlocksConfigEnvelope(req: GenericGeminiRequest): Record<str
       return {
         name: t.function.name,
         description: t.function.description,
-        parameters: t.function.parameters,
+        parameters: sanitizeSchemaForGemini(t.function.parameters) as Record<string, unknown>,
       };
     });
   }
