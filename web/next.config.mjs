@@ -23,6 +23,18 @@ const nextConfig = {
         source: '/api/:path*',
         destination: `${apiTarget}/api/:path*`,
       },
+      // Hosted artifact pages live on the API server (`/a/:slug` and the
+      // DNS-less fallback `/__artifacts__/a/:slug`). Proxy both same-origin
+      // so iframes embedded in the dashboard load with the user's session
+      // cookie attached — `workspace`/`private` visibilities require auth.
+      {
+        source: '/__artifacts__/:path*',
+        destination: `${apiTarget}/__artifacts__/:path*`,
+      },
+      {
+        source: '/a/:path*',
+        destination: `${apiTarget}/a/:path*`,
+      },
     ];
   },
 };

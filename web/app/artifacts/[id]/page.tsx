@@ -15,6 +15,8 @@ interface Artifact {
   currentVersionId: string | null;
   embedUrl: string;
   outerUrl: string;
+  appUrl?: string;
+  shareUrl?: string;
 }
 interface DataSource {
   id: string;
@@ -81,8 +83,12 @@ export default function ArtifactDetailPage() {
   const a = detail.data?.artifact;
   if (!a) return <div className="p-6 text-error">Not found</div>;
 
-  // Use the API-supplied embed URL — respects subdomain vs path-prefix.
-  const embedSrc = a.embedUrl;
+  // Always load via the same-origin path-prefix mount so the user's session
+  // cookie travels with the request — `workspace` / `private` visibilities
+  // need auth, and a cross-origin iframe to the artifacts subdomain drops
+  // the cookie. next.config.mjs proxies /__artifacts__/* to the API server.
+  const embedSrc = `/__artifacts__/a/${encodeURIComponent(a.slug)}/embed`;
+  const openHref = a.shareUrl ?? a.outerUrl;
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6 p-6">
@@ -96,7 +102,7 @@ export default function ArtifactDetailPage() {
           </div>
           <div className="flex items-center gap-2">
             <a
-              href={a.outerUrl}
+              href={openHref}
               target="_blank"
               rel="noreferrer"
               className="rounded border border-[#262626] px-3 py-1 text-sm hover:bg-surface-container-high"
