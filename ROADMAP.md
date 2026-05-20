@@ -14,11 +14,9 @@ project — distinct from the cleanup it follows.
 
 The UX + personality revamp planned 2026-05-20 from
 [`docs/plans/ux-personality-revamp.md`](docs/plans/ux-personality-revamp.md)
-landed in four slices on the same branch; see **Done → 2026-05-20
-batch (d) — UX + personality revamp** below for shipped scope. The
-two pieces that intentionally stayed out of scope (compiled `octi`
-binary, full TUI-based `octi init` rewrite, web persona settings page)
-remain follow-ups; promote when picked up.
+landed in full on the same branch (five slices) — see **Done →
+2026-05-20 batch (d) — UX + personality revamp** below. Nothing
+deferred from that plan remains in-flight.
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
   (772 lines) and `src/models/providers/index.ts` are at 0% coverage
@@ -248,15 +246,38 @@ Typecheck + lint clean.
   - `docs/CONFIGURATION-PRECEDENCE.md` explains the .env-bootstrap
     vs DB-runtime split.
 
-**Deferred (tracked for follow-up):**
-- Compiled `octi` binary via `bun build --compile` (retires PATH
-  mutation in `scripts/setup.ts`).
-- Full TUI-based `octi init` rewrite (current `bun run setup` is
-  enhanced rather than replaced).
-- Web `/setup` page demotion + a new `/persona` settings page in
-  the web UI.
+**Slice 5 (final follow-ups landed):**
+- **Compiled `octi` binary.** `bin/octi.ts` is a TypeScript
+  dispatcher built into a static binary via
+  `bun build --compile --minify --sourcemap` (`bun run build:cli`,
+  output at `dist/octi`, ~95MB). Handles
+  help/version/doctor/init/tui/edit/persona natively, delegates
+  start/stop/restart/status/logs/open to the existing bash
+  `bin/octi`. The install script now builds the binary and
+  symlinks it onto `~/.local/bin/octi`, retiring the PATH-mutation
+  in `scripts/setup.ts`. Smoke tests in `bin/octi.test.ts`.
+- **Full TUI `octi init` rewrite.** `scripts/init.ts` is the new
+  pi-tui based wizard (welcome → detect → storage → provider →
+  model → API key → summary → writes .env). The compiled
+  dispatcher routes `octi init` here on TTYs; non-TTY (CI) and
+  `OCTIPUS_INIT=legacy` fall back to the inquirer flow at
+  `scripts/setup.ts`. Same .env shape, same `bootstrapDefaultModel`
+  pickup on first boot. `buildEnv` helper unit-tested.
+- **Web `/persona` settings page.** `web/app/persona/page.tsx`
+  reads `/api/persona` and lets the user rename, change tone,
+  flip narration volume, switch preset, add/remove free-form
+  self-facts, and reset to Octipus default. Backed by
+  `src/api/routes/persona.ts` (Elysia, six routes, auth-gated,
+  delegates writes to `handlePersonaCommand` so the web UI and
+  the `/persona` slash command share validation). Sidebar gains
+  a "persona" nav entry with the Fingerprint icon.
+
+**Still deferred (separate track, not blocking):**
 - Hermes-style true interrupt-and-redirect — needs WS protocol +
   TUI editor changes. Foundations in place via `chat.interject`.
+- Web `/setup` page demotion — orthogonal to the persona page;
+  picked up when the TUI init becomes the canonical surface for
+  all users.
 
 ### 2026-05 batch (c) — memory-redesign cleanup arc
 
