@@ -47,6 +47,17 @@ async function main() {
     // One-time migration: move .env values into DB settings + vault
     await migrateEnvToDb();
 
+    // First-boot model bootstrap: reads BOOTSTRAP_PROVIDER / _MODEL /
+    // _API_KEY / _BASE_URL from .env (set by `bun run setup`) and
+    // seeds a single default model_config row + vault entry — only
+    // when model_config is empty.
+    try {
+      const { bootstrapDefaultModel } = await import('@/db/bootstrap-model');
+      await bootstrapDefaultModel();
+    } catch (err) {
+      logger.error({ err }, 'bootstrap-model failed — first-message UX may show the no-engine path');
+    }
+
     // Initialize settings service: warm cache from DB
     const settingsService = getSettingsService();
     await settingsService.initialize();

@@ -101,8 +101,24 @@ export class OrchestratorService {
       if (!defaultModel) {
         const allModels = await registry.getAllModels();
         if (allModels.length === 0) {
+          // No model. Speak in the active persona's voice. Fall back to
+          // the dry default if the persona system isn't loaded yet —
+          // this codepath fires on first-boot before settings exist.
+          let name = 'Octipus';
+          try {
+            const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+            const persona = await resolvePersonaForUser(userId);
+            name = persona.name;
+          } catch { /* registry not ready yet — base name is fine */ }
+          const text =
+            `${name} has no engine. The arms are idle.\n\n` +
+            'To wire one up, run one of:\n' +
+            '  • `bun run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
+            '  • `octi doctor`     (shows what is missing)\n' +
+            '  • open the Models page in the web UI\n\n' +
+            'Once a model is bound to the `general` topic, every turn after this one works.';
           return {
-            response: 'No model configured. Please add one in the Models page.',
+            response: text,
             classification: { type: 'casual', confidence: 0 },
           };
         }

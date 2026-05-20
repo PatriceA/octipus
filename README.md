@@ -10,6 +10,37 @@
 
 ---
 
+## Install in 90 seconds
+
+One-shot installer — clones the repo, installs deps, runs the
+interactive setup wizard (storage mode, base model provider, security
+keys), drops you at the `octi` CLI:
+
+```bash
+# Linux / macOS / WSL
+curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash
+
+# Windows (PowerShell)
+iex (irm https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1)
+```
+
+Then:
+
+```bash
+octi start         # full stack — backend + web UI
+octi tui           # terminal chat
+octi doctor        # what's wired, what's missing
+```
+
+Prefer Docker? Root-level `docker-compose.yml` brings up Postgres +
+Valkey + Octipus in one shot — see [docs/DOCKER.md](docs/DOCKER.md).
+
+Cloning manually instead? `git clone && bun install && bun run setup`
+does the same thing the installer does — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the dev path.
+
+---
+
 ## What it is
 
 Octipus is an open-source, self-hosted AI platform that delegates real work to a swarm of specialist agents. Send a message — research, code, audit, write, schedule — and the orchestrator picks the right experts, fans them out in parallel, and ships a result back over the channel you used (Telegram, Slack, web, voice, MCP, …).
