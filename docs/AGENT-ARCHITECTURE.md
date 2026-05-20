@@ -59,6 +59,29 @@ The LLM-facing tool is `spawn_child`. Agents also get `escalate_to_different_exp
 
 **Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.octipus/swarm-design.md`.
 
+## Orchestrator persona
+
+A per-user identity layer the orchestrator inherits at every turn — name, pronouns, tone, narration volume, free-form self-facts. Default is **Octipus** (the octopus-machine). Layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook:
+
+```
+SECURITY_PREAMBLE           (DESIGN.md rule #6 — untouched)
+│
+▼
+PERSONA BLOCK               (from personas/<preset>.yaml + per-user overrides)
+│
+▼
+ROLE PROMPT                 (roles/orchestrator/prompt.md — untouched)
+│
+▼
+memory block, recent history, classifier hint, …
+```
+
+The same persona applies to the casual-chat path (`directResponse`) so greetings sound like Octipus too. Live swarm events (`swarm.node_spawned`, `node_completed`, `budget_warning`) get re-emitted as `swarm.narration` carrying persona-rendered text ("Octipus dispatches a research arm.", "qa arm failed. Predictable.") — channels subscribe independently.
+
+Specialist children **don't** inherit the persona — they stay role-defined. Persona is host-level only.
+
+Six presets ship under `personas/`: `octipus` (default), `terse-engineer`, `mentor`, `nautilus`, `concierge`, `verbose-academic`. The `category='assistant'` row in the `profiles` table stores the user's overrides ([PROFILES.md](PROFILES.md#assistant-profile-persona)). Edit via `/persona ...` slash commands or the web `/persona` page.
+
 ## Execution Paths
 
 ```

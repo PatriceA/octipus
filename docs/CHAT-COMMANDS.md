@@ -19,6 +19,19 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/cost` | Show token usage and cost for the session |
 | `/cancel` | Abort a multi-step command (e.g., active `/plan`) |
 
+### Persona (Orchestrator Identity)
+
+| Command | Description |
+|---------|-------------|
+| `/persona` | Show the active persona (name, tone, narration, self-facts) |
+| `/persona name <X>` | Rename the orchestrator (default: `Octipus`) |
+| `/persona tone <X>` | Set tone: `dry`, `playful`, `neutral`, `professional`, `terse`, `verbose` |
+| `/persona narration <X>` | Set live swarm narration volume: `off`, `minimal`, `chatty` |
+| `/persona say <fact>` | Append a free-form self-fact ("always summarize in bullets") |
+| `/persona use <preset_id>` | Switch preset (keeps custom name; see Personas below) |
+| `/persona reset` | Restore Octipus default |
+| `/persona personas` | List available preset personas |
+
 ### TUI / Gateway Commands (Additional)
 
 | Command | Description |
@@ -51,6 +64,27 @@ Switch between pre-built expert personas from any channel:
 When an expert is active, all your messages bypass the orchestrator's classifier and go directly to that expert's agent with its specialized system prompt, domain knowledge (skills), critical rules, and deliverable template.
 
 Expert selection persists across messages in the session. Use `/expert reset` to return to automatic classification.
+
+---
+
+## Personas (Orchestrator Identity)
+
+The orchestrator's identity is a per-user setting, distinct from experts. By default it's **Octipus** — an octopus-machine that refers to itself in the third person, uses "we" for the swarm, and gives short dry replies. You can rename it, change tone, control how chatty its live swarm narration is, and add free-form facts that survive across sessions and channels.
+
+```
+/persona                       → Show current
+/persona name Adam             → Rename
+/persona tone playful          → Switch tone
+/persona narration chatty      → More live swarm narration
+/persona say always use bullets  → Add a self-fact
+/persona personas              → List presets
+/persona use mentor            → Switch preset (keeps the custom name)
+/persona reset                 → Back to Octipus default
+```
+
+Six presets ship by default — `octipus` (default, dry octopus-machine), `terse-engineer`, `mentor`, `nautilus` (maritime), `concierge`, `verbose-academic`. Each is a YAML file under `personas/` you can edit or copy as a new preset.
+
+The persona applies across **every channel** (TUI, web, Telegram, Slack, …) — it's per-user, not per-channel. The web UI surface for the same controls is at `/persona`. Full spec in [`docs/plans/ux-personality-revamp.md`](plans/ux-personality-revamp.md).
 
 ---
 

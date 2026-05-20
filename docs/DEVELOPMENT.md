@@ -49,8 +49,11 @@ octipus/
 | `bun run db:migrate` | Run database migrations |
 | `bun run db:generate` | Generate migrations from schema changes |
 | `bun run db:studio` | Open Drizzle Studio |
-| `bun run setup` | Interactive setup wizard |
+| `bun run setup` | Interactive setup wizard (inquirer-based, legacy) |
+| `bun run build:cli` | Compile `bin/octi.ts` → static `dist/octi` binary |
 | `bun run backup` | Backup database, Valkey, config, vault |
+| `octi doctor` | Run environment health checks (what is wired, what is missing) |
+| `octi init` | Run the pi-tui setup wizard (falls back to `bun run setup` on non-TTY) |
 
 ## Running Tests
 

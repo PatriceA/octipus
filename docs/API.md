@@ -122,6 +122,19 @@ Interactive documentation available at `http://localhost:3005/swagger`.
 | PATCH | `/api/skills/:id` | Update skill |
 | DELETE | `/api/skills/:id` | Delete custom skill |
 
+## Persona
+
+Per-user orchestrator persona — name, tone, narration volume, free-form self-facts. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/persona` | Resolved persona for the current user (name, pronouns, tone, narration, presetId, signaturePhrases, userFacts) |
+| GET | `/api/persona/presets` | List shipped persona presets (`personas/*.yaml`) — no auth |
+| PATCH | `/api/persona` | Update one or more of `{ name, tone, narration, presetId }` |
+| POST | `/api/persona/facts` | Append a free-form self-fact (`{ fact }`, 4–280 chars) |
+| DELETE | `/api/persona/facts/:idx` | Remove the N-th free-form fact (0-indexed across `extra:*`) |
+| POST | `/api/persona/reset` | Restore Octipus default — drops custom name and facts |
+
 ## Tools
 
 | Method | Endpoint | Description |

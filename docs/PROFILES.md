@@ -16,7 +16,7 @@ Each profile has:
 |-------|------|-------------|
 | `name` | string | Display name ("Mom", "Dr. Mueller", "Acme Corp") |
 | `relationship` | string | Relation to user ("self", "mother", "colleague", "boss", "friend") |
-| `category` | string | Entity type: `person`, `organization`, `pet` |
+| `category` | string | Entity type: `person`, `organization`, `pet`, `assistant` |
 | `facts` | array | Key-value facts with source and timestamp |
 | `isUserProfile` | boolean | If true, facts are injected into agent system prompts |
 
@@ -32,6 +32,20 @@ Each profile has:
 ```
 
 Common fact keys: `location`, `birthday`, `email`, `phone`, `likes`, `dislikes`, `occupation`, `timezone`, `language`, `notes`.
+
+### Assistant Profile (Persona)
+
+A special profile row with `category='assistant'` stores the orchestrator's per-user persona. Exactly one per user. Its `name` is what the orchestrator calls itself ("Octipus" by default, or whatever the user renamed it to via `/persona name <X>`). Fact keys for this category:
+
+| Key | Value |
+|-----|-------|
+| `preset_id` | Which YAML preset under `personas/` seeded this profile (`octipus`, `mentor`, …) |
+| `pronouns` | Rendered into the persona prompt (default `it/we`) |
+| `tone` | One of `dry|playful|neutral|professional|terse|verbose` |
+| `narration` | Live swarm narration volume: `off|minimal|chatty` |
+| `extra:N` | Free-form rules added via `/persona say` or the web UI |
+
+Auto-created on first edit. See [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity) for the slash commands and the [UX revamp plan](plans/ux-personality-revamp.md) for the full design.
 
 ## Agent Tools
 

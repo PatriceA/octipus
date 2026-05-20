@@ -25,6 +25,14 @@ All channels support automatic file attachment processing. When a user sends a f
 
 Supported file types: images (PNG, JPG, WEBP), PDFs, Office documents (DOCX, XLSX), and text files. Processing happens asynchronously — the user gets an immediate acknowledgment while the document pipeline runs in the background.
 
+### Persona narration
+
+Live swarm events (`swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`) are mirrored as a separate `swarm.narration` event with the active persona's rendered text — e.g., "Octipus dispatches a research arm.", "qa arm failed. Predictable." Channels subscribe independently; default volume (`persona.narration: minimal`) keeps it from flooding chats. Per-user setting; the user controls it via `/persona narration off|minimal|chatty` or the web `/persona` page. See [PROMPTING.md](PROMPTING.md#orchestrator-persona).
+
+### Side-channel messages
+
+`chat.interject` is a gateway message type that routes a user message directly through the persona-aware `directResponse` without going through the orchestrator queue. The reply lands as a `chat.message` event with `sideChannel: true` and persona attribution ("Octipus — side question: …") so UIs can render it distinctly from the main thread. Useful when the user wants a quick aside while a swarm is running. The running orchestrator is neither cancelled nor blocked.
+
 ## Account Linking
 
 All external channels (Telegram, Slack, Teams, WhatsApp) use the same account linking flow:
