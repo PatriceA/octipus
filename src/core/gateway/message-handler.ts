@@ -34,6 +34,10 @@ export function wireMessageHandler(hub: GatewayHub): void {
         await handleChatSend(hub, connectionId, context, message);
         break;
 
+      case 'chat.interject':
+        await handleChatInterject(hub, connectionId, context, message);
+        break;
+
       case 'command':
         await handleCommand(hub, connectionId, context, message);
         break;
@@ -169,6 +173,66 @@ async function handleChatSend(
     hub.connectionManager.sendToConnection(connectionId, {
       type: 'error',
       code: 'CHAT_ERROR',
+      message: (err as Error).message,
+    });
+  }
+}
+
+/**
+ * Side-channel chat message — does NOT go through the orchestrator
+ * queue. Routes directly through the persona-aware direct-response
+ * path so the user can ask a quick question while a swarm is
+ * running. Reply is prefixed with the persona's name and "side
+ * question:" so the user can tell it apart from the main thread.
+ */
+async function handleChatInterject(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'chat.interject' }>,
+): Promise<void> {
+  try {
+    const userId = await resolveUserId(context.userId);
+    context.sessionId = message.sessionId;
+
+    const { directResponse } = await import('@/core/orchestrator/direct-response');
+    const { ModelSelector } = await import('@/core/orchestrator/model-selector');
+    const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+
+    const persona = await resolvePersonaForUser(userId).catch(() => null);
+    const personaName = persona?.name || 'Octipus';
+    const selector = new ModelSelector();
+
+    let reply: string;
+    try {
+      const result = await directResponse(
+        message.content,
+        message.sessionId,
+        userId,
+        selector,
+        'simple',
+      );
+      reply = `${personaName} — side question: ${result.response}`;
+    } catch (err) {
+      reply = `${personaName} — side question: ${(err as Error).message}`;
+    }
+
+    hub.publishEvent({
+      type: 'chat.message',
+      source: `interject:${connectionId}`,
+      userId,
+      sessionId: message.sessionId,
+      payload: {
+        role: 'assistant',
+        content: reply,
+        sideChannel: true,
+      },
+    });
+  } catch (err) {
+    coreLogger.error({ err, sessionId: message.sessionId }, 'chat.interject failed');
+    hub.connectionManager.sendToConnection(connectionId, {
+      type: 'error',
+      code: 'INTERJECT_ERROR',
       message: (err as Error).message,
     });
   }

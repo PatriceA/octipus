@@ -195,6 +195,56 @@ export function createMetaTools(
       },
     },
     {
+      name: 'reflect',
+      description:
+        'Answer "what are you doing?" / "what\'s happening?" / "status?" without spawning. Reads the live swarm tree for this session and returns a persona-flavored summary of which arms are running, completed, or idle. Use this when the user asks about CURRENT state, NOT when they want new work done. Free — no LLM call, no spawn.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async (_args, context) => {
+        try {
+          const { swarmNodeRepository } = await import('@/core/swarm/node-repository');
+          const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+          const persona = await resolvePersonaForUser(context.userId);
+          const sessionId = context.sessionId;
+          if (!sessionId) {
+            return `${persona.name} has no session — nothing to reflect on.`;
+          }
+          const nodes = await swarmNodeRepository.findByRootSession(sessionId);
+
+          const running = nodes.filter(n => n.status === 'running');
+          const completed = nodes.filter(n => n.status === 'completed' || n.status === 'cache_hit');
+          const failedStatuses: Array<typeof nodes[number]['status']> = [
+            'cancelled', 'tool_error', 'provider_error', 'budget', 'timeout', 'denied', 'concurrency_limit',
+          ];
+          const failed = nodes.filter(n => failedStatuses.includes(n.status));
+
+          if (nodes.length === 0) {
+            return `${persona.name} has not dispatched any arms yet in this session.`;
+          }
+
+          const lines: string[] = [];
+          if (running.length > 0) {
+            const roles = running.map(n => `${n.role}${n.subtopic ? `(${n.subtopic})` : ''}`).join(', ');
+            lines.push(`Running: ${roles}`);
+          }
+          if (completed.length > 0) {
+            lines.push(`Completed this session: ${completed.length} arm${completed.length === 1 ? '' : 's'}.`);
+          }
+          if (failed.length > 0) {
+            lines.push(`Failed: ${failed.length}. Octipus has not papered over them.`);
+          }
+          if (running.length === 0 && completed.length > 0) {
+            lines.push(`No arms are running right now. ${persona.name} is waiting on you.`);
+          }
+          return lines.join(' ');
+        } catch (err) {
+          return `Reflection failed: ${(err as Error).message}`;
+        }
+      },
+    },
+    {
       name: 'remember_about_self',
       description:
         'Promote one durable fact about YOURSELF (the orchestrator persona) into the user\'s persona profile. Use ONLY when the user explicitly tells you to change how YOU behave, sound, or refer to yourself ("don\'t apologize for slow responses", "summarize in bullets", "stop saying \\"sure\\""). Do NOT use for facts about the user (those go to `remember_this`). The fact must be one short sentence describing how you should behave going forward. Stored on the per-user assistant profile and re-injected into your prompt next turn.',

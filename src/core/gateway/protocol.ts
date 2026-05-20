@@ -160,6 +160,29 @@ export const AgentStopSchema = z.object({
   agentId: z.string(),
 });
 
+/**
+ * `chat.interject` — a non-blocking side-channel message sent while
+ * the session already has an active orchestrator turn running.
+ *
+ * Distinct from `chat.send`:
+ *   - `chat.send` is the canonical user input; substantive turns
+ *     queue on a per-session basis.
+ *   - `chat.interject` is a quick aside the user wants answered
+ *     WITHOUT cancelling the in-flight task. The handler routes
+ *     directly to a `general`-role direct-response path, so the
+ *     answer comes back with persona attribution ("Octipus — side
+ *     question: …") in parallel with the swarm.
+ *
+ * Foundation for option (b) from the plan's B.3. The plumbing for
+ * the *running* orchestrator to *observe* interject events lands
+ * later; for now an interject opens a parallel mini-conversation.
+ */
+export const ChatInterjectSchema = z.object({
+  type: z.literal('chat.interject'),
+  sessionId: z.string().uuid(),
+  content: z.string().min(1).max(20_000),
+});
+
 export const PingSchema = z.object({
   type: z.literal('ping'),
 });
@@ -168,6 +191,7 @@ export const PingSchema = z.object({
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMessageSchema,
   ChatSendSchema,
+  ChatInterjectSchema,
   CommandSchema,
   SubscribeSchema,
   UnsubscribeSchema,

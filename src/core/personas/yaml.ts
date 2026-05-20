@@ -94,7 +94,14 @@ function parseArray(lines: string[], startLine: number, baseIndent: number): Par
 
     const afterDash = trimmed.slice(2).trim();
 
-    if (afterDash && !afterDash.includes(':')) {
+    // A quoted string is always a scalar, even if the quoted body
+    // contains a colon (e.g. `- "Need:"`). Otherwise a colon
+    // indicates a nested-mapping array item (e.g. `- user: "hi"`).
+    const isQuotedScalar =
+      (afterDash.startsWith('"') && afterDash.endsWith('"')) ||
+      (afterDash.startsWith("'") && afterDash.endsWith("'"));
+
+    if (afterDash && (isQuotedScalar || !afterDash.includes(':'))) {
       if (afterDash.startsWith('[') && afterDash.endsWith(']')) {
         const inner = afterDash.slice(1, -1);
         result.push(inner.split(',').map(s => parseScalar(s.trim())));
