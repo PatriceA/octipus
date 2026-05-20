@@ -12,6 +12,72 @@ Three infrastructure investments unblocked by the May-17 memory-system
 cleanup arc (PR #27 + #28). Each is a "build new capability"
 project — distinct from the cleanup it follows.
 
+Plus four UX + personality items added 2026-05-20 from the
+[`docs/plans/ux-personality-revamp.md`](docs/plans/ux-personality-revamp.md)
+strategic plan (Hermes-agent inspired). The first sits on the
+`before-agent-start` hook (promoted from Next to a prerequisite) and
+unblocks the rest.
+
+- **`before-agent-start` hook with mutable system-prompt options.**
+  Promoted from Next — prerequisite for orchestrator persona, dynamic
+  role definition, and the Extension SDK. Roles compose system prompts
+  at spawn time inside `worker-spawner.ts`; expose a typed event on the
+  bus that fires with a mutable `BuildSystemPromptOptions` so extensions
+  (and built-in modules like the persona loader) can inject per-spawn
+  role preambles, security rules, or project context without editing
+  `roles.ts`.
+
+- **Setup UX revamp — clone-to-chat in 90 seconds.** Single-command
+  installer (`scripts/install.sh` + `install.ps1`), root
+  `docker-compose.yaml`, compiled `octi` binary via `bun build --compile`
+  (retires PATH mutation), unified `octi init` TUI wizard that replaces
+  the CLI-wizard-plus-web-setup double flow, `octi doctor` health
+  command, friendly no-model path in `direct-response.ts`, README
+  one-liner at the top. **Provider-selection flow:** Ollama detected →
+  first choice (list models, ask user which to bind as base); LiteLLM
+  detected → second choice (same shape); otherwise pick a direct
+  provider (`openai`, `anthropic`, `gemini`, `deepseek`, `openrouter`,
+  `cli`) and paste a key — `voyage` is excluded from base-model
+  selection (embeddings only, surfaced in a later step). TUI is the
+  canonical setup surface; web `/setup` demoted to a status view.
+
+- **Orchestrator persona system.** Named, themed, user-customizable
+  identity for the orchestrator. **Per-user, persists across all
+  channels** (no workspace or per-channel overrides). Stored in the
+  existing `profiles` table with `category='assistant'`; default `Octi`
+  seeded per user, renameable ("Adam"), with `tone`, `pronouns`,
+  `signature_phrases`, and free-form facts. Persona block layered
+  between `SECURITY_PREAMBLE` and `roles/orchestrator/prompt.md` via the
+  `before-agent-start` hook — **both `SECURITY_PREAMBLE` and the role
+  prompt stay untouched** (DESIGN.md rule #6). Third-person
+  self-reference enforced via prompt rule + cheap post-process regex
+  nudge. New `remember_about_self` meta-tool writes user-added facts to
+  the orchestrator's own profile (parallel to `remember_this`); new
+  `reflect` meta-tool answers "what are you doing?" by reading
+  `swarm_nodes` without spawning. Slash commands `/persona`,
+  `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`,
+  `/persona reset`, `/persona personas`. Six preset personas in
+  `personas/*.yaml` (`default-octi`, `adam-the-bureaucrat`, `nautilus`,
+  `concierge`, `terse-engineer`, `mentor`). Specialist children do NOT
+  inherit the persona — it's host-level only.
+
+- **Live swarm narration.** `swarm.node_spawned` and
+  `swarm.node_completed` events emitted from `src/core/swarm/spawner.ts`
+  gain a `narration` field rendered through the persona ("Adam is
+  dispatching a research specialist…", "Adam's qa came back: 3
+  failures"). Existing channels (Telegram, Slack, Web, TUI) already
+  render status events — change is content, not pipeline. New
+  per-user setting `persona.narration: off | minimal | chatty`
+  (default `minimal`).
+
+- **Side-channel messages while swarm runs.** User can interject during
+  an in-flight orchestrator turn without cancelling the swarm; the
+  persona spawns a `general`-role child *in parallel* to answer, and
+  the reply surfaces with persona attribution ("Adam — side question:
+  …"). Foundation for a later first-class `interject` gateway event +
+  full interrupt-and-redirect (Hermes-style), which stay deferred until
+  the TUI and WS protocol both support it cleanly.
+
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
   (772 lines) and `src/models/providers/index.ts` are at 0% coverage
   because they front network IO; meaningful unit tests need a mock
@@ -77,13 +143,6 @@ project — distinct from the cleanup it follows.
   the tool definition itself for tools with shared-state hazards
   (`spawn_worker`, `create_pipeline`, swarm `spawn_child`). Pi's pattern;
   small change to `BaseTool` + the orchestrator dispatch path.
-
-- **`before-agent-start` hook with mutable system-prompt options.** Today
-  roles compose system prompts at spawn time inside `worker-spawner.ts`.
-  Expose a typed event on the bus that fires with a mutable
-  `BuildSystemPromptOptions` so extensions can inject per-spawn role
-  preambles, security rules, or project context without editing `roles.ts`.
-  Pairs with the Extension SDK above.
 
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
