@@ -29,20 +29,37 @@ function getPublicUrl(): string {
   return oauthConfig?.publicUrl ?? `http://localhost:${config.api.port}`;
 }
 
+/** HTML-escape a string to prevent XSS when interpolating into HTML. */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 /** Build HTML that closes the OAuth popup and posts a postMessage to opener. */
 function buildCallbackHtml(opts: { success: boolean; connectorId: string; error?: string }): string {
+  // Issue 3 fix: use JSON.stringify consistently for both connectorId and error
   const message = opts.success
-    ? `{ type: 'connector:connected', connectorId: '${opts.connectorId}' }`
-    : `{ type: 'connector:error', connectorId: '${opts.connectorId}', error: ${JSON.stringify(opts.error ?? 'Unknown error')} }`;
+    ? `{ type: 'connector:connected', connectorId: ${JSON.stringify(opts.connectorId)} }`
+    : `{ type: 'connector:error', connectorId: ${JSON.stringify(opts.connectorId)}, error: ${JSON.stringify(opts.error ?? 'Unknown error')} }`;
+
+  // Issue 2 fix: HTML-escape the error message before interpolating into HTML
+  const safeError = escapeHtml(opts.error ?? '');
 
   return `<!DOCTYPE html><html><head><title>Connecting...</title></head><body>
 <script>
   try { window.opener?.postMessage(${message}, window.location.origin); } catch(_) {}
   window.close();
 </script>
-<p>${opts.success ? 'Connected! You can close this window.' : `Error: ${opts.error}`}</p>
+<p>${opts.success ? 'Connected! You can close this window.' : `Error: ${safeError}`}</p>
 </body></html>`;
 }
+
+/** CSP header value that allows the OAuth callback's inline script (no external resources). */
+const CALLBACK_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'";
 
 export const connectorRoutes = new Elysia({ prefix: '/connectors' })
   .use(apiContext)
@@ -148,9 +165,12 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
       const state = query.state as string | undefined;
       const error = query.error as string | undefined;
 
+      // Issue 1 fix: override CSP for callback responses to allow the inline script
+      const callbackHeaders = { 'Content-Type': 'text/html', 'Content-Security-Policy': CALLBACK_CSP };
+
       if (error) {
         const html = buildCallbackHtml({ success: false, connectorId: id, error });
-        return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+        return new Response(html, { headers: callbackHeaders });
       }
 
       if (!code || !state) {
@@ -159,21 +179,21 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
           connectorId: id,
           error: 'Missing code or state parameter',
         });
-        return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+        return new Response(html, { headers: callbackHeaders });
       }
 
       try {
         const oauthManager = new OAuthManager();
         await oauthManager.exchangeCode(id, code, state);
         const html = buildCallbackHtml({ success: true, connectorId: id });
-        return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+        return new Response(html, { headers: callbackHeaders });
       } catch (err) {
         const html = buildCallbackHtml({
           success: false,
           connectorId: id,
           error: (err as Error).message,
         });
-        return new Response(html, { headers: { 'Content-Type': 'text/html' } });
+        return new Response(html, { headers: callbackHeaders });
       }
     },
     {
