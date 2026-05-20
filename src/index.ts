@@ -122,6 +122,17 @@ async function main() {
     await gatewayHub.start();
     logger.info('Gateway hub started');
 
+    // Persona system: install the `before-agent-start` hook so the
+    // orchestrator's system prompt gets the persona block, and the
+    // narration bridge so swarm.node_spawned/completed events get
+    // mirrored as `swarm.narration` for channel UIs. Synchronous so
+    // the first message after boot is never persona-less.
+    {
+      const { installPersonaHook } = await import('@/core/personas/persona-hook');
+      installPersonaHook();
+      logger.info('Persona system installed (before-agent-start hook + narration bridge)');
+    }
+
     // Load user-authored extensions (.octipus/extensions/)
     try {
       const { getExtensionRegistry } = await import('@/extensions');

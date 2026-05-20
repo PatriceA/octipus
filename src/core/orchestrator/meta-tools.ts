@@ -195,6 +195,51 @@ export function createMetaTools(
       },
     },
     {
+      name: 'remember_about_self',
+      description:
+        'Promote one durable fact about YOURSELF (the orchestrator persona) into the user\'s persona profile. Use ONLY when the user explicitly tells you to change how YOU behave, sound, or refer to yourself ("don\'t apologize for slow responses", "summarize in bullets", "stop saying \\"sure\\""). Do NOT use for facts about the user (those go to `remember_this`). The fact must be one short sentence describing how you should behave going forward. Stored on the per-user assistant profile and re-injected into your prompt next turn.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fact: {
+            type: 'string',
+            description: 'One sentence describing how you (the persona) should behave. Example: "Always summarize in bullets." or "Stop apologizing for slow responses."',
+          },
+        },
+        required: ['fact'],
+      },
+      execute: async (args, context) => {
+        const fact = String(args.fact || '').trim();
+        if (fact.length < 4) return { stored: false, reason: 'fact too short' };
+        if (fact.length > 280) return { stored: false, reason: 'fact too long (max 280 chars)' };
+        try {
+          const { getPersonaProfileRepository } = await import('@/core/personas/repository');
+          const { getPersonaRegistry } = await import('@/core/personas/registry');
+          const repo = getPersonaProfileRepository();
+          let profile = await repo.findForUser(context.userId);
+          if (!profile) {
+            await getPersonaRegistry().ensureLoaded();
+            const base = getPersonaRegistry().getDefault();
+            profile = await repo.create(context.userId, base.name, {
+              presetId: base.id,
+              pronouns: base.pronouns,
+              tone: base.tone,
+              narration: base.defaults.narration,
+              extras: [],
+            });
+          }
+          const updated = await repo.addExtraFact(profile.id, fact);
+          return {
+            stored: !!updated,
+            persona_profile_id: profile.id,
+            fact,
+          };
+        } catch (err) {
+          return { stored: false, error: (err as Error).message };
+        }
+      },
+    },
+    {
       name: 'request_user_approval',
       description:
         'Pause execution and ask the user for approval before proceeding. Use this at important decision points (e.g., before starting implementation after a plan is created).',

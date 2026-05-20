@@ -508,7 +508,7 @@ export class OrchestratorService {
     const orchestratorAbortController = new AbortController();
     const orchestratorAllowedToolIds = new Set<string>();
     // Meta-tool ids that the orchestrator owns by construction.
-    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this']) {
+    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this', 'remember_about_self']) {
       orchestratorAllowedToolIds.add(name);
     }
     // Role-defined tool ids (if any): orchestrator role uses meta-tools only.

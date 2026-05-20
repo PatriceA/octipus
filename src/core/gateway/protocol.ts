@@ -61,6 +61,10 @@ export type GatewayEventType =
   | 'swarm.node_status'
   | 'swarm.budget_warning'
   | 'swarm.call_graph_cycle_blocked'
+  // Persona narration — derived from swarm.node_spawned / completed,
+  // rendered through the active persona's narration_templates. Carries
+  // a one-line `text` payload like "Octipus dispatches a research arm.".
+  | 'swarm.narration'
   // Channel-side status
   | 'status_update'
   | 'typing'
