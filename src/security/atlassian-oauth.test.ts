@@ -20,7 +20,7 @@ describe('atlassian oauth dynamic registration', () => {
         });
       }
       return new Response('not found', { status: 404 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const { discoverAndRegisterAtlassian } = await import('./oauth');
     const result = await discoverAndRegisterAtlassian('https://octipus.example.com');

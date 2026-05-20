@@ -11,7 +11,7 @@ describe('OAuthHTTPTransport', () => {
       return new Response(JSON.stringify({ id: 1, result: {} }), {
         headers: { 'content-type': 'application/json' },
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const getToken = mock(async () => 'test-token-abc');
     const transport = new OAuthHTTPTransport('https://example.com/mcp', getToken);
@@ -32,7 +32,7 @@ describe('OAuthHTTPTransport', () => {
   test('calls getToken once per send', async () => {
     globalThis.fetch = mock(async () => new Response(JSON.stringify({ id: 1, result: {} }), {
       headers: { 'content-type': 'application/json' },
-    })) as typeof fetch;
+    })) as unknown as typeof fetch;
     const getToken = mock(async () => 'tok');
     const transport = new OAuthHTTPTransport('https://example.com/mcp', getToken);
     await transport.connect();
