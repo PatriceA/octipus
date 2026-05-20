@@ -892,6 +892,11 @@ cmd_edit() {
   API_PORT="$API_PORT" exec bun run src/tui-editor/index.ts --project "$user_cwd" "$@"
 }
 
+cmd_doctor() {
+  cd "$PROJECT_DIR"
+  exec bun run scripts/doctor.ts "$@"
+}
+
 cmd_help() {
   print_banner
   echo -e "  ${BOLD}Usage:${NC} octi <command> [options]"
@@ -903,6 +908,7 @@ cmd_help() {
   echo -e "    tui              Launch terminal chat — pins to current directory as project"
   echo -e "    edit             Launch TUI editor — pins to current directory as project"
   echo -e "    status           Show running state and service health"
+  echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
   echo -e "    help             Show this help message"
@@ -931,6 +937,7 @@ main() {
     tui)     cmd_tui "$@" ;;
     edit)    cmd_edit "$@" ;;
     status)  cmd_status ;;
+    doctor)  cmd_doctor "$@" ;;
     logs)    cmd_logs "$@" ;;
     open)    cmd_open ;;
     help|--help|-h) cmd_help ;;

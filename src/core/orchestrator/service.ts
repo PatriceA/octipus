@@ -19,6 +19,7 @@ import type { ApprovalRequest } from './approval-manager';
 import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
+import { getOrchestratorHooks } from './hooks';
 import { buildSecurityReminder, guardInput } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { ModelSelector } from './model-selector';
@@ -552,6 +553,20 @@ export class OrchestratorService {
     if (extraSystemContext) {
       systemPrompt += extraSystemContext;
     }
+
+    // Fire the before-agent-start hook so extensions and built-in
+    // modules (persona, project context) can mutate the system
+    // prompt before the orchestrator LLM call. Subscribers run
+    // sequentially; thrown handlers are logged and swallowed.
+    const hookCtx = await getOrchestratorHooks().fire('before-agent-start', {
+      role: 'orchestrator',
+      userId,
+      sessionId,
+      workspaceId,
+      channel,
+      systemPrompt,
+    });
+    systemPrompt = hookCtx.systemPrompt;
 
     const session = await sessionRepository.findById(sessionId);
     const sessionCtxData = session?.context as SessionContext | undefined;
