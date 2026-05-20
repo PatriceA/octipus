@@ -40,6 +40,7 @@ import { knowledgeRoutes } from './routes/knowledge';
 import { logRoutes } from './routes/logs';
 import { mcpRoutes } from './routes/mcp';
 import { memoryRoutes } from './routes/memory';
+import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
 import { notificationRoutes } from './routes/notifications';
 import { oauthRoutes } from './routes/oauth';
@@ -344,6 +345,7 @@ export function createServer() {
         .use(knowledgeRoutes)
         .use(logRoutes)
         .use(memoryRoutes)
+        .use(personaRoutes)
         .use(pluginRoutes)
         .use(searchRoutes)
         .use(deviceRoutes)

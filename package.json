@@ -21,6 +21,7 @@
     "start:all": "bin/octi start",
     "stop:all": "bin/octi stop",
     "build": "bun build src/index.ts --outdir dist --target bun --external playwright --external playwright-core --external chromium-bidi --external electron",
+    "build:cli": "bun build --compile --minify --sourcemap bin/octi.ts --outfile dist/octi",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",

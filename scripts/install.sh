@@ -100,6 +100,31 @@ if [ -d "$INSTALL_DIR/web" ]; then
   ok "Web dependencies installed"
 fi
 
+# ─── Build the compiled CLI binary ────────────────────────────────────────
+echo ""
+say "Building the compiled octi binary..."
+bun run build:cli >/dev/null 2>&1 || warn "build:cli failed — bash bin/octi will still work."
+
+# Link or copy the binary onto PATH. Prefer ~/.local/bin (no sudo).
+TARGET_BIN_DIR="${OCTIPUS_BIN_DIR:-$HOME/.local/bin}"
+mkdir -p "$TARGET_BIN_DIR"
+if [ -f "$INSTALL_DIR/dist/octi" ]; then
+  ln -sf "$INSTALL_DIR/dist/octi" "$TARGET_BIN_DIR/octi"
+  ok "octi binary linked at $TARGET_BIN_DIR/octi"
+elif [ -f "$INSTALL_DIR/bin/octi" ]; then
+  ln -sf "$INSTALL_DIR/bin/octi" "$TARGET_BIN_DIR/octi"
+  ok "octi (bash) linked at $TARGET_BIN_DIR/octi"
+fi
+
+# If TARGET_BIN_DIR isn't already on PATH, advise the user (one-shot).
+case ":$PATH:" in
+  *":$TARGET_BIN_DIR:"*) : ;;
+  *)
+    warn "Add $TARGET_BIN_DIR to PATH so 'octi' is reachable:"
+    echo "    echo 'export PATH=\"$TARGET_BIN_DIR:\$PATH\"' >> ~/.bashrc   # or ~/.zshrc"
+    ;;
+esac
+
 # ─── Run setup wizard ──────────────────────────────────────────────────────
 echo ""
 say "Launching the interactive setup wizard..."
