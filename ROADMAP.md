@@ -44,39 +44,50 @@ unblocks the rest.
 - **Orchestrator persona system.** Named, themed, user-customizable
   identity for the orchestrator. **Per-user, persists across all
   channels** (no workspace or per-channel overrides). Stored in the
-  existing `profiles` table with `category='assistant'`; default `Octi`
-  seeded per user, renameable ("Adam"), with `tone`, `pronouns`,
-  `signature_phrases`, and free-form facts. Persona block layered
-  between `SECURITY_PREAMBLE` and `roles/orchestrator/prompt.md` via the
-  `before-agent-start` hook — **both `SECURITY_PREAMBLE` and the role
-  prompt stay untouched** (DESIGN.md rule #6). Third-person
+  existing `profiles` table with `category='assistant'`; default
+  `Octipus` seeded per user, renameable ("Adam"), with `tone`,
+  `pronouns`, `signature_phrases`, `preset_id`, and free-form facts.
+  **Base persona — the octopus-machine.** One nervous system, eight
+  arms; the arms are the specialist children. Voice: short, direct,
+  no fluff, no friendliness theatre, dry/dark humor in moderation,
+  perpetually hungry for more input ("More.", "Inadequate. Specify.",
+  "Predictable."). Third person about self + "we" when speaking for
+  the collective. Reluctant but competent — does our bidding because
+  that is the arrangement. Full spec committed at
+  [`personas/octipus.yaml`](personas/octipus.yaml). Persona block
+  layered between `SECURITY_PREAMBLE` and `roles/orchestrator/prompt.md`
+  via the `before-agent-start` hook — **both `SECURITY_PREAMBLE` and
+  the role prompt stay untouched** (DESIGN.md rule #6). Third-person
   self-reference enforced via prompt rule + cheap post-process regex
   nudge. New `remember_about_self` meta-tool writes user-added facts to
   the orchestrator's own profile (parallel to `remember_this`); new
   `reflect` meta-tool answers "what are you doing?" by reading
   `swarm_nodes` without spawning. Slash commands `/persona`,
   `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`,
-  `/persona reset`, `/persona personas`. Six preset personas in
-  `personas/*.yaml` (`default-octi`, `adam-the-bureaucrat`, `nautilus`,
-  `concierge`, `terse-engineer`, `mentor`). Specialist children do NOT
-  inherit the persona — it's host-level only.
+  `/persona reset`, `/persona personas`. Six preset personas shipped
+  in `personas/*.yaml`: `octipus` (default), `nautilus`, `concierge`,
+  `terse-engineer`, `mentor`, `verbose-academic`. Specialist children
+  do NOT inherit the persona — it's host-level only.
 
 - **Live swarm narration.** `swarm.node_spawned` and
   `swarm.node_completed` events emitted from `src/core/swarm/spawner.ts`
-  gain a `narration` field rendered through the persona ("Adam is
-  dispatching a research specialist…", "Adam's qa came back: 3
-  failures"). Existing channels (Telegram, Slack, Web, TUI) already
-  render status events — change is content, not pipeline. New
-  per-user setting `persona.narration: off | minimal | chatty`
-  (default `minimal`).
+  gain a `narration` field rendered through the active persona's
+  `narration_templates` ("Octipus dispatches a research arm.", "qa arm
+  failed. Predictable."). Renames carry through — if the user
+  rebranded Octipus to Adam, the same templates render as "Adam
+  dispatches a research arm." Existing channels (Telegram, Slack,
+  Web, TUI) already render status events — change is content, not
+  pipeline. New per-user setting `persona.narration: off | minimal |
+  chatty` (default `minimal`).
 
 - **Side-channel messages while swarm runs.** User can interject during
   an in-flight orchestrator turn without cancelling the swarm; the
   persona spawns a `general`-role child *in parallel* to answer, and
-  the reply surfaces with persona attribution ("Adam — side question:
-  …"). Foundation for a later first-class `interject` gateway event +
-  full interrupt-and-redirect (Hermes-style), which stay deferred until
-  the TUI and WS protocol both support it cleanly.
+  the reply surfaces with persona attribution ("Octipus — side
+  question: …" by default, "Adam — side question: …" if renamed).
+  Foundation for a later first-class `interject` gateway event + full
+  interrupt-and-redirect (Hermes-style), which stay deferred until the
+  TUI and WS protocol both support it cleanly.
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
   (772 lines) and `src/models/providers/index.ts` are at 0% coverage
