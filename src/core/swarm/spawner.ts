@@ -305,7 +305,18 @@ export class SwarmSpawner {
     parent.budget.fanOut.used++;
 
     // ── Permission intersection ─────────────────────────────────────
-    const roleTools = getToolsForRole(childRole);
+    let roleTools = getToolsForRole(childRole);
+
+    if (parentContext.userId && parentContext.userId !== 'system' && parentContext.userId !== 'local') {
+      try {
+        const { getConnectorRegistry } = await import('@/connectors');
+        const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(parentContext.userId);
+        roleTools.push(...connectorHandlers);
+      } catch (err) {
+        coreLogger.error({ err, userId: parentContext.userId }, 'Failed to load connector tools for swarm child');
+      }
+    }
+
     const childTools = resolveChildTools(parent.allowedToolIds, roleTools);
 
     coreLogger.info(

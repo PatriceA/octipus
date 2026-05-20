@@ -196,7 +196,17 @@ export async function spawnWorker(
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
-  const roleTools = getToolsForRole(agentRole);
+  let roleTools = getToolsForRole(agentRole);
+
+  if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
+    try {
+      const { getConnectorRegistry } = await import('@/connectors');
+      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(context.userId);
+      roleTools.push(...connectorHandlers);
+    } catch (err) {
+      coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');
+    }
+  }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
 
