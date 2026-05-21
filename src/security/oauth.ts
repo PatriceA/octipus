@@ -80,8 +80,7 @@ export const ATLASSIAN_USER_TOKEN_EXPIRY_KEY = 'connector_atlassian_token_expiry
 
 async function getProviderConfig(provider: string): Promise<OAuthProviderConfig | null> {
   const config = getConfig();
-  const oauth = (config as any).oauth;
-  const publicUrl = oauth?.publicUrl || `http://localhost:${config.api.port}`;
+  const publicUrl = config.oauth?.publicUrl || `http://localhost:${config.api.port}`;
   const v = getVault();
 
   switch (provider) {
@@ -141,9 +140,8 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
       if (!clientId || !authorizationUrl || !tokenUrl) return null;
 
       const { ATLASSIAN_CONNECTOR } = await import('@/connectors/atlassian/definition');
-      const config = getConfig();
-      const oauth = (config as any).oauth;
-      const publicUrl = oauth?.publicUrl || `http://localhost:${config.api.port}`;
+      const atlasConfig = getConfig();
+      const atlasPublicUrl = atlasConfig.oauth?.publicUrl || `http://localhost:${atlasConfig.api.port}`;
 
       return {
         authorizationUrl,
@@ -151,7 +149,7 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
         clientId,
         clientSecret: '',
         scopes: ATLASSIAN_CONNECTOR.oauthScopes,
-        redirectUri: `${publicUrl}/api/connectors/atlassian/callback`,
+        redirectUri: `${atlasPublicUrl}/api/connectors/atlassian/callback`,
         additionalParams: {},
       };
     }
@@ -304,12 +302,12 @@ export class OAuthManager {
       );
 
     const entry = entries.find(
-      (e) => (e.metadata as any)?.oauthConfig?.provider === provider
+      (e) => e.metadata?.oauthConfig?.provider === provider
     );
 
     if (!entry) return null;
 
-    const oauthConfig = (entry.metadata as any)?.oauthConfig;
+    const oauthConfig = entry.metadata?.oauthConfig;
     if (!oauthConfig) return null;
 
     // Check if token is expired or about to expire (5 min buffer)
@@ -423,7 +421,7 @@ export class OAuthManager {
       );
 
     const existingEntry = existing.find(
-      (e) => (e.metadata as any)?.oauthConfig?.provider === provider
+      (e) => e.metadata?.oauthConfig?.provider === provider
     );
 
     const metadata: Record<string, unknown> = {
@@ -472,7 +470,7 @@ export class OAuthManager {
       );
 
     const entry = entries.find(
-      (e) => (e.metadata as any)?.oauthConfig?.provider === provider
+      (e) => e.metadata?.oauthConfig?.provider === provider
     );
 
     if (entry) {
@@ -512,14 +510,14 @@ export class OAuthManager {
       );
 
     const entry = entries.find(
-      (e) => (e.metadata as any)?.oauthConfig?.provider === provider
+      (e) => e.metadata?.oauthConfig?.provider === provider
     );
 
     if (!entry) {
       return { connected: false, provider };
     }
 
-    const oauthConfig = (entry.metadata as any)?.oauthConfig;
+    const oauthConfig = entry.metadata?.oauthConfig;
     return {
       connected: true,
       provider,
