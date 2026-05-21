@@ -305,7 +305,7 @@ export class SwarmSpawner {
     parent.budget.fanOut.used++;
 
     // ── Permission intersection ─────────────────────────────────────
-    let roleTools = getToolsForRole(childRole);
+    const roleTools = getToolsForRole(childRole);
 
     if (parentContext.userId && parentContext.userId !== 'system' && parentContext.userId !== 'local') {
       try {

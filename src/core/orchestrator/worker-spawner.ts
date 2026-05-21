@@ -196,7 +196,7 @@ export async function spawnWorker(
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
-  let roleTools = getToolsForRole(agentRole);
+  const roleTools = getToolsForRole(agentRole);
 
   if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
     try {

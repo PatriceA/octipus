@@ -4,7 +4,6 @@ import { CheckCircle, ExternalLink, Loader2, Unplug } from 'lucide-react';
 import Image from 'next/image';
 import { useState } from 'react';
 import { api } from '@/lib/api';
-import { cn } from '@/lib/utils';
 
 interface ConnectorCardProps {
   id: string;

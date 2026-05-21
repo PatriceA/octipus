@@ -10,7 +10,6 @@
  *   →     [{ key: 'bug', count: 2 }, { key: 'p1', count: 1 }]
  */
 
-import { applyJsonPath } from '../../refresh';
 import type { ToolboxTool } from '../types';
 
 interface Params {
