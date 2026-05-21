@@ -11,6 +11,7 @@ import {
   Plus,
   Power,
   PowerOff,
+  Puzzle,
   Trash2,
   Wrench,
   X,
@@ -19,6 +20,7 @@ import {
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { ConnectorsTab } from '@/components/mcp/connectors-tab';
 
 interface MCPServer {
   id: string;
@@ -340,6 +342,7 @@ export default function MCPPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'servers' | 'connectors'>('servers');
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -435,22 +438,47 @@ export default function MCPPage() {
             <Cable className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-xl text-on-surface">MCP Servers</h1>
+            <h1 className="text-xl text-on-surface">MCP &amp; Connectors</h1>
             <p className="text-on-surface-variant">
               Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients.
             </p>
           </div>
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="px-4 py-2 bg-primary text-on-surface cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          Add Server
-        </button>
+        {activeTab === 'servers' && (
+          <button
+            onClick={() => setShowAdd(true)}
+            className="px-4 py-2 bg-primary text-on-surface cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Add Server
+          </button>
+        )}
       </div>
 
-      <div className="space-y-3">
+      <div className="flex gap-1 border-b border-outline-variant/20">
+        {([
+          { id: 'servers' as const, label: 'MCP Servers', icon: Cable },
+          { id: 'connectors' as const, label: 'Connectors', icon: Puzzle },
+        ] as const).map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors cursor-pointer',
+              activeTab === tab.id
+                ? 'border-primary text-primary'
+                : 'border-transparent text-on-surface-variant hover:text-on-surface',
+            )}
+          >
+            <tab.icon className="w-4 h-4" />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'connectors' && <ConnectorsTab />}
+
+      {activeTab === 'servers' && <div className="space-y-3">
         {isLoading ? (
           <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
             <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
@@ -587,7 +615,7 @@ export default function MCPPage() {
             </div>
           ))
         )}
-      </div>
+      </div>}
 
       <AddServerModal
         open={showAdd}

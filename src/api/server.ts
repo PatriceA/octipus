@@ -38,6 +38,7 @@ import { healthRoutes } from './routes/health';
 import { hookRoutes } from './routes/hooks';
 import { knowledgeRoutes } from './routes/knowledge';
 import { logRoutes } from './routes/logs';
+import { connectorRoutes } from './routes/connectors';
 import { mcpRoutes } from './routes/mcp';
 import { memoryRoutes } from './routes/memory';
 import { modelRoutes } from './routes/models';
@@ -326,6 +327,7 @@ export function createServer() {
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)
+        .use(connectorRoutes)
         .use(mcpRoutes)
         .use(toolRoutes)
         .use(voiceRoutes)

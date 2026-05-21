@@ -66,6 +66,16 @@ export const OAUTH_VAULT_NAMES = {
   },
 } as const;
 
+// --- Atlassian OAuth vault keys ---
+
+const ATLASSIAN_CLIENT_ID_KEY = 'connector_atlassian_client_id';
+const ATLASSIAN_AUTH_ENDPOINT_KEY = 'connector_atlassian_auth_endpoint';
+const ATLASSIAN_TOKEN_ENDPOINT_KEY = 'connector_atlassian_token_endpoint';
+
+export const ATLASSIAN_USER_ACCESS_TOKEN_KEY = 'connector_atlassian_access_token';
+export const ATLASSIAN_USER_REFRESH_TOKEN_KEY = 'connector_atlassian_refresh_token';
+export const ATLASSIAN_USER_TOKEN_EXPIRY_KEY = 'connector_atlassian_token_expiry';
+
 // --- Provider Configs ---
 
 async function getProviderConfig(provider: string): Promise<OAuthProviderConfig | null> {
@@ -121,6 +131,28 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
           'offline_access',
         ],
         redirectUri: `${publicUrl}/api/auth/oauth/microsoft/callback`,
+      };
+    }
+    case 'atlassian': {
+      const v = getVault();
+      const clientId = await v.getSystemSecret(ATLASSIAN_CLIENT_ID_KEY);
+      const authorizationUrl = await v.getSystemSecret(ATLASSIAN_AUTH_ENDPOINT_KEY);
+      const tokenUrl = await v.getSystemSecret(ATLASSIAN_TOKEN_ENDPOINT_KEY);
+      if (!clientId || !authorizationUrl || !tokenUrl) return null;
+
+      const { ATLASSIAN_CONNECTOR } = await import('@/connectors/atlassian/definition');
+      const config = getConfig();
+      const oauth = (config as any).oauth;
+      const publicUrl = oauth?.publicUrl || `http://localhost:${config.api.port}`;
+
+      return {
+        authorizationUrl,
+        tokenUrl,
+        clientId,
+        clientSecret: '',
+        scopes: ATLASSIAN_CONNECTOR.oauthScopes,
+        redirectUri: `${publicUrl}/api/connectors/atlassian/callback`,
+        additionalParams: {},
       };
     }
     default:
@@ -228,13 +260,25 @@ export class OAuthManager {
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : undefined;
 
-    // Store tokens in vault
-    await this.storeTokens(stateData.userId, provider, {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiresAt,
-      scopes: providerConfig.scopes,
-    });
+    // Store tokens in vault.
+    // Atlassian uses dedicated per-key vault entries (connector_atlassian_*)
+    // consumed by getAtlassianAccessToken; the generic storage path is skipped
+    // to avoid maintaining two writers that can drift out of sync.
+    if (provider === 'atlassian') {
+      await storeAtlassianUserTokens(
+        stateData.userId,
+        tokens.access_token,
+        tokens.refresh_token,
+        tokens.expires_in,
+      );
+    } else {
+      await this.storeTokens(stateData.userId, provider, {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresAt,
+        scopes: providerConfig.scopes,
+      });
+    }
 
     securityLogger.info({ userId: stateData.userId, provider }, 'OAuth tokens stored');
     return { userId: stateData.userId };
@@ -493,4 +537,167 @@ export function getOAuthManager(): OAuthManager {
     oauthManagerInstance = new OAuthManager();
   }
   return oauthManagerInstance;
+}
+
+// --- Atlassian Dynamic Client Registration ---
+
+interface AtlassianOAuthMetadata {
+  clientId: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+}
+
+export async function discoverAndRegisterAtlassian(
+  publicUrl: string,
+): Promise<AtlassianOAuthMetadata> {
+  const { ATLASSIAN_OAUTH_DISCOVERY_URL } = await import('@/connectors/atlassian/definition');
+
+  const discoveryRes = await fetch(ATLASSIAN_OAUTH_DISCOVERY_URL);
+  if (!discoveryRes.ok) {
+    throw new Error(`Atlassian OAuth discovery failed (${discoveryRes.status})`);
+  }
+  const discovery = await discoveryRes.json() as {
+    authorization_endpoint: string;
+    token_endpoint: string;
+    registration_endpoint?: string;
+  };
+
+  if (!discovery.registration_endpoint) {
+    throw new Error('Atlassian OAuth discovery did not return a registration_endpoint');
+  }
+
+  const registrationRes = await fetch(discovery.registration_endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_name: 'Octipus',
+      redirect_uris: [`${publicUrl}/api/connectors/atlassian/callback`],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    }),
+  });
+
+  if (!registrationRes.ok) {
+    const body = await registrationRes.text().catch(() => '');
+    throw new Error(`Atlassian client registration failed (${registrationRes.status}): ${body}`);
+  }
+
+  const registration = await registrationRes.json() as { client_id: string };
+  if (!registration.client_id) {
+    throw new Error('Atlassian registration response missing client_id');
+  }
+
+  return {
+    clientId: registration.client_id,
+    authorizationEndpoint: discovery.authorization_endpoint,
+    tokenEndpoint: discovery.token_endpoint,
+  };
+}
+
+// --- Atlassian User Token Storage ---
+
+export async function storeAtlassianUserTokens(
+  userId: string,
+  accessToken: string,
+  refreshToken: string | undefined,
+  expiresInSeconds: number | undefined,
+): Promise<void> {
+  const v = getVault();
+  const expiresAt = expiresInSeconds
+    ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
+    : '';
+
+  // Delete existing tokens to avoid accumulation
+  const existing = await v.list(userId);
+  const tokenNames = [
+    ATLASSIAN_USER_ACCESS_TOKEN_KEY,
+    ATLASSIAN_USER_REFRESH_TOKEN_KEY,
+    ATLASSIAN_USER_TOKEN_EXPIRY_KEY,
+  ];
+  for (const entry of existing) {
+    if (tokenNames.includes(entry.name ?? '')) {
+      await v.delete(userId, entry.id);
+    }
+  }
+
+  await v.store(userId, ATLASSIAN_USER_ACCESS_TOKEN_KEY, accessToken, {
+    credentialType: 'oauth_token',
+  });
+  if (refreshToken) {
+    await v.store(userId, ATLASSIAN_USER_REFRESH_TOKEN_KEY, refreshToken, {
+      credentialType: 'oauth_token',
+    });
+  }
+  if (expiresAt) {
+    await v.store(userId, ATLASSIAN_USER_TOKEN_EXPIRY_KEY, expiresAt, {
+      credentialType: 'other',
+    });
+  }
+}
+
+// --- Atlassian Access Token Retrieval (with refresh) ---
+
+// Refresh buffer matches OAuthManager.getValidToken (5 minutes) so all
+// providers refresh on the same cadence.
+const ATLASSIAN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+// Per-user in-flight refresh promises. Concurrent callers during expiry
+// share a single token-endpoint round-trip instead of stampeding.
+const atlassianRefreshInFlight = new Map<string, Promise<string | null>>();
+
+async function refreshAtlassianAccessToken(userId: string): Promise<string | null> {
+  const v = getVault();
+  const refreshToken = await v.getByName(userId, ATLASSIAN_USER_REFRESH_TOKEN_KEY);
+  if (!refreshToken) return null;
+
+  const tokenEndpoint = await v.getSystemSecret(ATLASSIAN_TOKEN_ENDPOINT_KEY);
+  const clientId = await v.getSystemSecret(ATLASSIAN_CLIENT_ID_KEY);
+  if (!tokenEndpoint || !clientId) return null;
+
+  const res = await fetch(tokenEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+    }).toString(),
+  });
+
+  if (!res.ok) {
+    securityLogger.warn({ userId, status: res.status }, 'Atlassian token refresh failed');
+    return null;
+  }
+
+  const tokens = await res.json() as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in?: number;
+  };
+
+  await storeAtlassianUserTokens(userId, tokens.access_token, tokens.refresh_token, tokens.expires_in);
+  return tokens.access_token;
+}
+
+export async function getAtlassianAccessToken(userId: string): Promise<string | null> {
+  const v = getVault();
+  const accessToken = await v.getByName(userId, ATLASSIAN_USER_ACCESS_TOKEN_KEY);
+  if (!accessToken) return null;
+
+  const expiryStr = await v.getByName(userId, ATLASSIAN_USER_TOKEN_EXPIRY_KEY);
+  const isExpired = expiryStr
+    ? new Date(expiryStr).getTime() - ATLASSIAN_REFRESH_BUFFER_MS < Date.now()
+    : false;
+
+  if (!isExpired) return accessToken;
+
+  const existing = atlassianRefreshInFlight.get(userId);
+  if (existing) return existing;
+
+  const refreshPromise = refreshAtlassianAccessToken(userId).finally(() => {
+    atlassianRefreshInFlight.delete(userId);
+  });
+  atlassianRefreshInFlight.set(userId, refreshPromise);
+  return refreshPromise;
 }
