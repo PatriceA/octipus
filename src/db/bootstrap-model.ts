@@ -43,6 +43,8 @@ export async function bootstrapDefaultModel(): Promise<void> {
   // Vault: store the API key under a system secret name keyed by
   // provider. Model rows reference this via `apiKeyRef`. Skipped for
   // providers that don't need a key in our setup (ollama, cli).
+  // Fail loud if the vault write fails for a provider that needs a key —
+  // a row with apiKeyRef=null would be silently unusable at first call.
   let apiKeyRef: string | null = null;
   if (apiKey && provider !== 'ollama' && provider !== 'cli') {
     const refName = `${provider}_api_key`;
@@ -53,7 +55,11 @@ export async function bootstrapDefaultModel(): Promise<void> {
       });
       apiKeyRef = refName;
     } catch (err) {
-      logger.error({ err, provider }, 'bootstrap-model: vault write failed — model row will lack key reference');
+      logger.error(
+        { err, provider },
+        'bootstrap-model: vault write failed — aborting seed to avoid creating an unusable model row',
+      );
+      return;
     }
   }
 
