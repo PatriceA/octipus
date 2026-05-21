@@ -179,6 +179,28 @@ async function handleChatSend(
 }
 
 /**
+ * Side-channel rate limiter. Interject bypasses the orchestrator queue
+ * and triggers an LLM call directly, so it needs its own brake. Per-session
+ * sliding window: at most INTERJECT_MAX hits in INTERJECT_WINDOW_MS.
+ */
+const INTERJECT_WINDOW_MS = 10_000;
+const INTERJECT_MAX = 5;
+const interjectHits = new Map<string, number[]>();
+
+function allowInterject(sessionId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - INTERJECT_WINDOW_MS;
+  const history = (interjectHits.get(sessionId) ?? []).filter((t) => t > cutoff);
+  if (history.length >= INTERJECT_MAX) {
+    interjectHits.set(sessionId, history);
+    return false;
+  }
+  history.push(now);
+  interjectHits.set(sessionId, history);
+  return true;
+}
+
+/**
  * Side-channel chat message — does NOT go through the orchestrator
  * queue. Routes directly through the persona-aware direct-response
  * path so the user can ask a quick question while a swarm is
@@ -192,6 +214,15 @@ async function handleChatInterject(
   message: Extract<ClientMessage, { type: 'chat.interject' }>,
 ): Promise<void> {
   try {
+    if (!allowInterject(message.sessionId)) {
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'INTERJECT_RATE_LIMITED',
+        message: `Interject rate limit hit (${INTERJECT_MAX} per ${INTERJECT_WINDOW_MS / 1000}s). Slow down.`,
+      });
+      return;
+    }
+
     const userId = await resolveUserId(context.userId);
     context.sessionId = message.sessionId;
 
