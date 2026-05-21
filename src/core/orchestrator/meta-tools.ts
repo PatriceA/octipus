@@ -79,7 +79,7 @@ export function createMetaTools(
         // Validate template exists before creating pipeline
         const templateName = args.templateName as string;
         const { listAvailableTemplates } = await import('./templates');
-        const userId = (context as any).userId;
+        const userId = context.userId;
         const templates = await listAvailableTemplates(userId);
         const templateNames = templates.map(t => t.name);
         const match = templates.find(t =>
@@ -113,7 +113,7 @@ export function createMetaTools(
       },
       execute: async (_args, context) => {
         const { listAvailableTemplates } = await import('./templates');
-        const userId = (context as any).userId;
+        const userId = context.userId;
         const templates = await listAvailableTemplates(userId);
         if (templates.length === 0) {
           return 'No pipeline templates configured. Ask the user to create pipeline templates in the Pipelines page.';
