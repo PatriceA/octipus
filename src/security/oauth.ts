@@ -260,14 +260,10 @@ export class OAuthManager {
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : undefined;
 
-    // Store tokens in vault
-    await this.storeTokens(stateData.userId, provider, {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiresAt,
-      scopes: providerConfig.scopes,
-    });
-
+    // Store tokens in vault.
+    // Atlassian uses dedicated per-key vault entries (connector_atlassian_*)
+    // consumed by getAtlassianAccessToken; the generic storage path is skipped
+    // to avoid maintaining two writers that can drift out of sync.
     if (provider === 'atlassian') {
       await storeAtlassianUserTokens(
         stateData.userId,
@@ -275,6 +271,13 @@ export class OAuthManager {
         tokens.refresh_token,
         tokens.expires_in,
       );
+    } else {
+      await this.storeTokens(stateData.userId, provider, {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresAt,
+        scopes: providerConfig.scopes,
+      });
     }
 
     securityLogger.info({ userId: stateData.userId, provider }, 'OAuth tokens stored');
@@ -635,18 +638,16 @@ export async function storeAtlassianUserTokens(
 
 // --- Atlassian Access Token Retrieval (with refresh) ---
 
-export async function getAtlassianAccessToken(userId: string): Promise<string | null> {
+// Refresh buffer matches OAuthManager.getValidToken (5 minutes) so all
+// providers refresh on the same cadence.
+const ATLASSIAN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+// Per-user in-flight refresh promises. Concurrent callers during expiry
+// share a single token-endpoint round-trip instead of stampeding.
+const atlassianRefreshInFlight = new Map<string, Promise<string | null>>();
+
+async function refreshAtlassianAccessToken(userId: string): Promise<string | null> {
   const v = getVault();
-  const accessToken = await v.getByName(userId, ATLASSIAN_USER_ACCESS_TOKEN_KEY);
-  if (!accessToken) return null;
-
-  const expiryStr = await v.getByName(userId, ATLASSIAN_USER_TOKEN_EXPIRY_KEY);
-  const isExpired = expiryStr
-    ? new Date(expiryStr).getTime() - 60_000 < Date.now()
-    : false;
-
-  if (!isExpired) return accessToken;
-
   const refreshToken = await v.getByName(userId, ATLASSIAN_USER_REFRESH_TOKEN_KEY);
   if (!refreshToken) return null;
 
@@ -677,4 +678,26 @@ export async function getAtlassianAccessToken(userId: string): Promise<string | 
 
   await storeAtlassianUserTokens(userId, tokens.access_token, tokens.refresh_token, tokens.expires_in);
   return tokens.access_token;
+}
+
+export async function getAtlassianAccessToken(userId: string): Promise<string | null> {
+  const v = getVault();
+  const accessToken = await v.getByName(userId, ATLASSIAN_USER_ACCESS_TOKEN_KEY);
+  if (!accessToken) return null;
+
+  const expiryStr = await v.getByName(userId, ATLASSIAN_USER_TOKEN_EXPIRY_KEY);
+  const isExpired = expiryStr
+    ? new Date(expiryStr).getTime() - ATLASSIAN_REFRESH_BUFFER_MS < Date.now()
+    : false;
+
+  if (!isExpired) return accessToken;
+
+  const existing = atlassianRefreshInFlight.get(userId);
+  if (existing) return existing;
+
+  const refreshPromise = refreshAtlassianAccessToken(userId).finally(() => {
+    atlassianRefreshInFlight.delete(userId);
+  });
+  atlassianRefreshInFlight.set(userId, refreshPromise);
+  return refreshPromise;
 }
