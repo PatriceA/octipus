@@ -9,9 +9,16 @@ export interface ProfileFact {
 
 export const profiles = pgTable('profiles', {
   id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull(),                    // "Mom", "Patrice", "Dr. Mueller"
+  name: text('name').notNull(),                    // "Mom", "Patrice", "Dr. Mueller", "Octipus"
   relationship: text('relationship'),              // "self", "mother", "colleague", "boss", "friend"
-  category: text('category').notNull().default('person'),  // "person", "organization", "pet"
+  // Categories:
+  //   "person"       — humans the user knows
+  //   "organization" — companies / teams
+  //   "pet"          — animals
+  //   "assistant"    — the orchestrator's own profile (persona) for this
+  //                    user. Exactly one per user; created on demand and
+  //                    seeded from `personas/octipus.yaml`.
+  category: text('category').notNull().default('person'),
   facts: jsonb('facts').$type<ProfileFact[]>().default([]),
   userId: uuid('user_id').notNull(),               // owner of this profile
   isUserProfile: boolean('is_user_profile').default(false), // true for the user's own profile
@@ -20,6 +27,9 @@ export const profiles = pgTable('profiles', {
 }, (table) => ({
   userIdx: index('profiles_user_id_idx').on(table.userId),
   nameIdx: index('profiles_name_idx').on(table.name),
+  // Frequent lookup: "find this user's assistant profile" / "find this
+  // user's profile by category". Composite index supports both.
+  userCategoryIdx: index('profiles_user_category_idx').on(table.userId, table.category),
 }));
 
 export type Profile = typeof profiles.$inferSelect;

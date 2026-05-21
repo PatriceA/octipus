@@ -10,6 +10,37 @@
 
 ---
 
+## Install in 90 seconds
+
+One-shot installer — clones the repo, installs deps, runs the
+interactive setup wizard (storage mode, base model provider, security
+keys), drops you at the `octi` CLI:
+
+```bash
+# Linux / macOS / WSL
+curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash
+
+# Windows (PowerShell)
+iex (irm https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1)
+```
+
+Then:
+
+```bash
+octi start         # full stack — backend + web UI
+octi tui           # terminal chat
+octi doctor        # what's wired, what's missing
+```
+
+Prefer Docker? Root-level `docker-compose.yml` brings up Postgres +
+Valkey + Octipus in one shot — see [docs/DOCKER.md](docs/DOCKER.md).
+
+Cloning manually instead? `git clone && bun install && bun run setup`
+does the same thing the installer does — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the dev path.
+
+---
+
 ## What it is
 
 Octipus is an open-source, self-hosted AI platform that delegates real work to a swarm of specialist agents. Send a message — research, code, audit, write, schedule — and the orchestrator picks the right experts, fans them out in parallel, and ships a result back over the channel you used (Telegram, Slack, web, voice, MCP, …).
@@ -57,7 +88,8 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 - **Skill auto-extension (detector)** — pattern fingerprinting → `skill_proposals` queue, never auto-promotes; review UI surfaces high-frequency patterns.
 - **MCP circuit breaker** — closed/open/half-open with exponential backoff, admin reset, UI badge.
 - **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail with a clear error.
-- **26 E2E test modules** + 855+ unit tests + red-team plugins (prompt injection, role confusion, tool misuse, data leakage, off-topic drift).
+- **Orchestrator persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
+- **26 E2E test modules** + 1900+ unit tests + red-team plugins (prompt injection, role confusion, tool misuse, data leakage, off-topic drift).
 
 ## Technologies and ideas worth a look
 
@@ -94,11 +126,11 @@ Full feature breakdown: see the [documentation index](#documentation) below.
 git clone https://github.com/PatriceA/octipus.git
 cd octipus && bun install
 cd web && bun install && cd ..
-bun run setup        # interactive config
+bun run setup        # interactive config (or `octi init` once the binary is on PATH)
 bun run dev
 ```
 
-Open [http://localhost:3005/setup](http://localhost:3005/setup) to finish configuration.
+Open [http://localhost:3007/setup](http://localhost:3007/setup) to finish configuration.
 
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
 **External Postgres + Valkey (Redis-compatible):** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
@@ -132,6 +164,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands across all channels |
 | **[API Reference](docs/API.md)** | Complete REST API |
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |
+| **[Configuration Precedence](docs/CONFIGURATION-PRECEDENCE.md)** | `.env`-bootstrap vs DB-runtime split |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search, tiered content, auto-indexing |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose Octipus as MCP tools |

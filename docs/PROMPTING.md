@@ -34,6 +34,14 @@ Thanks for the help!
 
 These are classified as "casual" and get a quick response without spawning agents.
 
+## Orchestrator Persona
+
+The orchestrator (the entity you talk to) has a per-user identity layered between `SECURITY_PREAMBLE` and the role prompt at every turn. Default is **Octipus** — an octopus-machine that refers to itself in the third person, uses "we" for the swarm, and gives short dry replies. The voice applies to the casual-chat path AND the orchestrator's narration of swarm work ("Octipus dispatches a research arm.", "qa arm failed. Predictable.").
+
+Customize via `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`. Switch presets with `/persona use mentor`. Six presets ship; full list at [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity).
+
+Specialist children do **not** inherit the persona — they stay role-defined (Coder, Reviewer, etc.). The persona is host-level only.
+
 ## Expert Agents
 
 Experts are pre-configured agent personas with specific tools and skills. The system automatically routes to the right expert based on your message, or you can specify one explicitly.

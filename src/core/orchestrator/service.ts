@@ -19,6 +19,7 @@ import type { ApprovalRequest } from './approval-manager';
 import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
+import { getOrchestratorHooks } from './hooks';
 import { buildSecurityReminder, guardInput } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { ModelSelector } from './model-selector';
@@ -100,8 +101,24 @@ export class OrchestratorService {
       if (!defaultModel) {
         const allModels = await registry.getAllModels();
         if (allModels.length === 0) {
+          // No model. Speak in the active persona's voice. Fall back to
+          // the dry default if the persona system isn't loaded yet —
+          // this codepath fires on first-boot before settings exist.
+          let name = 'Octipus';
+          try {
+            const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+            const persona = await resolvePersonaForUser(userId);
+            name = persona.name;
+          } catch { /* registry not ready yet — base name is fine */ }
+          const text =
+            `${name} has no engine. The arms are idle.\n\n` +
+            'To wire one up, run one of:\n' +
+            '  • `bun run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
+            '  • `octi doctor`     (shows what is missing)\n' +
+            '  • open the Models page in the web UI\n\n' +
+            'Once a model is bound to the `general` topic, every turn after this one works.';
           return {
-            response: 'No model configured. Please add one in the Models page.',
+            response: text,
             classification: { type: 'casual', confidence: 0 },
           };
         }
@@ -507,7 +524,7 @@ export class OrchestratorService {
     const orchestratorAbortController = new AbortController();
     const orchestratorAllowedToolIds = new Set<string>();
     // Meta-tool ids that the orchestrator owns by construction.
-    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this']) {
+    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
       orchestratorAllowedToolIds.add(name);
     }
     // Role-defined tool ids (if any): orchestrator role uses meta-tools only.
@@ -552,6 +569,20 @@ export class OrchestratorService {
     if (extraSystemContext) {
       systemPrompt += extraSystemContext;
     }
+
+    // Fire the before-agent-start hook so extensions and built-in
+    // modules (persona, project context) can mutate the system
+    // prompt before the orchestrator LLM call. Subscribers run
+    // sequentially; thrown handlers are logged and swallowed.
+    const hookCtx = await getOrchestratorHooks().fire('before-agent-start', {
+      role: 'orchestrator',
+      userId,
+      sessionId,
+      workspaceId,
+      channel,
+      systemPrompt,
+    });
+    systemPrompt = hookCtx.systemPrompt;
 
     const session = await sessionRepository.findById(sessionId);
     const sessionCtxData = session?.context as SessionContext | undefined;

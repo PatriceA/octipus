@@ -47,6 +47,17 @@ async function main() {
     // One-time migration: move .env values into DB settings + vault
     await migrateEnvToDb();
 
+    // First-boot model bootstrap: reads BOOTSTRAP_PROVIDER / _MODEL /
+    // _API_KEY / _BASE_URL from .env (set by `bun run setup`) and
+    // seeds a single default model_config row + vault entry — only
+    // when model_config is empty.
+    try {
+      const { bootstrapDefaultModel } = await import('@/db/bootstrap-model');
+      await bootstrapDefaultModel();
+    } catch (err) {
+      logger.error({ err }, 'bootstrap-model failed — first-message UX may show the no-engine path');
+    }
+
     // Initialize settings service: warm cache from DB
     const settingsService = getSettingsService();
     await settingsService.initialize();
@@ -121,6 +132,17 @@ async function main() {
     const gatewayHub = getGatewayHub();
     await gatewayHub.start();
     logger.info('Gateway hub started');
+
+    // Persona system: install the `before-agent-start` hook so the
+    // orchestrator's system prompt gets the persona block, and the
+    // narration bridge so swarm.node_spawned/completed events get
+    // mirrored as `swarm.narration` for channel UIs. Synchronous so
+    // the first message after boot is never persona-less.
+    {
+      const { installPersonaHook } = await import('@/core/personas/persona-hook');
+      installPersonaHook();
+      logger.info('Persona system installed (before-agent-start hook + narration bridge)');
+    }
 
     // Load user-authored extensions (.octipus/extensions/)
     try {

@@ -79,7 +79,7 @@ export function createMetaTools(
         // Validate template exists before creating pipeline
         const templateName = args.templateName as string;
         const { listAvailableTemplates } = await import('./templates');
-        const userId = (context as any).userId;
+        const userId = context.userId;
         const templates = await listAvailableTemplates(userId);
         const templateNames = templates.map(t => t.name);
         const match = templates.find(t =>
@@ -113,7 +113,7 @@ export function createMetaTools(
       },
       execute: async (_args, context) => {
         const { listAvailableTemplates } = await import('./templates');
-        const userId = (context as any).userId;
+        const userId = context.userId;
         const templates = await listAvailableTemplates(userId);
         if (templates.length === 0) {
           return 'No pipeline templates configured. Ask the user to create pipeline templates in the Pipelines page.';
@@ -192,6 +192,101 @@ export function createMetaTools(
           memory_id: outcome.memoryId,
           fact: outcome.candidate.content, // PII-redacted form
         };
+      },
+    },
+    {
+      name: 'reflect',
+      description:
+        'Answer "what are you doing?" / "what\'s happening?" / "status?" without spawning. Reads the live swarm tree for this session and returns a persona-flavored summary of which arms are running, completed, or idle. Use this when the user asks about CURRENT state, NOT when they want new work done. Free — no LLM call, no spawn.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async (_args, context) => {
+        try {
+          const { swarmNodeRepository } = await import('@/core/swarm/node-repository');
+          const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+          const persona = await resolvePersonaForUser(context.userId);
+          const sessionId = context.sessionId;
+          if (!sessionId) {
+            return `${persona.name} has no session — nothing to reflect on.`;
+          }
+          const nodes = await swarmNodeRepository.findByRootSession(sessionId);
+
+          const running = nodes.filter(n => n.status === 'running');
+          const completed = nodes.filter(n => n.status === 'completed' || n.status === 'cache_hit');
+          const failedStatuses: Array<typeof nodes[number]['status']> = [
+            'cancelled', 'tool_error', 'provider_error', 'budget', 'timeout', 'denied', 'concurrency_limit',
+          ];
+          const failed = nodes.filter(n => failedStatuses.includes(n.status));
+
+          if (nodes.length === 0) {
+            return `${persona.name} has not dispatched any arms yet in this session.`;
+          }
+
+          const lines: string[] = [];
+          if (running.length > 0) {
+            const roles = running.map(n => `${n.role}${n.subtopic ? `(${n.subtopic})` : ''}`).join(', ');
+            lines.push(`Running: ${roles}`);
+          }
+          if (completed.length > 0) {
+            lines.push(`Completed this session: ${completed.length} arm${completed.length === 1 ? '' : 's'}.`);
+          }
+          if (failed.length > 0) {
+            lines.push(`Failed: ${failed.length}. Octipus has not papered over them.`);
+          }
+          if (running.length === 0 && completed.length > 0) {
+            lines.push(`No arms are running right now. ${persona.name} is waiting on you.`);
+          }
+          return lines.join(' ');
+        } catch (err) {
+          return `Reflection failed: ${(err as Error).message}`;
+        }
+      },
+    },
+    {
+      name: 'remember_about_self',
+      description:
+        'Promote one durable fact about YOURSELF (the orchestrator persona) into the user\'s persona profile. Use ONLY when the user explicitly tells you to change how YOU behave, sound, or refer to yourself ("don\'t apologize for slow responses", "summarize in bullets", "stop saying \\"sure\\""). Do NOT use for facts about the user (those go to `remember_this`). The fact must be one short sentence describing how you should behave going forward. Stored on the per-user assistant profile and re-injected into your prompt next turn.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fact: {
+            type: 'string',
+            description: 'One sentence describing how you (the persona) should behave. Example: "Always summarize in bullets." or "Stop apologizing for slow responses."',
+          },
+        },
+        required: ['fact'],
+      },
+      execute: async (args, context) => {
+        const fact = String(args.fact || '').trim();
+        if (fact.length < 4) return { stored: false, reason: 'fact too short' };
+        if (fact.length > 280) return { stored: false, reason: 'fact too long (max 280 chars)' };
+        try {
+          const { getPersonaProfileRepository } = await import('@/core/personas/repository');
+          const { getPersonaRegistry } = await import('@/core/personas/registry');
+          const repo = getPersonaProfileRepository();
+          let profile = await repo.findForUser(context.userId);
+          if (!profile) {
+            await getPersonaRegistry().ensureLoaded();
+            const base = getPersonaRegistry().getDefault();
+            profile = await repo.create(context.userId, base.name, {
+              presetId: base.id,
+              pronouns: base.pronouns,
+              tone: base.tone,
+              narration: base.defaults.narration,
+              extras: [],
+            });
+          }
+          const updated = await repo.addExtraFact(profile.id, fact);
+          return {
+            stored: !!updated,
+            persona_profile_id: profile.id,
+            fact,
+          };
+        } catch (err) {
+          return { stored: false, error: (err as Error).message };
+        }
       },
     },
     {

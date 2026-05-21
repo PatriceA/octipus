@@ -35,6 +35,17 @@ OLLAMA_URL=                            # Ollama URL (optional — set in Setting
 # Default model is configured in the database via the Models page.
 # Provider API keys (OpenAI, Anthropic, Gemini) are stored in the encrypted vault.
 
+# ─── First-boot model bootstrap (consumed once, then ignored) ─
+# Written by `bun run setup` / `octi init`. On first boot,
+# `bootstrapDefaultModel` reads these, seeds a single default
+# model_config row, stores the API key in the vault, and stops
+# touching .env. Editing these after first boot has no effect —
+# use the Models page instead. See CONFIGURATION-PRECEDENCE.md.
+BOOTSTRAP_PROVIDER=                    # ollama | litellm | openai | anthropic | gemini | deepseek | openrouter | cli
+BOOTSTRAP_MODEL=                       # e.g. llama3.2:3b, gpt-4o-mini, claude-haiku-4-5-20251001
+BOOTSTRAP_API_KEY=                     # required for cloud providers
+BOOTSTRAP_BASE_URL=                    # for litellm: the proxy URL
+
 # ─── Channels (optional) ─────────────────────────────────────
 TELEGRAM_BOT_TOKEN=                    # From @BotFather
 SLACK_BOT_TOKEN=                       # xoxb-...

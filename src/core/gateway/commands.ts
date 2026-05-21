@@ -397,6 +397,22 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
+    name: 'persona',
+    aliases: [],
+    description: 'Configure the orchestrator persona — name, tone, narration, free-form facts',
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      const { handlePersonaCommand } = await import('@/core/personas/commands');
+      try {
+        const result = await handlePersonaCommand({ userId: ctx.userId, rawArgs: ctx.rawArgs });
+        return { text: result.text };
+      } catch (err) {
+        return { text: `Persona command failed: ${(err as Error).message}` };
+      }
+    },
+  });
+
+  registry.register({
     name: 'version',
     aliases: ['v'],
     description: 'Show Octipus version and build info',

@@ -8,6 +8,7 @@ import {
   Cpu,
   FileText,
   Globe,
+  Fingerprint,
   FlaskConical,
   GitBranch,
   KeyRound,
@@ -45,6 +46,7 @@ const navGroups: NavGroup[] = [
       { name: 'chat', href: '/chat', icon: MessageSquare },
       { name: 'documents', href: '/documents', icon: FileText },
       { name: 'profiles', href: '/profiles', icon: Users },
+      { name: 'persona', href: '/persona', icon: Fingerprint },
     ],
   },
   {

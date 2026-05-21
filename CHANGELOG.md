@@ -7,6 +7,91 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### UX + personality revamp (2026-05-20)
+
+Branch `claude/octopus-ux-personality-swToC`. Five-slice land of the
+full plan at `docs/plans/ux-personality-revamp.md` (Hermes-agent
+inspired). User-visible:
+
+- **Orchestrator now has an identity.** Per-user, persists across
+  every channel. Default is `Octipus` — an octopus-machine that
+  refers to itself in the third person, uses "we" for the swarm,
+  and gives short dry replies. Rename via `/persona name <X>`;
+  change tone/narration/free-form facts via `/persona ...`. Six
+  preset YAMLs ship under `personas/` (`octipus`, `terse-engineer`,
+  `mentor`, `nautilus`, `concierge`, `verbose-academic`). Specialist
+  children stay role-defined — persona is host-level only.
+- **Live swarm narration.** New `swarm.narration` event mirrors
+  `swarm.node_spawned` / `node_completed` / `budget_warning` with
+  persona-rendered text ("Octipus dispatches a research arm.",
+  "qa arm failed. Predictable."). Per-user `persona.narration: off
+  | minimal | chatty` setting.
+- **Side-channel messages.** New gateway message type
+  `chat.interject` lets the user ask a quick question while a
+  swarm runs. Reply lands as `chat.message` with `sideChannel: true`
+  and persona attribution. Running orchestrator is neither cancelled
+  nor blocked.
+- **Friendly no-engine path.** First message before a model is
+  configured no longer throws — replies in the persona voice with
+  three concrete next steps (`bun run setup`, `octi doctor`, web
+  Models page).
+- **Casual chat is persona-aware.** `directResponse` (the
+  greetings/small-talk path that bypasses the orchestrator) now
+  uses the same persona resolver — so "hi" gets an Octipus reply
+  too, not a generic friendly-assistant string.
+
+Operator-visible:
+
+- **One-shot installer.** `curl -fsSL .../install.sh | bash` (Unix)
+  or `iex (irm .../install.ps1)` (Windows) clones, installs deps,
+  builds the compiled binary, symlinks it onto PATH, runs setup.
+- **Compiled `octi` binary.** `bun run build:cli` produces a static
+  ~95MB executable at `dist/octi`. Retires the PATH-mutation
+  `scripts/setup.ts` used to do. Handles
+  help/version/doctor/init/tui/edit/persona natively; delegates
+  start/stop/restart/status/logs/open to the bash dispatcher.
+- **`octi init`.** New pi-tui based setup wizard. Welcome →
+  service auto-detect → storage mode → provider (Ollama first if
+  detected, then LiteLLM, then direct provider — Voyage excluded)
+  → model picker → API key → summary → writes .env. Falls back
+  to `bun run setup` (the inquirer flow) on non-TTY.
+- **`octi doctor`.** 15 environment health checks: bun, .env,
+  vault keys, storage mode, base persona, state dir, Ollama,
+  LiteLLM, postgres, redis, backend, MCP server build, browser
+  extension, log sanity, disk space. JSON + text output.
+- **First-boot model bootstrap.** `src/db/bootstrap-model.ts` reads
+  `BOOTSTRAP_PROVIDER` / `_MODEL` / `_API_KEY` / `_BASE_URL` from
+  `.env` (written by `bun run setup` / `octi init`), seeds a
+  default `model_config` row, stores the API key in the vault.
+  Idempotent.
+
+Programmer-visible:
+
+- **`before-agent-start` hook.** New typed mutable-context hook in
+  `src/core/orchestrator/hooks.ts`. Fires inside `runOrchestrator`
+  with `BuildSystemPromptOptions` — handlers can prepend, append,
+  or substring-replace the system prompt. The persona-block
+  injector is the first consumer. `SECURITY_PREAMBLE` and
+  `roles/orchestrator/prompt.md` stay byte-untouched (DESIGN.md
+  rule #6). Extensions can subscribe — see PLUGINS.md.
+- **New meta-tools on the orchestrator:**
+  - `remember_about_self` — writes durable behavioral rules into
+    the per-user persona profile (parallel to `remember_this`).
+  - `reflect` — answers "what are you doing?" by reading the live
+    swarm tree, no spawn, no LLM call.
+- **New REST routes** at `/api/persona` (GET resolved, GET
+  /presets, PATCH, POST /facts, DELETE /facts/:idx, POST /reset).
+  See API.md.
+- **Schema:** new `category='assistant'` rows in `profiles`,
+  composite `(user_id, category)` index added by migration 0060.
+- **Docs:** `docs/CONFIGURATION-PRECEDENCE.md` explains the
+  `.env`-bootstrap vs DB-runtime split; `personas/octipus.yaml`
+  is the canonical voice spec; full design at
+  `docs/plans/ux-personality-revamp.md`.
+
+1929 / 0 / 133 pass / fail / skip on `bun test src`. Typecheck +
+lint clean.
+
 ### Legacy `source_type` retirement (2026-05-17, PR #28)
 
 Completes the column-retirement flagged after the memory-redesign

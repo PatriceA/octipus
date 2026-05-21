@@ -34,6 +34,10 @@ export function wireMessageHandler(hub: GatewayHub): void {
         await handleChatSend(hub, connectionId, context, message);
         break;
 
+      case 'chat.interject':
+        await handleChatInterject(hub, connectionId, context, message);
+        break;
+
       case 'command':
         await handleCommand(hub, connectionId, context, message);
         break;
@@ -169,6 +173,97 @@ async function handleChatSend(
     hub.connectionManager.sendToConnection(connectionId, {
       type: 'error',
       code: 'CHAT_ERROR',
+      message: (err as Error).message,
+    });
+  }
+}
+
+/**
+ * Side-channel rate limiter. Interject bypasses the orchestrator queue
+ * and triggers an LLM call directly, so it needs its own brake. Per-session
+ * sliding window: at most INTERJECT_MAX hits in INTERJECT_WINDOW_MS.
+ */
+const INTERJECT_WINDOW_MS = 10_000;
+const INTERJECT_MAX = 5;
+const interjectHits = new Map<string, number[]>();
+
+function allowInterject(sessionId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - INTERJECT_WINDOW_MS;
+  const history = (interjectHits.get(sessionId) ?? []).filter((t) => t > cutoff);
+  if (history.length >= INTERJECT_MAX) {
+    interjectHits.set(sessionId, history);
+    return false;
+  }
+  history.push(now);
+  interjectHits.set(sessionId, history);
+  return true;
+}
+
+/**
+ * Side-channel chat message — does NOT go through the orchestrator
+ * queue. Routes directly through the persona-aware direct-response
+ * path so the user can ask a quick question while a swarm is
+ * running. Reply is prefixed with the persona's name and "side
+ * question:" so the user can tell it apart from the main thread.
+ */
+async function handleChatInterject(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'chat.interject' }>,
+): Promise<void> {
+  try {
+    if (!allowInterject(message.sessionId)) {
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'INTERJECT_RATE_LIMITED',
+        message: `Interject rate limit hit (${INTERJECT_MAX} per ${INTERJECT_WINDOW_MS / 1000}s). Slow down.`,
+      });
+      return;
+    }
+
+    const userId = await resolveUserId(context.userId);
+    context.sessionId = message.sessionId;
+
+    const { directResponse } = await import('@/core/orchestrator/direct-response');
+    const { ModelSelector } = await import('@/core/orchestrator/model-selector');
+    const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+
+    const persona = await resolvePersonaForUser(userId).catch(() => null);
+    const personaName = persona?.name || 'Octipus';
+    const selector = new ModelSelector();
+
+    let reply: string;
+    try {
+      const result = await directResponse(
+        message.content,
+        message.sessionId,
+        userId,
+        selector,
+        'simple',
+      );
+      reply = `${personaName} — side question: ${result.response}`;
+    } catch (err) {
+      reply = `${personaName} — side question: ${(err as Error).message}`;
+    }
+
+    hub.publishEvent({
+      type: 'chat.message',
+      source: `interject:${connectionId}`,
+      userId,
+      sessionId: message.sessionId,
+      payload: {
+        role: 'assistant',
+        content: reply,
+        sideChannel: true,
+      },
+    });
+  } catch (err) {
+    coreLogger.error({ err, sessionId: message.sessionId }, 'chat.interject failed');
+    hub.connectionManager.sendToConnection(connectionId, {
+      type: 'error',
+      code: 'INTERJECT_ERROR',
       message: (err as Error).message,
     });
   }

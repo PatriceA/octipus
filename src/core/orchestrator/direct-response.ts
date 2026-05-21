@@ -82,16 +82,33 @@ export async function directResponse(
     }
     const now = new Date();
     const dateContext = `\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
-    // Persona: dev-flavored when the session is in a coding workspace (devMode / projectPath set),
-    // generalist Octipus otherwise. Octipus is a multi-domain orchestrator: coding, research,
-    // writing, design, devops, security, data, finance, planning, voice, etc. Casual replies
-    // shouldn't pre-narrow the user's expectations.
+    // Persona block — resolved from the user's assistant profile (or
+    // the base octipus persona if no profile exists yet). Casual
+    // replies go through this path, so the dry octopus-machine voice
+    // applies to greetings/small-talk too, not just orchestrator runs.
+    // Falls back to a one-line static persona if the registry isn't
+    // initialized (early-boot test path).
     const sessionCtx = (sessionForBoundary?.context as SessionContext) || {};
+    let personaBlock = '';
+    try {
+      const { resolvePersonaForUser } = await import('@/core/personas/resolver');
+      const resolved = await resolvePersonaForUser(userId);
+      personaBlock = resolved.promptBlock;
+    } catch (err) {
+      coreLogger.debug({ err }, 'direct-response: persona resolver unavailable, using static fallback');
+      personaBlock =
+        'You are Octipus, an octopus-machine. Refer to yourself in the third ' +
+        'person ("Octipus is here") and use "we" for the collective. Short, ' +
+        'direct, dry. Never "I". For casual chat, keep replies brief.';
+    }
+    // Dev-mode hint stays — orchestrator dispatch logic isn't on this
+    // path but a casual reply in a coding workspace should at least
+    // acknowledge the context.
     const isDevSession = Boolean(sessionCtx.devMode || sessionCtx.projectPath);
-    const persona = isDevSession
-      ? 'You are Octipus, a friendly development assistant. Keep casual responses brief and helpful.'
-      : 'You are Octipus, a friendly general-purpose AI assistant. You can route to specialized experts (coding, research, writing, design, devops, security, data, finance, planning, voice, etc.) when the user has a real task, but for casual chat keep replies brief and conversational. Don\'t pre-categorize yourself as a coding-only assistant — describe what the user needs help with rather than what tooling sits behind you.';
-    let basePrompt = SECURITY_PREAMBLE + persona + dateContext;
+    const devHint = isDevSession
+      ? '\n\nNOTE: This session is pinned to a project workspace. Casual replies stay brief.'
+      : '';
+    let basePrompt = SECURITY_PREAMBLE + personaBlock + devHint + dateContext;
     if (guardFlags.length > 0) {
       basePrompt += buildSecurityReminder(guardFlags);
     }

@@ -319,6 +319,169 @@ async function main(): Promise<void> {
     dataDir = await input({ message: 'Data directory', default: '~/.octipus/data' });
   }
 
+  // ── Model provider (user-confirmed flow: Ollama → LiteLLM → direct provider) ──
+  console.log('\n\x1b[1m── LLM Provider ──\x1b[0m');
+  console.log('Octipus needs at least one engine. This step picks the BASE model — the');
+  console.log('one used when no per-topic override is set. You can add more in the UI later.\n');
+
+  let bootstrapProvider = '';
+  let bootstrapModel = '';
+  let bootstrapApiKey = '';
+  let bootstrapBaseUrl = '';
+  let providerSkipped = false;
+
+  // 1. Ollama first if reachable.
+  let ollamaModels: string[] = [];
+  if (ollamaAvailable) {
+    try {
+      const res = await fetch('http://localhost:11434/api/tags');
+      const data = await res.json() as { models?: Array<{ name: string }> };
+      ollamaModels = (data.models || []).map(m => m.name);
+    } catch { /* keep empty list */ }
+  }
+
+  const choices: Array<{ value: string; name: string; description?: string; disabled?: string | false }> = [];
+  if (ollamaAvailable) {
+    choices.push({
+      value: 'ollama',
+      name: `Ollama (detected${ollamaModels.length > 0 ? `, ${ollamaModels.length} model${ollamaModels.length === 1 ? '' : 's'} pulled` : ', no models pulled yet'})`,
+      description: 'Local inference. Best for privacy / offline. Free.',
+    });
+  }
+  // LiteLLM detection — we don't probe by default since it's not on a fixed port.
+  // Surface it as a choice; the user supplies the URL.
+  choices.push({
+    value: 'litellm',
+    name: 'LiteLLM proxy',
+    description: 'Existing LiteLLM proxy. You provide the URL; we list its models.',
+  });
+  choices.push({
+    value: 'openrouter',
+    name: 'OpenRouter',
+    description: '200+ models, single key. Pay-per-use.',
+  });
+  choices.push({
+    value: 'openai',
+    name: 'OpenAI',
+    description: 'GPT models. Requires API key.',
+  });
+  choices.push({
+    value: 'anthropic',
+    name: 'Anthropic',
+    description: 'Claude models. Requires API key.',
+  });
+  choices.push({
+    value: 'gemini',
+    name: 'Google Gemini',
+    description: 'Gemini models. Requires API key.',
+  });
+  choices.push({
+    value: 'deepseek',
+    name: 'DeepSeek',
+    description: 'DeepSeek models. Requires API key.',
+  });
+  choices.push({
+    value: 'cli',
+    name: 'Claude CLI (claude-code auth)',
+    description: 'Uses your existing Claude Code auth. No key needed if already signed in.',
+  });
+  choices.push({
+    value: 'skip',
+    name: 'Skip — configure later via the web UI',
+    description: 'You can wire a model after first boot. Casual chat will show a setup hint.',
+  });
+
+  const provider = await select({
+    message: 'Choose your base model provider',
+    choices,
+    default: ollamaAvailable ? 'ollama' : 'openrouter',
+  });
+
+  if (provider === 'skip') {
+    providerSkipped = true;
+    console.log('\x1b[33m⚠ Skipped. Configure a model from the web UI before sending real messages.\x1b[0m');
+  } else if (provider === 'ollama') {
+    bootstrapProvider = 'ollama';
+    if (ollamaModels.length === 0) {
+      console.log('\x1b[33mNo models pulled yet. Pick a default to pull after setup:\x1b[0m');
+      bootstrapModel = await input({
+        message: 'Ollama model tag (will be pulled later — leave blank to pick yourself)',
+        default: 'llama3.2:3b',
+      });
+    } else {
+      bootstrapModel = await select({
+        message: 'Which Ollama model should be the base model?',
+        choices: ollamaModels.map(m => ({ value: m, name: m })),
+        default: ollamaModels[0],
+      });
+    }
+  } else if (provider === 'litellm') {
+    bootstrapProvider = 'litellm';
+    bootstrapBaseUrl = await input({
+      message: 'LiteLLM proxy URL',
+      default: 'http://localhost:4000',
+    });
+    bootstrapApiKey = await input({
+      message: 'LiteLLM API key (leave blank if proxy is open)',
+      default: '',
+    });
+    // Try to list models.
+    let liteModels: string[] = [];
+    try {
+      const url = bootstrapBaseUrl.replace(/\/$/, '') + '/v1/models';
+      const headers: Record<string, string> = bootstrapApiKey
+        ? { Authorization: `Bearer ${bootstrapApiKey}` }
+        : {};
+      const res = await fetch(url, { headers });
+      const data = await res.json() as { data?: Array<{ id: string }> };
+      liteModels = (data.data || []).map(m => m.id);
+    } catch (err) {
+      console.log(`\x1b[33m⚠ Could not list LiteLLM models: ${(err as Error).message}\x1b[0m`);
+    }
+    if (liteModels.length > 0) {
+      bootstrapModel = await select({
+        message: 'Which LiteLLM model should be the base?',
+        choices: liteModels.map(m => ({ value: m, name: m })),
+        default: liteModels[0],
+      });
+    } else {
+      bootstrapModel = await input({
+        message: 'Model name (LiteLLM)',
+        default: 'openai/gpt-4o-mini',
+      });
+    }
+  } else {
+    // Direct provider: ask for a key, then for a model. We don't list
+    // models from cloud providers (each has a different API and rate
+    // limits) — the user picks a sensible default and can change it
+    // in the UI.
+    bootstrapProvider = provider;
+    if (provider !== 'cli') {
+      bootstrapApiKey = await input({
+        message: `${provider} API key`,
+        default: '',
+      });
+      if (!bootstrapApiKey) {
+        console.log('\x1b[33m⚠ No API key provided — provider entry skipped.\x1b[0m');
+        providerSkipped = true;
+      }
+    }
+    if (!providerSkipped) {
+      const modelDefaults: Record<string, string> = {
+        openrouter: 'openai/gpt-4o-mini',
+        openai: 'gpt-4o-mini',
+        anthropic: 'claude-haiku-4-5-20251001',
+        gemini: 'gemini-2.0-flash',
+        deepseek: 'deepseek-chat',
+        cli: 'claude-sonnet-4-6',
+      };
+      bootstrapModel = await input({
+        message: `${provider} model id`,
+        default: modelDefaults[provider] || '',
+      });
+    }
+  }
+
   // ── API ──
   console.log('\n\x1b[1m── API Server ──\x1b[0m');
   const port = await input({ message: 'API port', default: '3005' });
@@ -400,6 +563,20 @@ async function main(): Promise<void> {
     `CORS_ORIGINS=http://localhost:3007`,
     ``,
   );
+
+  // Bootstrap LLM provider: read once on first boot by migrateEnvToDb
+  // and promoted into the `model_config` table. After that, DB wins.
+  if (!providerSkipped && bootstrapProvider) {
+    lines.push(
+      `# Bootstrap LLM provider — applied on first boot, then ignored.`,
+      `# Edit via the Models page in the web UI after first start.`,
+      `BOOTSTRAP_PROVIDER=${bootstrapProvider}`,
+      `BOOTSTRAP_MODEL=${bootstrapModel}`,
+    );
+    if (bootstrapApiKey) lines.push(`BOOTSTRAP_API_KEY=${bootstrapApiKey}`);
+    if (bootstrapBaseUrl) lines.push(`BOOTSTRAP_BASE_URL=${bootstrapBaseUrl}`);
+    lines.push(``);
+  }
 
   await Bun.write('.env', lines.join('\n'));
   console.log('\n\x1b[32m✅ Bootstrap .env created\x1b[0m');

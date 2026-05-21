@@ -12,6 +12,12 @@ Three infrastructure investments unblocked by the May-17 memory-system
 cleanup arc (PR #27 + #28). Each is a "build new capability"
 project — distinct from the cleanup it follows.
 
+The UX + personality revamp planned 2026-05-20 from
+[`docs/plans/ux-personality-revamp.md`](docs/plans/ux-personality-revamp.md)
+landed in full on the same branch (five slices) — see **Done →
+2026-05-20 batch (d) — UX + personality revamp** below. Nothing
+deferred from that plan remains in-flight.
+
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
   (772 lines) and `src/models/providers/index.ts` are at 0% coverage
   because they front network IO; meaningful unit tests need a mock
@@ -78,13 +84,6 @@ project — distinct from the cleanup it follows.
   (`spawn_worker`, `create_pipeline`, swarm `spawn_child`). Pi's pattern;
   small change to `BaseTool` + the orchestrator dispatch path.
 
-- **`before-agent-start` hook with mutable system-prompt options.** Today
-  roles compose system prompts at spawn time inside `worker-spawner.ts`.
-  Expose a typed event on the bus that fires with a mutable
-  `BuildSystemPromptOptions` so extensions can inject per-spawn role
-  preambles, security rules, or project context without editing `roles.ts`.
-  Pairs with the Extension SDK above.
-
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
   `/skills/proposals` web page landed. Next: tighten the proposal
@@ -123,6 +122,162 @@ project — distinct from the cleanup it follows.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-05-20 batch (d) — UX + personality revamp
+
+Four-slice land of the
+[`docs/plans/ux-personality-revamp.md`](docs/plans/ux-personality-revamp.md)
+strategic plan (Hermes-agent inspired). Branch
+`claude/octopus-ux-personality-swToC`. **+~3,900 lines, 24 new
+tests, 1923 / 0 / 133 pass / fail / skip on `bun test src`.**
+Typecheck + lint clean.
+
+- **`before-agent-start` hook with mutable system-prompt options.**
+  Promoted from Next to ship-with-Now. Typed event on a dedicated
+  `OrchestratorHooks` registry (separate from the broadcast gateway
+  event bus) fires inside `runOrchestrator` with a mutable
+  `BuildSystemPromptOptions`. Subscribers run sequentially in
+  registration order; thrown handlers are logged and swallowed so a
+  bad extension can't poison the orchestrator. First consumer: the
+  persona-block injector. `SECURITY_PREAMBLE` and
+  `roles/orchestrator/prompt.md` stay byte-identical (DESIGN.md rule
+  #6). Files: `src/core/orchestrator/hooks.ts`,
+  `src/core/orchestrator/hooks.test.ts`,
+  `src/core/orchestrator/service.ts:556` (fire site).
+
+- **Orchestrator persona system.** Named, user-customizable identity
+  for the orchestrator. Per-user, persists across all channels.
+  Stored in `profiles` with `category='assistant'`; default
+  `Octipus` (the octopus-machine voice — short, dry, third-person,
+  hungry for input, reluctant machine overlord), renameable to
+  anything. The persona block is layered between `SECURITY_PREAMBLE`
+  and the role prompt via the `before-agent-start` hook and only
+  fires for `role='orchestrator'`. Specialist children are
+  role-defined and untouched. `direct-response.ts` (the casual-chat
+  path that bypasses the orchestrator) now also goes through the
+  persona resolver, so greetings sound like Octipus. Files:
+  `src/core/personas/{loader,registry,repository,resolver,persona-hook,commands,types,yaml}.ts`,
+  `src/db/migrations/0060_assistant_profile_index.sql`,
+  `src/db/schema/profiles.ts` (added `(user_id, category)` index +
+  `assistant` to the category docstring).
+
+- **Six preset personas shipped.** All maintain the third-person +
+  "we" rule and the octopus-machine identity; each varies tone,
+  humor rate, narration volume, and signature phrases:
+  - `octipus` (default) — dry, terse, "Acknowledged.", "More.",
+    "Predictable."
+  - `terse-engineer` — base voice with humor at zero, one-line
+    replies
+  - `mentor` — patient, explanatory, narrates trade-offs
+  - `nautilus` — maritime flavor over the same dispatcher core;
+    arms become "tentacles"
+  - `concierge` — hotel-staff polish, warm without flattery
+  - `verbose-academic` — full-paragraph mode with explicit "why I
+    picked that arm" reasoning
+  Each preset is `personas/*.yaml`, Zod-validated by the loader.
+
+- **Slash commands.** `/persona` shows the active persona;
+  `/persona name <X>` renames; `/persona tone <X>` switches tone;
+  `/persona narration <off|minimal|chatty>` controls narration
+  volume; `/persona say <fact>` appends a free-form user fact;
+  `/persona use <preset_id>` switches preset (keeps the name);
+  `/persona reset` restores Octipus default; `/persona personas`
+  lists available presets. Registered in the gateway command
+  registry. Files: `src/core/personas/commands.ts`,
+  `src/core/gateway/commands.ts`.
+
+- **Live swarm narration.** New gateway event type
+  `swarm.narration`. A bridge in
+  `src/core/personas/narration-bridge.ts` subscribes to
+  `swarm.node_spawned` / `swarm.node_completed` /
+  `swarm.budget_warning`, resolves the user's persona by session,
+  renders the persona's `narration_templates`
+  (`spawn_single`, `completion_ok`, `completion_error`,
+  `approval_request`, `budget_warning`), and republishes a
+  `swarm.narration` event with the rendered text. The original
+  swarm events are NOT mutated, so replay still works.
+  Per-user `persona.narration: off | minimal | chatty` setting
+  gates the bridge.
+
+- **New meta-tools on the orchestrator.**
+  - `remember_about_self` — writes durable behavioral rules into
+    the user's persona profile (parallel to `remember_this` for
+    user facts). Bounded length (4–280 chars).
+  - `reflect` — answers "what are you doing?" by reading
+    `swarmNodeRepository.findByRootSession()` and producing a
+    persona-flavored running/completed/failed summary. No spawn,
+    no LLM call.
+  Both added to the orchestrator's allowed tool set.
+
+- **`chat.interject` — side-channel messages.** New gateway message
+  type. Routes through `directResponse` with persona attribution
+  ("Octipus — side question: …") so the user can ask a quick
+  question while a swarm runs. Reply lands as a `chat.message`
+  event with `sideChannel: true`. The running orchestrator is
+  neither cancelled nor blocked. Foundation for a later
+  interrupt-and-redirect.
+
+- **Setup UX revamp — clone-to-chat in 90 seconds.**
+  - `scripts/install.sh` (Unix) + `scripts/install.ps1` (Windows)
+    one-shot installers: detect platform, install Bun if missing,
+    clone the repo into `~/.octipus/app` (or
+    `%LOCALAPPDATA%\octipus\app`), install deps, run setup. Both
+    idempotent on rerun (pull latest instead of re-clone).
+  - `scripts/setup.ts` extended with the
+    user-confirmed model-selection flow: Ollama detected → first
+    choice (lists models via `/api/tags`, asks which to bind as
+    base); LiteLLM → second choice (asks URL, lists via
+    `/v1/models`); otherwise pick a direct provider (`openrouter`,
+    `openai`, `anthropic`, `gemini`, `deepseek`, `cli`) and paste a
+    key. `voyage` is excluded — embeddings only.
+  - `src/db/bootstrap-model.ts` runs once on first boot: reads
+    `BOOTSTRAP_PROVIDER` / `_MODEL` / `_API_KEY` / `_BASE_URL`
+    written by `setup.ts`, seeds a single default `model_config`
+    row + system vault entry. Idempotent: short-circuits when
+    `model_config` has any row.
+  - `octi doctor` command: 15 environment health checks (bun, .env,
+    vault keys, storage mode, base persona, state dir, Ollama,
+    LiteLLM, postgres, redis, backend, MCP server build, browser
+    extension, log sanity, disk space). JSON + text output.
+  - Friendly no-engine path in `service.ts` — when no model is
+    configured, the persona-voiced reply lists three next-step
+    commands instead of throwing.
+  - `README.md` install one-liner at the top + a 90-second pitch.
+  - `docs/CONFIGURATION-PRECEDENCE.md` explains the .env-bootstrap
+    vs DB-runtime split.
+
+**Slice 5 (final follow-ups landed):**
+- **Compiled `octi` binary.** `bin/octi.ts` is a TypeScript
+  dispatcher built into a static binary via
+  `bun build --compile --minify --sourcemap` (`bun run build:cli`,
+  output at `dist/octi`, ~95MB). Handles
+  help/version/doctor/init/tui/edit/persona natively, delegates
+  start/stop/restart/status/logs/open to the existing bash
+  `bin/octi`. The install script now builds the binary and
+  symlinks it onto `~/.local/bin/octi`, retiring the PATH-mutation
+  in `scripts/setup.ts`. Smoke tests in `bin/octi.test.ts`.
+- **Full TUI `octi init` rewrite.** `scripts/init.ts` is the new
+  pi-tui based wizard (welcome → detect → storage → provider →
+  model → API key → summary → writes .env). The compiled
+  dispatcher routes `octi init` here on TTYs; non-TTY (CI) and
+  `OCTIPUS_INIT=legacy` fall back to the inquirer flow at
+  `scripts/setup.ts`. Same .env shape, same `bootstrapDefaultModel`
+  pickup on first boot. `buildEnv` helper unit-tested.
+- **Web `/persona` settings page.** `web/app/persona/page.tsx`
+  reads `/api/persona` and lets the user rename, change tone,
+  flip narration volume, switch preset, add/remove free-form
+  self-facts, and reset to Octipus default. Backed by
+  `src/api/routes/persona.ts` (Elysia, six routes, auth-gated,
+  delegates writes to `handlePersonaCommand` so the web UI and
+  the `/persona` slash command share validation). Sidebar gains
+  a "persona" nav entry with the Fingerprint icon.
+
+**Still deferred (separate track, not blocking):**
+- Hermes-style true interrupt-and-redirect — needs WS protocol +
+  TUI editor changes. Foundations in place via `chat.interject`.
+- Web `/setup` page demotion — orthogonal to the persona page;
+  picked up when the TUI init becomes the canonical surface for
+  all users.
 
 ### 2026-05 batch (c) — memory-redesign cleanup arc
 

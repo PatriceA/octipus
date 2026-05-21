@@ -83,6 +83,21 @@ export default {
 3. Restart the backend, or call `POST /api/plugins/:name/reload` to hot-reload
 4. Test via the tools API or by chatting with an agent
 
+## Orchestrator hooks
+
+In addition to registering tools, plugins can subscribe to the orchestrator's `before-agent-start` hook to mutate the system prompt before the LLM call (e.g., inject project-specific guidance, custom security rules, or a different persona). The hook is the same primitive the built-in persona system uses to layer the persona block between `SECURITY_PREAMBLE` and the role prompt.
+
+```ts
+import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
+
+getOrchestratorHooks().register('before-agent-start', (ctx) => {
+  if (ctx.role !== 'orchestrator') return;
+  ctx.systemPrompt += '\n\n# project notes\n- All paths are relative to repo root.';
+});
+```
+
+Handlers run sequentially in registration order. A thrown handler is logged and swallowed so a broken plugin can't poison the orchestrator. **Do not** strip or rewrite `SECURITY_PREAMBLE` — DESIGN.md house rule #6.
+
 ## Example Plugin
 
 See `extensions/example-plugin/` for a working example with a greeting tool and a calculator.
