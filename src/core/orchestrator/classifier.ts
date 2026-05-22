@@ -7,7 +7,9 @@ const CASUAL_PATTERNS = [
   /^(bye|goodbye|see\s*you|later|cya)\b/i,
   /^(how\s*are\s*you|what'?s\s*up|how'?s\s*it\s*going)/i,
   /^(yes|no|ok|okay|sure|nope|yep|yeah)\b/i,
-  /^(help|what\s*can\s*you\s*do)\b/i,
+  // Capability questions ("help", "what can you do") are NOT casual —
+  // they need the orchestrator so the answer reflects the actual
+  // configured experts/tools, not whatever the persona LLM guesses.
   /^what\s+is\s+the\s+\w+\s+of\b/i,  // "What is the capital of France?"
   /^(can you|could you)\s+(explain|tell|clarify)/i,  // "Can you explain that?"
   /\b(more detail|elaborate|clarify)\b/i,  // Follow-up requests

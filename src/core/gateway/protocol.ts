@@ -169,7 +169,7 @@ export const AgentStopSchema = z.object({
  *     queue on a per-session basis.
  *   - `chat.interject` is a quick aside the user wants answered
  *     WITHOUT cancelling the in-flight task. The handler routes
- *     directly to a `general`-role direct-response path, so the
+ *     directly to the persona-tagged direct-response path, so the
  *     answer comes back with persona attribution ("Octipus — side
  *     question: …") in parallel with the swarm.
  *

@@ -392,12 +392,15 @@ export class OrchestratorService {
       };
 
       if (classification.type === 'casual' && classification.confidence >= 0.7) {
-        // Emit worker_spawned so channel feedback shows a reaction (even for direct responses)
+        // Emit worker_spawned so channel feedback shows a reaction (even for direct responses).
+        // Role label is 'octipus' (the persona itself answering casually), NOT a specialist
+        // expert — the direct-response path doesn't pick an expert. UI badges treat this as
+        // identity, not as a routing decision.
         this.emit({
           type: 'worker_spawned',
           sessionId: resolvedSessionId,
           userId,
-          data: { role: 'general', workerId: `direct-${Date.now()}`, model: 'direct' },
+          data: { role: 'octipus', workerId: `direct-${Date.now()}`, model: 'direct' },
           timestamp: new Date(),
         });
 
@@ -417,7 +420,7 @@ export class OrchestratorService {
           type: 'worker_completed',
           sessionId: resolvedSessionId,
           userId,
-          data: { role: 'general', result: finalResponse },
+          data: { role: 'octipus', result: finalResponse },
           timestamp: new Date(),
         });
 
@@ -927,7 +930,7 @@ export class OrchestratorService {
     task: string,
     input: string,
     context: AgentContext,
-    overrides?: { systemPrompt?: string; model?: string },
+    overrides?: { systemPrompt?: string; model?: string; swarmParent?: import('./worker-spawner').WorkerSwarmParent },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);
   }
