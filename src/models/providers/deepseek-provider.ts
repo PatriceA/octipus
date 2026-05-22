@@ -5,6 +5,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -101,6 +102,32 @@ export class DeepSeekProvider implements ModelProvider {
         ...(reasoningContent ? { reasoningContent } : {}),
       };
 
+      // DeepSeek chat-template leak: when the model gets confused mid-turn
+      // (often after a tool error), it sometimes emits its native tool-call
+      // markup (`<｜tool▁calls▁begin｜>`, `<｜tool▁call▁begin｜>`, etc.)
+      // as plain text in `content` instead of as structured tool_calls.
+      // The provider would otherwise hand the markup to the agent as a
+      // "successful" final response — pipeline marks the stage completed
+      // but nothing was actually executed. Detect the marker tokens
+      // (U+FF5C-fenced names, separator is the SentencePiece glyph U+2581
+      // `▁` in the real tokenizer; some serializers emit underscore so we
+      // accept both) and force a retry. Only fires when there are NO
+      // structured tool_calls, so legitimate tool-call responses untouched.
+      const DEEPSEEK_TEMPLATE_LEAK = /<｜+(?:tool[▁_]calls?[▁_]begin|tool[▁_]call[▁_]begin|tool[▁_]calls?[▁_]end|tool[▁_]sep|tool[▁_]outputs?[▁_]begin)｜*>?/iu;
+      if (!choice.message.tool_calls?.length && DEEPSEEK_TEMPLATE_LEAK.test(result.content)) {
+        modelLogger.warn(
+          { model: response.model, contentPreview: result.content.slice(0, 200), provider: this.name },
+          'DeepSeek emitted native tool-call template in content channel — forcing retry',
+        );
+        throw new ClassifiedError({
+          reason: FailoverReason.TOOL_CALL_INVALID,
+          recovery: RecoveryAction.RETRY_NOW,
+          message: `DeepSeek chat-template leak: tool-call markup emitted as content instead of structured tool_calls`,
+          providerHint: this.name,
+          metadata: { contentPreview: result.content.slice(0, 300) },
+        });
+      }
+
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
           if (tc.type !== 'function') {
@@ -110,6 +137,25 @@ export class DeepSeekProvider implements ModelProvider {
           try {
             return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
           } catch (parseErr) {
+            // DeepSeek (flash variants in particular) truncates long
+            // tool-call argument strings mid-stream — most commonly the
+            // `content` parameter on file-writes. Attempt a best-effort
+            // repair before surfacing as TOOL_CALL_INVALID; the LLM retry
+            // path otherwise loops on the same broken output for 3
+            // attempts and then aborts the agent.
+            const repaired = repairTruncatedJson(rawArgs);
+            if (repaired) {
+              try {
+                const parsed = JSON.parse(repaired) as Record<string, unknown>;
+                modelLogger.warn(
+                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
+                  'Recovered truncated DeepSeek tool-call JSON via repairTruncatedJson',
+                );
+                return { id: tc.id, name: tc.function.name, arguments: parsed };
+              } catch {
+                // fall through to ClassifiedError
+              }
+            }
             throw new ClassifiedError({
               reason: FailoverReason.TOOL_CALL_INVALID,
               recovery: RecoveryAction.RETRY_NOW,

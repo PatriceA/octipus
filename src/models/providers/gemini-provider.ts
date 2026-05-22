@@ -25,12 +25,6 @@ export class GeminiProvider implements ModelProvider {
   }
 
   /**
-   * Cache raw assistant messages from Gemini to preserve thought_signature.
-   * Keyed by sorted tool_call IDs so we can match when replaying.
-   */
-  private rawAssistantMessages = new Map<string, Record<string, unknown>>();
-
-  /**
    * Gemini rejects sequences where a function_call is not immediately followed
    * by its function_response, or where a function_response has no preceding
    * function_call. Compaction can break these pairs, so sanitize before send.
@@ -149,17 +143,6 @@ export class GeminiProvider implements ModelProvider {
     const choice = data.choices?.[0];
     if (!choice) throw classifyError(new Error('Gemini returned no choices'), 'gemini');
 
-    // Cache the raw assistant message keyed by tool_call IDs (preserves thought_signature)
-    if (choice.message?.tool_calls?.length) {
-      const tcIds = choice.message.tool_calls.map((tc: any) => tc.id).sort().join(',');
-      this.rawAssistantMessages.set(tcIds, choice.message);
-      // Evict old entries to prevent unbounded growth
-      if (this.rawAssistantMessages.size > 50) {
-        const firstKey = this.rawAssistantMessages.keys().next().value;
-        if (firstKey) this.rawAssistantMessages.delete(firstKey);
-      }
-    }
-
     const result: CompletionResult = {
       content: choice.message?.content || '',
       finishReason: choice.finish_reason || 'stop',
@@ -170,6 +153,11 @@ export class GeminiProvider implements ModelProvider {
       },
       model: data.model || options.model,
       latencyMs,
+      // Stash raw assistant message so thought_signature survives the next
+      // turn. Travels on AgentMessage.providerRaw — no singleton, no eviction.
+      ...(choice.message?.tool_calls?.length
+        ? { providerRaw: choice.message as Record<string, unknown> }
+        : {}),
     };
 
     if (choice.message?.tool_calls?.length) {
@@ -191,9 +179,11 @@ export class GeminiProvider implements ModelProvider {
   }
 
   /**
-   * Format messages for raw fetch, preserving Gemini-specific fields like thought_signature.
-   * For assistant messages with tool_calls, we replay the raw cached message from Gemini
-   * instead of reconstructing it (which would lose thought_signature).
+   * Format messages for raw fetch, preserving Gemini-specific fields like
+   * thought_signature. For assistant messages with tool_calls, replay the
+   * provider-raw payload captured on the prior turn (travels on the
+   * AgentMessage itself — no provider-side singleton) instead of
+   * reconstructing the message, which would lose thought_signature.
    */
   private formatMessagesRaw(messages: AgentMessage[]): unknown[] {
     const result: unknown[] = [];
@@ -206,15 +196,17 @@ export class GeminiProvider implements ModelProvider {
           tool_call_id: msg.toolCallId || 'unknown',
         });
       } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        // Look up cached raw message by tool_call IDs (preserves thought_signature)
-        const tcIds = msg.toolCalls.map(tc => tc.id).sort().join(',');
-        const cachedMsg = this.rawAssistantMessages.get(tcIds);
-
-        if (cachedMsg) {
-          result.push(cachedMsg);
+        if (msg.providerRaw) {
+          result.push(msg.providerRaw);
         } else {
-          // Fallback: reconstruct (may be missing thought_signature for Gemini 3)
-          modelLogger.warn({ toolCallIds: tcIds }, 'No cached raw Gemini message — thought_signature may be missing');
+          // Fallback: reconstruct. Missing thought_signature — Gemini 3 may
+          // degrade. Happens for assistant tool-call messages that weren't
+          // produced by this provider on this conversation (e.g. session
+          // restore from DB).
+          modelLogger.warn(
+            { toolCallIds: msg.toolCalls.map(tc => tc.id).join(',') },
+            'No providerRaw on Gemini assistant message — thought_signature may be missing',
+          );
           result.push({
             role: 'assistant',
             content: msg.content || '',
@@ -242,9 +234,13 @@ export class GeminiProvider implements ModelProvider {
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const client = await this.createClient();
 
+    // Use the raw formatter (same as non-streaming complete()) so
+    // thought_signature on cached assistant tool_calls and the `system`
+    // role both survive. Without this, streaming sent a degraded
+    // conversation while non-streaming sent the canonical one.
     const params: ChatCompletionCreateParams = {
       model: options.model,
-      messages: this.formatMessages(this.sanitizeMessages(options.messages)),
+      messages: this.formatMessagesRaw(this.sanitizeMessages(options.messages)) as ChatCompletionMessageParam[],
       stream: true,
     };
 
@@ -372,45 +368,4 @@ export class GeminiProvider implements ModelProvider {
     });
   }
 
-  private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
-      if (msg.role === 'tool') {
-        // Gemini requires non-empty tool_call_id and string content
-        return {
-          role: 'tool' as const,
-          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-          tool_call_id: msg.toolCallId || 'unknown',
-        };
-      }
-
-      if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        // Gemini requires content to be a string (not null) when tool_calls are present
-        return {
-          role: 'assistant' as const,
-          content: msg.content || '',
-          tool_calls: msg.toolCalls.map((tc) => ({
-            id: tc.id,
-            type: 'function' as const,
-            function: {
-              name: tc.name,
-              arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
-            },
-          })),
-        };
-      }
-
-      // Gemini doesn't support 'system' role — convert to user message
-      if (msg.role === 'system') {
-        return {
-          role: 'user' as const,
-          content: msg.content,
-        };
-      }
-
-      return {
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      };
-    });
-  }
 }

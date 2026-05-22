@@ -5,6 +5,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -83,15 +84,27 @@ export class GrokProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
+          const rawArgs = tc.function.arguments || '';
           try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) as Record<string, unknown> };
+            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
           } catch (parseErr) {
+            const repaired = repairTruncatedJson(rawArgs);
+            if (repaired) {
+              try {
+                const parsed = JSON.parse(repaired) as Record<string, unknown>;
+                modelLogger.warn(
+                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
+                  'Recovered truncated tool-call JSON via repairTruncatedJson',
+                );
+                return { id: tc.id, name: tc.function.name, arguments: parsed };
+              } catch { /* fall through */ }
+            }
             throw new ClassifiedError({
               reason: FailoverReason.TOOL_CALL_INVALID,
               recovery: RecoveryAction.RETRY_NOW,
               message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
               providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: tc.function.arguments?.slice(0, 300) },
+              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
               cause: parseErr,
             });
           }

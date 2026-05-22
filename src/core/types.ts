@@ -41,6 +41,15 @@ export interface AgentMessage {
    * back on the next turn. Ignored by every other provider's formatter.
    */
   reasoningContent?: string;
+  /**
+   * Provider-specific raw payload that must be echoed verbatim on the next
+   * turn. Currently used by Gemini to preserve `thought_signature` on
+   * tool-calling turns (Gemini 3 degrades or rejects without it). Travels
+   * with the message rather than living in a provider singleton — no
+   * cross-session leakage, no eviction needed. Opaque to everything except
+   * the provider that produced it.
+   */
+  providerRaw?: Record<string, unknown>;
 }
 
 export interface ToolCall {

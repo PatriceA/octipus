@@ -6,6 +6,7 @@ import type {
 import { getConfig } from '@/config';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -134,15 +135,27 @@ export class OllamaProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
+          const rawArgs = tc.function.arguments || '';
           try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) as Record<string, unknown> };
+            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
           } catch (parseErr) {
+            const repaired = repairTruncatedJson(rawArgs);
+            if (repaired) {
+              try {
+                const parsed = JSON.parse(repaired) as Record<string, unknown>;
+                modelLogger.warn(
+                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
+                  'Recovered truncated tool-call JSON via repairTruncatedJson',
+                );
+                return { id: tc.id, name: tc.function.name, arguments: parsed };
+              } catch { /* fall through */ }
+            }
             throw new ClassifiedError({
               reason: FailoverReason.TOOL_CALL_INVALID,
               recovery: RecoveryAction.RETRY_NOW,
               message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
               providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: tc.function.arguments?.slice(0, 300) },
+              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
               cause: parseErr,
             });
           }
@@ -187,20 +200,11 @@ export class OllamaProvider implements ModelProvider {
     const resolvedEndpoint = options.endpoint || this.endpoint;
     const startTime = Date.now();
 
-    // Format messages for native API — include tool_call_id for tool responses
-    const messages = this.formatMessages(options.messages).map((m) => {
-      const native: Record<string, unknown> = { role: m.role };
-      if (m.role === 'tool') {
-        native.content = typeof (m as any).content === 'string' ? (m as any).content : '';
-        if ((m as any).tool_call_id) native.tool_call_id = (m as any).tool_call_id;
-      } else if (m.role === 'assistant' && (m as any).tool_calls?.length) {
-        native.content = (m as any).content || '';
-        native.tool_calls = (m as any).tool_calls;
-      } else {
-        native.content = typeof (m as any).content === 'string' ? (m as any).content : '';
-      }
-      return native;
-    });
+    // Native /api/chat shape (per https://docs.ollama.com/capabilities/tool-calling):
+    //   - tool messages keyed by `tool_name` (not `tool_call_id`)
+    //   - assistant.tool_calls[].function.arguments is an OBJECT (not stringified)
+    // The OpenAI /v1 formatter does the opposite — don't reuse it here.
+    const messages = this.formatMessagesNative(options.messages);
 
     const body: Record<string, unknown> = {
       model: options.model,
@@ -300,6 +304,27 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    // think:false must go through native /api/chat (the /v1 endpoint
+    // ignores the flag). Implement as non-streamed native completion
+    // yielded as a single chunk — matches complete()'s branch on line 76.
+    if (options.extraBody?.think === false) {
+      const result = await this.completeNative(options);
+      if (result.content) yield { content: result.content };
+      if (result.toolCalls?.length) {
+        for (const tc of result.toolCalls) {
+          yield {
+            toolCallDelta: {
+              id: tc.id,
+              name: tc.name,
+              arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
+            },
+          };
+        }
+      }
+      yield { finishReason: result.finishReason };
+      return;
+    }
+
     const client = this.createClient(options.endpoint, options.apiKey);
 
     const params: ChatCompletionCreateParams = {
@@ -449,6 +474,47 @@ export class OllamaProvider implements ModelProvider {
       return {
         role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
+      };
+    });
+  }
+
+  /**
+   * Format messages for Ollama's NATIVE /api/chat endpoint.
+   * Differs from the /v1 (OpenAI-compat) shape:
+   *   - tool messages use `tool_name` (not `tool_call_id`)
+   *   - assistant.tool_calls[].function.arguments is an OBJECT (not string)
+   *   - no `type: 'function'` wrapper on tool_calls
+   * Per https://docs.ollama.com/capabilities/tool-calling
+   */
+  private formatMessagesNative(messages: AgentMessage[]): Array<Record<string, unknown>> {
+    return messages.map((msg) => {
+      if (msg.role === 'tool') {
+        const native: Record<string, unknown> = {
+          role: 'tool',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        };
+        if (msg.name) native.tool_name = msg.name;
+        return native;
+      }
+
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        return {
+          role: 'assistant',
+          content: msg.content || '',
+          tool_calls: msg.toolCalls.map((tc) => ({
+            function: {
+              name: tc.name,
+              arguments: typeof tc.arguments === 'string'
+                ? (() => { try { return JSON.parse(tc.arguments); } catch { return {}; } })()
+                : tc.arguments,
+            },
+          })),
+        };
+      }
+
+      return {
+        role: msg.role,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
       };
     });
   }
