@@ -29,7 +29,7 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 
-const HELP = `Octipus — one nervous system, eight arms.
+const HELP = `Octipus — one nervous system, many arms.
 
 Usage: octi <command> [options]
 
