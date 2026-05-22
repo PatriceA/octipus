@@ -278,11 +278,25 @@ export class CLIArgumentBuilder {
     // cannot silently exit 1 for every codex-routed swarm child. Default to
     // gpt-5.4 (the successor per codex migration notice) unless overridden.
     const modelOverride = process.env.CODEX_MODEL || settings?.model || 'gpt-5.4';
+    // Sandbox / approval policy: codex `exec` defaults to `--sandbox
+    // read-only`, so spawned agents (e.g. pipeline architecture stages)
+    // cannot write the ADRs / docs they produce. Mirror the write-enabled
+    // defaults the Claude (`bypassPermissions`) and Gemini (`yolo`) CLI
+    // adapters already use. Operators can downgrade to read-only by
+    // setting permissionMode='read-only' on the model row.
+    // Sandbox policy: `codex exec` is non-interactive (no approval prompts
+    // to suppress) but it does honor `--sandbox`. Default is read-only,
+    // which blocks pipeline stages from writing the docs/code they
+    // produce — see Claude (`bypassPermissions`) and Gemini (`yolo`)
+    // adapters above for the write-enabled equivalents. Operators can
+    // dial back per-model via `permissionMode` on the model row.
+    const codexPermMode = settings?.permissionMode || 'workspace-write';
     const baseArgs = [
       'exec',
       '--skip-git-repo-check',
       '--json',
       '--ephemeral',
+      '--sandbox', codexPermMode,
       '-c', `model="${modelOverride}"`,
     ];
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
