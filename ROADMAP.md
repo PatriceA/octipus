@@ -36,6 +36,14 @@ deferred from that plan remains in-flight.
   memory-redesign Phase D extractor + judge + retrieval pipeline
   has integration-test coverage on the data layer only.
 
+- **Live Artifacts — BETA.** `src/core/artifacts/`, `/api/artifacts`,
+  `web/app/artifacts/`, and the `create_live_artifact` meta-tool are
+  live behind a BETA flag in the sidebar and on the page header.
+  Outstanding work: subdomain hosting hardening (host header /
+  CSP origin sandboxing), embed-mode auth scopes, retention &
+  garbage-collection policy, slug-collision UX, agent-authored
+  refresh loop. Stays in **Now** until the BETA flag drops.
+
 - **Schema directory grouping.** `src/db/schema/` is 47 flat files.
   Still searchable, but the next 5-10 additions will start to bite.
   Proposed grouping: `schema/{auth,orchestration,rag,memory,artifacts,audit,settings}/`.

@@ -54,7 +54,12 @@ export default function ArtifactsPage() {
     <div className="p-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Live Artifacts</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            Live Artifacts
+            <span className="rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+              BETA
+            </span>
+          </h1>
           {mode && (
             <p className="mt-1 text-xs text-on-surface-variant">
               {mode.mode === 'subdomain'
