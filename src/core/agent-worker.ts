@@ -41,14 +41,26 @@ export class AgentWorker extends BaseAgentWorker {
   /** Track consecutive same-tool-name calls regardless of args — catches chatty LLMs looping on send_status_update with slightly different messages */
   private lastToolNames: string = '';
   private consecutiveSameNameCount: number = 0;
-  private static MAX_SAME_NAME_REPEATS = 2;
   /**
-   * Tools that are LEGITIMATELY called many times in a row by their owner
-   * role. The same-tool-name guard above (intended for chatty
-   * `send_status_update` spammers) used to trip on these and disable the
-   * orchestrator after two `spawn_child` calls — but spawning multiple
-   * children sequentially across iterations is the orchestrator's
-   * primary job. The guard remains active for any other tool name.
+   * After this many consecutive iterations on the same tool-name signature,
+   * tools get disabled and the model is forced to a plain-text reply. The
+   * threshold has to be high enough to survive normal doer workflows
+   * (read 8 files → write 5 files often hits the same name pattern across
+   * 3-4 iterations) and low enough to still catch genuine spam loops on
+   * status/notification tools. 5 is the empirical sweet spot.
+   */
+  private static MAX_SAME_NAME_REPEATS = 5;
+  /**
+   * Tools that are LEGITIMATELY called many times in a row. The same-tool-
+   * name guard is meant to catch chatty status-report / notification loops
+   * (`send_status_update` spinning with slightly different progress
+   * messages), NOT productive work like reading or writing files. Anything
+   * that produces real side effects / new state belongs here.
+   *
+   * Matching is exact-name AND by namespace prefix (`filesystem__`,
+   * `shell__`, `git__`, `web_`, `code__`) — see callsAllowList below.
+   * Status / notification tools stay off this list so the guard still
+   * catches them.
    */
   private static REPEAT_ALLOWED_TOOLS = new Set<string>([
     'spawn_child',
@@ -57,6 +69,14 @@ export class AgentWorker extends BaseAgentWorker {
     'list_pipeline_templates',
     'request_user_approval',
   ]);
+  /**
+   * Namespace prefixes (matched via tc.name.startsWith) for tools that
+   * always count as productive work — file I/O, shell, git, web fetches,
+   * code edits. The doer roles (coding, design, devops) routinely chain
+   * many of these in sequence and tripping the same-name guard wastes
+   * their progress.
+   */
+  private static REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'code__', 'search_'];
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
@@ -821,11 +841,16 @@ export class AgentWorker extends BaseAgentWorker {
         // messages — the per-signature loop above misses them because args
         // differ every call.
         const toolNameSignature = [...completion.toolCalls].map(tc => tc.name).sort().join(',');
-        // Skip the guard entirely when every tool call this iteration is on
-        // the allowed-repeat list (orchestrator meta-tools). Calling
-        // `spawn_child` ten times in a row is the orchestrator delegating to
-        // ten specialists — exactly what we want.
-        const callsAllowList = completion.toolCalls.every(tc => AgentWorker.REPEAT_ALLOWED_TOOLS.has(tc.name));
+        // Skip the guard entirely when every tool call this iteration is
+        // productive work (orchestrator meta-tools, filesystem/shell/git/web/
+        // code namespaces). Reading 8 files in sequence then writing 5 is a
+        // designer/coder doing their job — the guard is meant for notification
+        // spam (send_status_update with slightly varying progress text), not
+        // genuine file I/O bursts.
+        const callsAllowList = completion.toolCalls.every(tc =>
+          AgentWorker.REPEAT_ALLOWED_TOOLS.has(tc.name)
+          || AgentWorker.REPEAT_ALLOWED_PREFIXES.some(p => tc.name.startsWith(p)),
+        );
         if (!callsAllowList && toolNameSignature === this.lastToolNames) {
           this.consecutiveSameNameCount++;
           if (this.consecutiveSameNameCount >= AgentWorker.MAX_SAME_NAME_REPEATS) {
