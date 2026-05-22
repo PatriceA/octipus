@@ -7,6 +7,7 @@ import type {
 import { getConfig } from '@/config';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage, ToolCall } from '@/core/types';
+import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
@@ -353,6 +354,39 @@ export class LiteLLMClient {
         latencyMs,
         ...(reasoningContent ? { reasoningContent } : {}),
       };
+
+      // DeepSeek native-template leak recovery — fires for any DeepSeek
+      // model routed through LiteLLM (e.g. `deepseek-v4-pro-litellm`) since
+      // the direct DeepSeek provider doesn't see those. See the direct
+      // provider's matching block for context.
+      if (!choice.message.tool_calls?.length && DEEPSEEK_TEMPLATE_LEAK.test(content)) {
+        const recovered = parseDsmlToolCalls(content);
+        if (recovered.length) {
+          modelLogger.warn(
+            {
+              model: response.model,
+              recoveredCount: recovered.length,
+              recoveredTools: recovered.map((tc) => tc.name),
+              provider: 'litellm',
+            },
+            'DeepSeek-via-litellm emitted native DSML/template markup in content channel — recovered as structured tool_calls',
+          );
+          result.toolCalls = recovered;
+          result.content = '';
+          return result;
+        }
+        modelLogger.warn(
+          { model: response.model, contentPreview: content.slice(0, 200), provider: 'litellm' },
+          'DeepSeek-via-litellm emitted native tool-call template in content channel — recovery failed, forcing retry',
+        );
+        throw new ClassifiedError({
+          reason: FailoverReason.TOOL_CALL_INVALID,
+          recovery: RecoveryAction.RETRY_NOW,
+          message: `DeepSeek chat-template leak via litellm: tool-call markup emitted as content, unrecoverable`,
+          providerHint: 'litellm',
+          metadata: { contentPreview: content.slice(0, 300) },
+        });
+      }
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
