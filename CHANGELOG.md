@@ -7,6 +7,87 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Orchestrator freedom + Hermes-inspired curator (2026-05-24)
+
+Branch `claude/orchestrator-freedom-hermes-fixes`. 8-phase land
+inspired by a deep-dive into the Hermes-agent and pi-mono repos.
+Headline: the orchestrator can now narrate, supervise, and chat to
+the user while children run — it used to block on every spawn. Plus
+a Hermes-style skill curator, a `/model` slash command, and a pile
+of UX polish that surfaced while wiring everything together.
+
+User-visible:
+
+- **Orchestrator can talk while children work.** `spawn_child mode:
+  "detach"` is now valid at depth 0 — the orchestrator fires up to
+  six parallel agents, narrates progress, takes side-channel
+  questions, then synthesizes via `collect_children` (or the
+  framework auto-collects before the final reply). Previously every
+  spawn was a blocking await: persona-narration events fired but the
+  UI only saw them after the worker finished, so it looked like
+  narration only triggered on errors. Now narration appears live.
+- **Narration actually appears in chat.** The persona-narration
+  bridge has been emitting `swarm.narration` events since the
+  2026-05-20 ship but no surface rendered them — chat went silent
+  during waits. New `narration` message role + chat-UI handler
+  surfaces them as compact inline italics.
+- **Tool-call streaming in the agent card.** Per-tool
+  `tool_call_complete` events flip rows from spinner → check (or
+  red X) the moment a tool returns, with duration + result preview.
+  While the agent is running you see the live stream of what it's
+  doing; once the agent finishes the inline list collapses and the
+  tool count badge stays in the agent header. Survives the 10s
+  REST poll without flickering.
+- **Inline code stays inline.** LLM outputs like "the container is
+  ` octipus-pg `" rendered as full-width fenced blocks. New
+  formatting rule in every role prompt + a UI heuristic that
+  collapses short single-line fenced blocks (≤80 chars, no
+  language) to inline code.
+- **Swarm-tree "Task brief" shows the full brief.** The WS event
+  used to slice the preview to 200 chars while the DB stored 4000 —
+  the modal looked truncated until a hard reload. Slice unified at
+  4000; modal height bumped from `max-h-72` to `max-h-[60vh]`.
+- **`/model` slash command.** Switch the orchestrator model for
+  the current session without editing config. `/model <id|name>`
+  to set, `/model clear` to revert, `/model list` to browse,
+  `/model` to show the active override. Bad picks (reasoner,
+  no-tools, known-unreliable for orchestration) get rejected at
+  command time, not mid-turn. In-memory; resets on restart.
+
+Operator-visible:
+
+- **Skill curator (Phase 4 — Hermes-inspired learning loop).**
+  Skills now track `last_used_at`, `usage_count`, `archived_at`,
+  `curation_notes` (migration `0061_skill_curator_lifecycle`).
+  A debounced in-process tracker (5s window or 32-id threshold,
+  race-safe follow-up flush) records every prompt-injection of a
+  skill. `runSkillCurator()` flags skills unused >30d, auto-archives
+  unused >90d with a note. `findActiveByTopic` now filters archived.
+- **Cross-provider tool-call IDs survive edge cases.**
+  `normalizeToolCallId` falls back to a hash when stripping
+  invalid chars would leave an empty string — earlier those silently
+  dropped the assistant↔tool message link. Added idempotency and
+  length-cap tests.
+- **Orchestrator detach budget is configurable per level.**
+  `LEVEL_DEFAULT[0].maxPendingDetached`: 0 → 6 (matches `fanOut`).
+  Override per deployment via `config.swarm.levelDefaults.orchestrator`.
+
+Internal:
+
+- New: `src/skills/{curator,usage-tracker}.ts`,
+  `src/core/orchestrator/session-model-override.ts`,
+  `src/core/commands/model.ts`,
+  `src/core/orchestrator/meta-tools-detach.test.ts`,
+  `src/core/tool-executor-events.test.ts`.
+- Reshape: `ModelSelector.selectForOrchestration(sessionId?)` runs
+  both the default model and the session override through the same
+  suitability gate.
+- Roadmap items closed by this branch: **Skill auto-extension —
+  promotion path** (curator covers archive lifecycle; promotion UI
+  remains).
+- Tests: 2009 / 0 / 128 pass / fail / skip across 200 unit files;
+  134/138 e2e pass (4 failures pre-existing — env config + flake).
+
 ### UX + personality revamp (2026-05-20)
 
 Branch `claude/octopus-ux-personality-swToC`. Five-slice land of the
