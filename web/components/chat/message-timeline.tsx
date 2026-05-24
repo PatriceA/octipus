@@ -36,7 +36,7 @@ export interface MessageMetadata {
 
 export interface ChatMessageData {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'narration';
   content: string;
   timestamp: Date;
   agentId?: string;
@@ -49,7 +49,16 @@ export interface TrackedAgent {
   role: string;
   model: string;
   status: 'running' | 'completed' | 'failed' | 'stopped';
-  toolCalls: Array<{ id: string; name: string; argsSummary?: string }>;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    argsSummary?: string;
+    /** Filled by the `tool_call_complete` event (Phase 5). */
+    status?: string;
+    durationMs?: number;
+    resultPreview?: string;
+    error?: string;
+  }>;
   startTime: number;
   endTime?: number;
   durationMs?: number;
@@ -201,7 +210,20 @@ function MessageContent({ content }: { content: string }) {
             children?: React.ReactNode;
           } & React.HTMLAttributes<HTMLElement>) {
             const text = String(children ?? '').replace(/\n$/, '');
-            if (inline) {
+            // Heuristic — if the model wraps a short single-line token
+            // (command, container name, file path) in a fenced block
+            // without specifying a language, render it as inline code so
+            // the chat bubble keeps its prose flow. Multi-line content,
+            // language-tagged blocks, and anything over ~80 chars still
+            // go through the full CodeBlock (with copy button).
+            const match = /language-(\w+)/.exec(className || '');
+            const looksLikeAccidentalFence =
+              !inline &&
+              !match &&
+              !text.includes('\n') &&
+              text.length > 0 &&
+              text.length <= 80;
+            if (inline || looksLikeAccidentalFence) {
               return (
                 <code
                   className="bg-surface-container-highest px-1 py-0.5 rounded font-mono text-sm"
@@ -211,7 +233,6 @@ function MessageContent({ content }: { content: string }) {
                 </code>
               );
             }
-            const match = /language-(\w+)/.exec(className || '');
             return <CodeBlock language={match?.[1] || 'text'} code={text} />;
           },
           p({ children }) {
@@ -279,6 +300,18 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
         <div className="text-center text-sm italic text-on-surface-variant max-w-lg px-4 py-2 rounded-lg bg-surface-container/60">
           <MessageContent content={content} />
           <p className="text-[10px] mt-1 text-on-surface-variant/60">{timeStr}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (role === 'narration') {
+    return (
+      <div className="flex justify-center py-1 group">
+        <div className="inline-flex items-center gap-2 text-xs italic text-on-surface-variant/70 max-w-lg px-3 py-1 rounded-full bg-surface-container/30 border border-outline-variant/10">
+          <Volume2 className="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
+          <span className="whitespace-pre-wrap">{content}</span>
+          <span className="text-[10px] text-on-surface-variant/40 opacity-0 group-hover:opacity-100 transition-opacity">{timeStr}</span>
         </div>
       </div>
     );

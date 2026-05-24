@@ -324,15 +324,27 @@ describe('createSpawnChildTool', () => {
     expect(String(out)).toContain('already at max pending detached (3)');
   });
 
-  test('detach mode: rejected at depth 0 (orchestrator cannot detach-spawn agents)', async () => {
-    const parent = makeParent(); // depth 0
+  test('detach mode: accepted at depth 0 (orchestrator can detach-spawn agents — phase 1 freedom)', async () => {
+    const parent = makeParent(); // depth 0 (orchestrator)
+    const seen: Array<{ id: string }> = [];
+    let count = 0;
     const spawner = {
-      spawnChild: async () => { throw new Error('should not be called'); },
+      spawnChild: async () => ({
+        nodeId: 'agent-detached',
+        kind: 'agent' as const,
+        status: 'ok' as const,
+        output: 'done',
+        usedTokens: 10,
+        durationMs: 100,
+        spawnedChildren: [],
+      }),
     } as unknown as SwarmSpawner;
     const tool = createSpawnChildTool(parent, spawner, {
-      registerPending: () => {},
-      pendingCount: () => 0,
-      maxPendingDetached: () => 3,
+      registerPending: (pc) => { seen.push({ id: pc.childId }); count++; },
+      pendingCount: () => count,
+      // Mirrors LEVEL_DEFAULT[0].maxPendingDetached after the orchestrator
+      // freedom rework — 0 used to be the value here and blocked detach.
+      maxPendingDetached: () => 6,
     });
     const out = await tool.execute(
       {
@@ -344,7 +356,33 @@ describe('createSpawnChildTool', () => {
       },
       { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
-    expect(String(out)).toContain("mode='detach' is only valid for agent");
+    expect(seen).toHaveLength(1);
+    expect(String(out)).toContain('status="pending"');
+    expect(String(out)).toContain('mode="detach"');
+  });
+
+  test('detach mode: rejected when level config provides zero detach budget', async () => {
+    const parent = makeParent(); // depth 0
+    const spawner = {
+      spawnChild: async () => { throw new Error('should not be called'); },
+    } as unknown as SwarmSpawner;
+    const tool = createSpawnChildTool(parent, spawner, {
+      registerPending: () => {},
+      pendingCount: () => 0,
+      // Simulates a deployment that explicitly disables orchestrator detach.
+      maxPendingDetached: () => 0,
+    });
+    const out = await tool.execute(
+      {
+        topic: 'research',
+        subtopic: 'page-1',
+        taskBrief: 'brief',
+        expectedOutput: { shape: 'summary' },
+        mode: 'detach',
+      },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(String(out)).toContain('detach-mode disabled');
   });
 
   test('detach mode without hooks falls back to await (no silent drop)', async () => {

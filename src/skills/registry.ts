@@ -2,6 +2,7 @@ import { skillRepository } from '@/db/repositories/skill-repository';
 import type { Skill } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
 import { isExternalSkillId, loadExternalSkills, type LoadExternalSkillsOptions } from './external-loader';
+import { recordSkillUsage } from './usage-tracker';
 
 function buildPromptFragment(skill: Skill): string {
   // Prefer markdown content (Claude Code-style) over structured fields
@@ -120,6 +121,7 @@ export class SkillRegistry {
   async buildPromptFragment(skillIds: string[]): Promise<string> {
     const found = await this.getByIds(skillIds);
     if (found.length === 0) return '';
+    recordSkillUsage(found.filter((s) => !isExternalSkillId(s.id)).map((s) => s.id));
     return found.map(buildPromptFragment).join('\n\n');
   }
 
@@ -134,6 +136,9 @@ export class SkillRegistry {
     if (skillIds.length === 0) return '';
     const found = await this.getByIds(skillIds);
     if (found.length === 0) return '';
+    // Summary-only injection still counts as usage — the LLM saw the skill
+    // exists and may load its full content via the MCP tool.
+    recordSkillUsage(found.filter((s) => !isExternalSkillId(s.id)).map((s) => s.id));
     const lines = [
       'Available skills (call `octipus_get_skill` with the id to load the full spec):',
       ...found.map(buildPromptSummary),
@@ -148,6 +153,7 @@ export class SkillRegistry {
   async buildTopicPromptFragment(topic: string): Promise<string> {
     const found = await this.getActiveSkillsForTopic(topic);
     if (found.length === 0) return '';
+    recordSkillUsage(found.map((s) => s.id));
     return found.map(buildPromptFragment).join('\n\n');
   }
 }

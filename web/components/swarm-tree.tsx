@@ -512,8 +512,8 @@ export default function SwarmTree({
           <div className="space-y-3">
             <div className="text-xs text-on-surface-variant">Topic</div>
             <div className="font-mono text-xs wrap-break-word">{detailNode.topicPath}</div>
-            <div className="text-xs text-on-surface-variant mt-3">Brief preview</div>
-            <pre className="font-mono text-[11px] whitespace-pre-wrap bg-surface-container-highest/60 rounded p-2 max-h-72 overflow-auto">
+            <div className="text-xs text-on-surface-variant mt-3">Task brief</div>
+            <pre className="font-mono text-[11px] whitespace-pre-wrap bg-surface-container-highest/60 rounded p-2 max-h-[60vh] overflow-auto">
               {detailNode.taskBriefPreview || '(not available)'}
             </pre>
           </div>

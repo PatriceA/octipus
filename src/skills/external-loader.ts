@@ -171,6 +171,13 @@ function toSkill(loc: ScanLocation, found: FoundFile): Skill | undefined {
     descriptionEmbedding: null,
     descriptionHash: null,
     alwaysInject: false,
+    // External skills (filesystem) live outside the DB, so the curator
+    // lifecycle fields are inert here — initialize to the "fresh, never
+    // archived, never used" shape so the type matches the DB row.
+    lastUsedAt: null,
+    usageCount: 0,
+    archivedAt: null,
+    curationNotes: null,
     createdAt: now,
     updatedAt: now,
   } satisfies Skill;

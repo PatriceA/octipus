@@ -21,6 +21,10 @@ interface ToolCallInfo {
   id: string;
   name: string;
   argsSummary?: string;
+  status?: string;
+  durationMs?: number;
+  resultPreview?: string;
+  error?: string;
 }
 
 export interface FileChange {
@@ -570,6 +574,32 @@ export default function ChatPage() {
         break;
 
       case 'swarm_event':
+        // Persona narration: render as inline chat bubble so the orchestrator
+        // appears to "speak" while subagents work. Without this the bridge
+        // emits but no surface displays it, which manifests as "narration
+        // never fires" in the UI.
+        if (data.event === 'swarm.narration') {
+          const np = data.payload as { text?: string };
+          const text = (np?.text ?? '').trim();
+          const sid = eventSessionId || activeSessionId;
+          if (text && sid) {
+            if (!activeSessionId) setActiveSessionId(sid);
+            updateSessionState(sid, (prev) => ({
+              ...prev,
+              messages: [
+                ...prev.messages,
+                {
+                  id: `narr-${sid}-${Date.now()}-${prev.messages.length}`,
+                  role: 'narration',
+                  content: text,
+                  timestamp: new Date(data.timestamp ?? Date.now()),
+                },
+              ],
+            }));
+          }
+          break;
+        }
+
         // Swarm lifecycle events — funnel into the SwarmTree component AND
         // into the per-session trackedAgents map so the sidepanel's agent
         // count / duration / iteration / token columns populate live.
@@ -926,6 +956,61 @@ export default function ChatPage() {
               };
             }
           }
+          return { ...prev, trackedAgents: next };
+        });
+      }
+      // Phase 5: per-tool completion event — flip the tracked tool call
+      // entry's status the moment the tool returns so the user sees live
+      // progress instead of all tools turning "done" at end-of-batch.
+      // If the event arrives before the matching `action` event (rare:
+      // React batching could in theory reorder setState commits),
+      // synthesize a placeholder so the completion isn't lost.
+      else if (d?.type === 'tool_call_complete' && d?.toolCallId) {
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          const completionPatch = {
+            status: String(d.status ?? 'ok'),
+            durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
+            resultPreview: typeof d.resultPreview === 'string' ? d.resultPreview : undefined,
+            error: typeof d.error === 'string' ? d.error : undefined,
+          };
+          if (!existing) {
+            // Agent record not yet hydrated — stash the completion on a
+            // stub so the eventual `action`/`swarm.node_spawned` arrival
+            // can merge it. Stubs are harmless if abandoned.
+            next.set(data.agentId, {
+              id: data.agentId,
+              role: 'unknown',
+              model: '',
+              status: 'running',
+              toolCalls: [{
+                id: String(d.toolCallId),
+                name: typeof d.name === 'string' ? d.name : '',
+                ...completionPatch,
+              }],
+              startTime: Date.now(),
+            });
+            return { ...prev, trackedAgents: next };
+          }
+          let matched = false;
+          const updatedCalls = existing.toolCalls.map(tc => {
+            if (tc.id === d.toolCallId) {
+              matched = true;
+              return { ...tc, ...completionPatch };
+            }
+            return tc;
+          });
+          // Completion came before the start emit landed in this map —
+          // append a partial entry so we still surface the status.
+          if (!matched) {
+            updatedCalls.push({
+              id: String(d.toolCallId),
+              name: typeof d.name === 'string' ? d.name : '',
+              ...completionPatch,
+            });
+          }
+          next.set(data.agentId, { ...existing, toolCalls: updatedCalls });
           return { ...prev, trackedAgents: next };
         });
       }

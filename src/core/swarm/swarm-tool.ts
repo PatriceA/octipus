@@ -105,7 +105,7 @@ export function createSpawnChildTool(
     // return. Multiple `spawn_child` calls per turn are allowed.
     final: false,
     description:
-      'Delegate a sub-topic to a better-fit specialist agent. The child runs autonomously with a restricted tool set and budget, then returns a structured result you must synthesize. Default mode="await" blocks until the child returns; mode="detach" (agents only, depth 1 → 2) returns immediately so you can keep working — you must later call `collect_children` (or the framework auto-collects before your final answer). Detach when the child output is a datapoint, not a dependency.',
+      'Delegate a sub-topic to a better-fit specialist agent. The child runs autonomously with a restricted tool set and budget, then returns a structured result you must synthesize. Default mode="await" blocks until the child returns; mode="detach" returns immediately so you can keep working, narrate to the user, or spawn more siblings — you must later call `collect_children` (or the framework auto-collects before your final answer). Detach when the child output is a datapoint, not a dependency, or when you want to run multiple siblings in parallel without blocking on each one.',
     previewParam: 'subtopic',
     parameters: {
       type: 'object',
@@ -166,7 +166,7 @@ export function createSpawnChildTool(
           enum: ['await', 'detach'],
           description:
             "'await' (default): block until the child returns, synthesize inline. " +
-            "'detach': return { nodeId, status: 'pending' } immediately and keep working — only valid for agent → subagent spawns. " +
+            "'detach': return { nodeId, status: 'pending' } immediately and keep working — available at every depth that has a detach budget (orchestrator can detach agents; agents can detach subagents). " +
             'Call `collect_children` before your final answer, or the framework force-awaits.',
         },
       },
@@ -181,13 +181,13 @@ export function createSpawnChildTool(
       const mode: 'await' | 'detach' = params.mode ?? 'await';
 
       // ── Detach path ─────────────────────────────────────────────────
-      // Only valid at depth 1 (agent spawning subagent). Hooks carry the
+      // Available at any depth whose level config provides a detach
+      // budget (orchestrator → agent and agent → subagent today). Depth 2
+      // has maxPendingDetached=0 and so will be rejected by the cap check
+      // below — no need for a separate depth guard. Hooks carry the
       // pending map + cap — if not wired, downgrade to await so old
       // call-sites don't silently drop children.
       if (mode === 'detach') {
-        if (parent.depth !== 1) {
-          return `spawn_child: mode='detach' is only valid for agent → subagent spawns (current depth ${parent.depth}). Re-call with mode='await'.`;
-        }
         if (!hooks) {
           coreLogger.warn({ parentNodeId: parent.id }, 'spawn_child detach requested but worker did not wire hooks — falling back to await');
         } else {

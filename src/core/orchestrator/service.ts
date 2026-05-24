@@ -6,7 +6,8 @@ import { humanizeProviderError } from '@/core/errors/humanize';
 import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
-import { type AgentNode, LEVEL_DEFAULT } from '@/core/swarm/types';
+import type { AgentWorker } from '@/core/agent-worker';
+import { type AgentNode, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext } from '@/core/types';
@@ -516,7 +517,7 @@ export class OrchestratorService {
     workspaceId: string | null = null,
   ): Promise<{ response: string; agentId: string; sources: string[] }> {
     const agentManager = getAgentManager();
-    const modelName = await this.modelSelector.selectForOrchestration();
+    const modelName = await this.modelSelector.selectForOrchestration(sessionId);
 
     const orchestratorConfig = getRoleConfig('orchestrator');
 
@@ -527,7 +528,7 @@ export class OrchestratorService {
     const orchestratorAbortController = new AbortController();
     const orchestratorAllowedToolIds = new Set<string>();
     // Meta-tool ids that the orchestrator owns by construction.
-    for (const name of ['spawn_child', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
+    for (const name of ['spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
       orchestratorAllowedToolIds.add(name);
     }
     // Role-defined tool ids (if any): orchestrator role uses meta-tools only.
@@ -563,7 +564,27 @@ export class OrchestratorService {
       signal: orchestratorAbortController.signal,
     };
 
-    const metaTools = createMetaTools(this, { parentNode });
+    // Late-bound worker handles for detach-mode `spawn_child` +
+    // `collect_children`. The orchestrator's AgentWorker is created below
+    // by `agentManager.spawn(...)`; both refs are populated once it
+    // returns. Tool executes run inside `worker.run(...)` AFTER this
+    // wiring, so a stray null on these refs would be a bug in the spawn
+    // path, not a race.
+    const orchestratorDetachHookRef: {
+      current: {
+        registerPendingChild: (pc: PendingChild) => void;
+        pendingDetachedCount: () => number;
+      } | null;
+    } = { current: null };
+    const orchestratorWorkerRef: { current: AgentWorker | null } = { current: null };
+
+    const metaTools = createMetaTools(this, {
+      parentNode,
+      swarmRefs: {
+        detachHookRef: orchestratorDetachHookRef,
+        workerRef: orchestratorWorkerRef,
+      },
+    });
 
     let systemPrompt = orchestratorConfig.systemPromptTemplate;
     if (guardFlags.length > 0) {
@@ -715,6 +736,26 @@ export class OrchestratorService {
     });
 
     const agentId = worker.getContext().id;
+
+    // Wire detach refs: bind the worker's pending-child methods so
+    // `spawn_child` (detach mode) and `collect_children` can reach them.
+    // Only full AgentWorkers expose these methods — CLI workers won't,
+    // and the refs simply stay null (the spawn-tool downgrades to await
+    // when hooks are missing).
+    const maybeWorker = worker as unknown as {
+      registerPendingChild?: (pc: PendingChild) => void;
+      pendingDetachedCount?: () => number;
+    };
+    if (
+      typeof maybeWorker.registerPendingChild === 'function' &&
+      typeof maybeWorker.pendingDetachedCount === 'function'
+    ) {
+      orchestratorDetachHookRef.current = {
+        registerPendingChild: maybeWorker.registerPendingChild.bind(worker),
+        pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
+      };
+      orchestratorWorkerRef.current = worker as unknown as AgentWorker;
+    }
 
     // Swarm: promote parent node id + persist root swarm_node row.
     parentNode.id = agentId;
