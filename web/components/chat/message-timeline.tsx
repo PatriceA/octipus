@@ -450,46 +450,6 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
           </span>
         )}
       </div>
-
-      {/* Live tool stream — visible only while the agent is running so the
-          chat doesn't grow indefinitely. After the agent finishes, the
-          count badge above is enough; the swarm tree + side panel keep
-          the full history for users who want to inspect it. */}
-      {agent.status === 'running' && agent.toolCalls.length > 0 && (
-        <div className="mt-2 space-y-1 pl-5">
-          {agent.toolCalls.map((tc) => {
-            const done = !!tc.status && tc.status !== 'running';
-            const failed = tc.status === 'error' || tc.status === 'cancelled';
-            return (
-              <div
-                key={tc.id}
-                className={cn(
-                  'flex items-center gap-2 text-on-surface-variant transition-opacity',
-                  done && !failed && 'opacity-50',
-                  failed && 'text-error',
-                )}
-              >
-                {done ? (
-                  failed ? (
-                    <XCircle className="h-2.5 w-2.5 shrink-0" />
-                  ) : (
-                    <Check className="h-2.5 w-2.5 shrink-0" />
-                  )
-                ) : (
-                  <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
-                )}
-                <span className="font-mono">{tc.name}</span>
-                {tc.argsSummary && (
-                  <span className="truncate max-w-xs opacity-60">{tc.argsSummary}</span>
-                )}
-                {tc.durationMs != null && done && (
-                  <span className="ml-auto tabular-nums opacity-60">{formatDuration(tc.durationMs)}</span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

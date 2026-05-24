@@ -135,6 +135,36 @@ export default function ChatPage() {
     });
   }, []);
 
+  // Transient narration messages — pop in, then fade out after a short
+  // TTL. Used for orchestrator dispatch lines AND per-tool stream
+  // updates ("data arm calls read_file", "data arm · read_file ✓ 0.2s").
+  // Keeps the chat readable instead of growing an ever-longer log of
+  // ephemeral activity. ~8s feels right — long enough to read, short
+  // enough that two siblings don't pile on top of each other.
+  const NARRATION_TTL_MS = 8000;
+  const pushTransientNarration = useCallback((sessionId: string, text: string, timestamp?: Date) => {
+    if (!sessionId || !text.trim()) return;
+    const id = `narr-${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    updateSessionState(sessionId, (prev) => ({
+      ...prev,
+      messages: [
+        ...prev.messages,
+        {
+          id,
+          role: 'narration',
+          content: text,
+          timestamp: timestamp ?? new Date(),
+        },
+      ],
+    }));
+    setTimeout(() => {
+      updateSessionState(sessionId, (prev) => ({
+        ...prev,
+        messages: prev.messages.filter((m) => m.id !== id),
+      }));
+    }, NARRATION_TTL_MS);
+  }, [updateSessionState]);
+
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
     try {
@@ -607,18 +637,7 @@ export default function ChatPage() {
           const sid = eventSessionId || activeSessionId;
           if (text && sid) {
             if (!activeSessionId) setActiveSessionId(sid);
-            updateSessionState(sid, (prev) => ({
-              ...prev,
-              messages: [
-                ...prev.messages,
-                {
-                  id: `narr-${sid}-${Date.now()}-${prev.messages.length}`,
-                  role: 'narration',
-                  content: text,
-                  timestamp: new Date(data.timestamp ?? Date.now()),
-                },
-              ],
-            }));
+            pushTransientNarration(sid, text, new Date(data.timestamp ?? Date.now()));
           }
           break;
         }
@@ -913,10 +932,12 @@ export default function ChatPage() {
         // containing spaces (e.g. "C:/Users/patri/Github Reps/…") get cut
         // off at the first space, which produced a phantom duplicate entry
         // like "C:/Users/patri/Github" sitting next to the real path.
+        let agentRoleForNarration = 'unknown';
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
           if (existing) {
+            agentRoleForNarration = existing.role;
             next.set(data.agentId, {
               ...existing,
               toolCalls: [...existing.toolCalls, ...toolCalls],
@@ -924,6 +945,17 @@ export default function ChatPage() {
           }
           return { ...prev, trackedAgents: next };
         });
+        // Per-tool transient narration — fades in, fades out. Lets the
+        // user see *what* the agent is doing as it runs without filling
+        // the chat with a persistent tool log. argsSummary already gets
+        // truncated to 120 chars upstream so the bubble stays compact.
+        for (const tc of toolCalls) {
+          const argsPart = tc.argsSummary ? ` · ${tc.argsSummary}` : '';
+          pushTransientNarration(
+            sessionId,
+            `${agentRoleForNarration} arm calls \`${tc.name}\`${argsPart}`,
+          );
+        }
       }
       // CLI agent tool use (single tool format from cli_tool_use events)
       else if (d?.type === 'cli_tool_use' && d?.toolName) {
@@ -989,6 +1021,28 @@ export default function ChatPage() {
       // React batching could in theory reorder setState commits),
       // synthesize a placeholder so the completion isn't lost.
       else if (d?.type === 'tool_call_complete' && d?.toolCallId) {
+        // Emit a transient completion narration so the user sees the
+        // outcome ("data arm · read_file · 0.2s" or "data arm · bash
+        // failed: timeout"). Counterpart to the start narration above.
+        const completionRole = (() => {
+          const state = sessionStates.get(sessionId);
+          return state?.trackedAgents.get(data.agentId)?.role ?? 'unknown';
+        })();
+        const toolName = typeof d.name === 'string' ? d.name : '';
+        const status = String(d.status ?? 'ok');
+        const dur = typeof d.durationMs === 'number'
+          ? ` · ${(d.durationMs / 1000).toFixed(d.durationMs >= 1000 ? 1 : 2)}s`
+          : '';
+        const err = typeof d.error === 'string' ? d.error : null;
+        if (toolName) {
+          if (status === 'error' && err) {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` failed: ${err}`);
+          } else if (status === 'cancelled') {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` cancelled`);
+          } else {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\`${dur}`);
+          }
+        }
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
