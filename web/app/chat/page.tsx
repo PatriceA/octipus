@@ -262,19 +262,42 @@ export default function ChatPage() {
       } catch {}
 
       updateSessionState(sessionId, (prev) => {
-        // Merge restored agents with live-tracked agents, preserving live data
-        // (WebSocket events have accurate durationMs before DB persists it)
+        // Merge restored agents with live-tracked agents, preserving live
+        // data. WebSocket events carry status streaming (Phase 5
+        // tool_call_complete: status, durationMs, resultPreview, error)
+        // that the REST `/agents/:id/events` endpoint does NOT replay, so
+        // blindly overwriting toolCalls on every 10s poll caused live
+        // entries to flicker — pop in from WS, get wiped by the next
+        // restore, come back on the next tool, vanish again.
+        //
+        // Rule: live toolCalls win whenever the live list is non-empty
+        // OR carries any streamed status field. REST is the cold-load
+        // fallback for sessions we don't have live data for yet.
         let mergedAgents = prev.trackedAgents;
         if (restoredAgents.size > 0) {
           mergedAgents = new Map(restoredAgents);
-          // Preserve live-tracked data that may be more accurate
           Array.from(prev.trackedAgents.entries()).forEach(([id, liveAgent]) => {
             const restored = mergedAgents.get(id);
-            if (restored && liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)) {
-              mergedAgents.set(id, { ...restored, durationMs: liveAgent.durationMs, endTime: liveAgent.endTime });
-            } else if (!restored) {
+            if (!restored) {
               mergedAgents.set(id, liveAgent);
+              return;
             }
+            const liveHasToolData =
+              liveAgent.toolCalls.length > 0 &&
+              (liveAgent.toolCalls.length >= restored.toolCalls.length ||
+                liveAgent.toolCalls.some(tc => tc.status || tc.durationMs != null || tc.resultPreview || tc.error));
+            mergedAgents.set(id, {
+              ...restored,
+              // Phase 5: keep live tool-call entries so the streamed
+              // status/duration/preview don't get wiped by the poll.
+              toolCalls: liveHasToolData ? liveAgent.toolCalls : restored.toolCalls,
+              // Live durationMs/endTime can be fresher than the DB row.
+              durationMs:
+                liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)
+                  ? liveAgent.durationMs
+                  : restored.durationMs,
+              endTime: liveAgent.endTime ?? restored.endTime,
+            });
           });
         }
         // Merge restored file changes with any live-tracked ones
