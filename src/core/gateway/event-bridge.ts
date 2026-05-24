@@ -58,6 +58,11 @@ export function connectEventBridge(hub: GatewayHub): () => void {
       const subtype = event.type === 'spawned' ? 'agent.spawned'
         : event.type === 'completed' ? 'agent.completed'
         : event.type === 'stopped' ? 'agent.stopped'
+        // 'action' carries the tool-call stream payload — bridge it as
+        // its own subtype so the TUI (and any other `/gateway` client)
+        // can match it instead of fishing through the generic
+        // `agent.event` bucket.
+        : event.type === 'action' ? 'agent.action'
         : 'agent.event';
       hub.publishEvent({
         type: subtype,

@@ -241,6 +241,20 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     };
   })
 
+  // Browser extension bridge status — `octi doctor` queries this to
+  // detect store-installed extensions (which don't drop a copy under
+  // ~/.octipus). Returns `{ connected: true }` only when a browser
+  // is actively holding the bridge WS open.
+  .get('/browser-bridge', async () => {
+    try {
+      const { getBrowserBridge } = await import('@/api/browser-bridge');
+      const bridge = getBrowserBridge();
+      return { connected: bridge.connected };
+    } catch {
+      return { connected: false };
+    }
+  })
+
   // Channel status
   .get('/channels', async () => {
     try {

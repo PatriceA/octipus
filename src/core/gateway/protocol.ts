@@ -43,6 +43,11 @@ export type GatewayEventType =
   | 'agent.completed'
   | 'agent.stopped'
   | 'agent.event'
+  // Tool-call stream from the agent's executor — start / complete /
+  // file_change / cli_tool_use payloads land here. Distinct subtype
+  // so consumers can subscribe just to the stream without picking
+  // up the generic agent.event bucket.
+  | 'agent.action'
   // Per-iteration tick during a worker's reasoning loop. Surfaces so
   // chat/TUI UIs can show a "thinking …" indicator with a progress
   // count instead of a frozen spinner.

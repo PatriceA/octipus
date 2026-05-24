@@ -59,7 +59,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {children}
           </main>
         </div>
-        <GlobalPermissionBanner />
+        {/* On /chat the page renders its own banner just above the
+            prompt input — the floating one would leave a huge gap
+            between the chat content and the viewport bottom. */}
+        {pathname !== '/chat' && <GlobalPermissionBanner />}
       </div>
     </div>
   );

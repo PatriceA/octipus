@@ -12,6 +12,7 @@ import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
+import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
@@ -135,13 +136,13 @@ export default function ChatPage() {
     });
   }, []);
 
-  // Transient narration messages — pop in, then fade out after a short
-  // TTL. Used for orchestrator dispatch lines AND per-tool stream
-  // updates ("data arm calls read_file", "data arm · read_file ✓ 0.2s").
-  // Keeps the chat readable instead of growing an ever-longer log of
-  // ephemeral activity. ~8s feels right — long enough to read, short
-  // enough that two siblings don't pile on top of each other.
-  const NARRATION_TTL_MS = 8000;
+  // Narration messages — orchestrator dispatch lines and per-tool
+  // stream updates ("data arm calls read_file", "data arm · read_file
+  // · 0.2s"). They live in the in-memory session state and persist for
+  // the lifetime of the session (the 10s REST poll preserves them via
+  // `loadSessionMessages` merge). On a fresh page reload they're gone
+  // because narration events aren't persisted server-side — that's
+  // fine: narration is a live trace of activity, not history.
   const pushTransientNarration = useCallback((sessionId: string, text: string, timestamp?: Date) => {
     if (!sessionId || !text.trim()) return;
     const id = `narr-${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -157,12 +158,6 @@ export default function ChatPage() {
         },
       ],
     }));
-    setTimeout(() => {
-      updateSessionState(sessionId, (prev) => ({
-        ...prev,
-        messages: prev.messages.filter((m) => m.id !== id),
-      }));
-    }, NARRATION_TTL_MS);
   }, [updateSessionState]);
 
   // Load sessions from backend
@@ -292,6 +287,15 @@ export default function ChatPage() {
       } catch {}
 
       updateSessionState(sessionId, (prev) => {
+        // Preserve in-memory `role: 'narration'` messages — they're
+        // emitted from WebSocket events (swarm dispatch + per-tool
+        // stream) and never round-tripped through REST, so a naive
+        // overwrite would wipe them on every 10s poll. Splice them
+        // back into the freshly-loaded message list keyed by id.
+        const liveNarrations = prev.messages.filter((m) => m.role === 'narration');
+        const restoredIds = new Set(msgs.map((m) => m.id));
+        const mergedMessages = [...msgs, ...liveNarrations.filter((m) => !restoredIds.has(m.id))]
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         // Merge restored agents with live-tracked agents, preserving live
         // data. WebSocket events carry status streaming (Phase 5
         // tool_call_complete: status, durationMs, resultPreview, error)
@@ -336,7 +340,7 @@ export default function ChatPage() {
               !restoredFileChanges.some(r => r.path === fc.path && r.agentId === fc.agentId)
             )]
           : prev.fileChanges;
-        return { ...prev, messages: msgs, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
+        return { ...prev, messages: mergedMessages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
       });
     } catch {}
   }, [updateSessionState]);
@@ -932,12 +936,15 @@ export default function ChatPage() {
         // containing spaces (e.g. "C:/Users/patri/Github Reps/…") get cut
         // off at the first space, which produced a phantom duplicate entry
         // like "C:/Users/patri/Github" sitting next to the real path.
-        let agentRoleForNarration = 'unknown';
+        //
+        // No "start" narration here: it produced a double-bubble per tool
+        // (start + complete, often <200ms apart) and felt like noise.
+        // The completion narration emitted from `tool_call_complete`
+        // below is enough — it carries name + status + duration.
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
           if (existing) {
-            agentRoleForNarration = existing.role;
             next.set(data.agentId, {
               ...existing,
               toolCalls: [...existing.toolCalls, ...toolCalls],
@@ -945,17 +952,6 @@ export default function ChatPage() {
           }
           return { ...prev, trackedAgents: next };
         });
-        // Per-tool transient narration — fades in, fades out. Lets the
-        // user see *what* the agent is doing as it runs without filling
-        // the chat with a persistent tool log. argsSummary already gets
-        // truncated to 120 chars upstream so the bubble stays compact.
-        for (const tc of toolCalls) {
-          const argsPart = tc.argsSummary ? ` · ${tc.argsSummary}` : '';
-          pushTransientNarration(
-            sessionId,
-            `${agentRoleForNarration} arm calls \`${tc.name}\`${argsPart}`,
-          );
-        }
       }
       // CLI agent tool use (single tool format from cli_tool_use events)
       else if (d?.type === 'cli_tool_use' && d?.toolName) {
@@ -1023,26 +1019,17 @@ export default function ChatPage() {
       else if (d?.type === 'tool_call_complete' && d?.toolCallId) {
         // Emit a transient completion narration so the user sees the
         // outcome ("data arm · read_file · 0.2s" or "data arm · bash
-        // failed: timeout"). Counterpart to the start narration above.
-        const completionRole = (() => {
-          const state = sessionStates.get(sessionId);
-          return state?.trackedAgents.get(data.agentId)?.role ?? 'unknown';
-        })();
+        // failed: timeout"). Role comes from the event payload — the
+        // tool-executor stamps `this.context.role` on every emit so we
+        // don't need to look it up in trackedAgents (which loses races
+        // when several events fire faster than React's setState batches).
         const toolName = typeof d.name === 'string' ? d.name : '';
         const status = String(d.status ?? 'ok');
         const dur = typeof d.durationMs === 'number'
           ? ` · ${(d.durationMs / 1000).toFixed(d.durationMs >= 1000 ? 1 : 2)}s`
           : '';
         const err = typeof d.error === 'string' ? d.error : null;
-        if (toolName) {
-          if (status === 'error' && err) {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` failed: ${err}`);
-          } else if (status === 'cancelled') {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` cancelled`);
-          } else {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\`${dur}`);
-          }
-        }
+        const completionRole = typeof d.role === 'string' && d.role ? d.role : 'unknown';
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
@@ -1090,6 +1077,15 @@ export default function ChatPage() {
           next.set(data.agentId, { ...existing, toolCalls: updatedCalls });
           return { ...prev, trackedAgents: next };
         });
+        if (toolName) {
+          if (status === 'error' && err) {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` failed: ${err}`);
+          } else if (status === 'cancelled') {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` cancelled`);
+          } else {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\`${dur}`);
+          }
+        }
       }
       // File change events from built-in filesystem tools
       else if (d?.type === 'file_change' && d?.path) {
@@ -1405,6 +1401,14 @@ export default function ChatPage() {
           isLoading={isLoading}
           statusMessage={statusMessage}
         />
+
+        {/* Permission / approval banner — sits directly above the prompt
+            input so the user doesn't have to hunt for it at the viewport
+            bottom (which used to leave a big empty gap between chat
+            content and the floating banner). The component is inline
+            for /chat; other pages still use the floating version via
+            app-shell. */}
+        <GlobalPermissionBanner inline />
 
         {/* Prompt input */}
         <div className="border-t border-outline-variant/10 bg-surface-container p-3">

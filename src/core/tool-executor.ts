@@ -188,6 +188,7 @@ export class ToolExecutor {
    */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     this.emitFn('action', {
+      role: this.context.role,
       toolCalls: toolCalls.map(tc => ({
         id: tc.id,
         name: tc.name,
@@ -247,6 +248,7 @@ export class ToolExecutor {
             type: 'tool_call_complete',
             toolCallId: toolCall.id,
             name: toolCall.name,
+            role: this.context.role,
             status: 'ok',
             durationMs: toolExecMs,
             resultPreview: previewToolResult(result),
@@ -289,6 +291,7 @@ export class ToolExecutor {
             type: 'tool_call_complete',
             toolCallId: toolCall.id,
             name: toolCall.name,
+            role: this.context.role,
             status: isCancellationError(error) ? 'cancelled' : 'error',
             error: (error as Error).message,
           });
@@ -411,6 +414,7 @@ export class ToolExecutor {
           type: 'tool_call_complete',
           toolCallId: toolCall.id,
           name: toolCall.name,
+          role: this.context.role,
           status: 'ok',
           durationMs: toolExecMs,
           resultPreview: previewToolResult(result),
@@ -489,6 +493,7 @@ export class ToolExecutor {
           type: 'tool_call_complete',
           toolCallId: toolCall.id,
           name: toolCall.name,
+          role: this.context.role,
           status: cancelled ? 'cancelled' : 'error',
           error: (error as Error).message,
         });
