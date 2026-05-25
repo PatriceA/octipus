@@ -1,7 +1,12 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
+import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
+import { swarmNodeRepository } from '@/core/swarm/node-repository';
+import { taskFingerprint } from '@/core/swarm/spawner';
+import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
+import { type AgentNode, getLevelDefault } from '@/core/swarm/types';
 import type { AgentContext } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -14,6 +19,21 @@ import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreambl
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
+
+/**
+ * Optional swarm wiring for `spawnWorker`. When provided, the worker is
+ * registered as a depth-1 agent node under the supplied parent (typically
+ * the orchestrator), so it shows up in the swarm tree UI, and is given the
+ * `spawn_child` meta-tool so it can fan out to subagents like any other
+ * agent in the swarm. Used by pipeline stages — without this, stages run
+ * invisibly to the swarm view and cannot delegate further.
+ */
+export interface WorkerSwarmParent {
+  id: string;
+  rootSessionId: string;
+  topicPath: string;
+  subtopic?: string;
+}
 
 type EmitFn = (event: OrchestratorEvent) => void;
 
@@ -191,7 +211,7 @@ export async function spawnWorker(
   input: string,
   context: AgentContext,
   deps: WorkerSpawnerDeps,
-  overrides?: { systemPrompt?: string; model?: string },
+  overrides?: { systemPrompt?: string; model?: string; swarmParent?: WorkerSwarmParent },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
@@ -516,6 +536,44 @@ Available capabilities: people/profiles, knowledge base, web search, messaging (
 Use these when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
   }
 
+  // ── Swarm wiring (pipeline stages) ──────────────────────────────
+  // When a parent swarm node is supplied (currently only by pipeline
+  // stages), register this worker in the swarm tree and hand it the
+  // `spawn_child` meta-tool so it can fan out to subagents. The stage's
+  // own AgentNode carries a placeholder id that is mutated to the real
+  // worker id once `agentManager.spawn` returns; `createSpawnChildTool`
+  // closes over the node by reference, so the tool sees the real id by
+  // the time it can be invoked.
+  let stageNode: AgentNode | null = null;
+  if (overrides?.swarmParent) {
+    const lvl = getLevelDefault(1);
+    stageNode = {
+      id: '__pending__',
+      rootSessionId: overrides.swarmParent.rootSessionId,
+      parentNodeId: overrides.swarmParent.id,
+      kind: 'agent',
+      depth: 1,
+      role: agentRole,
+      topicPath: overrides.swarmParent.topicPath,
+      subtopic: overrides.swarmParent.subtopic,
+      model: finalModel,
+      budget: {
+        tokens: { cap: lvl.tokens, used: 0 },
+        wallClockMs: { cap: lvl.wallMs, startedAt: Date.now() },
+        fanOut: { cap: lvl.fanOut, used: 0 },
+        depth: 1,
+      },
+      allowedToolIds: new Set(roleTools.map((t) => t.toolId ?? t.name)),
+      signal: undefined as unknown as AbortSignal,
+    };
+    stageNode.allowedToolIds.add('spawn_child');
+    try {
+      roleTools.push(createSpawnChildTool(stageNode));
+    } catch (err) {
+      coreLogger.error({ err, role: agentRole }, 'Failed to inject spawn_child for pipeline stage — stage runs without subagent spawning');
+    }
+  }
+
   const worker = await agentManager.spawn({
     sessionId: context.sessionId,
     userId: context.userId,
@@ -525,15 +583,100 @@ Use these when the task benefits from them — especially for people-related que
     role: agentRole,
     systemPrompt,
     tools: roleTools,
+    parentAgentId: overrides?.swarmParent?.id,
   });
 
   const workerId = worker.getContext().id;
+
+  // ── Register stage in swarm_nodes + announce on hub ──
+  if (stageNode && overrides?.swarmParent) {
+    stageNode.id = workerId;
+    const brief = `${task}\n${input}`.slice(0, 4000);
+    const briefHash = taskFingerprint({
+      originalUserRequest: task,
+      topicPath: stageNode.topicPath,
+      parentSummary: input,
+      taskBrief: task,
+      constraints: [],
+      inputArtifacts: [],
+      expectedOutput: { shape: 'summary', maxTokens: 2000 },
+      forbidden: [],
+    });
+    try {
+      await swarmNodeRepository.create({
+        id: workerId,
+        rootSessionId: overrides.swarmParent.rootSessionId,
+        userId: context.userId,
+        workspaceId: context.workspaceId ?? null,
+        parentNodeId: overrides.swarmParent.id,
+        depth: 1,
+        kind: 'agent',
+        role: agentRole,
+        expertId: null,
+        topicPath: stageNode.topicPath,
+        subtopic: stageNode.subtopic ?? null,
+        model: finalModel,
+        status: 'running',
+        tokenCap: stageNode.budget.tokens.cap,
+        wallClockCapMs: stageNode.budget.wallClockMs.cap,
+        fanOutCap: stageNode.budget.fanOut.cap,
+        briefHash,
+        taskBriefPreview: brief,
+        spawnMode: 'await',
+      });
+      getGatewayHub().publishEvent({
+        type: 'swarm.node_spawned',
+        source: `swarm:${overrides.swarmParent.id}`,
+        userId: undefined,
+        sessionId: overrides.swarmParent.rootSessionId,
+        payload: {
+          rootSessionId: overrides.swarmParent.rootSessionId,
+          nodeId: workerId,
+          parentNodeId: overrides.swarmParent.id,
+          kind: 'agent',
+          depth: 1,
+          topicPath: stageNode.topicPath,
+          subtopic: stageNode.subtopic,
+          role: agentRole,
+          model: finalModel,
+          budget: stageNode.budget,
+          taskBriefPreview: brief.slice(0, 200),
+          retryAttempt: 0,
+        },
+      });
+      // Backfill agents.parentAgentId + swarmNodeId so the agents table
+      // mirrors the link (same as SwarmSpawner.backfillAgentLink).
+      try {
+        const { agentRepository } = await import('@/db/repositories/agent-repository');
+        const { getDb } = await import('@/db/postgres');
+        const { agents } = await import('@/db/schema/agents');
+        const { eq } = await import('drizzle-orm');
+        // Small delay so the agent row exists before we update it.
+        setTimeout(async () => {
+          try {
+            const existing = await agentRepository.findById(workerId);
+            if (!existing) return;
+            await getDb()
+              .update(agents)
+              .set({ parentAgentId: overrides.swarmParent!.id, swarmNodeId: workerId })
+              .where(eq(agents.id, workerId));
+          } catch (err) {
+            coreLogger.debug({ err, workerId }, 'pipeline stage backfillAgentLink skipped');
+          }
+        }, 25);
+      } catch (err) {
+        coreLogger.debug({ err }, 'pipeline stage backfillAgentLink import failed');
+      }
+    } catch (err) {
+      coreLogger.error({ err, workerId }, 'Failed to persist swarm_node for pipeline stage');
+    }
+  }
 
   deps.emit({
     type: 'worker_spawned',
     sessionId: context.sessionId,
     userId: context.userId,
-    data: { workerId, role: agentRole, model: finalModel, parentAgentId: context.id, stageName: (context as any).stageName },
+    data: { workerId, role: agentRole, model: finalModel, parentAgentId: overrides?.swarmParent?.id ?? context.id, stageName: (context as any).stageName },
     timestamp: new Date(),
   });
 
@@ -571,6 +714,45 @@ Use these when the task benefits from them — especially for people-related que
       timestamp: new Date(),
     });
 
+    // ── Close out the swarm node for pipeline stages ───
+    if (stageNode && overrides?.swarmParent) {
+      try {
+        await swarmNodeRepository.updateStatus(workerId, {
+          status: 'completed',
+          tokensUsed: worker.getTotalTokens(),
+          result: {
+            nodeId: workerId,
+            kind: 'agent',
+            status: 'ok',
+            output: result,
+            usedTokens: worker.getTotalTokens(),
+            durationMs,
+            spawnedChildren: [],
+          },
+        });
+        getGatewayHub().publishEvent({
+          type: 'swarm.node_completed',
+          source: `swarm:${overrides.swarmParent.id}`,
+          userId: undefined,
+          sessionId: overrides.swarmParent.rootSessionId,
+          payload: {
+            rootSessionId: overrides.swarmParent.rootSessionId,
+            nodeId: workerId,
+            parentNodeId: overrides.swarmParent.id,
+            kind: 'agent',
+            depth: 1,
+            topicPath: stageNode.topicPath,
+            role: agentRole,
+            status: 'completed',
+            usedTokens: worker.getTotalTokens(),
+            durationMs,
+          },
+        });
+      } catch (err) {
+        coreLogger.error({ err, workerId }, 'Failed to update swarm_node on completion');
+      }
+    }
+
     getNotificationService().notify(
       context.userId,
       'agent_complete',
@@ -583,6 +765,39 @@ Use these when the task benefits from them — especially for people-related que
 
     return result;
   } catch (error) {
+    // Mark the swarm node as failed before delegating to the retry/fallback
+    // path. handleWorkerFailure spawns new workers with new IDs — those
+    // aren't tied to this swarm_node row, so the row's terminal state must
+    // be set here from the original failure.
+    if (stageNode && overrides?.swarmParent) {
+      const errMsg = (error as Error).message || '';
+      try {
+        await swarmNodeRepository.updateStatus(workerId, {
+          status: errMsg.includes('Permission denied') ? 'denied' : 'tool_error',
+          tokensUsed: worker.getTotalTokens(),
+          error: errMsg.slice(0, 1000),
+        });
+        getGatewayHub().publishEvent({
+          type: 'swarm.node_completed',
+          source: `swarm:${overrides.swarmParent.id}`,
+          userId: undefined,
+          sessionId: overrides.swarmParent.rootSessionId,
+          payload: {
+            rootSessionId: overrides.swarmParent.rootSessionId,
+            nodeId: workerId,
+            parentNodeId: overrides.swarmParent.id,
+            kind: 'agent',
+            depth: 1,
+            topicPath: stageNode.topicPath,
+            role: agentRole,
+            status: 'failed',
+            error: errMsg.slice(0, 200),
+          },
+        });
+      } catch (updateErr) {
+        coreLogger.error({ err: updateErr, workerId }, 'Failed to update swarm_node on error');
+      }
+    }
     return handleWorkerFailure(error as Error, worker, workerId, routing.model, agentRole, roleConfig, roleTools, task, input, context, startTime, deps);
   }
 }

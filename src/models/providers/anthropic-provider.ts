@@ -5,6 +5,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -51,12 +52,12 @@ export class AnthropicProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
-    // Enable prompt caching for Anthropic models.
-    // Mark the system message (first message) with cache_control for efficient caching
-    // of the static portion of the system prompt across requests.
-    const anthropicHeaders: Record<string, string> = {
-      'anthropic-beta': 'prompt-caching-2024-07-31',
-    };
+    // Prompt caching is NOT supported through Anthropic's OpenAI-compat
+    // layer — it requires the native /v1/messages endpoint with
+    // cache_control content blocks. Don't send the no-op
+    // `anthropic-beta: prompt-caching-2024-07-31` header, and don't read
+    // cache_*_input_tokens (always 0 on this path). If you need caching,
+    // route this provider through the native @anthropic-ai/sdk.
 
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
@@ -64,19 +65,12 @@ export class AnthropicProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params, {
-        headers: anthropicHeaders,
-      });
+      const response = await client.chat.completions.create(params);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'anthropic');
       }
       const choice = response.choices[0];
-
-      // Extract cache stats from Anthropic's response (available via extra fields)
-      const rawUsage = response.usage as Record<string, unknown> | undefined;
-      const cacheReadTokens = (rawUsage?.cache_read_input_tokens || (rawUsage?.prompt_tokens_details as any)?.cached_tokens || 0) as number;
-      const cacheCreationTokens = (rawUsage?.cache_creation_input_tokens || 0) as number;
 
       const result: CompletionResult = {
         content: choice.message.content || '',
@@ -85,8 +79,6 @@ export class AnthropicProvider implements ModelProvider {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
-          cacheReadTokens: cacheReadTokens || undefined,
-          cacheCreationTokens: cacheCreationTokens || undefined,
         },
         model: response.model,
         latencyMs,
@@ -97,15 +89,27 @@ export class AnthropicProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
+          const rawArgs = tc.function.arguments || '';
           try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) as Record<string, unknown> };
+            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
           } catch (parseErr) {
+            const repaired = repairTruncatedJson(rawArgs);
+            if (repaired) {
+              try {
+                const parsed = JSON.parse(repaired) as Record<string, unknown>;
+                modelLogger.warn(
+                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
+                  'Recovered truncated tool-call JSON via repairTruncatedJson',
+                );
+                return { id: tc.id, name: tc.function.name, arguments: parsed };
+              } catch { /* fall through */ }
+            }
             throw new ClassifiedError({
               reason: FailoverReason.TOOL_CALL_INVALID,
               recovery: RecoveryAction.RETRY_NOW,
               message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
               providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: tc.function.arguments?.slice(0, 300) },
+              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
               cause: parseErr,
             });
           }

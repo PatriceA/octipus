@@ -100,6 +100,92 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     }
   )
 
+  // Mobile / API client login — same credentials as /login, but returns the
+  // bearer token in the body instead of an HttpOnly cookie. Cookie clients
+  // (the web UI) should keep using /login; native clients can't read the
+  // HttpOnly cookie and need the token directly.
+  .post(
+    '/login-mobile',
+    async ({ body, request, set }) => {
+      const { username, password, totpCode, deviceName } = body;
+      const rateLimiter = getRateLimiter();
+
+      const lockoutCheck = await rateLimiter.checkLoginAttempts(username);
+      if (!lockoutCheck.allowed) {
+        set.status = 423;
+        return {
+          error: 'Account temporarily locked due to too many failed login attempts.',
+          retryAfter: lockoutCheck.retryAfter,
+        };
+      }
+
+      const user = await userRepository.findByUsername(username);
+      if (!user || !user.passwordHash) {
+        await rateLimiter.recordFailedLogin(username);
+        set.status = 401;
+        return { error: 'Invalid credentials' };
+      }
+
+      if (!user.isActive) {
+        set.status = 401;
+        return { error: 'Account is disabled' };
+      }
+
+      const validPassword = await verifyPassword(password, user.passwordHash);
+      if (!validPassword) {
+        await rateLimiter.recordFailedLogin(username);
+        set.status = 401;
+        return { error: 'Invalid credentials' };
+      }
+
+      if (user.totpEnabled) {
+        if (!totpCode) {
+          set.status = 401;
+          return { error: 'TOTP code required', requiresTOTP: true };
+        }
+        const totpAuth = getTOTPAuth();
+        const validTOTP = await totpAuth.verify(user.id, totpCode);
+        if (!validTOTP) {
+          await rateLimiter.recordFailedLogin(username);
+          set.status = 401;
+          return { error: 'Invalid TOTP code' };
+        }
+      }
+
+      await rateLimiter.clearLoginAttempts(username);
+
+      const sessionManager = getSessionManager();
+      const ipAddress = request.headers.get('x-forwarded-for') || undefined;
+      const ua = deviceName || request.headers.get('user-agent') || 'Mobile App';
+
+      const { token, session } = await sessionManager.create(user.id, {
+        ipAddress,
+        userAgent: `Mobile: ${ua}`,
+      });
+
+      apiLogger.info({ userId: user.id, deviceName }, 'Mobile login successful');
+
+      return {
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          isAdmin: user.isAdmin,
+        },
+        expiresAt: session.expiresAt,
+      };
+    },
+    {
+      body: t.Object({
+        username: t.String(),
+        password: t.String(),
+        totpCode: t.Optional(t.String()),
+        deviceName: t.Optional(t.String()),
+      }),
+      detail: { tags: ['auth'] },
+    }
+  )
+
   // Logout
   .post(
     '/logout',

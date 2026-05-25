@@ -248,6 +248,18 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     // subagents were invisible. Mirror them into the same agent.start /
     // agent.end shapes so the rest of the UI doesn't have to care which
     // path spawned the worker.
+    // Persona narration — orchestrator dispatch / completion / budget
+    // lines. The web chat surfaces these as italic narration bubbles;
+    // the TUI shows them as system messages so the user gets the same
+    // running commentary while children work.
+    case 'swarm.narration': {
+      const text = pickString(payload, 'text');
+      if (text && text.trim()) {
+        out.push({ kind: 'message', role: 'system', content: text.trim() });
+      }
+      return out;
+    }
+
     case 'swarm.node_spawned': {
       const kind = pickString(payload, 'kind') ?? 'agent';
       // Orchestrator already gets a separate agent.spawned event from the
@@ -311,6 +323,37 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
           kind: 'tool',
           tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer },
         });
+      } else if (type === 'tool_call_complete') {
+        // Phase 5 per-tool completion event. Web chat uses it for the
+        // streaming status update; the TUI maps it onto its `tool`
+        // state machine so the existing renderer marks the row done.
+        const name = pickString(data, 'name') ?? 'tool';
+        const status = pickString(data, 'status') ?? 'ok';
+        const role = pickString(data, 'role');
+        const durationMs = pickNumber(data, 'durationMs');
+        const error = pickString(data, 'error');
+        const resultPreview = pickString(data, 'resultPreview');
+        const isError = status === 'error' || status === 'cancelled';
+        const preview = isError
+          ? (error ? error.slice(0, 80) : status)
+          : (resultPreview ? resultPreview.slice(0, 80) : undefined);
+        out.push({
+          kind: 'tool',
+          tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer },
+        });
+        // Surface a one-liner narration too so the activity log shows
+        // who did what with what timing — matches the web chat's
+        // transient bubble ("data arm · read_file · 0.2s").
+        if (role) {
+          const dur = durationMs != null
+            ? ` · ${(durationMs / 1000).toFixed(durationMs >= 1000 ? 1 : 2)}s`
+            : '';
+          if (isError && error) {
+            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${name} failed: ${error}` });
+          } else if (!isError) {
+            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${name}${dur}` });
+          }
+        }
       }
       return out;
     }

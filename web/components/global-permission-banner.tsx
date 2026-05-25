@@ -4,7 +4,7 @@ import { CheckCircle, ChevronDown, ChevronUp, Clock, Shield, Square, XCircle } f
 import { useState } from 'react';
 import { type ApprovalRequest, type PermissionRequest, usePermissions } from '@/lib/permission-context';
 
-export function GlobalPermissionBanner() {
+export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } = {}) {
   const {
     permissions,
     approvals,
@@ -27,8 +27,11 @@ export function GlobalPermissionBanner() {
 
   const totalCount = permissions.length + approvals.length;
 
+  // Inline mode (rendered by a page that wants the banner anchored to
+  // its own bottom edge, e.g. /chat above the prompt input). Default
+  // floating mode is fixed to the viewport bottom for other surfaces.
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 pointer-events-none">
+    <div className={inline ? 'pointer-events-none' : 'fixed bottom-0 left-0 right-0 z-50 pointer-events-none'}>
       <div className="pointer-events-auto animate-slide-up">
         {/* Show approval banner if one is pending (approvals take priority) */}
         {latestApproval && (

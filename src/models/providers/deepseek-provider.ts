@@ -5,6 +5,8 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
+import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -101,6 +103,45 @@ export class DeepSeekProvider implements ModelProvider {
         ...(reasoningContent ? { reasoningContent } : {}),
       };
 
+      // DeepSeek chat-template leak: model emits native tool-call markup
+      // (DSML or V3 SentencePiece) as content instead of structured
+      // tool_calls. Detection + recovery shared with the LiteLLM proxy path
+      // — see @/models/deepseek-template-recovery for the two formats and
+      // why throwing TOOL_CALL_INVALID alone is insufficient.
+      if (!choice.message.tool_calls?.length && DEEPSEEK_TEMPLATE_LEAK.test(result.content)) {
+        // Try to recover the tool calls from the markup before falling back
+        // to a retry — DeepSeek-v4-flash/pro get stuck in this pattern, so
+        // throwing RETRY_NOW just burns the retry budget. Recovery keeps the
+        // agent moving and gets the tools actually executed.
+        const recovered = parseDsmlToolCalls(result.content);
+        if (recovered.length) {
+          modelLogger.warn(
+            {
+              model: response.model,
+              recoveredCount: recovered.length,
+              recoveredTools: recovered.map((tc) => tc.name),
+              provider: this.name,
+            },
+            'DeepSeek emitted native DSML/template markup in content channel — recovered as structured tool_calls',
+          );
+          result.toolCalls = recovered;
+          result.content = '';
+          return result;
+        }
+
+        modelLogger.warn(
+          { model: response.model, contentPreview: result.content.slice(0, 200), provider: this.name },
+          'DeepSeek emitted native tool-call template in content channel — recovery failed, forcing retry',
+        );
+        throw new ClassifiedError({
+          reason: FailoverReason.TOOL_CALL_INVALID,
+          recovery: RecoveryAction.RETRY_NOW,
+          message: `DeepSeek chat-template leak: tool-call markup emitted as content, unrecoverable`,
+          providerHint: this.name,
+          metadata: { contentPreview: result.content.slice(0, 300) },
+        });
+      }
+
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
           if (tc.type !== 'function') {
@@ -110,6 +151,25 @@ export class DeepSeekProvider implements ModelProvider {
           try {
             return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
           } catch (parseErr) {
+            // DeepSeek (flash variants in particular) truncates long
+            // tool-call argument strings mid-stream — most commonly the
+            // `content` parameter on file-writes. Attempt a best-effort
+            // repair before surfacing as TOOL_CALL_INVALID; the LLM retry
+            // path otherwise loops on the same broken output for 3
+            // attempts and then aborts the agent.
+            const repaired = repairTruncatedJson(rawArgs);
+            if (repaired) {
+              try {
+                const parsed = JSON.parse(repaired) as Record<string, unknown>;
+                modelLogger.warn(
+                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
+                  'Recovered truncated DeepSeek tool-call JSON via repairTruncatedJson',
+                );
+                return { id: tc.id, name: tc.function.name, arguments: parsed };
+              } catch {
+                // fall through to ClassifiedError
+              }
+            }
             throw new ClassifiedError({
               reason: FailoverReason.TOOL_CALL_INVALID,
               recovery: RecoveryAction.RETRY_NOW,

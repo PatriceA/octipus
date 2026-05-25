@@ -37,6 +37,15 @@ import type { AgentWorker } from '@/core/agent-worker';
 /** Re-exported (moved into `call-graph.ts` in Phase 2). */
 export const taskFingerprint = _taskFingerprint;
 
+/**
+ * Upper bound on `taskBriefPreview` length, both in the DB column and on
+ * the wire (WS swarm.node_spawned event). The swarm-tree "view brief"
+ * modal reads this verbatim, so the slice must be wide enough to carry a
+ * real brief — earlier the WS event was sliced to 200 chars, which made
+ * the UI brief look truncated until a REST reload.
+ */
+export const TASK_BRIEF_PREVIEW_MAX = 4000;
+
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
   /** Used by `escalate_to_different_expert` to pick a different expert. */
@@ -641,7 +650,7 @@ export class SwarmSpawner {
         wallClockCapMs: opts.budget.wallClockMs.cap,
         fanOutCap: opts.budget.fanOut.cap,
         briefHash: opts.briefHash,
-        taskBriefPreview: opts.brief.taskBrief.slice(0, 4000),
+        taskBriefPreview: opts.brief.taskBrief.slice(0, TASK_BRIEF_PREVIEW_MAX),
         spawnMode: opts.spawnMode,
       });
     } catch (err) {
@@ -659,7 +668,7 @@ export class SwarmSpawner {
       expertId: opts.expertId,
       model: opts.childModel,
       budget: opts.budget,
-      taskBriefPreview: opts.brief.taskBrief.slice(0, 200),
+      taskBriefPreview: opts.brief.taskBrief.slice(0, TASK_BRIEF_PREVIEW_MAX),
       retryAttempt: isCrashRetry ? 1 : 0,
     });
 

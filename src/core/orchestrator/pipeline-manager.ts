@@ -182,7 +182,15 @@ export class PipelineManager {
           input,
           handoffText || previousOutput,
           { ...context, stageName: stage.name } as any,
-          modelOverride ? { model: modelOverride } : undefined,
+          {
+            ...(modelOverride ? { model: modelOverride } : {}),
+            swarmParent: {
+              id: orchestratorAgentId,
+              rootSessionId: sessionId,
+              topicPath: `pipeline/${pipeline.id}/${stage.name}`,
+              subtopic: stage.name,
+            },
+          },
         );
 
         previousOutput = String(result || '');
@@ -291,7 +299,15 @@ export class PipelineManager {
                   retryInput,
                   '',
                   context,
-                  retryModelOverride ? { model: retryModelOverride } : undefined,
+                  {
+                    ...(retryModelOverride ? { model: retryModelOverride } : {}),
+                    swarmParent: {
+                      id: orchestratorAgentId,
+                      rootSessionId: sessionId,
+                      topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
+                      subtopic: `${retryTargetStage.name} (retry ${attempt})`,
+                    },
+                  },
                 );
 
                 const retryOutput = String(retryResult || '');
@@ -325,7 +341,15 @@ export class PipelineManager {
                   qaRetryInput,
                   retryOutput,
                   context,
-                  qaModelOverride ? { model: qaModelOverride } : undefined,
+                  {
+                    ...(qaModelOverride ? { model: qaModelOverride } : {}),
+                    swarmParent: {
+                      id: orchestratorAgentId,
+                      rootSessionId: sessionId,
+                      topicPath: `pipeline/${pipeline.id}/${stage.name}#qa-retry${attempt}`,
+                      subtopic: `${stage.name} QA (retry ${attempt})`,
+                    },
+                  },
                 );
 
                 previousOutput = String(qaRetryResult || '');
@@ -597,6 +621,14 @@ export class PipelineManager {
           input,
           handoffText || previousOutput,
           context,
+          {
+            swarmParent: {
+              id: pipeline.orchestratorAgentId,
+              rootSessionId: sessionId,
+              topicPath: `pipeline/${pipeline.id}/${stage.name}`,
+              subtopic: stage.name,
+            },
+          },
         );
 
         previousOutput = String(result || '');
@@ -679,6 +711,14 @@ export class PipelineManager {
                 retryInput,
                 '',
                 context,
+                {
+                  swarmParent: {
+                    id: pipeline.orchestratorAgentId,
+                    rootSessionId: sessionId,
+                    topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
+                    subtopic: `${retryTargetStage.name} (retry ${attempt})`,
+                  },
+                },
               );
 
               const retryOutput = String(retryResult || '');
@@ -700,6 +740,14 @@ export class PipelineManager {
                 qaRetryInput,
                 retryOutput,
                 context,
+                {
+                  swarmParent: {
+                    id: pipeline.orchestratorAgentId,
+                    rootSessionId: sessionId,
+                    topicPath: `pipeline/${pipeline.id}/${stage.name}#qa-retry${attempt}`,
+                    subtopic: `${stage.name} QA (retry ${attempt})`,
+                  },
+                },
               );
 
               previousOutput = String(qaRetryResult || '');
@@ -843,17 +891,28 @@ export class PipelineManager {
 
   /**
    * Parse QA validation output into a structured result.
-   * Attempts to extract JSON from the agent's response (with or without markdown fences).
+   *
+   * Resolution order (most reliable → fuzziest):
+   *   1. Strict JSON (with or without code fences) — what well-prompted
+   *      agents emit when asked for a `{"passed":bool,...}` deliverable.
+   *   2. Inline JSON keys (`"passed": true|false`) anywhere in prose.
+   *   3. Prose verdict keywords matching the seed-template wording —
+   *      `Overall status: PASS|FAIL|PASS WITH NOTES`,
+   *      `Rate overall quality: Excellent|Good|Needs Work|Critical Issues`,
+   *      bare `PASS` / `FAIL` headlines.
+   *
+   *   Why (3) exists: the built-in "Full Development Cycle" template
+   *   prompts the agent to emit those exact verdicts in prose, not JSON.
+   *   Without (3), the retry loop silently no-ops on a failing QA stage
+   *   because `parseQAResult` returns null → `while (qaResult && ...)`
+   *   short-circuits and the pipeline marks the stage "complete".
    */
   private parseQAResult(output: string): QAValidationResult | null {
+    // (1) Strict JSON parse
     try {
-      // Try to extract JSON from markdown code fences first
       const fenceMatch = output.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
       const jsonStr = fenceMatch ? fenceMatch[1].trim() : output.trim();
-
-      // Try parsing the extracted or raw string
       const parsed = JSON.parse(jsonStr);
-
       if (typeof parsed.passed === 'boolean') {
         return {
           passed: parsed.passed,
@@ -862,30 +921,88 @@ export class PipelineManager {
           retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
         };
       }
+    } catch { /* fall through */ }
 
-      return null;
-    } catch {
-      // If the output contains clear pass/fail indicators but isn't valid JSON,
-      // try a best-effort parse
-      const passedMatch = output.match(/"passed"\s*:\s*(true|false)/);
-      if (passedMatch) {
-        const passed = passedMatch[1] === 'true';
-        const issuesMatch = output.match(/"issues"\s*:\s*\[([\s\S]*?)\]/);
-        const feedbackMatch = output.match(/"feedback"\s*:\s*"([\s\S]*?)"/);
-
-        return {
-          passed,
-          issues: issuesMatch
-            ? issuesMatch[1].split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean)
-            : [],
-          feedback: feedbackMatch ? feedbackMatch[1] : '',
-          retryCount: 0,
-        };
-      }
-
-      coreLogger.debug({ outputSnippet: output.slice(0, 200) }, 'Could not parse QA validation output as JSON');
-      return null;
+    // (2) Inline `"passed": true|false` anywhere in prose
+    const passedMatch = output.match(/"passed"\s*:\s*(true|false)/);
+    if (passedMatch) {
+      const passed = passedMatch[1] === 'true';
+      const issuesMatch = output.match(/"issues"\s*:\s*\[([\s\S]*?)\]/);
+      const feedbackMatch = output.match(/"feedback"\s*:\s*"([\s\S]*?)"/);
+      return {
+        passed,
+        issues: issuesMatch
+          ? issuesMatch[1].split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean)
+          : [],
+        feedback: feedbackMatch ? feedbackMatch[1] : '',
+        retryCount: 0,
+      };
     }
+
+    // (3) Prose verdict patterns — matches the wording the built-in
+    //     templates ask the QA / Code Review agents to emit.
+    const proseVerdict = this.parseProseVerdict(output);
+    if (proseVerdict) return proseVerdict;
+
+    coreLogger.debug({ outputSnippet: output.slice(0, 200) }, 'Could not parse QA validation output (no JSON, no prose verdict)');
+    return null;
+  }
+
+  /**
+   * Extract pass/fail verdict from prose. Returns null if no recognizable
+   * verdict was found. Failing verdicts capture an issues list from common
+   * markdown headings (`## Issues`, `### Issues`, `**Issues:**`, etc.) so
+   * the retry prompt has actionable feedback to inject into the
+   * implementation stage.
+   */
+  private parseProseVerdict(output: string): QAValidationResult | null {
+    // Negative verdicts win over positive — a stage that says "mostly good
+    // but FAIL on X" should retry, not pass.
+    const NEGATIVE_PATTERNS = [
+      /Overall\s+status\s*:\s*FAIL\b/i,
+      /Overall\s+status\s*:\s*PASS\s+WITH\s+NOTES\b/i, // treat as failure → retry
+      /Rate\s+overall\s+quality\s*:\s*(?:Needs\s+Work|Critical\s+Issues)\b/i,
+      /Overall\s+quality\s*:\s*(?:Needs\s+Work|Critical\s+Issues)\b/i,
+      /\bVerdict\s*:\s*(?:fail|reject|not\s+ready)\b/i,
+      /^[#*\s]*FAIL\b/im,
+    ];
+    const POSITIVE_PATTERNS = [
+      /Overall\s+status\s*:\s*PASS\b(?!\s+WITH\s+NOTES)/i,
+      /Rate\s+overall\s+quality\s*:\s*(?:Excellent|Good)\b/i,
+      /Overall\s+quality\s*:\s*(?:Excellent|Good)\b/i,
+      /\bVerdict\s*:\s*(?:pass|approve|ready)\b/i,
+      /^[#*\s]*PASS\b/im,
+    ];
+
+    const hasNegative = NEGATIVE_PATTERNS.some(rx => rx.test(output));
+    const hasPositive = POSITIVE_PATTERNS.some(rx => rx.test(output));
+
+    if (!hasNegative && !hasPositive) return null;
+
+    const passed = hasNegative ? false : true;
+
+    // Pull an issues bullet list from common heading shapes if the verdict
+    // is negative — gives the retry prompt something concrete to act on.
+    let issues: string[] = [];
+    if (!passed) {
+      const issuesSection = output.match(
+        /(?:^|\n)\s*(?:#{1,4}\s+|\*\*)\s*(?:Issues\s+found|Issues|Critical\s+Issues|Problems|Findings)\b[^\n]*\n([\s\S]*?)(?=\n\s*(?:#{1,4}\s+|\*\*[A-Z])|\n\s*$|$)/i,
+      );
+      if (issuesSection) {
+        issues = issuesSection[1]
+          .split('\n')
+          .map(line => line.replace(/^\s*[-*•]\s*/, '').trim())
+          .filter(line => line.length > 0 && !line.startsWith('#'))
+          .slice(0, 20);
+      }
+    }
+
+    return {
+      passed,
+      issues,
+      feedback: passed ? '' : (output.slice(0, 2000)),
+      retryCount: 0,
+    };
   }
 
   private async updatePipeline(id: string, data: Partial<NewPipeline>) {

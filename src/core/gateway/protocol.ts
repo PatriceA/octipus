@@ -43,6 +43,11 @@ export type GatewayEventType =
   | 'agent.completed'
   | 'agent.stopped'
   | 'agent.event'
+  // Tool-call stream from the agent's executor — start / complete /
+  // file_change / cli_tool_use payloads land here. Distinct subtype
+  // so consumers can subscribe just to the stream without picking
+  // up the generic agent.event bucket.
+  | 'agent.action'
   // Per-iteration tick during a worker's reasoning loop. Surfaces so
   // chat/TUI UIs can show a "thinking …" indicator with a progress
   // count instead of a frozen spinner.
@@ -169,7 +174,7 @@ export const AgentStopSchema = z.object({
  *     queue on a per-session basis.
  *   - `chat.interject` is a quick aside the user wants answered
  *     WITHOUT cancelling the in-flight task. The handler routes
- *     directly to a `general`-role direct-response path, so the
+ *     directly to the persona-tagged direct-response path, so the
  *     answer comes back with persona attribution ("Octipus — side
  *     question: …") in parallel with the swarm.
  *

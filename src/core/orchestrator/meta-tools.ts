@@ -1,7 +1,29 @@
-import type { ToolHandler } from '@/core/agent-worker';
+import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
+import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
 import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
-import type { AgentNode } from '@/core/swarm/types';
+import {
+  type AgentNode,
+  getLevelDefault,
+  type PendingChild,
+} from '@/core/swarm/types';
 import type { OrchestratorService } from './service';
+
+/**
+ * Hook refs the orchestrator passes in so we can wire `spawn_child`'s
+ * detach hooks and `collect_children` BEFORE the worker is created. The
+ * service populates both refs after `agentManager.spawn` returns.
+ */
+export interface OrchestratorSwarmRefs {
+  /** Hooks slot wired to the worker's pending-child map. Tools read this lazily. */
+  detachHookRef: {
+    current: {
+      registerPendingChild: (pc: PendingChild) => void;
+      pendingDetachedCount: () => number;
+    } | null;
+  };
+  /** Worker handle for `collect_children` to await pending detached results. */
+  workerRef: { current: AgentWorker | null };
+}
 
 /**
  * Create meta-tools for the orchestrator agent.
@@ -15,7 +37,7 @@ import type { OrchestratorService } from './service';
  */
 export function createMetaTools(
   orchestrator: OrchestratorService,
-  options?: { parentNode?: AgentNode },
+  options?: { parentNode?: AgentNode; swarmRefs?: OrchestratorSwarmRefs },
 ): ToolHandler[] {
   // Pipeline gate: once `create_pipeline` runs, further delegation is blocked.
   // `spawn_child` is NOT gated — multiple swarm calls per turn are explicitly
@@ -29,12 +51,27 @@ export function createMetaTools(
 
   const tools: ToolHandler[] = [];
 
-  // Swarm: register `spawn_child` on the Orchestrator (depth 0). Only
-  // available when the service has built a parent node — it's a no-op hook
-  // in contexts where the swarm wiring hasn't been threaded (e.g. legacy
-  // unit tests that call createMetaTools directly).
+  // Swarm: register `spawn_child` on the Orchestrator (depth 0). With
+  // `swarmRefs` we also enable detach mode + `collect_children`, so the
+  // orchestrator can fire-and-forget parallel children, narrate while they
+  // run, and pick up their results before its final reply. Without the
+  // refs (legacy unit-test callers) the tool stays in await-only mode.
   if (options?.parentNode) {
-    tools.push(createSpawnChildTool(options.parentNode));
+    const refs = options.swarmRefs;
+    if (refs) {
+      const detachHookRef = refs.detachHookRef;
+      tools.push(
+        createSpawnChildTool(options.parentNode, undefined, {
+          registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
+          pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
+          maxPendingDetached: () => getLevelDefault(0).maxPendingDetached,
+        }),
+      );
+      tools.push(createCollectChildrenTool(options.parentNode, refs.workerRef));
+      options.parentNode.allowedToolIds.add('collect_children');
+    } else {
+      tools.push(createSpawnChildTool(options.parentNode));
+    }
   }
 
   tools.push(

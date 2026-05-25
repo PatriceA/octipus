@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  OUTPUT_FORMATTING_RULES,
   ROLE_CONFIGS,
   SECURITY_PREAMBLE,
   getRoleConfig,
@@ -49,5 +50,33 @@ describe('getRoleConfig', () => {
     const original = ROLE_CONFIGS.general.systemPromptTemplate;
     const wrapped = getRoleConfig('general').systemPromptTemplate;
     expect(stripSecurityPreamble(wrapped)).toBe(original);
+  });
+
+  test('includes output formatting rules after the security preamble', () => {
+    const cfg = getRoleConfig('general');
+    const afterPreamble = cfg.systemPromptTemplate.slice(SECURITY_PREAMBLE.length);
+    expect(afterPreamble.startsWith(OUTPUT_FORMATTING_RULES)).toBe(true);
+  });
+});
+
+describe('OUTPUT_FORMATTING_RULES', () => {
+  test('discourages fenced blocks for short tokens', () => {
+    expect(OUTPUT_FORMATTING_RULES).toMatch(/single backticks/i);
+    expect(OUTPUT_FORMATTING_RULES).toMatch(/triple-backtick fenced blocks ONLY for multi-line/i);
+  });
+
+  test('strip also removes formatting block when adjacent to preamble', () => {
+    const inner = 'ROLE_TEXT';
+    const composed = SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + inner;
+    expect(stripSecurityPreamble(composed)).toBe(inner);
+  });
+
+  test('strip removes an orphan formatting block too (defense against double-wrap)', () => {
+    // Some callers compose prompts without re-adding SECURITY_PREAMBLE
+    // (e.g. expert prompt builder strips before concatenation). The
+    // formatting block on its own should also fall off so we never echo
+    // the rule text back in a child reply.
+    const orphan = OUTPUT_FORMATTING_RULES + 'BODY';
+    expect(stripSecurityPreamble(orphan)).toBe('BODY');
   });
 });

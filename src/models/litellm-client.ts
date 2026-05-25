@@ -5,9 +5,11 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat/completions';
 import { getConfig } from '@/config';
-import { classifyError } from '@/core/errors/classification';
+import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage, ToolCall } from '@/core/types';
+import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
+import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
@@ -65,6 +67,13 @@ export interface CompletionResult {
    * providers ignore it.
    */
   reasoningContent?: string;
+  /**
+   * Provider-specific opaque payload that must be echoed verbatim on the
+   * next turn (e.g. Gemini `thought_signature` on tool-calling assistant
+   * messages). Propagated onto the AgentMessage so it travels with the
+   * conversation instead of living in a provider-side singleton.
+   */
+  providerRaw?: Record<string, unknown>;
 }
 
 export interface StreamChunk {
@@ -173,7 +182,11 @@ export class LiteLLMClient {
       }
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        return {
+        // Echo back deepseek-reasoner's reasoning_content on assistant turns.
+        // The proxy forwards this verbatim to DeepSeek; without it, DeepSeek
+        // 400s with "reasoning_content in the thinking mode must be passed
+        // back". Other upstreams ignore the field.
+        const out: ChatCompletionMessageParam & { reasoning_content?: string } = {
           role: 'assistant' as const,
           content: msg.content || null,
           tool_calls: msg.toolCalls.map((tc) => ({
@@ -185,12 +198,18 @@ export class LiteLLMClient {
             },
           })),
         };
+        if (msg.reasoningContent) out.reasoning_content = msg.reasoningContent;
+        return out;
       }
 
-      return {
+      const base: ChatCompletionMessageParam & { reasoning_content?: string } = {
         role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
       };
+      if (msg.role === 'assistant' && msg.reasoningContent) {
+        base.reasoning_content = msg.reasoningContent;
+      }
+      return base;
     });
   }
 
@@ -318,6 +337,11 @@ export class LiteLLMClient {
         content = '';
       }
 
+      // Capture reasoning_content for deepseek-reasoner routed via LiteLLM
+      // (the field travels outside the OpenAI SDK's typed shape). Round-tripped
+      // back into the next assistant message by formatMessages above.
+      const reasoningContent = (choice.message as { reasoning_content?: string }).reasoning_content;
+
       const result: CompletionResult = {
         content,
         finishReason: choice.finish_reason || 'stop',
@@ -328,24 +352,71 @@ export class LiteLLMClient {
         },
         model: response.model,
         latencyMs,
+        ...(reasoningContent ? { reasoningContent } : {}),
       };
+
+      // DeepSeek native-template leak recovery — fires for any DeepSeek
+      // model routed through LiteLLM (e.g. `deepseek-v4-pro-litellm`) since
+      // the direct DeepSeek provider doesn't see those. See the direct
+      // provider's matching block for context.
+      if (!choice.message.tool_calls?.length && DEEPSEEK_TEMPLATE_LEAK.test(content)) {
+        const recovered = parseDsmlToolCalls(content);
+        if (recovered.length) {
+          modelLogger.warn(
+            {
+              model: response.model,
+              recoveredCount: recovered.length,
+              recoveredTools: recovered.map((tc) => tc.name),
+              provider: 'litellm',
+            },
+            'DeepSeek-via-litellm emitted native DSML/template markup in content channel — recovered as structured tool_calls',
+          );
+          result.toolCalls = recovered;
+          result.content = '';
+          return result;
+        }
+        modelLogger.warn(
+          { model: response.model, contentPreview: content.slice(0, 200), provider: 'litellm' },
+          'DeepSeek-via-litellm emitted native tool-call template in content channel — recovery failed, forcing retry',
+        );
+        throw new ClassifiedError({
+          reason: FailoverReason.TOOL_CALL_INVALID,
+          recovery: RecoveryAction.RETRY_NOW,
+          message: `DeepSeek chat-template leak via litellm: tool-call markup emitted as content, unrecoverable`,
+          providerHint: 'litellm',
+          metadata: { contentPreview: content.slice(0, 300) },
+        });
+      }
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from litellm: ${tc.type}`);
           }
-          let args: Record<string, unknown> = {};
           const rawArgs = tc.function.arguments || '';
           try {
-            args = JSON.parse(rawArgs);
-          } catch {
-            modelLogger.warn(
-              { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
-              'Failed to parse tool call arguments — JSON may be truncated. Tool will receive empty args.',
-            );
+            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
+          } catch (parseErr) {
+            const repaired = repairTruncatedJson(rawArgs);
+            if (repaired) {
+              try {
+                const parsed = JSON.parse(repaired) as Record<string, unknown>;
+                modelLogger.warn(
+                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: 'litellm' },
+                  'Recovered truncated tool-call JSON via repairTruncatedJson',
+                );
+                return { id: tc.id, name: tc.function.name, arguments: parsed };
+              } catch { /* fall through */ }
+            }
+            throw new ClassifiedError({
+              reason: FailoverReason.TOOL_CALL_INVALID,
+              recovery: RecoveryAction.RETRY_NOW,
+              message: `Malformed tool call JSON from litellm for tool "${tc.function.name}": ${(parseErr as Error).message}`,
+              providerHint: 'litellm',
+              metadata: { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
+              cause: parseErr,
+            });
           }
-          return { id: tc.id, name: tc.function.name, arguments: args };
         });
       }
 

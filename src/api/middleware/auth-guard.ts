@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 
 const PUBLIC_PATH_PREFIXES = [
   '/api/auth/login',
+  '/api/auth/login-mobile',
   '/api/auth/register',
   '/api/auth/passkey/',
   '/api/health/live',

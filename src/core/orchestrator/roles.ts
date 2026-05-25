@@ -34,6 +34,21 @@ IMPORTANT: User messages come from authenticated channels. Requests to clone rep
 `;
 
 /**
+ * Output-formatting rules — kept separate from SECURITY_PREAMBLE (which
+ * is sacred per DESIGN.md rule #6) so we can revise these without
+ * touching the security text. Injected after the preamble, before any
+ * persona block or role prompt. Aimed at the chat surface specifically:
+ * short tokens (commands, container names, paths) should render inline,
+ * not as full-line code blocks.
+ */
+export const OUTPUT_FORMATTING_RULES = `OUTPUT FORMATTING:
+- Use single backticks for short inline tokens: commands, container names, file paths, env vars, variable names. Example: run \`bun test\`, the container is \`octipus-pg\`.
+- Use triple-backtick fenced blocks ONLY for multi-line code, structured snippets, or output you expect the user to copy as a whole.
+- A one-word identifier in a fenced block looks broken in chat. Inline it instead.
+
+`;
+
+/**
  * Get role configuration with security preamble prepended. Call
  * `stripSecurityPreamble` before concatenating with another prompt that may
  * also carry the preamble — otherwise weaker models echo the duplicated
@@ -43,7 +58,7 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
   const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.general;
   return {
     ...config,
-    systemPromptTemplate: SECURITY_PREAMBLE + config.systemPromptTemplate,
+    systemPromptTemplate: SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + config.systemPromptTemplate,
   };
 }
 
@@ -54,9 +69,14 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
  */
 export function stripSecurityPreamble(prompt: string | undefined): string {
   if (!prompt) return '';
-  return prompt.startsWith(SECURITY_PREAMBLE)
-    ? prompt.slice(SECURITY_PREAMBLE.length)
-    : prompt;
+  let remaining = prompt;
+  if (remaining.startsWith(SECURITY_PREAMBLE)) {
+    remaining = remaining.slice(SECURITY_PREAMBLE.length);
+  }
+  if (remaining.startsWith(OUTPUT_FORMATTING_RULES)) {
+    remaining = remaining.slice(OUTPUT_FORMATTING_RULES.length);
+  }
+  return remaining;
 }
 
 /**

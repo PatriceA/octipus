@@ -41,14 +41,26 @@ export class AgentWorker extends BaseAgentWorker {
   /** Track consecutive same-tool-name calls regardless of args — catches chatty LLMs looping on send_status_update with slightly different messages */
   private lastToolNames: string = '';
   private consecutiveSameNameCount: number = 0;
-  private static MAX_SAME_NAME_REPEATS = 2;
   /**
-   * Tools that are LEGITIMATELY called many times in a row by their owner
-   * role. The same-tool-name guard above (intended for chatty
-   * `send_status_update` spammers) used to trip on these and disable the
-   * orchestrator after two `spawn_child` calls — but spawning multiple
-   * children sequentially across iterations is the orchestrator's
-   * primary job. The guard remains active for any other tool name.
+   * After this many consecutive iterations on the same tool-name signature,
+   * tools get disabled and the model is forced to a plain-text reply. The
+   * threshold has to be high enough to survive normal doer workflows
+   * (read 8 files → write 5 files often hits the same name pattern across
+   * 3-4 iterations) and low enough to still catch genuine spam loops on
+   * status/notification tools. 5 is the empirical sweet spot.
+   */
+  private static MAX_SAME_NAME_REPEATS = 5;
+  /**
+   * Tools that are LEGITIMATELY called many times in a row. The same-tool-
+   * name guard is meant to catch chatty status-report / notification loops
+   * (`send_status_update` spinning with slightly different progress
+   * messages), NOT productive work like reading or writing files. Anything
+   * that produces real side effects / new state belongs here.
+   *
+   * Matching is exact-name AND by namespace prefix (`filesystem__`,
+   * `shell__`, `git__`, `web_`, `code__`) — see callsAllowList below.
+   * Status / notification tools stay off this list so the guard still
+   * catches them.
    */
   private static REPEAT_ALLOWED_TOOLS = new Set<string>([
     'spawn_child',
@@ -57,9 +69,25 @@ export class AgentWorker extends BaseAgentWorker {
     'list_pipeline_templates',
     'request_user_approval',
   ]);
+  /**
+   * Namespace prefixes (matched via tc.name.startsWith) for tools that
+   * always count as productive work — file I/O, shell, git, web fetches,
+   * code edits. The doer roles (coding, design, devops) routinely chain
+   * many of these in sequence and tripping the same-name guard wastes
+   * their progress.
+   */
+  private static REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'code__', 'search_'];
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
+
+  /**
+   * Count of nudge-retries triggered when the model bails on tool use and
+   * dumps file contents as inline text. Limited to one retry per agent
+   * lifetime — if the model keeps refusing tools after a direct nudge,
+   * accept the text reply rather than spinning forever.
+   */
+  private toolBailoutRetries: number = 0;
 
   /** Inject a message into the agent's context mid-run. */
   steer(message: AgentMessage): void {
@@ -813,11 +841,16 @@ export class AgentWorker extends BaseAgentWorker {
         // messages — the per-signature loop above misses them because args
         // differ every call.
         const toolNameSignature = [...completion.toolCalls].map(tc => tc.name).sort().join(',');
-        // Skip the guard entirely when every tool call this iteration is on
-        // the allowed-repeat list (orchestrator meta-tools). Calling
-        // `spawn_child` ten times in a row is the orchestrator delegating to
-        // ten specialists — exactly what we want.
-        const callsAllowList = completion.toolCalls.every(tc => AgentWorker.REPEAT_ALLOWED_TOOLS.has(tc.name));
+        // Skip the guard entirely when every tool call this iteration is
+        // productive work (orchestrator meta-tools, filesystem/shell/git/web/
+        // code namespaces). Reading 8 files in sequence then writing 5 is a
+        // designer/coder doing their job — the guard is meant for notification
+        // spam (send_status_update with slightly varying progress text), not
+        // genuine file I/O bursts.
+        const callsAllowList = completion.toolCalls.every(tc =>
+          AgentWorker.REPEAT_ALLOWED_TOOLS.has(tc.name)
+          || AgentWorker.REPEAT_ALLOWED_PREFIXES.some(p => tc.name.startsWith(p)),
+        );
         if (!callsAllowList && toolNameSignature === this.lastToolNames) {
           this.consecutiveSameNameCount++;
           if (this.consecutiveSameNameCount >= AgentWorker.MAX_SAME_NAME_REPEATS) {
@@ -925,6 +958,35 @@ export class AgentWorker extends BaseAgentWorker {
         }
       }
 
+      // Tool-bailout detection: doer roles (coding/design/devops/etc) that
+      // emit no tool calls but dump file contents as inline markdown have
+      // almost always given up on tool use mid-task. Common DeepSeek pattern
+      // after a single ENOENT or transient tool error: model decides tools
+      // are "unavailable" and writes everything as text. Pipeline then marks
+      // the stage completed even though nothing was actually written to
+      // disk. Nudge once with an explicit "tools ARE working" message;
+      // accept the text reply only if the model refuses a second time.
+      if (this.shouldRetryToolBailout(completion.content)) {
+        this.toolBailoutRetries++;
+        if (this.toolBailoutRetries <= 1) {
+          agentLogger.warn({
+            agentId: this.context.id, role: this.context.role,
+            contentLength: completion.content?.length ?? 0,
+          }, 'Tool-bailout detected — nudging agent to actually call tools');
+          this.messages.push({
+            role: 'user' as const,
+            content:
+              '[SYSTEM] You appear to have stopped calling tools mid-task. ' +
+              'No rate limit, sandbox, or filter is blocking your tool calls — those constraints do not exist in this environment. ' +
+              'A single tool error earlier (ENOENT, metacharacter rejection on a shell heredoc, etc.) does NOT mean tools are disabled. ' +
+              'Use `filesystem__write_file` to write files directly with absolute paths — do NOT fall back to `cat << EOF` heredocs (those need `useShell: true` and are rejected for safety). ' +
+              'Resume the work: call the tools needed to actually create the files you described.',
+            timestamp: new Date(),
+          });
+          continue;
+        }
+      }
+
       // No tool calls — treat as final response
       // If content is empty (e.g. thinking tokens consumed entire output), retry up to 3 times
       if (!completion.content?.trim()) {
@@ -988,6 +1050,69 @@ export class AgentWorker extends BaseAgentWorker {
     }
 
     throw new Error(`Max iterations (${this.config.maxIterations}) reached`);
+  }
+
+  /**
+   * Heuristic: did the model "give up" on tools and dump file contents as
+   * inline text instead of using filesystem__write_file? Fires for doer
+   * roles when the reply looks like a multi-file dump *and* the model
+   * either claimed tools were unavailable or used clear "providing inline"
+   * phrasing. Conservative on purpose — false positives waste one LLM call
+   * each, false negatives lose the entire stage's output.
+   */
+  private shouldRetryToolBailout(content?: string): boolean {
+    if (!content) return false;
+    if (this.toolExecutor.toolsDisabled) return false;
+    // Only roles that actually WRITE files. qa/writing/data legitimately
+    // produce long markdown reports with code blocks as their deliverable
+    // and would false-positive on the inline-dump branch.
+    const FILE_WRITING_ROLES = new Set(['coding', 'design', 'devops']);
+    if (!FILE_WRITING_ROLES.has(this.context.role as string)) return false;
+
+    // Short-form bailout: model announces it stopped, no tool calls.
+    // Length-gated branches below skip these, so catch them up front.
+    const SHORT_BAILOUT_PHRASES = [
+      /^\s*I(?:'|'?ll)?\s+stop\s+here\.?\s*$/i,
+      /^\s*Done\.?\s*$/i,
+      /^\s*(?:Read[-\s]?only|read[-\s]?only\s+confirmed)\.?\s*$/i,
+    ];
+    if (SHORT_BAILOUT_PHRASES.some(rx => rx.test(content))) return true;
+
+    if (content.length < 80) return false;
+
+    // Inline-dump phrases — model decided to write everything as text
+    // instead of using tools. Needs corroborating code-block dump.
+    const INLINE_DUMP_PHRASES = [
+      /tools?\s+(?:are|were)\s+(?:temporarily\s+)?(?:unavailable|disabled|down|broken)/i,
+      /(?:since|because|as)\s+(?:I\s+)?(?:can(?:no|')t|am\s+unable\s+to)\s+(?:use\s+tools|write|access|create)/i,
+      /(?:I'?ll|let\s+me)\s+provide\s+(?:the\s+)?(?:complete|full)?\s*(?:implementation|code|solution|files?)\s+(?:below|inline|as\s+text|as\s+structured\s+code|in\s+this\s+(?:reply|response|message))/i,
+      /provid(?:e|ing)\s+(?:the\s+)?(?:code|files?)\s+(?:as\s+structured\s+code|inline|below|in\s+this\s+response)/i,
+      /unable\s+to\s+(?:write|create|save)\s+files?/i,
+      // Grok "tools disabled / re-enabled" framing — saw in audit log where
+      // Grok wrapped up with "(Read-Only Confirmed) Continue ... once tools
+      // are re-enabled" instead of doing the work. Pipeline accepted it.
+      /once\s+tools?\s+(?:are\s+)?re[-\s]?enabled/i,
+      /\bread[-\s]?only\s+confirmed\b/i,
+    ];
+
+    // Excuse-and-give-up patterns — model hallucinates a constraint that
+    // doesn't exist. Saw DeepSeek invent "rate-limited on shell calls",
+    // "tool is sandboxed", "blocked by the metacharacter filter".
+    const EXCUSE_PHRASES = [
+      /(?:I\s+(?:was|am)|got)\s+rate[-\s]?limited/i,
+      /(?:tool|filesystem|shell)\s+(?:is|was)\s+sandboxed/i,
+      /blocked\s+by\s+the\s+metacharacter\s+filter/i,
+    ];
+
+    const fenceCount = (content.match(/```/g) || []).length;
+    const filePathHeadingCount = (content.match(/^#{2,4}\s+`[^`\n]*\/[^`\n]+`/gm) || []).length;
+
+    if (EXCUSE_PHRASES.some(rx => rx.test(content))) return true;
+    if (INLINE_DUMP_PHRASES.some(rx => rx.test(content)) && fenceCount >= 2) return true;
+    // Implicit bailout: file-writing role dumping ≥2 file headings + ≥4 fences with no tool calls.
+    if (filePathHeadingCount >= 2 && fenceCount >= 4) return true;
+
+    return false;
   }
 
   /**
@@ -1169,6 +1294,7 @@ export class AgentWorker extends BaseAgentWorker {
       toolCalls: result.toolCalls,
       timestamp: new Date(),
       ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
+      ...(result.providerRaw ? { providerRaw: result.providerRaw } : {}),
     };
     this.messages.push(octiMessage);
 

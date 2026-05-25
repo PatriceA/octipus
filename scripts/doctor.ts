@@ -179,7 +179,14 @@ export async function checkOllama(): Promise<CheckResult> {
 }
 
 export async function checkLiteLLM(): Promise<CheckResult> {
-  const url = process.env.LITELLM_BASE_URL;
+  // Match the env vars the rest of the codebase actually reads —
+  // `src/config/legacy-loader.ts` reads LITELLM_URL first then
+  // LITELLM_PROXY_URL. Doctor used to read LITELLM_BASE_URL which is
+  // not set anywhere, so it always reported "not configured" even on
+  // installs that DO have LiteLLM running.
+  const url = process.env.LITELLM_URL
+    || process.env.LITELLM_PROXY_URL
+    || process.env.LITELLM_BASE_URL;
   if (!url) {
     return { name: 'LiteLLM proxy', status: 'warn', detail: 'not configured', critical: false };
   }
@@ -189,7 +196,7 @@ export async function checkLiteLLM(): Promise<CheckResult> {
     status: reachable ? 'ok' : 'warn',
     detail: reachable ? `reachable at ${url}` : `unreachable at ${url}`,
     critical: false,
-    hint: reachable ? undefined : 'Start the LiteLLM proxy or update LITELLM_BASE_URL.',
+    hint: reachable ? undefined : 'Start the LiteLLM proxy or update LITELLM_URL.',
   };
 }
 
@@ -314,17 +321,49 @@ export async function checkMcpServerBuild(projectDir: string): Promise<CheckResu
 }
 
 export async function checkBrowserExtension(): Promise<CheckResult> {
+  // Two ways the extension can be "present":
+  //   1. The unpacked extension dir is installed under ~/.octipus
+  //      (what `bun run setup` copies).
+  //   2. The backend is up AND its /ws/browser-bridge has a live
+  //      connection from a browser that loaded the extension. This
+  //      second path matters because users installing the extension
+  //      directly from the Chrome / Firefox store never have a copy
+  //      under ~/.octipus, which used to surface as "not installed".
   const dir = join(homedir(), '.octipus', 'browser-extension');
-  if (!existsSync(dir)) {
+  const hasDir = existsSync(dir);
+
+  let bridgeConnected = false;
+  try {
+    const port = process.env.PORT || process.env.OCTIPUS_PORT || '3005';
+    const res = await fetch(`http://localhost:${port}/api/health/browser-bridge`, {
+      signal: AbortSignal.timeout(750),
+    });
+    if (res.ok) {
+      const body = await res.json().catch(() => null) as { connected?: boolean } | null;
+      bridgeConnected = body?.connected === true;
+    }
+  } catch {
+    // Backend not up or endpoint missing — fall back to the dir check.
+  }
+
+  if (bridgeConnected) {
     return {
       name: 'Browser extension',
-      status: 'warn',
-      detail: 'not installed',
+      status: 'ok',
+      detail: hasDir ? `connected (dir: ${dir})` : 'connected (extension loaded from store)',
       critical: false,
-      hint: 'Optional — `bun run setup` can copy it; needed only for browser-handoff tools.',
     };
   }
-  return { name: 'Browser extension', status: 'ok', detail: dir, critical: false };
+  if (hasDir) {
+    return { name: 'Browser extension', status: 'ok', detail: `installed at ${dir}`, critical: false };
+  }
+  return {
+    name: 'Browser extension',
+    status: 'warn',
+    detail: 'not installed or not connected',
+    critical: false,
+    hint: 'Optional — `bun run setup` can copy a local copy; or load the extension from the Chrome/Firefox store. Needed only for browser-handoff tools.',
+  };
 }
 
 export async function checkLogSanity(): Promise<CheckResult> {

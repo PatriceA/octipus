@@ -423,13 +423,23 @@ describe('LiteLLMClient — completeViaProxy', () => {
     expect(res.finishReason).toBe('tool_calls');
   });
 
-  test('falls back to empty args on unparseable JSON', async () => {
+  test('repairs truncated tool-call JSON via repairTruncatedJson', async () => {
     chatCreateImpl.current = () => Promise.resolve(chatCompletion({
-      toolCalls: [{ id: 'tc-1', name: 'broken', arguments: '{"truncated' }],
+      toolCalls: [{ id: 'tc-1', name: 'broken', arguments: '{"q": "weather' }],
     }));
     const client = new LiteLLMClient();
     const res = await client.completeViaProxy({ model: 'gpt-4', messages: [userMsg('hi')] });
-    expect(res.toolCalls![0]).toEqual({ id: 'tc-1', name: 'broken', arguments: {} });
+    expect(res.toolCalls![0]).toEqual({ id: 'tc-1', name: 'broken', arguments: { q: 'weather' } });
+  });
+
+  test('throws ClassifiedError on unrecoverable tool-call JSON', async () => {
+    chatCreateImpl.current = () => Promise.resolve(chatCompletion({
+      toolCalls: [{ id: 'tc-1', name: 'broken', arguments: '}}}not json{{{' }],
+    }));
+    const client = new LiteLLMClient();
+    await expect(
+      client.completeViaProxy({ model: 'gpt-4', messages: [userMsg('hi')] })
+    ).rejects.toBeInstanceOf(ClassifiedError);
   });
 
   test('throws ClassifiedError on empty choices', async () => {

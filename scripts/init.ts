@@ -187,7 +187,7 @@ interface InitResult {
 async function runWizard(ctx: WizardContext): Promise<InitResult | null> {
   // ── Welcome ─────────────────────────────────────────────────
   await infoStep(ctx, 'Welcome', [
-    '\x1b[1mOctipus init\x1b[0m — one nervous system, eight arms.',
+    '\x1b[1mOctipus init\x1b[0m — one nervous system, many arms.',
     '',
     'This wizard configures the bootstrap .env file. Everything else',
     'lives in DB settings after first boot.',

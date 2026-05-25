@@ -34,6 +34,61 @@ const INDEXABLE_EXTENSIONS = new Set([
 ]);
 
 /**
+ * Project markers that signal "this directory is a real codebase the user
+ * cares about" — writes targeting paths inside such a directory should land
+ * on the actual file, not get redirected into the throwaway session folder.
+ *
+ * Heuristic only — projects without any of these markers (e.g. a plain notes
+ * directory) still get the redirect; that's the safer default.
+ */
+const PROJECT_MARKERS = Object.freeze([
+  '.git',
+  'package.json',
+  'pubspec.yaml',
+  'Cargo.toml',
+  'pyproject.toml',
+  'go.mod',
+  'composer.json',
+  'Gemfile',
+  'pom.xml',
+  'build.gradle',
+  'build.gradle.kts',
+]);
+
+/** Per-process cache of directory → project-root (or null). */
+const projectRootCache = new Map<string, string | null>();
+
+/**
+ * Walk up from `absPath` looking for a project marker. Returns the directory
+ * that contains a marker, or null if none was found before reaching the
+ * workspace root. The walk stops at workspace root — we never claim
+ * `workspace.rootPath` itself or any ancestor of it as a "project".
+ */
+function findProjectRoot(absPath: string, workspaceRoot: string): string | null {
+  let dir = absPath;
+  // If the input is a file path, start from its parent.
+  try {
+    if (existsSync(dir) && !existsSync(join(dir, '.'))) dir = dirname(dir);
+  } catch { /* ignore */ }
+  if (!dir.startsWith(workspaceRoot)) return null;
+
+  while (dir.length > workspaceRoot.length && dir !== workspaceRoot) {
+    const cached = projectRootCache.get(dir);
+    if (cached !== undefined) return cached;
+
+    for (const marker of PROJECT_MARKERS) {
+      if (existsSync(join(dir, marker))) {
+        projectRootCache.set(dir, dir);
+        return dir;
+      }
+    }
+    projectRootCache.set(dir, null);
+    dir = dirname(dir);
+  }
+  return null;
+}
+
+/**
  * Get or create the session output directory for an agent.
  * Format: {workspace}/sessions/{YYYY-MM-DD}-{topic}/
  */
@@ -182,13 +237,38 @@ export class FilesystemTool extends BaseTool {
         const sessionDir = projectPath ? null : await getSessionOutputDir(context);
         if (sessionDir) {
           if (!rawPath.startsWith('/')) {
-            // Relative path → resolve into session dir
-            filePath = resolve(sessionDir, rawPath);
+            // Relative path: by default resolve into session dir, BUT if the
+            // path's first segment matches a real project under workspace
+            // root (carries a project marker like `.git`/`package.json`),
+            // resolve against workspace root instead. Pipeline subagents
+            // routinely write `trivia_masters/server/src/foo.js` — without
+            // this branch every relative write lands in the session folder
+            // and the actual repo stays empty.
+            const { root } = getWorkspacePaths();
+            const firstSegment = rawPath.split(/[/\\]/, 1)[0];
+            const candidate = firstSegment ? resolve(root, firstSegment) : null;
+            if (candidate && candidate.startsWith(root) && existsSync(candidate) && findProjectRoot(candidate, root)) {
+              filePath = resolve(root, rawPath);
+            } else {
+              filePath = resolve(sessionDir, rawPath);
+            }
           } else {
-            // Absolute path within workspace root → redirect to session dir
+            // Absolute path within workspace root: redirect to the session
+            // dir UNLESS the target lives inside a real project (marker dir
+            // like `.git`, `package.json`, etc.). Pipeline stages targeting
+            // an explicit repo had their writes silently sandboxed to
+            // `sessions/.../<repo>/...` — files never landed in the repo.
             const { root } = getWorkspacePaths();
             const resolved = resolve(rawPath);
-            if (resolved.startsWith(root) && !resolved.includes('/sessions/') && !resolved.includes('/extensions/') && !resolved.includes('/.octipus/')) {
+            const insideWorkspace = resolved.startsWith(root);
+            const inExcludedSubtree = resolved.includes('/sessions/')
+              || resolved.includes('/extensions/')
+              || resolved.includes('/.octipus/');
+            const projectRoot = insideWorkspace && !inExcludedSubtree
+              ? findProjectRoot(resolved, root)
+              : null;
+
+            if (insideWorkspace && !inExcludedSubtree && !projectRoot) {
               const relFromRoot = relative(root, resolved);
               filePath = resolve(sessionDir, relFromRoot);
             } else {

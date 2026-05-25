@@ -4,6 +4,7 @@ import {
   resolveChildTools,
   taskFingerprint,
   SwarmSpawner,
+  TASK_BRIEF_PREVIEW_MAX,
 } from './spawner';
 import { LEVEL_DEFAULT, type AgentNode, type NodeBudget, type TaskBrief } from './types';
 import type { ToolHandler } from '@/core/agent-worker';
@@ -143,6 +144,31 @@ describe('taskFingerprint', () => {
 
   test('differs when taskBrief differs', () => {
     expect(taskFingerprint(mk())).not.toBe(taskFingerprint(mk({ taskBrief: 'something else' })));
+  });
+});
+
+// ── TASK_BRIEF_PREVIEW_MAX: wire/DB slice contract ─────────────────────
+
+describe('TASK_BRIEF_PREVIEW_MAX', () => {
+  // Regression guard: the WS event previously sliced to 200 chars while
+  // the DB stored 4000. The swarm-tree UI reads the WS payload as the
+  // source of truth for the brief modal, so the two MUST stay equal —
+  // and at least 1k so a non-trivial brief survives. Drop this only
+  // alongside a deliberate schema change.
+  test('is wide enough for a real brief and matches the DB column', () => {
+    expect(TASK_BRIEF_PREVIEW_MAX).toBeGreaterThanOrEqual(1000);
+    expect(TASK_BRIEF_PREVIEW_MAX).toBe(4000);
+  });
+
+  test('slicing a brief at this width preserves a 3,500-char body', () => {
+    const body = 'x'.repeat(3500);
+    expect(body.slice(0, TASK_BRIEF_PREVIEW_MAX)).toBe(body);
+    expect(body.slice(0, TASK_BRIEF_PREVIEW_MAX).length).toBe(3500);
+  });
+
+  test('slicing caps an over-sized brief without throwing', () => {
+    const body = 'y'.repeat(10_000);
+    expect(body.slice(0, TASK_BRIEF_PREVIEW_MAX).length).toBe(TASK_BRIEF_PREVIEW_MAX);
   });
 });
 

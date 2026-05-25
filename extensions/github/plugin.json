@@ -1,0 +1,418 @@
+{
+  "name": "github",
+  "version": "1.0.0",
+  "description": "Full GitHub integration — repos, issues, pull requests, files, search, and more via the GitHub REST API",
+  "author": "Octipus",
+  "main": "index.ts",
+  "tools": [
+    {
+      "name": "get_repo",
+      "description": "Get detailed information about a GitHub repository",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "list_repos",
+      "description": "List repositories for a GitHub user or the authenticated user (omit username for self)",
+      "parameters": {
+        "username": {
+          "type": "string",
+          "description": "GitHub username. Omit to list repos of the authenticated user.",
+          "required": false
+        },
+        "type": {
+          "type": "string",
+          "description": "Filter by repository type: all, owner, member, public, private. Default: all",
+          "required": false
+        },
+        "sort": {
+          "type": "string",
+          "description": "Sort by: created, updated, pushed, full_name. Default: full_name",
+          "required": false
+        },
+        "per_page": {
+          "type": "number",
+          "description": "Results per page (max 100). Default: 30",
+          "required": false
+        },
+        "page": {
+          "type": "number",
+          "description": "Page number. Default: 1",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "search_repositories",
+      "description": "Search GitHub repositories by name, description, or topics",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Search query (e.g. 'machine learning in:name language:python')",
+          "required": true
+        },
+        "sort": {
+          "type": "string",
+          "description": "Sort by: stars, forks, updated. Default: best match",
+          "required": false
+        },
+        "order": {
+          "type": "string",
+          "description": "Sort order: asc or desc. Default: desc",
+          "required": false
+        },
+        "per_page": {
+          "type": "number",
+          "description": "Results per page (max 100). Default: 20",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a GitHub repository",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "description": "Issue title",
+          "required": true
+        },
+        "body": {
+          "type": "string",
+          "description": "Issue body (Markdown supported)",
+          "required": false
+        },
+        "labels": {
+          "type": "string",
+          "description": "Comma-separated label names",
+          "required": false
+        },
+        "assignees": {
+          "type": "string",
+          "description": "Comma-separated GitHub usernames to assign",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "list_issues",
+      "description": "List issues in a GitHub repository with optional filters",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "state": {
+          "type": "string",
+          "description": "Filter by state: open, closed, all. Default: open",
+          "required": false
+        },
+        "labels": {
+          "type": "string",
+          "description": "Comma-separated label names to filter by",
+          "required": false
+        },
+        "assignee": {
+          "type": "string",
+          "description": "GitHub username to filter by assignee. Use '*' for any, 'none' for unassigned.",
+          "required": false
+        },
+        "sort": {
+          "type": "string",
+          "description": "Sort by: created, updated, comments. Default: created",
+          "required": false
+        },
+        "per_page": {
+          "type": "number",
+          "description": "Results per page (max 100). Default: 30",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "get_issue",
+      "description": "Get detailed information about a specific issue",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "issue_number": {
+          "type": "number",
+          "description": "Issue number",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "create_pull_request",
+      "description": "Create a new pull request",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "description": "Pull request title",
+          "required": true
+        },
+        "head": {
+          "type": "string",
+          "description": "Source branch name (e.g. 'feature-branch') or 'user:branch' for cross-fork PRs",
+          "required": true
+        },
+        "base": {
+          "type": "string",
+          "description": "Target branch name. Default: main",
+          "required": false
+        },
+        "body": {
+          "type": "string",
+          "description": "PR body (Markdown supported)",
+          "required": false
+        },
+        "draft": {
+          "type": "boolean",
+          "description": "Create as draft PR. Default: false",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "list_pull_requests",
+      "description": "List pull requests in a GitHub repository",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "state": {
+          "type": "string",
+          "description": "Filter by state: open, closed, all. Default: open",
+          "required": false
+        },
+        "sort": {
+          "type": "string",
+          "description": "Sort by: created, updated, popularity, long-running. Default: created",
+          "required": false
+        },
+        "direction": {
+          "type": "string",
+          "description": "Sort direction: asc or desc. Default: desc",
+          "required": false
+        },
+        "per_page": {
+          "type": "number",
+          "description": "Results per page (max 100). Default: 30",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "get_pull_request",
+      "description": "Get detailed information about a specific pull request",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "pr_number": {
+          "type": "number",
+          "description": "Pull request number",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "merge_pull_request",
+      "description": "Merge a pull request",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "pr_number": {
+          "type": "number",
+          "description": "Pull request number",
+          "required": true
+        },
+        "merge_method": {
+          "type": "string",
+          "description": "Merge method: merge, squash, rebase. Default: merge",
+          "required": false
+        },
+        "commit_title": {
+          "type": "string",
+          "description": "Custom merge commit title",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "get_file_contents",
+      "description": "Read file contents from a GitHub repository (returns decoded content)",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "description": "File path within the repository (e.g. 'src/main.ts')",
+          "required": true
+        },
+        "ref": {
+          "type": "string",
+          "description": "Branch, tag, or commit SHA. Default: default branch",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "create_or_update_file",
+      "description": "Create or update a file in a GitHub repository",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "description": "File path within the repository (e.g. 'docs/readme.md')",
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "description": "File content as plain text (will be Base64-encoded automatically)",
+          "required": true
+        },
+        "message": {
+          "type": "string",
+          "description": "Commit message",
+          "required": true
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch to commit to. Default: default branch",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "search_code",
+      "description": "Search code across GitHub repositories",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "Search query (e.g. 'fetch repo:octipus/octipus language:typescript')",
+          "required": true
+        },
+        "sort": {
+          "type": "string",
+          "description": "Sort by: indexed (best match). Default: best match",
+          "required": false
+        },
+        "order": {
+          "type": "string",
+          "description": "Sort order: asc or desc. Default: desc",
+          "required": false
+        },
+        "per_page": {
+          "type": "number",
+          "description": "Results per page (max 100). Default: 20",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "list_branches",
+      "description": "List branches in a GitHub repository",
+      "parameters": {
+        "owner": {
+          "type": "string",
+          "description": "Repository owner (user or organization)",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        "per_page": {
+          "type": "number",
+          "description": "Results per page (max 100). Default: 30",
+          "required": false
+        }
+      }
+    }
+  ]
+}

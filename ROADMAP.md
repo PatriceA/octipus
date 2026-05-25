@@ -36,6 +36,14 @@ deferred from that plan remains in-flight.
   memory-redesign Phase D extractor + judge + retrieval pipeline
   has integration-test coverage on the data layer only.
 
+- **Live Artifacts — BETA.** `src/core/artifacts/`, `/api/artifacts`,
+  `web/app/artifacts/`, and the `create_live_artifact` meta-tool are
+  live behind a BETA flag in the sidebar and on the page header.
+  Outstanding work: subdomain hosting hardening (host header /
+  CSP origin sandboxing), embed-mode auth scopes, retention &
+  garbage-collection policy, slug-collision UX, agent-authored
+  refresh loop. Stays in **Now** until the BETA flag drops.
+
 - **Schema directory grouping.** `src/db/schema/` is 47 flat files.
   Still searchable, but the next 5-10 additions will start to bite.
   Proposed grouping: `schema/{auth,orchestration,rag,memory,artifacts,audit,settings}/`.
@@ -86,10 +94,14 @@ deferred from that plan remains in-flight.
 
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
-  `/skills/proposals` web page landed. Next: tighten the proposal
-  review UI (diff preview of generated prompt, one-click promote to
-  `skills` table, rejection-suppression timers visible, user-scoped
-  opt-out toggle).
+  `/skills/proposals` web page landed. The
+  [2026-05-24 curator land](#2026-05-24--orchestrator-freedom--hermes-skill-curator)
+  added the lifecycle backbone (`last_used_at`, `usage_count`,
+  `archived_at`, `curation_notes`, debounced usage tracker,
+  `runSkillCurator` auto-archive after 90d / flag after 30d). What's
+  still next on this item: tighten the proposal review UI (diff
+  preview of generated prompt, one-click promote to `skills` table,
+  rejection-suppression timers visible, user-scoped opt-out toggle).
 
 - **Trajectory learning — consumers.** Recorder + JSONL + compress +
   `trajectory_runs` pointer table + `/api/trajectories` are live. Next:
@@ -122,6 +134,88 @@ deferred from that plan remains in-flight.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-05-24 — Orchestrator freedom + Hermes skill curator
+
+Branch `claude/orchestrator-freedom-hermes-fixes`. 8-phase land
+inspired by a deep dive into the Hermes-agent and pi-mono repos.
+**+1558 / -79 across 33 files, 8 new test files (~50 new tests),
+2009 / 0 / 128 pass / fail / skip on `bun test src`.** Typecheck +
+lint clean. 134/138 e2e pass (4 failures pre-existing — env config
++ flake).
+
+Headline: the orchestrator can finally narrate, supervise, and chat
+to the user while children run. It used to block on every spawn —
+the persona narration bridge had been emitting events since the
+2026-05-20 land but the parent thread was stuck in `await
+worker.run`, so the UI saw narration only on errors and turn-end.
+
+- **Orchestrator detach budget.** `LEVEL_DEFAULT[0].maxPendingDetached`
+  flipped from 0 to 6 (matches `fanOut`). `spawn_child mode:"detach"`
+  is now valid at depth 0, the orchestrator gets `collect_children`
+  via the same workerRef/detachHookRef late-bind pattern that
+  agents already used. Updated `roles/orchestrator/prompt.md` with
+  a `DETACH MODE` section that teaches the LLM when to detach
+  (parallel siblings, long-running children) vs. await (next reply
+  depends on the child).
+- **Narration actually visible.** `swarm.narration` events were
+  emitted but no chat surface rendered them. New `narration` message
+  role (compact italic pill) + chat-UI handler.
+- **Tool-call streaming events (Phase 5).** Per-tool
+  `tool_call_complete` action event from both the meta-tool fast
+  path and the permission-gated path. UI flips tracked rows live
+  (spinner → check / red X, with duration). Phase 5 follow-up:
+  agent card now only shows the live tool stream while running —
+  once the agent completes the list collapses, just the count
+  badge stays. Plus a merge-preserves-live fix so the 10s REST poll
+  doesn't wipe streamed status.
+- **`/model` slash command.** Per-session in-memory orchestrator
+  model override. Override runs through the full suitability gate
+  (reasoner / no-tools / known-bad swap), so a bad pick fails loud
+  at command time, not mid-turn.
+
+Plus polish that surfaced while wiring everything together:
+
+- **Swarm tree "Task brief" no longer looks truncated.** WS event
+  was slicing to 200 chars while the DB stored 4000; the modal
+  silently showed the WS version until a reload. Slice unified at
+  4000 via `TASK_BRIEF_PREVIEW_MAX`; modal height bumped to
+  `max-h-[60vh]`.
+- **Inline code stays inline.** New `OUTPUT_FORMATTING_RULES`
+  block injected after `SECURITY_PREAMBLE` (rule #6 preserved
+  byte-identical) teaches the LLM to keep short tokens in single
+  backticks. UI heuristic collapses any leftover ≤80-char, single-
+  line, no-language fenced block to inline code.
+- **Tool-call ID hash fallback.** `normalizeToolCallId` falls back
+  to a hash when stripping invalid characters would leave an empty
+  string — previously dropped the assistant↔tool message link.
+
+Operator-facing:
+
+- **Skill curator (Phase 4 — Hermes-inspired learning loop).**
+  Migration `0061_skill_curator_lifecycle.sql` adds `last_used_at`,
+  `usage_count`, `archived_at`, `curation_notes` + index. New
+  debounced usage tracker (5s window or 32-id threshold, race-safe
+  follow-up flush) records every prompt-injection of a skill.
+  `runSkillCurator()` flags skills unused >30d, auto-archives >90d
+  with a curator note. `findActiveByTopic` now filters archived.
+  Foundation for the Hermes-style autonomous skill refresh loop on
+  top of the existing `skill_proposals` infrastructure.
+
+Files (selected):
+`src/core/swarm/{types,swarm-tool,spawner}.ts`,
+`src/core/orchestrator/{meta-tools,model-selector,service,session-model-override}.ts`,
+`src/core/orchestrator/roles/orchestrator/prompt.md`,
+`src/core/commands/model.ts`,
+`src/core/tool-executor.ts`,
+`src/skills/{curator,usage-tracker,registry}.ts`,
+`src/db/repositories/skill-repository.ts`,
+`src/db/schema/skills.ts`,
+`src/db/migrations/0061_skill_curator_lifecycle.sql`,
+`src/models/message-transform.ts`,
+`web/app/chat/page.tsx`,
+`web/components/chat/message-timeline.tsx`,
+`web/components/swarm-tree.tsx`.
 
 ### 2026-05-20 batch (d) — UX + personality revamp
 

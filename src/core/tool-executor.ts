@@ -22,6 +22,28 @@ const FILE_CHANGE_TOOLS = new Set([
  * timer — the agent is blocked waiting on the child, not doing work. */
 const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
 
+/**
+ * One-line preview of a tool's return value for UI streaming. Strings are
+ * trimmed to a single line; objects are JSON-serialized with a length cap.
+ * Keep this tight — it lands in the `tool_call_complete` event payload
+ * and the UI only needs a glance ("read 348 lines from x.ts").
+ */
+function previewToolResult(result: unknown): string {
+  if (result == null) return '';
+  let text: string;
+  if (typeof result === 'string') {
+    text = result;
+  } else {
+    try {
+      text = JSON.stringify(result);
+    } catch {
+      text = String(result);
+    }
+  }
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 200 ? oneLine.slice(0, 197) + '...' : oneLine;
+}
+
 export class ToolExecutor {
   private tools: Map<string, ToolHandler> = new Map();
   private consecutiveToolErrors: number = 0;
@@ -166,6 +188,7 @@ export class ToolExecutor {
    */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     this.emitFn('action', {
+      role: this.context.role,
       toolCalls: toolCalls.map(tc => ({
         id: tc.id,
         name: tc.name,
@@ -221,6 +244,16 @@ export class ToolExecutor {
             tool: toolCall.name, toolId, durationMs: toolExecMs,
           }, 'Tool executed');
 
+          this.emitFn('action', {
+            type: 'tool_call_complete',
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            role: this.context.role,
+            status: 'ok',
+            durationMs: toolExecMs,
+            resultPreview: previewToolResult(result),
+          });
+
           results.push({ toolCallId: toolCall.id, result });
 
           if (tool.final) {
@@ -254,6 +287,14 @@ export class ToolExecutor {
           if (tool.final) {
             throw error;
           }
+          this.emitFn('action', {
+            type: 'tool_call_complete',
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            role: this.context.role,
+            status: isCancellationError(error) ? 'cancelled' : 'error',
+            error: (error as Error).message,
+          });
           results.push({ toolCallId: toolCall.id, result: null, error: (error as Error).message });
         }
         continue;
@@ -366,6 +407,19 @@ export class ToolExecutor {
           tool: toolCall.name, toolId, durationMs: toolExecMs,
         }, 'Tool executed');
 
+        // Phase 5: per-tool completion event so the UI can flip a row
+        // from "running" to "done" as soon as the tool returns, instead
+        // of waiting for the bulk `observation` emit at end-of-batch.
+        this.emitFn('action', {
+          type: 'tool_call_complete',
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          role: this.context.role,
+          status: 'ok',
+          durationMs: toolExecMs,
+          resultPreview: previewToolResult(result),
+        });
+
         results.push({ toolCallId: toolCall.id, result });
 
         // Emit file change events for file-modifying operations
@@ -417,7 +471,8 @@ export class ToolExecutor {
           }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in tool-executor'));
         } catch { /* hooks not ready */ }
       } catch (error) {
-        if (isCancellationError(error)) {
+        const cancelled = isCancellationError(error);
+        if (cancelled) {
           // Tool aborted because the agent (or an ancestor) was cancelled.
           // Not a real tool failure — log at info so cancelling a swarm
           // doesn't fill the dashboard with red error rows.
@@ -431,6 +486,17 @@ export class ToolExecutor {
             'Tool execution failed'
           );
         }
+
+        // Phase 5: surface per-tool failure too, so the UI can mark the
+        // row failed before the batch finishes.
+        this.emitFn('action', {
+          type: 'tool_call_complete',
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          role: this.context.role,
+          status: cancelled ? 'cancelled' : 'error',
+          error: (error as Error).message,
+        });
 
         results.push({
           toolCallId: toolCall.id,

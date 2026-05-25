@@ -31,6 +31,7 @@ interface NavItem {
   name: string;
   href: string;
   icon: typeof LayoutDashboard;
+  badge?: string;
 }
 
 interface NavGroup {
@@ -60,7 +61,7 @@ const navGroups: NavGroup[] = [
       { name: 'knowledge', href: '/knowledge', icon: Brain },
       { name: 'memory', href: '/memory', icon: Brain },
       { name: 'evaluations', href: '/eval', icon: FlaskConical },
-      { name: 'artifacts', href: '/artifacts', icon: Globe },
+      { name: 'artifacts', href: '/artifacts', icon: Globe, badge: 'BETA' },
     ],
   },
   {
@@ -171,6 +172,11 @@ export function Sidebar() {
                     )}
                     <item.icon className="shrink-0 w-4 h-4" />
                     {!collapsed && <span className="truncate">{item.name}</span>}
+                    {!collapsed && item.badge && (
+                      <span className="ml-auto rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider text-primary">
+                        {item.badge}
+                      </span>
+                    )}
                   </Link>
                 );
               })}

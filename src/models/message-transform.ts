@@ -4,13 +4,26 @@ import type { AgentMessage } from '@/core/types';
 /**
  * Normalize tool call IDs across providers.
  * OpenAI IDs can be 450+ chars with pipe characters.
- * Anthropic limits to 64 chars.
+ * Anthropic limits to 64 chars, alphanumeric + hyphen/underscore.
  * Standardize to max 64 chars, alphanumeric + hyphen.
+ *
+ * Idempotent: a normalized id passes through unchanged. Round-trip
+ * stable: the same input always produces the same output (hash for
+ * long ids is deterministic).
+ *
+ * If stripping invalid chars leaves nothing (e.g. an id that was all
+ * pipes / colons / dots), we fall back to the hash form so we never
+ * return an empty string for a non-empty input — that would silently
+ * drop the tool message link.
  */
 export function normalizeToolCallId(id: string): string {
   if (!id) return id;
   // Strip non-alphanumeric except hyphens and underscores
   const cleaned = id.replace(/[^a-zA-Z0-9-_]/g, '');
+  if (cleaned.length === 0) {
+    // All-invalid input — hash so we still produce a stable, non-empty id.
+    return 'tc-' + createHash('sha256').update(id).digest('hex').slice(0, 60);
+  }
   if (cleaned.length <= 64) return cleaned;
   // Hash long IDs to fit
   return 'tc-' + createHash('sha256').update(id).digest('hex').slice(0, 60);

@@ -1,4 +1,4 @@
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { getUserOrgIds } from '@/services/org-membership';
 import { getDb } from '../postgres';
 import { skillTopicAssignments } from '../schema/skill-topic-assignments';
@@ -104,9 +104,84 @@ export class SkillRepository {
         and(
           eq(skillTopicAssignments.topic, topic),
           eq(skillTopicAssignments.isActive, true),
+          isNull(skills.archivedAt),
         ),
       );
     return rows.map(r => r.skill);
+  }
+
+  // ── Curator (Phase 4) — usage tracking + archive lifecycle ────────
+
+  /**
+   * Bump usage_count + last_used_at for a batch of skill ids. Single
+   * statement so the tracker can flush a debounced batch in one round
+   * trip. Silently ignores ids that don't exist (the tracker may have
+   * cached an id that has since been deleted).
+   */
+  async recordUsage(skillIds: string[]): Promise<void> {
+    if (skillIds.length === 0) return;
+    await this.db
+      .update(skills)
+      .set({
+        usageCount: sql`${skills.usageCount} + 1`,
+        lastUsedAt: new Date(),
+      })
+      .where(inArray(skills.id, skillIds));
+  }
+
+  /**
+   * Find skills the curator may want to archive: not used for `unusedDays`
+   * AND not already archived AND not system skills (those are explicit
+   * conventions we don't auto-prune). Caller decides whether to actually
+   * archive — this is the read side.
+   */
+  async findStale(unusedDays: number, limit = 50): Promise<Skill[]> {
+    const cutoff = new Date(Date.now() - unusedDays * 24 * 60 * 60 * 1000);
+    return this.db
+      .select()
+      .from(skills)
+      .where(
+        and(
+          isNull(skills.archivedAt),
+          eq(skills.isSystem, false),
+          or(
+            isNull(skills.lastUsedAt),
+            lt(skills.lastUsedAt, cutoff),
+          ),
+        ),
+      )
+      .limit(limit);
+  }
+
+  /** Soft-archive a skill with an optional note. Reversible via `unarchive`. */
+  async archive(skillId: string, note?: string): Promise<Skill | undefined> {
+    const [row] = await this.db
+      .update(skills)
+      .set({
+        archivedAt: new Date(),
+        curationNotes: note ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(skills.id, skillId))
+      .returning();
+    return row;
+  }
+
+  async unarchive(skillId: string): Promise<Skill | undefined> {
+    const [row] = await this.db
+      .update(skills)
+      .set({
+        archivedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(skills.id, skillId))
+      .returning();
+    return row;
+  }
+
+  /** List archived skills (audit view). */
+  async findArchived(): Promise<Skill[]> {
+    return this.db.select().from(skills).where(isNotNull(skills.archivedAt));
   }
 }
 

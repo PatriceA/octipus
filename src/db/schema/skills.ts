@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { vector } from './embeddings';
 import { organizations } from './organizations';
 import { users } from './users';
@@ -28,11 +28,22 @@ export const skills = pgTable(
     descriptionHash: text('description_hash'),
     /** Bypass discovery — when true, skill is always injected for its topic regardless of message content. */
     alwaysInject: boolean('always_inject').notNull().default(false),
+    // ── Curator lifecycle fields (Phase 4) ──────────────────────────
+    /** Last time this skill was loaded into a prompt, set by the usage tracker. */
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    /** Lifetime injection count, debounced-incremented by the usage tracker. */
+    usageCount: integer('usage_count').notNull().default(0),
+    /** Soft-archive flag: hidden from discovery but kept for audit. NULL = active. */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    /** Free-form notes left by the curator (auto-archive reason, refresh suggestion). */
+    curationNotes: text('curation_notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     orgIdIdx: index('skills_org_id_idx').on(table.orgId),
+    /** Speeds up the curator's stale-detection scan: WHERE last_used_at < cutoff AND archived_at IS NULL. */
+    lastUsedIdx: index('skills_last_used_idx').on(table.lastUsedAt),
   }),
 );
 

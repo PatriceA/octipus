@@ -12,6 +12,7 @@ import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
+import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
@@ -21,6 +22,10 @@ interface ToolCallInfo {
   id: string;
   name: string;
   argsSummary?: string;
+  status?: string;
+  durationMs?: number;
+  resultPreview?: string;
+  error?: string;
 }
 
 export interface FileChange {
@@ -130,6 +135,30 @@ export default function ChatPage() {
       return next;
     });
   }, []);
+
+  // Narration messages — orchestrator dispatch lines and per-tool
+  // stream updates ("data arm calls read_file", "data arm · read_file
+  // · 0.2s"). They live in the in-memory session state and persist for
+  // the lifetime of the session (the 10s REST poll preserves them via
+  // `loadSessionMessages` merge). On a fresh page reload they're gone
+  // because narration events aren't persisted server-side — that's
+  // fine: narration is a live trace of activity, not history.
+  const pushTransientNarration = useCallback((sessionId: string, text: string, timestamp?: Date) => {
+    if (!sessionId || !text.trim()) return;
+    const id = `narr-${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    updateSessionState(sessionId, (prev) => ({
+      ...prev,
+      messages: [
+        ...prev.messages,
+        {
+          id,
+          role: 'narration',
+          content: text,
+          timestamp: timestamp ?? new Date(),
+        },
+      ],
+    }));
+  }, [updateSessionState]);
 
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
@@ -258,19 +287,51 @@ export default function ChatPage() {
       } catch {}
 
       updateSessionState(sessionId, (prev) => {
-        // Merge restored agents with live-tracked agents, preserving live data
-        // (WebSocket events have accurate durationMs before DB persists it)
+        // Preserve in-memory `role: 'narration'` messages — they're
+        // emitted from WebSocket events (swarm dispatch + per-tool
+        // stream) and never round-tripped through REST, so a naive
+        // overwrite would wipe them on every 10s poll. Splice them
+        // back into the freshly-loaded message list keyed by id.
+        const liveNarrations = prev.messages.filter((m) => m.role === 'narration');
+        const restoredIds = new Set(msgs.map((m) => m.id));
+        const mergedMessages = [...msgs, ...liveNarrations.filter((m) => !restoredIds.has(m.id))]
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        // Merge restored agents with live-tracked agents, preserving live
+        // data. WebSocket events carry status streaming (Phase 5
+        // tool_call_complete: status, durationMs, resultPreview, error)
+        // that the REST `/agents/:id/events` endpoint does NOT replay, so
+        // blindly overwriting toolCalls on every 10s poll caused live
+        // entries to flicker — pop in from WS, get wiped by the next
+        // restore, come back on the next tool, vanish again.
+        //
+        // Rule: live toolCalls win whenever the live list is non-empty
+        // OR carries any streamed status field. REST is the cold-load
+        // fallback for sessions we don't have live data for yet.
         let mergedAgents = prev.trackedAgents;
         if (restoredAgents.size > 0) {
           mergedAgents = new Map(restoredAgents);
-          // Preserve live-tracked data that may be more accurate
           Array.from(prev.trackedAgents.entries()).forEach(([id, liveAgent]) => {
             const restored = mergedAgents.get(id);
-            if (restored && liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)) {
-              mergedAgents.set(id, { ...restored, durationMs: liveAgent.durationMs, endTime: liveAgent.endTime });
-            } else if (!restored) {
+            if (!restored) {
               mergedAgents.set(id, liveAgent);
+              return;
             }
+            const liveHasToolData =
+              liveAgent.toolCalls.length > 0 &&
+              (liveAgent.toolCalls.length >= restored.toolCalls.length ||
+                liveAgent.toolCalls.some(tc => tc.status || tc.durationMs != null || tc.resultPreview || tc.error));
+            mergedAgents.set(id, {
+              ...restored,
+              // Phase 5: keep live tool-call entries so the streamed
+              // status/duration/preview don't get wiped by the poll.
+              toolCalls: liveHasToolData ? liveAgent.toolCalls : restored.toolCalls,
+              // Live durationMs/endTime can be fresher than the DB row.
+              durationMs:
+                liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)
+                  ? liveAgent.durationMs
+                  : restored.durationMs,
+              endTime: liveAgent.endTime ?? restored.endTime,
+            });
           });
         }
         // Merge restored file changes with any live-tracked ones
@@ -279,7 +340,7 @@ export default function ChatPage() {
               !restoredFileChanges.some(r => r.path === fc.path && r.agentId === fc.agentId)
             )]
           : prev.fileChanges;
-        return { ...prev, messages: msgs, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
+        return { ...prev, messages: mergedMessages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
       });
     } catch {}
   }, [updateSessionState]);
@@ -570,6 +631,21 @@ export default function ChatPage() {
         break;
 
       case 'swarm_event':
+        // Persona narration: render as inline chat bubble so the orchestrator
+        // appears to "speak" while subagents work. Without this the bridge
+        // emits but no surface displays it, which manifests as "narration
+        // never fires" in the UI.
+        if (data.event === 'swarm.narration') {
+          const np = data.payload as { text?: string };
+          const text = (np?.text ?? '').trim();
+          const sid = eventSessionId || activeSessionId;
+          if (text && sid) {
+            if (!activeSessionId) setActiveSessionId(sid);
+            pushTransientNarration(sid, text, new Date(data.timestamp ?? Date.now()));
+          }
+          break;
+        }
+
         // Swarm lifecycle events — funnel into the SwarmTree component AND
         // into the per-session trackedAgents map so the sidepanel's agent
         // count / duration / iteration / token columns populate live.
@@ -860,6 +936,11 @@ export default function ChatPage() {
         // containing spaces (e.g. "C:/Users/patri/Github Reps/…") get cut
         // off at the first space, which produced a phantom duplicate entry
         // like "C:/Users/patri/Github" sitting next to the real path.
+        //
+        // No "start" narration here: it produced a double-bubble per tool
+        // (start + complete, often <200ms apart) and felt like noise.
+        // The completion narration emitted from `tool_call_complete`
+        // below is enough — it carries name + status + duration.
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
@@ -928,6 +1009,83 @@ export default function ChatPage() {
           }
           return { ...prev, trackedAgents: next };
         });
+      }
+      // Phase 5: per-tool completion event — flip the tracked tool call
+      // entry's status the moment the tool returns so the user sees live
+      // progress instead of all tools turning "done" at end-of-batch.
+      // If the event arrives before the matching `action` event (rare:
+      // React batching could in theory reorder setState commits),
+      // synthesize a placeholder so the completion isn't lost.
+      else if (d?.type === 'tool_call_complete' && d?.toolCallId) {
+        // Emit a transient completion narration so the user sees the
+        // outcome ("data arm · read_file · 0.2s" or "data arm · bash
+        // failed: timeout"). Role comes from the event payload — the
+        // tool-executor stamps `this.context.role` on every emit so we
+        // don't need to look it up in trackedAgents (which loses races
+        // when several events fire faster than React's setState batches).
+        const toolName = typeof d.name === 'string' ? d.name : '';
+        const status = String(d.status ?? 'ok');
+        const dur = typeof d.durationMs === 'number'
+          ? ` · ${(d.durationMs / 1000).toFixed(d.durationMs >= 1000 ? 1 : 2)}s`
+          : '';
+        const err = typeof d.error === 'string' ? d.error : null;
+        const completionRole = typeof d.role === 'string' && d.role ? d.role : 'unknown';
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          const completionPatch = {
+            status: String(d.status ?? 'ok'),
+            durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
+            resultPreview: typeof d.resultPreview === 'string' ? d.resultPreview : undefined,
+            error: typeof d.error === 'string' ? d.error : undefined,
+          };
+          if (!existing) {
+            // Agent record not yet hydrated — stash the completion on a
+            // stub so the eventual `action`/`swarm.node_spawned` arrival
+            // can merge it. Stubs are harmless if abandoned.
+            next.set(data.agentId, {
+              id: data.agentId,
+              role: 'unknown',
+              model: '',
+              status: 'running',
+              toolCalls: [{
+                id: String(d.toolCallId),
+                name: typeof d.name === 'string' ? d.name : '',
+                ...completionPatch,
+              }],
+              startTime: Date.now(),
+            });
+            return { ...prev, trackedAgents: next };
+          }
+          let matched = false;
+          const updatedCalls = existing.toolCalls.map(tc => {
+            if (tc.id === d.toolCallId) {
+              matched = true;
+              return { ...tc, ...completionPatch };
+            }
+            return tc;
+          });
+          // Completion came before the start emit landed in this map —
+          // append a partial entry so we still surface the status.
+          if (!matched) {
+            updatedCalls.push({
+              id: String(d.toolCallId),
+              name: typeof d.name === 'string' ? d.name : '',
+              ...completionPatch,
+            });
+          }
+          next.set(data.agentId, { ...existing, toolCalls: updatedCalls });
+          return { ...prev, trackedAgents: next };
+        });
+        if (toolName) {
+          if (status === 'error' && err) {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` failed: ${err}`);
+          } else if (status === 'cancelled') {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` cancelled`);
+          } else {
+            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\`${dur}`);
+          }
+        }
       }
       // File change events from built-in filesystem tools
       else if (d?.type === 'file_change' && d?.path) {
@@ -1243,6 +1401,14 @@ export default function ChatPage() {
           isLoading={isLoading}
           statusMessage={statusMessage}
         />
+
+        {/* Permission / approval banner — sits directly above the prompt
+            input so the user doesn't have to hunt for it at the viewport
+            bottom (which used to leave a big empty gap between chat
+            content and the floating banner). The component is inline
+            for /chat; other pages still use the floating version via
+            app-shell. */}
+        <GlobalPermissionBanner inline />
 
         {/* Prompt input */}
         <div className="border-t border-outline-variant/10 bg-surface-container p-3">

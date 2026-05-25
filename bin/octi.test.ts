@@ -27,7 +27,7 @@ describe('octi dispatcher', () => {
   test('help prints the banner and exits 0', async () => {
     const r = await run(['help']);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain('one nervous system, eight arms');
+    expect(r.stdout).toContain('one nervous system, many arms');
     expect(r.stdout).toContain('doctor');
     expect(r.stdout).toContain('init');
     expect(r.stdout).toContain('tui');

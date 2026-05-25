@@ -35,6 +35,35 @@ describe('Message Transform', () => {
       const r2 = normalizeToolCallId(longId);
       expect(r1).toBe(r2);
     });
+
+    test('is idempotent — re-normalizing returns the same id', () => {
+      const cases = [
+        'call_abc123',
+        'a'.repeat(100),
+        'call|with|pipes',
+        'mixed-and_underscored.ID:42',
+      ];
+      for (const id of cases) {
+        const once = normalizeToolCallId(id);
+        const twice = normalizeToolCallId(once);
+        expect(twice).toBe(once);
+      }
+    });
+
+    test('falls back to a hash when stripping leaves nothing', () => {
+      // Anthropic-incompatible chars only — must still produce a non-empty,
+      // stable id so the assistant↔tool message link is preserved.
+      const result = normalizeToolCallId('|||::::....');
+      expect(result.length).toBeGreaterThan(0);
+      expect(result.startsWith('tc-')).toBe(true);
+      // Stability check.
+      expect(normalizeToolCallId('|||::::....')).toBe(result);
+    });
+
+    test('long ids stay within the 64-char Anthropic limit', () => {
+      const result = normalizeToolCallId('y'.repeat(500));
+      expect(result.length).toBeLessThanOrEqual(64);
+    });
   });
 
   describe('transformMessagesForProvider', () => {
