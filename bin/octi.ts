@@ -34,19 +34,20 @@ const HELP = `Octipus — one nervous system, many arms.
 Usage: octi <command> [options]
 
 Commands:
-  doctor [--json]   Environment health checks
-  init              Run the setup wizard (storage, base model, security keys)
-  tui               Launch terminal chat
-  edit              Launch the TUI editor
-  start [--dev]     Start backend + web UI (delegates to bash dispatcher)
-  stop              Stop all Octipus processes
-  restart [--dev]   Restart everything
-  status            Show running state
-  logs [--web]      Tail backend logs
-  open              Open the web UI in a browser
-  persona [show]    Print the resolved persona (use the web UI to edit)
-  version           Print version
-  help              Print this banner
+  setup [--remote <url>]   Run the setup wizard (single entry point — TUI/non-TTY/remote)
+  doctor [--json]          Environment health checks
+  capabilities [install]   List or install optional tools (browser, mcp, …)
+  tui                      Launch terminal chat
+  edit                     Launch the TUI editor
+  start [--dev]            Start backend + web UI (delegates to bash dispatcher)
+  stop                     Stop all Octipus processes
+  restart [--dev]          Restart everything
+  status                   Show running state
+  logs [--web]             Tail backend logs
+  open                     Open the web UI in a browser
+  persona [show]           Print the resolved persona (use the web UI to edit)
+  version                  Print version
+  help                     Print this banner
 `;
 
 interface PathResolution {
@@ -131,19 +132,74 @@ async function runDoctor(args: string[]): Promise<never> {
 }
 
 async function runInit(args: string[]): Promise<never> {
-  const projectDir = projectOrDie();
-  // The TUI-based init wizard ships under scripts/init.ts and falls
-  // back to the legacy inquirer flow at scripts/setup.ts when the
-  // terminal isn't capable enough (CI, dumb terminals).
-  const tuiInit = join(projectDir, 'scripts', 'init.ts');
-  const legacySetup = join(projectDir, 'scripts', 'setup.ts');
-  const tty = Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
-  if (!tty || process.env.OCTIPUS_INIT === 'legacy' || !existsSync(tuiInit)) {
-    return delegateBun('scripts/setup.ts', args);
+  // Single unified wizard — handles TTY, non-TTY (CI / Docker), and
+  // remote (`--remote <url>`) modes itself. No TTY branching here.
+  return delegateBun('scripts/setup-wizard.ts', args);
+}
+
+async function runCapabilities(args: string[]): Promise<never> {
+  // List / install via the running backend. The backend's
+  // /api/capabilities route owns the truth (probed once at boot, kept
+  // current by installs). When the backend is down we surface a hint
+  // rather than running probes a second way that could diverge.
+  const port = process.env.API_PORT || '3005';
+  const base = `http://localhost:${port}`;
+  const sub = args[0];
+
+  if (!sub || sub === 'list' || sub === '--help' || sub === '-h') {
+    if (sub === '--help' || sub === '-h') {
+      process.stdout.write(
+        'octi capabilities                  list installed/missing tools\n' +
+        'octi capabilities install <id>     install a capability (e.g. browser, mcp)\n' +
+        'octi capabilities install --all    install every missing capability with an installer\n',
+      );
+      process.exit(0);
+    }
+    try {
+      const res = await fetch(`${base}/api/capabilities`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const rows = (await res.json()) as Array<{ toolId: string; available: boolean; reason: string | null; version: string | null }>;
+      for (const r of rows) {
+        const mark = r.available ? '\x1b[32m✓\x1b[0m' : '\x1b[33m·\x1b[0m';
+        const meta = r.available ? (r.version ?? '') : (r.reason ?? '');
+        process.stdout.write(`  ${mark}  ${r.toolId.padEnd(16)}  ${meta}\n`);
+      }
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write(`octi capabilities: backend unreachable at ${base} (${(err as Error).message}). Run \`octi start\` first.\n`);
+      process.exit(1);
+    }
   }
-  // Modern path: pi-tui wizard
-  void legacySetup;
-  return delegateBun('scripts/init.ts', args);
+
+  if (sub === 'install') {
+    const target = args[1];
+    if (!target) {
+      process.stderr.write('octi capabilities install: missing capability id (or pass --all).\n');
+      process.exit(2);
+    }
+    try {
+      if (target === '--all' || target === '--all-missing') {
+        const res = await fetch(`${base}/api/capabilities/install-all-missing`, { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const out = (await res.json()) as Record<string, { ok: boolean; detail: string }>;
+        for (const [id, r] of Object.entries(out)) {
+          process.stdout.write(`  ${r.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[33m!\x1b[0m'}  ${id}  ${r.detail}\n`);
+        }
+        process.exit(0);
+      }
+      const res = await fetch(`${base}/api/capabilities/${target}/install`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const r = (await res.json()) as { ok: boolean; detail: string };
+      process.stdout.write(`${r.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[33m!\x1b[0m'} ${r.detail}\n`);
+      process.exit(r.ok ? 0 : 1);
+    } catch (err) {
+      process.stderr.write(`octi capabilities install: ${(err as Error).message}\n`);
+      process.exit(1);
+    }
+  }
+
+  process.stderr.write(`octi capabilities: unknown subcommand "${sub}"\n`);
+  process.exit(2);
 }
 
 async function runPersona(args: string[]): Promise<never> {
@@ -240,6 +296,11 @@ async function main(): Promise<void> {
 
     case 'persona':
       await runPersona(rest);
+      break;
+
+    case 'capabilities':
+    case 'caps':
+      await runCapabilities(rest);
       break;
 
     case 'start':

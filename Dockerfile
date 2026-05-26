@@ -41,10 +41,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     rsync \
     ripgrep \
+    fd-find \
     zip \
     unzip \
     openssh-client \
     python3-minimal \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built app
@@ -64,6 +67,16 @@ COPY bin/ bin/
 
 # Create data directories
 RUN mkdir -p /data/workspace /data/documents /data/extensions
+
+# Pre-bake optional capabilities so the container reports them as
+# `available` via /api/capabilities on first boot. The streamlined
+# setup wizard surfaces these so an admin connecting remotely with
+# `octi setup --remote …` doesn't have to install them in-container.
+#
+# - Playwright Chromium → `browser`, `visual` tools
+# - mcp-server build    → `mcp` capability (external MCP clients)
+RUN bunx playwright install chromium && \
+    cd mcp-server && npm install --silent && npm run build --silent && cd ..
 
 # Environment defaults
 ENV NODE_ENV=production \
