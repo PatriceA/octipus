@@ -16,6 +16,10 @@
 import { existsSync, readFileSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join, resolve } from 'path';
+import {
+  tcpReachable as tcpProbe,
+  httpReachable as httpProbe,
+} from '../src/setup/probes';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -38,33 +42,16 @@ export interface DoctorReport {
 }
 
 // ── Probes ─────────────────────────────────────────────────────────
+// Thin boolean adapters around the shared probe helpers so the rest
+// of doctor.ts stays unchanged. ProbeResult carries detail/latency
+// for future reporting; doctor only cares about reachability today.
 
 async function tcpReachable(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const socket = await Bun.connect({
-      hostname: host,
-      port,
-      socket: { data() {}, open(s) { s.end(); }, error() {} },
-    }).catch(() => null);
-    clearTimeout(timer);
-    return socket !== null;
-  } catch {
-    return false;
-  }
+  return (await tcpProbe(host, port, timeoutMs)).ok;
 }
 
 async function httpReachable(url: string, timeoutMs = 2000): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
-    return res.ok || res.status < 500;
-  } catch {
-    return false;
-  }
+  return (await httpProbe(url, timeoutMs)).ok;
 }
 
 // ── Individual checks ──────────────────────────────────────────────
@@ -430,6 +417,47 @@ export async function checkDiskSpace(): Promise<CheckResult> {
 
 // ── Runner ─────────────────────────────────────────────────────────
 
+/**
+ * Pull the live capabilities table from the backend. We fall back to a
+ * `warn` row when the backend isn't up — the table only exists once
+ * migrations have run. This intentionally does NOT re-probe locally:
+ * the backend is the source of truth, and re-probing here would let
+ * doctor and orchestrator drift apart.
+ */
+export async function checkCapabilities(): Promise<CheckResult> {
+  const port = process.env.API_PORT || '3005';
+  try {
+    const res = await fetch(`http://localhost:${port}/api/capabilities`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = (await res.json()) as Array<{ toolId: string; available: boolean; reason: string | null }>;
+    if (rows.length === 0) {
+      return { name: 'Capabilities', status: 'warn', detail: 'no rows — backend probed but registry empty?', critical: false };
+    }
+    const installed = rows.filter((r) => r.available).map((r) => r.toolId);
+    const missing = rows.filter((r) => !r.available).map((r) => r.toolId);
+    if (missing.length === 0) {
+      return { name: 'Capabilities', status: 'ok', detail: `all installed: ${installed.join(', ')}`, critical: false };
+    }
+    return {
+      name: 'Capabilities',
+      status: 'warn',
+      detail: `installed: ${installed.join(', ') || '(none)'} · missing: ${missing.join(', ')}`,
+      critical: false,
+      hint: `Install missing: ${missing.map((m) => `octi capabilities install ${m}`).join(' · ')}`,
+    };
+  } catch (err) {
+    return {
+      name: 'Capabilities',
+      status: 'warn',
+      detail: `backend unreachable (${(err as Error).message}) — cannot read capability state`,
+      critical: false,
+      hint: 'Start the backend (`octi start`) to populate /api/capabilities.',
+    };
+  }
+}
+
 export async function runDoctor(projectDir: string): Promise<DoctorReport> {
   const checks = await Promise.all([
     checkBun(),
@@ -443,6 +471,7 @@ export async function runDoctor(projectDir: string): Promise<DoctorReport> {
     checkPostgres(),
     checkRedis(),
     checkBackend(),
+    checkCapabilities(),
     checkMcpServerBuild(projectDir),
     checkBrowserExtension(),
     checkLogSanity(),

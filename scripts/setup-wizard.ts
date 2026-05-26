@@ -1,0 +1,619 @@
+#!/usr/bin/env bun
+/**
+ * `octi setup` — the single Octipus setup wizard.
+ *
+ * Replaces the old inquirer wizard (`scripts/setup.ts`), the bootstrap
+ * `scripts/init.ts`, and the web `/setup` page. Walks the user from a
+ * clean checkout to a runnable service in one pass:
+ *
+ *   1. Detect runtime + services (shared probes from src/setup/probes.ts)
+ *   2. Storage mode  → writes secrets-only .env
+ *   3. Secrets       → auto-generated, written to .env
+ *   4. Boot backend  → spawns `bun run src/index.ts`, waits on /api/health
+ *   5. Admin account → POST /api/auth/register (first user gets admin grant)
+ *   6. Provider      → select from canonical PROVIDERS, key into vault
+ *   7. Default model → PATCH /api/settings
+ *   8. Capabilities  → probe missing, multiselect-install (Playwright, MCP, …)
+ *   9. Mark complete → POST /settings/setup-complete; print next steps
+ *
+ * Non-interactive mode: pass `--non-interactive` or set CI; the wizard
+ * reads OCTIPUS_SETUP_* env vars instead of prompting. Useful for CI
+ * and Dockerfile builds.
+ *
+ *   OCTIPUS_SETUP_STORAGE=embedded|external
+ *   OCTIPUS_SETUP_DATA_DIR=~/.octipus/data       (embedded)
+ *   OCTIPUS_SETUP_DATABASE_URL=postgres://…      (external)
+ *   OCTIPUS_SETUP_REDIS_URL=redis://…            (external)
+ *   OCTIPUS_SETUP_API_PORT=3005
+ *   OCTIPUS_SETUP_API_HOST=127.0.0.1
+ *   OCTIPUS_SETUP_ADMIN_USER, _ADMIN_PASS, _ADMIN_EMAIL
+ *   OCTIPUS_SETUP_PROVIDER=openai|anthropic|…
+ *   OCTIPUS_SETUP_API_KEY=…
+ *   OCTIPUS_SETUP_MODEL=gpt-4o-mini
+ *   OCTIPUS_SETUP_INSTALL_CAPS=browser,mcp       (comma-separated)
+ *
+ * Remote mode (--remote <url>) skips local .env + backend boot and
+ * runs the admin/provider/capability steps against the remote API.
+ * Used by Docker: container boots itself, host runs setup against it.
+ */
+
+import { existsSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+import {
+  Container,
+  Input,
+  ProcessTerminal,
+  SelectList,
+  type SelectItem,
+  Spacer,
+  Text,
+  TUI,
+} from '@mariozechner/pi-tui';
+import { httpReachable, probeAllServices } from '@/setup/probes';
+import { PROVIDERS, getProvider, type ProviderId } from '@/setup/providers';
+
+// ── Args ───────────────────────────────────────────────────────────
+
+const args = process.argv.slice(2);
+const REMOTE_URL = (() => {
+  const i = args.indexOf('--remote');
+  return i >= 0 ? args[i + 1] : null;
+})();
+const NON_INTERACTIVE =
+  args.includes('--non-interactive') || !process.stdout.isTTY || !!process.env.CI;
+
+// ── Utilities ──────────────────────────────────────────────────────
+
+function generateSecureKey(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Buffer.from(bytes).toString('base64');
+}
+
+const SELECT_THEME = {
+  selectedPrefix: (t: string) => `\x1b[36m${t}\x1b[0m`,
+  selectedText: (t: string) => `\x1b[1;36m${t}\x1b[0m`,
+  description: (t: string) => `\x1b[90m${t}\x1b[0m`,
+  scrollInfo: (t: string) => `\x1b[90m${t}\x1b[0m`,
+  noMatch: (t: string) => `\x1b[33m${t}\x1b[0m`,
+};
+
+interface WizardCtx {
+  tui: TUI;
+  body: Container;
+  terminal: ProcessTerminal;
+}
+
+function mountStep(ctx: WizardCtx, title: string, components: { render(width: number): string[] }[]): void {
+  while (ctx.body.children.length > 1) ctx.body.removeChild(ctx.body.children[1]);
+  ctx.body.addChild(new Spacer(1));
+  ctx.body.addChild(new Text(`\x1b[1;36m▸ ${title}\x1b[0m`));
+  ctx.body.addChild(new Spacer(1));
+  for (const c of components) ctx.body.addChild(c as Parameters<typeof ctx.body.addChild>[0]);
+  ctx.tui.requestRender();
+}
+
+function selectStep<T extends string>(
+  ctx: WizardCtx,
+  title: string,
+  items: Array<{ value: T; label: string; description?: string }>,
+  defaultValue?: T,
+): Promise<T> {
+  return new Promise((resolveValue) => {
+    const list = new SelectList(items as SelectItem[], 12, SELECT_THEME);
+    if (defaultValue) {
+      const idx = items.findIndex((i) => i.value === defaultValue);
+      if (idx >= 0) list.setSelectedIndex(idx);
+    }
+    const hint = new Text('\x1b[90m  ↑/↓ to navigate · Enter to select · Esc to skip\x1b[0m');
+    mountStep(ctx, title, [list, new Spacer(1), hint]);
+    ctx.tui.setFocus(list as never);
+    list.onSelect = (item) => resolveValue(item.value as T);
+    list.onCancel = () => resolveValue((defaultValue ?? items[0].value) as T);
+  });
+}
+
+function textStep(ctx: WizardCtx, title: string, prompt: string, defaultValue = '', mask = false): Promise<string> {
+  return new Promise((resolveValue) => {
+    const input = new Input();
+    input.setValue(defaultValue);
+    if (mask && 'setMaskCharacter' in input) (input as unknown as { setMaskCharacter: (c: string) => void }).setMaskCharacter('•');
+    const promptText = new Text(`\x1b[90m${prompt}\x1b[0m`);
+    const hint = new Text('\x1b[90m  Enter to confirm · Esc for default\x1b[0m');
+    mountStep(ctx, title, [promptText, new Spacer(1), input, new Spacer(1), hint]);
+    ctx.tui.setFocus(input);
+    input.onSubmit = (v) => resolveValue(v || defaultValue);
+    input.onEscape = () => resolveValue(defaultValue);
+  });
+}
+
+function infoStep(ctx: WizardCtx, title: string, lines: string[]): Promise<void> {
+  return new Promise((resolveStep) => {
+    const text = new Text(lines.join('\n'));
+    const hint = new Text('\x1b[90m  Press Enter to continue · Ctrl+C to abort\x1b[0m');
+    mountStep(ctx, title, [text, new Spacer(1), hint]);
+    const off = ctx.tui.addInputListener((data) => {
+      if (data === '\r' || data === '\n' || data === ' ') {
+        off();
+        resolveStep();
+        return { consume: true };
+      }
+      if (data === '\x03') {
+        process.stderr.write('\nAborted.\n');
+        process.exit(130);
+      }
+      return undefined;
+    });
+  });
+}
+
+// ── .env writer (secrets only) ─────────────────────────────────────
+
+export interface BootstrapConfig {
+  storageMode: 'embedded' | 'external';
+  databaseUrl: string;
+  redisUrl: string;
+  dataDir: string;
+  apiPort: string;
+  apiHost: string;
+  bootstrapProvider: string;
+  bootstrapModel: string;
+  bootstrapApiKey: string;
+  bootstrapBaseUrl: string;
+}
+
+export function buildEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwtSecret: string; sessionSecret: string }): string {
+  const lines: string[] = [
+    `# Octipus bootstrap — secrets and pre-DB targets only.`,
+    `# Everything else lives in the DB after first boot.`,
+    `# Generated by \`octi setup\` on ${new Date().toISOString()}.`,
+    ``,
+    `MASTER_KEY=${secrets.masterKey}`,
+    `JWT_SECRET=${secrets.jwtSecret}`,
+    `SESSION_SECRET=${secrets.sessionSecret}`,
+    ``,
+    `STORAGE_MODE=${cfg.storageMode}`,
+  ];
+  if (cfg.storageMode === 'external') {
+    lines.push(`DATABASE_URL=${cfg.databaseUrl}`, `REDIS_URL=${cfg.redisUrl}`);
+  } else {
+    lines.push(`DATA_DIR=${cfg.dataDir}`);
+  }
+  lines.push(``, `API_HOST=${cfg.apiHost}`, `API_PORT=${cfg.apiPort}`, ``);
+  if (cfg.bootstrapProvider) {
+    lines.push(`# One-shot bootstrap; cleared after first boot seeds the DB.`);
+    lines.push(`BOOTSTRAP_PROVIDER=${cfg.bootstrapProvider}`);
+    lines.push(`BOOTSTRAP_MODEL=${cfg.bootstrapModel}`);
+    if (cfg.bootstrapApiKey) lines.push(`BOOTSTRAP_API_KEY=${cfg.bootstrapApiKey}`);
+    if (cfg.bootstrapBaseUrl) lines.push(`BOOTSTRAP_BASE_URL=${cfg.bootstrapBaseUrl}`);
+    lines.push(``);
+  }
+  return lines.join('\n');
+}
+
+// ── Backend lifecycle ──────────────────────────────────────────────
+
+interface BackendHandle {
+  proc: ReturnType<typeof Bun.spawn>;
+  url: string;
+  shutdown: () => Promise<void>;
+}
+
+async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHandle> {
+  const url = `http://${apiHost === '0.0.0.0' ? '127.0.0.1' : apiHost}:${apiPort}`;
+  const proc = Bun.spawn(['bun', 'run', 'src/index.ts'], {
+    cwd: process.cwd(),
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env },
+  });
+
+  // Wait for /api/health (max 60s — first boot runs migrations + seeds).
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const probe = await httpReachable(`${url}/api/health`, 1000);
+    if (probe.ok) {
+      return {
+        proc,
+        url,
+        shutdown: async () => {
+          proc.kill();
+          await proc.exited.catch(() => {});
+        },
+      };
+    }
+    if (proc.exitCode !== null) {
+      const stderr = await new Response(proc.stderr).text();
+      throw new Error(`backend exited before becoming healthy: ${stderr.slice(-1000)}`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  proc.kill();
+  throw new Error('backend did not become healthy within 60s');
+}
+
+// ── API helpers (cookie-aware) ─────────────────────────────────────
+
+class ApiClient {
+  private cookie: string | null = null;
+
+  constructor(private baseUrl: string) {}
+
+  async post<T>(path: string, body: unknown): Promise<T> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.cookie) headers['Cookie'] = this.cookie;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    const setCookie = res.headers.get('set-cookie');
+    if (setCookie) this.cookie = setCookie.split(';')[0];
+    if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${await res.text()}`);
+    return (await res.json()) as T;
+  }
+
+  async patch<T>(path: string, body: unknown): Promise<T> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.cookie) headers['Cookie'] = this.cookie;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`PATCH ${path} → ${res.status}: ${await res.text()}`);
+    return (await res.json()) as T;
+  }
+
+  async put<T>(path: string, body: unknown): Promise<T> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.cookie) headers['Cookie'] = this.cookie;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`PUT ${path} → ${res.status}: ${await res.text()}`);
+    return (await res.json()) as T;
+  }
+
+  async get<T>(path: string): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (this.cookie) headers['Cookie'] = this.cookie;
+    const res = await fetch(`${this.baseUrl}${path}`, { headers });
+    if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${await res.text()}`);
+    return (await res.json()) as T;
+  }
+}
+
+// ── Pre-backend wizard (.env writing) ──────────────────────────────
+
+async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & { secrets: { masterKey: string; jwtSecret: string; sessionSecret: string } }> {
+  // Auto-detect services for sensible defaults.
+  const services = await probeAllServices();
+
+  let storageMode: 'embedded' | 'external';
+  if (NON_INTERACTIVE) {
+    storageMode = (process.env.OCTIPUS_SETUP_STORAGE as 'embedded' | 'external') ||
+      (services.postgres.ok && services.redis.ok ? 'external' : 'embedded');
+  } else if (ctx) {
+    await infoStep(ctx, 'Welcome', [
+      '\x1b[1mOctipus setup\x1b[0m — one nervous system, many arms.',
+      '',
+      'This wizard writes a secrets-only .env, boots the backend,',
+      'registers your admin account, wires a model provider, and',
+      'installs optional capabilities (browser, MCP server, …).',
+      '',
+      `Detected: ollama=${services.ollama.ok ? '✓' : '·'}  postgres=${services.postgres.ok ? '✓' : '·'}  redis=${services.redis.ok ? '✓' : '·'}  litellm=${services.litellm.ok ? '✓' : '·'}`,
+    ]);
+    storageMode = await selectStep<'embedded' | 'external'>(
+      ctx,
+      'Storage mode',
+      [
+        { value: 'embedded', label: 'Embedded — PGlite + in-memory cache', description: 'Zero external deps. Best for personal use / getting started.' },
+        { value: 'external', label: 'External — PostgreSQL + Redis', description: 'Full production setup. Requires both running.' },
+      ],
+      services.postgres.ok && services.redis.ok ? 'external' : 'embedded',
+    );
+  } else {
+    throw new Error('cannot prompt in non-interactive mode without TTY');
+  }
+
+  let databaseUrl = '';
+  let redisUrl = '';
+  let dataDir = resolve(homedir(), '.octipus', 'data');
+
+  if (storageMode === 'external') {
+    if (NON_INTERACTIVE) {
+      databaseUrl = process.env.OCTIPUS_SETUP_DATABASE_URL || 'postgresql://octipus:octipus@localhost:5432/octipus';
+      redisUrl = process.env.OCTIPUS_SETUP_REDIS_URL || 'redis://localhost:6379';
+    } else if (ctx) {
+      databaseUrl = await textStep(ctx, 'Database URL', 'PostgreSQL connection string', 'postgresql://octipus:octipus@localhost:5432/octipus');
+      redisUrl = await textStep(ctx, 'Redis URL', 'Valkey/Redis connection string', 'redis://localhost:6379');
+    }
+  } else if (ctx && !NON_INTERACTIVE) {
+    dataDir = await textStep(ctx, 'Data directory', 'Where to store the embedded database', dataDir);
+  } else {
+    dataDir = process.env.OCTIPUS_SETUP_DATA_DIR || dataDir;
+  }
+
+  const apiPort = NON_INTERACTIVE
+    ? process.env.OCTIPUS_SETUP_API_PORT || '3005'
+    : ctx ? await textStep(ctx, 'API port', 'Backend listens here', '3005') : '3005';
+  const apiHost = NON_INTERACTIVE
+    ? process.env.OCTIPUS_SETUP_API_HOST || '127.0.0.1'
+    : ctx ? await textStep(ctx, 'API host', 'Bind address (127.0.0.1 for local-only)', '127.0.0.1') : '127.0.0.1';
+
+  return {
+    storageMode,
+    databaseUrl,
+    redisUrl,
+    dataDir,
+    apiPort,
+    apiHost,
+    bootstrapProvider: '',
+    bootstrapModel: '',
+    bootstrapApiKey: '',
+    bootstrapBaseUrl: '',
+    secrets: {
+      masterKey: generateSecureKey(),
+      jwtSecret: generateSecureKey(),
+      sessionSecret: generateSecureKey(),
+    },
+  };
+}
+
+// ── Post-backend wizard (admin, provider, default model, caps) ─────
+
+async function pickAdmin(ctx: WizardCtx | null): Promise<{ username: string; email: string; password: string }> {
+  if (NON_INTERACTIVE) {
+    const username = process.env.OCTIPUS_SETUP_ADMIN_USER;
+    const password = process.env.OCTIPUS_SETUP_ADMIN_PASS;
+    if (!username || !password) throw new Error('OCTIPUS_SETUP_ADMIN_USER and OCTIPUS_SETUP_ADMIN_PASS required in non-interactive mode');
+    return { username, email: process.env.OCTIPUS_SETUP_ADMIN_EMAIL || '', password };
+  }
+  if (!ctx) throw new Error('TTY required for admin step');
+  const username = await textStep(ctx, 'Admin account — username', 'You\'ll log in as this user (≥3 chars)', 'admin');
+  const email = await textStep(ctx, 'Admin account — email (optional)', 'Leave blank to skip', '');
+  const password = await textStep(ctx, 'Admin account — password', 'Min 8 chars, ≥1 upper, ≥1 lower, ≥1 digit', '', true);
+  return { username, email, password };
+}
+
+async function pickProvider(ctx: WizardCtx | null): Promise<{ providerId: ProviderId; apiKey: string; model: string; baseUrl: string }> {
+  if (NON_INTERACTIVE) {
+    const providerId = (process.env.OCTIPUS_SETUP_PROVIDER || 'openai') as ProviderId;
+    const def = getProvider(providerId);
+    return {
+      providerId,
+      apiKey: process.env.OCTIPUS_SETUP_API_KEY || '',
+      model: process.env.OCTIPUS_SETUP_MODEL || def.defaultModel,
+      baseUrl: process.env.OCTIPUS_SETUP_BASE_URL || '',
+    };
+  }
+  if (!ctx) throw new Error('TTY required for provider step');
+
+  // Run live detection so the wizard shows what's already up.
+  const probes = await Promise.all(
+    PROVIDERS.map(async (p) => ({ p, r: p.detect ? await p.detect() : { ok: false } })),
+  );
+  const items = probes.map(({ p, r }) => ({
+    value: p.id,
+    label: r.ok
+      ? `${p.label}  \x1b[32m(detected${'modelCount' in r && r.modelCount ? `, ${r.modelCount} models` : ''})\x1b[0m`
+      : p.label,
+    description: p.description,
+  }));
+  const providerId = await selectStep<ProviderId>(ctx, 'LLM provider', items, items[0]?.value as ProviderId);
+  const def = getProvider(providerId);
+
+  let apiKey = '';
+  let baseUrl = '';
+  let model = def.defaultModel;
+
+  if (def.id === 'litellm') {
+    baseUrl = await textStep(ctx, 'LiteLLM proxy URL', 'http(s)://host:port', 'http://localhost:4000');
+    apiKey = await textStep(ctx, 'LiteLLM API key (optional)', 'Leave blank if open', '', true);
+  } else if (def.requiresApiKey) {
+    apiKey = await textStep(ctx, `${def.label} API key`, 'Stored in the vault, never plaintext after setup', '', true);
+  }
+
+  // Try to list live models when the provider supports it.
+  const live = def.listModels ? await def.listModels({ baseUrl, apiKey }) : null;
+  if (live && live.length > 0) {
+    model = await selectStep<string>(
+      ctx,
+      'Default model',
+      live.slice(0, 50).map((m) => ({ value: m, label: m })),
+      live.includes(def.defaultModel) ? def.defaultModel : live[0],
+    );
+  } else {
+    model = await textStep(ctx, 'Default model id', '', def.defaultModel);
+  }
+  return { providerId, apiKey, model, baseUrl };
+}
+
+async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promise<string[]> {
+  if (missing.length === 0) return [];
+  if (NON_INTERACTIVE) {
+    const env = process.env.OCTIPUS_SETUP_INSTALL_CAPS;
+    if (!env) return [];
+    if (env === 'all') return missing;
+    return env.split(',').map((s) => s.trim()).filter((s) => missing.includes(s));
+  }
+  if (!ctx) return [];
+  // pi-tui doesn't have a multiselect out of the box; we ask once with
+  // "all" / "none" / "let me pick one at a time" branching for simplicity.
+  const mode = await selectStep<'all' | 'none' | 'pick'>(
+    ctx,
+    `Optional capabilities — ${missing.length} missing`,
+    [
+      { value: 'all', label: `Install all (${missing.join(', ')})`, description: 'Recommended — full agent toolset.' },
+      { value: 'pick', label: 'Pick one at a time', description: 'Walk through each.' },
+      { value: 'none', label: 'Skip all — install later with `octi capabilities install <name>`', description: '' },
+    ],
+    'all',
+  );
+  if (mode === 'all') return missing;
+  if (mode === 'none') return [];
+  const picked: string[] = [];
+  for (const cap of missing) {
+    const choice = await selectStep<'y' | 'n'>(
+      ctx,
+      `Install "${cap}"?`,
+      [
+        { value: 'y', label: 'Yes', description: '' },
+        { value: 'n', label: 'No', description: '' },
+      ],
+      'y',
+    );
+    if (choice === 'y') picked.push(cap);
+  }
+  return picked;
+}
+
+// ── Main ───────────────────────────────────────────────────────────
+
+async function main() {
+  // Remote-mode short-circuit: skip .env + backend boot, use existing API.
+  if (REMOTE_URL) {
+    process.stdout.write(`octi setup --remote ${REMOTE_URL}\n`);
+    process.stdout.write('(local .env unchanged; configuring remote backend)\n\n');
+    await runApiPhase(REMOTE_URL, null);
+    return;
+  }
+
+  if (existsSync('.env')) {
+    process.stderr.write('.env already exists. Delete or back it up first.\n');
+    process.exit(1);
+  }
+
+  // Pre-backend phase: TUI or non-interactive.
+  let ctx: WizardCtx | null = null;
+  let cfg: BootstrapConfig & { secrets: { masterKey: string; jwtSecret: string; sessionSecret: string } };
+  if (NON_INTERACTIVE) {
+    cfg = await runPreBackend(null);
+  } else {
+    const terminal = new ProcessTerminal();
+    const tui = new TUI(terminal, false);
+    terminal.setTitle('Octipus setup');
+    const body = new Container();
+    body.addChild(new Text('\x1b[1;36mOctipus\x1b[0m — installing your octopus-machine.'));
+    tui.addChild(body);
+    tui.start();
+    ctx = { tui, body, terminal };
+    process.on('SIGINT', () => {
+      try { tui.stop(); } catch {}
+      process.exit(130);
+    });
+    try {
+      cfg = await runPreBackend(ctx);
+    } finally {
+      try { tui.stop(); } catch {}
+      try { await terminal.drainInput(500, 50); } catch {}
+    }
+    ctx = null; // TUI is stopped now; post-backend phase uses plain stdout
+  }
+
+  // Write .env.
+  const env = buildEnv(cfg, cfg.secrets);
+  writeFileSync('.env', env);
+  process.stdout.write('\n\x1b[32m✓ Wrote .env (secrets only — everything else lives in the DB)\x1b[0m\n');
+
+  // Boot backend.
+  process.stdout.write('Booting backend (runs migrations + seeds — may take ~30s on first boot)…\n');
+  const backend = await bootBackend(cfg.apiHost, cfg.apiPort);
+  process.stdout.write(`\x1b[32m✓ Backend healthy at ${backend.url}\x1b[0m\n`);
+
+  try {
+    await runApiPhase(backend.url, null);
+  } finally {
+    process.stdout.write('Shutting down setup backend…\n');
+    await backend.shutdown();
+  }
+
+  process.stdout.write('\n\x1b[1;32mSetup complete.\x1b[0m\n');
+  process.stdout.write('  octi start         # full stack (api + web)\n');
+  process.stdout.write('  octi tui           # terminal chat\n');
+  process.stdout.write('  octi capabilities  # view installed tools\n\n');
+}
+
+/**
+ * The post-backend phase. Talks to a running API at `baseUrl` — used
+ * for both the local-boot path and `--remote`. `ctx` is null because
+ * we run this phase against plain stdout (the TUI was stopped before
+ * we spawned the backend so its logs don't tear up the screen).
+ */
+async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<void> {
+  const api = new ApiClient(baseUrl);
+
+  // Admin account.
+  const admin = await pickAdmin(null);
+  process.stdout.write(`Registering admin "${admin.username}"…\n`);
+  await api.post('/api/auth/register', admin);
+  process.stdout.write('\x1b[32m✓ Admin registered (first-user admin grant applied)\x1b[0m\n');
+
+  // Provider + key.
+  const provider = await pickProvider(null);
+  if (provider.providerId) {
+    process.stdout.write(`Wiring provider "${provider.providerId}"…\n`);
+    const def = getProvider(provider.providerId);
+    // Build a batch of setting writes. Settings flagged isSecret in
+    // SETTINGS_REGISTRY are routed to the vault by the backend handler;
+    // we just PUT them through the settings batch endpoint either way.
+    const batch: Record<string, unknown> = {
+      'orchestrator.defaultModel': provider.model,
+    };
+    if (def.id === 'ollama') {
+      batch['ollama.defaultModel'] = provider.model;
+      if (provider.baseUrl) batch['ollama.url'] = provider.baseUrl;
+    } else if (def.id === 'litellm') {
+      if (provider.baseUrl) batch['litellm.proxyUrl'] = provider.baseUrl;
+      if (provider.apiKey) batch['litellm.apiKey'] = provider.apiKey;
+    } else if (def.requiresApiKey && provider.apiKey) {
+      // Direct providers — there's a vaultKey on the def, but the
+      // matching registry entry name uses the `<provider>.apiKey` form
+      // (e.g. openrouter.apiKey). Only OpenRouter has an explicit entry
+      // today; for the others, PATCH the bootstrap key under the
+      // shared `bootstrap.<provider>` path until the registry is
+      // extended. Fall back: write straight to the vault via a
+      // dedicated provider-key route added in P3.3.
+      batch[`${def.id}.apiKey`] = provider.apiKey;
+    }
+    try {
+      await api.put('/api/settings/batch', { settings: batch });
+      process.stdout.write(`\x1b[32m✓ Provider configured (default model: ${provider.model})\x1b[0m\n`);
+    } catch (err) {
+      process.stdout.write(`\x1b[33m! Provider settings partially applied: ${(err as Error).message}\x1b[0m\n`);
+    }
+  }
+
+  // Capabilities.
+  type CapRow = { toolId: string; available: boolean; reason: string | null };
+  let caps: CapRow[] = [];
+  try {
+    caps = await api.get<CapRow[]>('/api/capabilities');
+  } catch (err) {
+    process.stdout.write(`\x1b[33m! Could not list capabilities: ${(err as Error).message}\x1b[0m\n`);
+  }
+  const missing = caps.filter((c) => !c.available).map((c) => c.toolId);
+  const picks = await pickCapabilities(null, missing);
+  for (const cap of picks) {
+    process.stdout.write(`Installing capability "${cap}"…\n`);
+    try {
+      const result = await api.post<{ ok: boolean; detail: string }>(`/api/capabilities/${cap}/install`, {});
+      process.stdout.write(`  ${result.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[33m!\x1b[0m'} ${result.detail}\n`);
+    } catch (err) {
+      process.stdout.write(`  \x1b[33m! install failed: ${(err as Error).message}\x1b[0m\n`);
+    }
+  }
+
+  // Mark setup complete.
+  await api.post('/api/settings/setup-complete', {}).catch((err) => {
+    process.stdout.write(`\x1b[33m! Could not mark setup complete: ${(err as Error).message}\x1b[0m\n`);
+  });
+}
+
+if (import.meta.main) {
+  await main();
+}

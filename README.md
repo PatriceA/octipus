@@ -12,9 +12,8 @@
 
 ## Install in 90 seconds
 
-One-shot installer — clones the repo, installs deps, runs the
-interactive setup wizard (storage mode, base model provider, security
-keys), drops you at the `octi` CLI:
+One-shot installer — clones the repo, installs deps, drops you into
+`octi setup`, and leaves you at the `octi` CLI:
 
 ```bash
 # Linux / macOS / WSL
@@ -24,18 +23,42 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 iex (irm https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1)
 ```
 
-Then:
+`octi setup` is the only wizard — it walks storage mode (embedded vs.
+external) → generates security keys → boots the backend → registers
+your admin account → wires a model provider and default model →
+installs optional capabilities (Playwright, MCP server, browser
+extension). After it finishes the service is runnable; pick TUI or
+web as your surface.
 
 ```bash
-octi start         # full stack — backend + web UI
-octi tui           # terminal chat
-octi doctor        # what's wired, what's missing
+octi start                    # full stack — backend + web UI
+octi tui                      # terminal chat
+octi capabilities             # what optional tools are installed
+octi doctor                   # what's wired, what's missing
 ```
 
-Prefer Docker? Root-level `docker-compose.yml` brings up Postgres +
-Valkey + Octipus in one shot — see [docs/DOCKER.md](docs/DOCKER.md).
+**`.env` holds only secrets** (master key, JWT, session, DB/Redis
+URLs, and one-shot bootstrap vars). Every other setting — ports,
+providers, channels, workspace paths, feature flags — lives in the
+DB and is editable at runtime via the API or the web UI.
 
-Cloning manually instead? `git clone && bun install && bun run setup`
+**Prefer Docker?** Root-level `docker-compose.yml` brings up Postgres
++ Valkey + Octipus in one shot. Playwright Chromium and the MCP
+server are pre-baked in the image. Configure the container from your
+host:
+
+```bash
+docker compose up -d
+octi setup --remote http://localhost:3005   # admin, provider, caps — against the container
+```
+
+See [docs/DOCKER.md](docs/DOCKER.md).
+
+**Headless / CI?** `octi setup --non-interactive` drives every step
+from `OCTIPUS_SETUP_*` env vars (`_STORAGE`, `_ADMIN_USER`,
+`_ADMIN_PASS`, `_PROVIDER`, `_API_KEY`, `_MODEL`, `_INSTALL_CAPS`).
+
+**Cloning manually instead?** `git clone && bun install && octi setup`
 does the same thing the installer does — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the dev path.
 
@@ -126,11 +149,13 @@ Full feature breakdown: see the [documentation index](#documentation) below.
 git clone https://github.com/PatriceA/octipus.git
 cd octipus && bun install
 cd web && bun install && cd ..
-bun run setup        # interactive config (or `octi init` once the binary is on PATH)
-bun run dev
+bun run setup        # the single wizard (same as `octi setup`)
+octi start           # backend + web UI
 ```
 
-Open [http://localhost:3007/setup](http://localhost:3007/setup) to finish configuration.
+Then open [http://localhost:3007](http://localhost:3007) and log in
+with the admin account you registered during `octi setup`. There is
+no separate web onboarding flow — setup happens in the terminal.
 
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
 **External Postgres + Valkey (Redis-compatible):** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).

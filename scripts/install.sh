@@ -127,10 +127,17 @@ esac
 
 # ─── Run setup wizard ──────────────────────────────────────────────────────
 echo ""
-say "Launching the interactive setup wizard..."
-echo "${DIM}(it picks storage, base model, and writes ~/.octipus/app/.env)${NC}"
+say "Launching the setup wizard..."
+echo "${DIM}(storage, secrets, admin account, provider, default model, capabilities)${NC}"
 echo ""
-bun run setup
+# Prefer the linked `octi` binary so the wizard runs through the same
+# code path users will hit later. Fall back to the script directly if
+# PATH doesn't include the bin dir yet.
+if command -v octi >/dev/null 2>&1; then
+  octi setup
+else
+  bun run scripts/setup-wizard.ts
+fi
 
 # ─── Done ──────────────────────────────────────────────────────────────────
 echo ""

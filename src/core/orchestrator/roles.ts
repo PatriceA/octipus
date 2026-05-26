@@ -7,9 +7,11 @@
  * node-folder pattern, inspired by https://github.com/WeaveMindAI/weft.
  */
 
+import { getCapabilityService } from '@/capabilities/service';
 import type { ToolHandler } from '@/core/agent-worker';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getToolRegistry } from '@/tools/registry';
+import { logger } from '@/utils/logger';
 import { loadRoles } from './roles/index';
 import type { AgentRole, RoleConfig } from './types';
 
@@ -83,13 +85,32 @@ export function stripSecurityPreamble(prompt: string | undefined): string {
  * Get tool handlers for a specific role from the tool registry.
  * If the role includes 'mcp' in its toolIds, appends lazy MCP meta-tools
  * (mcp_list_tools, mcp_call_tool) instead of expanding all MCP tools.
+ *
+ * Gates each toolId against the capability service: a tool listed in
+ * the role but not installed (Playwright missing, docker not on PATH,
+ * mcp-server not built) is filtered out, and a one-time warning logged
+ * with an `octi capabilities install <id>` hint. Capability cache is
+ * warmed at boot — if it's cold (very early in startup or in tests),
+ * we don't gate (null sentinel from getAvailableSync).
  */
 export function getToolsForRole(role: AgentRole): ToolHandler[] {
   const config = getRoleConfig(role);
   if (config.toolIds.length === 0) return [];
 
-  const builtinIds = config.toolIds.filter(id => id !== 'mcp');
-  const wantsMcp = config.toolIds.includes('mcp');
+  const capSnapshot = getCapabilityService().getAvailableSync();
+  const requestedIds = capSnapshot
+    ? config.toolIds.filter((id) => {
+        if (capSnapshot.has(id)) return true;
+        logger.warn(
+          { role, toolId: id },
+          `tool "${id}" unavailable for role "${role}" — install via: octi capabilities install ${id}`,
+        );
+        return false;
+      })
+    : config.toolIds;
+
+  const builtinIds = requestedIds.filter((id) => id !== 'mcp');
+  const wantsMcp = requestedIds.includes('mcp');
 
   const registry = getToolRegistry();
   const handlers = registry.getToolHandlersForTools(builtinIds);

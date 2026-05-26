@@ -114,6 +114,18 @@ async function main() {
     await registerBuiltinTools();
     logger.info('Tools registered');
 
+    // Probe optional capabilities (Playwright, MCP, docker, …) and persist
+    // their state to the `capabilities` table so the orchestrator can
+    // gate agent dispatch on tool availability. Non-fatal — if probing
+    // fails we still boot, agents will surface "tool unavailable" hints
+    // at spawn time instead.
+    try {
+      const { getCapabilityService } = await import('@/capabilities/service');
+      await getCapabilityService().probeAll();
+    } catch (err) {
+      logger.error({ err }, 'capability probe failed — orchestrator will fall back to per-spawn probes');
+    }
+
     // Connect to MCP servers
     const mcpBridge = getMCPBridge();
     await mcpBridge.connectAll();

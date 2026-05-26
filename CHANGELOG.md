@@ -7,6 +7,60 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Streamlined setup (2026-05-26)
+
+One way in. The six divergent setup paths (`install.sh`, inquirer
+`scripts/setup.ts`, pi-tui `scripts/init.ts`, `bin/octi start`,
+`web/app/setup/page.tsx`, `docker-entrypoint.sh`) collapse into a
+single `octi setup` wizard. After it runs, the service is runnable
+and the user picks TUI or web — both surfaces consume the same
+backend; neither owns onboarding.
+
+User-visible:
+
+- **`octi setup`** is the only wizard. Walks storage → secrets →
+  backend boot → admin account → provider+key → default model →
+  capabilities install (Playwright, MCP, browser ext, …). Supports
+  `--non-interactive` (env-var driven, for CI / Docker builds) and
+  `--remote <url>` (configure a running container from your host).
+- **`.env` is secrets only** — `MASTER_KEY`, `JWT_SECRET`,
+  `SESSION_SECRET`, storage targeting, `API_HOST`/`API_PORT`, and
+  one-shot `BOOTSTRAP_*` vars consumed at first boot. Everything
+  else (ports, channels, workspace, providers, feature flags) lives
+  in the `settings` table / vault and is editable via the API at
+  runtime.
+- **`octi capabilities`** lists installed/missing optional tools.
+  Sub-commands: `octi capabilities install <id>` and
+  `octi capabilities install --all` to fix gaps after first run.
+- **Web `/setup` is gone.** First-run onboarding happens in the
+  terminal; the legacy route redirects to `/chat` once the system
+  is set up, or shows a one-paragraph CLI hint otherwise.
+- **Docker reports its own capabilities.** Playwright Chromium and
+  the MCP server build are pre-baked in the image; the
+  `capabilities` table reflects that on first boot. The entrypoint
+  prints a one-shot `octi setup --remote` hint when the system has
+  not been set up yet.
+
+Internal:
+
+- **Shared probe utilities** (`src/setup/probes.ts`) and a canonical
+  provider registry (`src/setup/providers.ts`) replace three
+  duplicated copies.
+- **Capability service** (`src/capabilities/service.ts`) persists
+  every tool's `checkAvailability()` result into a new
+  `capabilities` DB table. The orchestrator gates `getToolsForRole`
+  against this table at spawn time, so an agent that requires
+  Playwright but lacks it logs a clear
+  `octi capabilities install browser` hint instead of failing deep
+  in a tool call.
+- **Settings registry** (`src/config/settings-registry.ts`) gained
+  explicit `*.apiKey` entries for OpenAI / Anthropic / Gemini /
+  DeepSeek so the wizard can route keys into the vault through the
+  existing `PATCH /api/settings/:key` handler.
+- **Deleted**: `scripts/setup.ts` (715 LOC inquirer wizard) and the
+  five `web/components/setup/*.tsx` step components. The
+  `@inquirer/prompts` dev-dep dropped with them.
+
 ### Orchestrator freedom + Hermes-inspired curator (2026-05-24)
 
 Branch `claude/orchestrator-freedom-hermes-fixes`. 8-phase land

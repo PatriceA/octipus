@@ -7,6 +7,10 @@ const PUBLIC_PATH_PREFIXES = [
   '/api/auth/passkey/',
   '/api/health/live',
   '/api/health/ready',
+  // Setup status — read-only boolean. Lets the web /setup page decide
+  // whether to redirect to /chat before the user is authenticated, and
+  // lets the CLI wizard probe state without first logging in.
+  '/api/settings/setup-status',
 ];
 
 function isPublicPath(path: string): boolean {

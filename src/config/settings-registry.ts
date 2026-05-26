@@ -1,6 +1,20 @@
 /**
  * Static manifest of all runtime-configurable settings.
  * Used for: DB seeding, migration from env, API validation, UI rendering.
+ *
+ * `.env` contract (post-streamlined-setup):
+ *   - Secrets that boot the system before the DB is reachable:
+ *       MASTER_KEY, JWT_SECRET, SESSION_SECRET
+ *   - Storage targeting (also pre-DB):
+ *       STORAGE_MODE, DATABASE_URL, REDIS_URL, DATA_DIR
+ *   - API server bind (pre-config-load):
+ *       API_HOST, API_PORT
+ *   - One-shot bootstrap that seeds DB on first boot:
+ *       BOOTSTRAP_PROVIDER, BOOTSTRAP_MODEL, BOOTSTRAP_API_KEY, BOOTSTRAP_BASE_URL
+ *
+ * Every other env var listed below in `envVar:` is migrated into the DB
+ * (settings table or vault) by migrate-env-to-db.ts on first boot, then
+ * the .env entry becomes redundant — users edit values via API/UI.
  */
 
 export type SettingValueType = 'string' | 'number' | 'boolean' | 'json' | 'string_array';
@@ -450,16 +464,56 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
 
-  // ── OpenRouter ──
+  // ── Direct LLM providers (API keys land in the vault) ──
   {
     key: 'openrouter.apiKey',
-    category: 'openrouter',
+    category: 'providers',
     valueType: 'string',
     defaultValue: '',
     description: 'OpenRouter API key (get one at openrouter.ai/keys)',
     isSecret: true,
     vaultName: 'openrouter_api_key',
     envVar: 'OPENROUTER_API_KEY',
+  },
+  {
+    key: 'openai.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'OpenAI API key',
+    isSecret: true,
+    vaultName: 'openai_api_key',
+    envVar: 'OPENAI_API_KEY',
+  },
+  {
+    key: 'anthropic.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Anthropic API key',
+    isSecret: true,
+    vaultName: 'anthropic_api_key',
+    envVar: 'ANTHROPIC_API_KEY',
+  },
+  {
+    key: 'gemini.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Google Gemini API key',
+    isSecret: true,
+    vaultName: 'gemini_api_key',
+    envVar: 'GEMINI_API_KEY',
+  },
+  {
+    key: 'deepseek.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'DeepSeek API key',
+    isSecret: true,
+    vaultName: 'deepseek_api_key',
+    envVar: 'DEEPSEEK_API_KEY',
   },
 
   // ── Workspace ──

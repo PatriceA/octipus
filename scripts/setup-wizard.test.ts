@@ -1,0 +1,90 @@
+import { describe, expect, test } from 'bun:test';
+import { type BootstrapConfig, buildEnv } from './setup-wizard';
+
+/**
+ * The interactive flow (pi-tui, backend boot, API calls) needs a PTY
+ * harness — that lives in the dedicated e2e suite. Here we just verify
+ * the pure .env builder enforces the secrets-only contract: secrets +
+ * pre-DB storage + bootstrap one-shots, nothing else.
+ */
+
+const KEYS = {
+  masterKey: 'm'.repeat(44),
+  jwtSecret: 'j'.repeat(44),
+  sessionSecret: 's'.repeat(44),
+};
+
+const BASE: BootstrapConfig = {
+  storageMode: 'embedded',
+  databaseUrl: '',
+  redisUrl: '',
+  dataDir: '/tmp/data',
+  apiPort: '3005',
+  apiHost: '127.0.0.1',
+  bootstrapProvider: '',
+  bootstrapModel: '',
+  bootstrapApiKey: '',
+  bootstrapBaseUrl: '',
+};
+
+describe('setup-wizard — buildEnv', () => {
+  test('embedded mode emits DATA_DIR, no DATABASE_URL', () => {
+    const env = buildEnv(BASE, KEYS);
+    expect(env).toContain('STORAGE_MODE=embedded');
+    expect(env).toContain('DATA_DIR=/tmp/data');
+    expect(env).not.toContain('DATABASE_URL=');
+  });
+
+  test('external mode emits DATABASE_URL + REDIS_URL', () => {
+    const env = buildEnv(
+      { ...BASE, storageMode: 'external', databaseUrl: 'postgresql://u:p@h:5432/db', redisUrl: 'redis://h:6379', dataDir: '' },
+      KEYS,
+    );
+    expect(env).toContain('STORAGE_MODE=external');
+    expect(env).toContain('DATABASE_URL=postgresql://u:p@h:5432/db');
+    expect(env).toContain('REDIS_URL=redis://h:6379');
+    expect(env).not.toContain('DATA_DIR=');
+  });
+
+  test('always emits security keys', () => {
+    const env = buildEnv(BASE, KEYS);
+    expect(env).toContain(`MASTER_KEY=${KEYS.masterKey}`);
+    expect(env).toContain(`JWT_SECRET=${KEYS.jwtSecret}`);
+    expect(env).toContain(`SESSION_SECRET=${KEYS.sessionSecret}`);
+  });
+
+  test('always emits API_HOST and API_PORT (bootstrap, needed pre-DB)', () => {
+    const env = buildEnv(BASE, KEYS);
+    expect(env).toContain('API_HOST=127.0.0.1');
+    expect(env).toContain('API_PORT=3005');
+  });
+
+  test('bootstrap provider + model land when set', () => {
+    const env = buildEnv({ ...BASE, bootstrapProvider: 'ollama', bootstrapModel: 'llama3.2:3b' }, KEYS);
+    expect(env).toContain('BOOTSTRAP_PROVIDER=ollama');
+    expect(env).toContain('BOOTSTRAP_MODEL=llama3.2:3b');
+    expect(env).not.toContain('BOOTSTRAP_API_KEY=');
+  });
+
+  test('bootstrap API key + base URL only when present', () => {
+    const env = buildEnv(
+      { ...BASE, bootstrapProvider: 'openrouter', bootstrapModel: 'openai/gpt-4o-mini', bootstrapApiKey: 'sk-test-redacted' },
+      KEYS,
+    );
+    expect(env).toContain('BOOTSTRAP_API_KEY=sk-test-redacted');
+    expect(env).not.toContain('BOOTSTRAP_BASE_URL=');
+  });
+
+  test('skip path — no BOOTSTRAP_* block at all', () => {
+    const env = buildEnv(BASE, KEYS);
+    expect(env).not.toContain('BOOTSTRAP_PROVIDER');
+    expect(env).not.toContain('BOOTSTRAP_MODEL');
+  });
+
+  test('does NOT emit CORS or generic PORT/HOST — those live in DB', () => {
+    const env = buildEnv(BASE, KEYS);
+    expect(env).not.toMatch(/^PORT=/m);
+    expect(env).not.toMatch(/^HOST=/m);
+    expect(env).not.toMatch(/^CORS_ORIGINS=/m);
+  });
+});
