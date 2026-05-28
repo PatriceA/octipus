@@ -25,7 +25,6 @@ export function createCollectChildrenTool(
 ): ToolHandler {
   return {
     name: 'collect_children',
-    toolId: 'collect_children',
     final: false,
     description:
       'Pick up the results of subagents you spawned with `spawn_child` mode="detach". ' +

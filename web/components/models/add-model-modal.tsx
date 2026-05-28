@@ -771,7 +771,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                   <p className="text-xs text-on-surface-variant mt-1">
-                    Use <code className="text-xs bg-surface-container-high px-1 rounded">env:VAR_NAME</code> for an env var, or a vault entry name. Leave blank to auto-generate.
+                    <code className="text-xs bg-surface-container-high px-1 rounded">env:VAR_NAME</code> reads <code className="text-xs bg-surface-container-high px-1 rounded">process.env.VAR_NAME</code> on the backend (must be exported before <code className="text-xs bg-surface-container-high px-1 rounded">bun run dev</code>). A bare name looks up the vault entry by that name. Leave blank to auto-generate a vault key.
                   </p>
                 </div>
               </div>
@@ -909,7 +909,13 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
             {formData.modelId && (
               <div className="border border-outline-variant/10 rounded-lg p-3">
                 <div className="text-xs text-on-surface-variant mb-2">
-                  Tests via {connectionType === 'litellm' ? 'LiteLLM proxy' : (formData.provider === 'ollama' ? 'Ollama directly' : 'LiteLLM proxy')}
+                  Tests via {
+                    connectionType === 'litellm' ? 'LiteLLM proxy'
+                    : formData.provider === 'ollama' ? 'Ollama directly'
+                    : formData.provider === 'custom-openai' || formData.provider === 'custom-gemini' ? `${formData.provider} endpoint directly`
+                    : formData.provider === 'cli' ? 'local CLI binary'
+                    : `${formData.provider} directly`
+                  }
                 </div>
                 <button
                   type="button"

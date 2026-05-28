@@ -204,6 +204,15 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
     };
 
     if (toolCalls.length) result.toolCalls = toolCalls;
+
+    // Gemini 3.x returns thought_signature on functionCall parts. The next turn
+    // must echo the assistant content verbatim or Vertex rejects with 400
+    // ("Function call is missing a thought_signature"). Stash the raw content
+    // on providerRaw — the envelope replays it instead of reconstructing.
+    if (toolCalls.length && candidate.content) {
+      result.providerRaw = { content: candidate.content as Record<string, unknown> };
+    }
+
     return result;
   }
 }
@@ -291,7 +300,8 @@ function extractTextToolCalls(text: string): { extracted: Array<{ name: string; 
 
 interface GeminiPart {
   text?: string;
-  functionCall?: { id?: string; name: string; args: Record<string, unknown> };
+  functionCall?: { id?: string; name: string; args: Record<string, unknown>; thoughtSignature?: string };
+  thoughtSignature?: string;
 }
 
 interface GeminiCandidate {

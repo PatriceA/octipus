@@ -54,6 +54,8 @@ export interface TestContext {
   provider: ModelProvider;
   capabilities: ModelCapabilities;
   extraBody: Record<string, unknown>;
+  /** Calling user — threaded into provider calls so user-scoped vault lookups succeed */
+  userId?: string;
   /** Call model directly via LiteLLM proxy — bypasses circuit breaker and rate limiter */
   complete: (options: Omit<import('../litellm-client').CompletionOptions, 'model' | 'extraBody'>) => Promise<import('../litellm-client').CompletionResult>;
 }
@@ -141,13 +143,16 @@ const testCases: ConformanceTestCase[] = [
     requiredCapability: 'streaming',
     async run(ctx) {
       const chunks: StreamChunk[] = [];
-      // Direct provider stream or LiteLLM fallback — bypass circuit breaker
+      // Direct provider stream or LiteLLM fallback — bypass circuit breaker.
+      // userId must travel for user-scoped vault lookups (custom providers
+      // resolving apiKeyRef against the calling user's vault entry).
       const streamOpts = {
         model: ctx.model.modelId,
         messages: [msg('user', 'Count from 1 to 5, one number per line.')],
         temperature: 0,
         maxTokens: 512,
         extraBody: ctx.extraBody,
+        userId: ctx.userId,
       };
       // Route based on DB-configured provider field
       const gen = ctx.model.provider === 'litellm'
@@ -470,7 +475,7 @@ export async function runConformanceTests(
       }
       return provider.complete(fullOpts);
     };
-    const ctx: TestContext = { client, model, provider, capabilities, extraBody, complete };
+    const ctx: TestContext = { client, model, provider, capabilities, extraBody, complete, userId: options?.userId };
 
     for (const tc of testCases) {
       if (selectedTests && !selectedTests.includes(tc.name)) continue;

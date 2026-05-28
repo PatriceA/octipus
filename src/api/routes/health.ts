@@ -89,6 +89,22 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         }
       };
 
+      // Only probe providers that have at least one enabled model row. Avoids
+      // burning paid API calls (e.g. xAI models.list()) for providers the user
+      // has deleted from the registry.
+      const registry = getModelRegistry();
+      const enabledModels = await registry.getAllModels();
+      const hasProvider = (name: string) => enabledModels.some((m) => m.provider === name);
+      const conditionalCheck = (name: string) =>
+        hasProvider(name)
+          ? directCheck(name)
+          : Promise.resolve({
+              service: name,
+              status: 'not_configured' as const,
+              message: 'No models registered',
+              lastChecked: new Date(),
+            });
+
       const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, voyage, openrouter, custom] = await Promise.all([
         healthChecker.checkLiteLLMProxy().catch((e: Error) => ({
           service: 'litellm', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
@@ -96,13 +112,13 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         healthChecker.checkOllama().catch((e: Error) => ({
           service: 'ollama', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
         })),
-        directCheck('openai'),
-        directCheck('anthropic'),
-        directCheck('gemini'),
-        directCheck('deepseek'),
-        directCheck('grok'),
-        directCheck('voyage'),
-        directCheck('openrouter'),
+        conditionalCheck('openai'),
+        conditionalCheck('anthropic'),
+        conditionalCheck('gemini'),
+        conditionalCheck('deepseek'),
+        conditionalCheck('grok'),
+        conditionalCheck('voyage'),
+        conditionalCheck('openrouter'),
         customCheck(),
       ]);
 

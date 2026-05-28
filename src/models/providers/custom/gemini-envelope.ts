@@ -63,6 +63,15 @@ export function buildGeminiContents(messages: AgentMessage[]): Array<Record<stri
     }
 
     if (msg.role === 'assistant' && msg.toolCalls?.length) {
+      // Replay raw assistant content when available — preserves Gemini 3
+      // thought_signature on functionCall parts. Reconstructing from
+      // msg.toolCalls drops the signature and Vertex rejects the next turn
+      // with 400 ("Function call is missing a thought_signature").
+      const raw = msg.providerRaw as { content?: Record<string, unknown> } | undefined;
+      if (raw?.content) {
+        contents.push(raw.content);
+        continue;
+      }
       const parts: Array<Record<string, unknown>> = [];
       if (msg.content && msg.content.trim()) parts.push({ text: msg.content });
       for (const tc of msg.toolCalls) {
