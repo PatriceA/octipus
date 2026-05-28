@@ -47,7 +47,7 @@ Not every file needs OCR. The processor classifies each file and picks the most 
 | Strategy | When Used | Method |
 |----------|-----------|--------|
 | **`text`** | Plain text, code, config, markup files | Direct file read — no model calls needed |
-| **`structured`** | Office documents (Word, Excel, PowerPoint) | Parse XML inside the ZIP archive via `jszip` |
+| **`structured`** | Office documents (Word, Excel, PowerPoint) | Dedicated parser per format (mammoth / SheetJS / node-pptx-parser / word-extractor) |
 | **`ocr`** | Images and PDFs | Vision model (`glm-ocr`) via Ollama |
 
 ### Text — Direct Read
@@ -62,28 +62,47 @@ Files that are already human-readable text are read directly with no model invol
 
 ### Structured — Office Document Parsing
 
-Modern Office formats (.docx, .xlsx, .pptx) are ZIP archives containing XML. The processor extracts text directly from the XML structure without sending anything to an LLM or OCR model.
+Each supported Office format has a dedicated pure-JS parser. Output is markdown where possible so the markdown chunker (`src/core/rag/markdown-chunker.ts`) builds sectioned chunks rather than one flat blob. No LLM or OCR involvement.
 
-| Format | Extension | MIME Type | Extraction |
-|--------|-----------|-----------|------------|
-| Word | `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | Paragraphs from `word/document.xml` via `<w:t>` elements |
-| Word (legacy) | `.doc` | `application/msword` | Printable string extraction from binary OLE2 |
-| Excel | `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | Shared strings + cell values, tab-separated rows per sheet |
-| Excel (legacy) | `.xls` | `application/vnd.ms-excel` | Printable string extraction from binary OLE2 |
-| PowerPoint | `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | Text from `<a:t>` elements per slide |
-| PowerPoint (legacy) | `.ppt` | `application/vnd.ms-powerpoint` | Printable string extraction from binary OLE2 |
+| Format | Extension | MIME Type | Parser | Output |
+|--------|-----------|-----------|--------|--------|
+| Word | `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | `mammoth` | Markdown — headings, lists, tables, footnotes preserved |
+| Word (legacy) | `.doc` | `application/msword` | `word-extractor` | Plain text — body + footnotes + endnotes |
+| Excel | `.xlsx`, `.xlsm` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | `xlsx` (SheetJS) | Markdown table per sheet |
+| Excel (legacy) | `.xls` | `application/vnd.ms-excel` | `xlsx` (SheetJS) | Markdown table per sheet |
+| PowerPoint | `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | `node-pptx-parser` + jszip for notes | Markdown — `## Slide N` sections with speaker notes |
+| PowerPoint (legacy) | `.ppt` | `application/vnd.ms-powerpoint` | — | **Unsupported** — fail-loud: convert to `.pptx` and re-upload |
 
 **Excel output example:**
-```
---- Sheet 1 ---
-Name	Department	Salary
-Alice	Engineering	95000
-Bob	Marketing	82000
+```markdown
+## Sheet: People
 
---- Sheet 2 ---
-Q1	Q2	Q3	Q4
-120000	135000	128000	142000
+| Name | Department | Salary |
+| --- | --- | --- |
+| Alice | Engineering | 95000 |
+| Bob | Marketing | 82000 |
+
+## Sheet: Quarters
+
+| Q1 | Q2 | Q3 | Q4 |
+| --- | --- | --- | --- |
+| 120000 | 135000 | 128000 | 142000 |
 ```
+
+**PowerPoint output example:**
+```markdown
+## Slide 1
+
+Q3 Roadmap
+
+**Notes:** Open with the milestone delivered last quarter.
+
+## Slide 2
+
+Three pillars: scale, security, support.
+```
+
+**Failure handling.** Structured extractors fail loud — a corrupted DOCX, an unsupported `.ppt`, or an unknown structured extension surfaces as `status: 'failed'` on the document row with the underlying error message. There is no silent fallback to reading the binary as text (which historically produced garbage that still passed the categorizer).
 
 ### OCR — Vision Model
 

@@ -514,173 +514,195 @@ export class DocumentProcessor {
   }
 
   /**
-   * Extract content from structured documents (Word, Excel, PowerPoint)
-   * without sending to OCR. Uses direct parsing of XML-based Office formats.
+   * Extract content from structured documents (Word, Excel, PowerPoint).
+   * Uses dedicated libraries per format. Fails loud — no silent fallback to
+   * binary-as-text read, which would feed garbage to the categorizer/embedder.
    */
   private async extractStructured(filePath: string, filename: string, mimeType: string): Promise<string> {
     const ext = extname(filename).toLowerCase();
 
-    try {
-      if (ext === '.xlsx' || ext === '.xls' || mimeType.includes('spreadsheet') || mimeType.includes('excel')) {
-        return await this.extractExcel(filePath);
-      }
-      if (ext === '.docx' || mimeType.includes('wordprocessing')) {
-        return await this.extractDocx(filePath);
-      }
-      if (ext === '.pptx' || mimeType.includes('presentation') || mimeType.includes('powerpoint')) {
-        return await this.extractPptx(filePath);
-      }
-      if (ext === '.doc' || ext === '.ppt') {
-        // Legacy binary formats — try to extract readable text
-        return await this.extractLegacyOffice(filePath, filename);
-      }
-    } catch (err) {
-      this.logger.warn({ err, filePath, ext }, 'Structured extraction failed, falling back to text read');
+    if (ext === '.ppt') {
+      throw new Error(
+        'Legacy .ppt binary format is not supported. Convert the file to .pptx and re-upload.',
+      );
+    }
+    if (ext === '.doc') {
+      return this.extractDocLegacy(filePath);
+    }
+    if (ext === '.docx' || mimeType.includes('wordprocessing')) {
+      return this.extractDocx(filePath);
+    }
+    if (ext === '.xlsx' || ext === '.xls' || mimeType.includes('spreadsheet') || mimeType.includes('excel')) {
+      return this.extractExcel(filePath);
+    }
+    if (ext === '.pptx' || mimeType.includes('presentation') || mimeType.includes('powerpoint')) {
+      return this.extractPptx(filePath);
     }
 
-    return this.readTextFile(filePath);
+    throw new Error(`Unsupported structured format: ${filename} (mime=${mimeType || 'unknown'})`);
   }
 
   /**
-   * Extract data from Excel (.xlsx) files by parsing the XML inside the ZIP.
-   * Returns a text representation of all sheets with rows as tab-separated values.
+   * Extract data from spreadsheets (.xlsx / .xls / .xlsm) via SheetJS.
+   * Emits one markdown section per sheet so the markdown chunker can
+   * scope chunks to a sheet and the embedder sees real structure.
    */
   private async extractExcel(filePath: string): Promise<string> {
-    const jszip = await import('jszip');
-    const JSZip = (jszip as any).default || jszip;
+    const XLSX = await import('xlsx');
     const buffer = await readFile(filePath);
-    const zip = await JSZip.loadAsync(buffer);
+    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
 
-    // Read shared strings (Excel stores text in a shared string table)
-    const sharedStrings: string[] = [];
-    const ssFile = zip.file('xl/sharedStrings.xml');
-    if (ssFile) {
-      const ssXml = await ssFile.async('text');
-      const matches = ssXml.matchAll(/<t[^>]*>([^<]*)<\/t>/g);
-      for (const m of matches) {
-        sharedStrings.push(m[1]);
+    const sections: string[] = [];
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+        header: 1,
+        blankrows: false,
+        defval: '',
+      });
+      if (rows.length === 0) continue;
+
+      const maxCols = Math.max(...rows.map(r => (Array.isArray(r) ? r.length : 0)));
+      if (maxCols === 0) continue;
+
+      const renderCell = (v: unknown): string => {
+        if (v === undefined || v === null || v === '') return '';
+        if (v instanceof Date) return v.toISOString();
+        return String(v).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+      };
+
+      sections.push(`## Sheet: ${sheetName}`);
+      sections.push('');
+
+      const header = rows[0] as unknown[];
+      const headerCells = Array.from({ length: maxCols }, (_, i) => {
+        const raw = renderCell(header[i]);
+        return raw || `Col${i + 1}`;
+      });
+      sections.push(`| ${headerCells.join(' | ')} |`);
+      sections.push(`| ${Array.from({ length: maxCols }, () => '---').join(' | ')} |`);
+
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i] as unknown[];
+        const cells = Array.from({ length: maxCols }, (_, j) => renderCell(row[j]));
+        sections.push(`| ${cells.join(' | ')} |`);
       }
+      sections.push('');
     }
 
-    const lines: string[] = [];
-
-    // Iterate over sheets
-    const sheetFiles = Object.keys(zip.files).filter(f => f.match(/^xl\/worksheets\/sheet\d+\.xml$/)).sort();
-    for (let si = 0; si < sheetFiles.length; si++) {
-      const sheetXml = await zip.file(sheetFiles[si])!.async('text');
-      lines.push(`--- Sheet ${si + 1} ---`);
-
-      // Parse rows: <row> contains <c> cells
-      const rows = sheetXml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g);
-      for (const row of rows) {
-        const cells: string[] = [];
-        const cellMatches = row[1].matchAll(/<c\s+[^>]*?(?:t="([^"]*)")?[^>]*>[\s\S]*?(?:<v>([^<]*)<\/v>)?[\s\S]*?<\/c>/g);
-        for (const cell of cellMatches) {
-          const type = cell[1];
-          const value = cell[2] || '';
-          if (type === 's' && sharedStrings[parseInt(value, 10)] !== undefined) {
-            cells.push(sharedStrings[parseInt(value, 10)]);
-          } else {
-            cells.push(value);
-          }
-        }
-        if (cells.length > 0) {
-          lines.push(cells.join('\t'));
-        }
-      }
-      lines.push('');
-    }
-
-    return lines.join('\n') || '[Empty spreadsheet]';
-  }
-
-  /**
-   * Extract text from Word (.docx) files by parsing document.xml inside the ZIP.
-   */
-  private async extractDocx(filePath: string): Promise<string> {
-    const jszip = await import('jszip');
-    const JSZip = (jszip as any).default || jszip;
-    const buffer = await readFile(filePath);
-    const zip = await JSZip.loadAsync(buffer);
-
-    const docFile = zip.file('word/document.xml');
-    if (!docFile) {
-      return '[Could not find document.xml in DOCX]';
-    }
-
-    const xml = await docFile.async('text');
-
-    // Extract text from paragraphs: <w:t> elements contain the text
-    const paragraphs: string[] = [];
-    const paraMatches = xml.matchAll(/<w:p[\s>]([\s\S]*?)<\/w:p>/g);
-    for (const para of paraMatches) {
-      const textParts: string[] = [];
-      const textMatches = para[1].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g);
-      for (const t of textMatches) {
-        textParts.push(t[1]);
-      }
-      paragraphs.push(textParts.join(''));
-    }
-
-    return paragraphs.filter(p => p.length > 0).join('\n') || '[Empty document]';
-  }
-
-  /**
-   * Extract text from PowerPoint (.pptx) files by parsing slide XML inside the ZIP.
-   */
-  private async extractPptx(filePath: string): Promise<string> {
-    const jszip = await import('jszip');
-    const JSZip = (jszip as any).default || jszip;
-    const buffer = await readFile(filePath);
-    const zip = await JSZip.loadAsync(buffer);
-
-    const lines: string[] = [];
-    const slideFiles = Object.keys(zip.files).filter(f => f.match(/^ppt\/slides\/slide\d+\.xml$/)).sort();
-
-    for (let si = 0; si < slideFiles.length; si++) {
-      const slideXml = await zip.file(slideFiles[si])!.async('text');
-      lines.push(`--- Slide ${si + 1} ---`);
-
-      // Extract text from <a:t> elements
-      const textMatches = slideXml.matchAll(/<a:t>([^<]*)<\/a:t>/g);
-      const slideTexts: string[] = [];
-      for (const t of textMatches) {
-        if (t[1].trim()) slideTexts.push(t[1]);
-      }
-      lines.push(slideTexts.join('\n'));
-      lines.push('');
-    }
-
-    return lines.join('\n') || '[Empty presentation]';
-  }
-
-  /**
-   * Attempt to extract readable text from legacy binary Office formats (.doc, .ppt).
-   * These are binary OLE2 compound documents — we extract printable strings.
-   */
-  private async extractLegacyOffice(filePath: string, filename: string): Promise<string> {
-    const buffer = await readFile(filePath);
-    // Extract runs of printable ASCII/Unicode characters (rough but serviceable)
-    const text = buffer.toString('utf-8');
-    const runs: string[] = [];
-    let current = '';
-    for (const char of text) {
-      if (char >= ' ' && char <= '~' || char === '\n' || char === '\t') {
-        current += char;
-      } else {
-        if (current.length >= 4) {
-          runs.push(current.trim());
-        }
-        current = '';
-      }
-    }
-    if (current.length >= 4) runs.push(current.trim());
-
-    const result = runs.filter(r => r.length > 3).join(' ');
-    if (result.length < 50) {
-      return `[Could not extract meaningful text from legacy format: ${filename}]`;
+    const result = sections.join('\n').trim();
+    if (!result) {
+      throw new Error(`Spreadsheet ${filePath} contains no readable data`);
     }
     return result;
+  }
+
+  /**
+   * Extract text from Word (.docx) via mammoth.
+   * Returns markdown so headings, lists, tables, and footnotes survive
+   * into the chunker (which understands ATX headings).
+   */
+  private async extractDocx(filePath: string): Promise<string> {
+    const mammoth = await import('mammoth');
+    const result = await mammoth.convertToMarkdown({ path: filePath });
+    for (const msg of result.messages) {
+      if (msg.type === 'error') {
+        this.logger.warn({ filePath, message: msg.message }, 'mammoth conversion error');
+      } else {
+        this.logger.debug({ filePath, message: msg.message }, 'mammoth conversion warning');
+      }
+    }
+    const text = result.value.trim();
+    if (!text) {
+      throw new Error(`mammoth produced no text for ${filePath}`);
+    }
+    return text;
+  }
+
+  /**
+   * Extract text from PowerPoint (.pptx) via node-pptx-parser.
+   * Speaker notes aren't exposed by the lib — we read notesSlideN.xml
+   * directly via jszip and append per-slide.
+   */
+  private async extractPptx(filePath: string): Promise<string> {
+    const { default: PptxParser } = await import('node-pptx-parser');
+    const parser = new PptxParser(filePath);
+    const slides = await parser.extractText();
+    const notes = await this.extractPptxNotes(filePath);
+
+    const sections: string[] = [];
+    slides.forEach((slide, idx) => {
+      const slideNum = idx + 1;
+      sections.push(`## Slide ${slideNum}`);
+      sections.push('');
+      const body = slide.text.map(t => t.trim()).filter(Boolean).join('\n\n');
+      if (body) sections.push(body);
+      const note = notes.get(slideNum);
+      if (note) {
+        sections.push('');
+        sections.push(`**Notes:** ${note}`);
+      }
+      sections.push('');
+    });
+
+    const result = sections.join('\n').trim();
+    if (!result) {
+      throw new Error(`No text extracted from presentation ${filePath}`);
+    }
+    return result;
+  }
+
+  /**
+   * Read speaker notes from a pptx by scanning ppt/notesSlides/notesSlideN.xml.
+   * Returns a map of slide number → notes text. Slides without notes are absent.
+   */
+  private async extractPptxNotes(filePath: string): Promise<Map<number, string>> {
+    const jszip = await import('jszip');
+    const JSZip = (jszip as any).default || jszip;
+    const buffer = await readFile(filePath);
+    const zip = await JSZip.loadAsync(buffer);
+    const notes = new Map<number, string>();
+
+    const noteFiles = Object.keys(zip.files).filter(f =>
+      /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(f),
+    );
+    for (const file of noteFiles) {
+      const match = file.match(/notesSlide(\d+)\.xml$/);
+      if (!match) continue;
+      const slideNum = parseInt(match[1], 10);
+      const xml = await zip.file(file)!.async('text');
+      const texts: string[] = [];
+      for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)) {
+        const trimmed = m[1].trim();
+        // Drop slide-number placeholders that PowerPoint stamps into notes
+        if (trimmed && !/^\d+$/.test(trimmed)) texts.push(trimmed);
+      }
+      if (texts.length > 0) notes.set(slideNum, texts.join(' '));
+    }
+    return notes;
+  }
+
+  /**
+   * Extract text from legacy Word (.doc, OLE2 binary) via word-extractor.
+   * Includes body, footnotes, and endnotes. Legacy .ppt is not supported —
+   * handled by extractStructured() with a fail-loud error.
+   */
+  private async extractDocLegacy(filePath: string): Promise<string> {
+    const mod = await import('word-extractor');
+    const WordExtractor = (mod as any).default || mod;
+    const extractor = new WordExtractor();
+    const doc = await extractor.extract(filePath);
+
+    const parts = [doc.getBody(), doc.getFootnotes(), doc.getEndnotes()]
+      .map((s: string) => (s ? s.trim() : ''))
+      .filter(Boolean);
+
+    const text = parts.join('\n\n').trim();
+    if (text.length < 10) {
+      throw new Error(`word-extractor produced no meaningful text for ${filePath}`);
+    }
+    return text;
   }
 
   /**

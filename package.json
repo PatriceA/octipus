@@ -61,6 +61,8 @@
     "grammy": "^1.42.0",
     "ioredis": "^5.10.1",
     "jszip": "3.10.1",
+    "mammoth": "1.12.0",
+    "node-pptx-parser": "1.0.1",
     "openai": "^6.37.0",
     "otplib": "^12.0.1",
     "pdfjs-dist": "5.7.284",
@@ -69,7 +71,9 @@
     "playwright": "^1.59.1",
     "postgres": "^3.4.9",
     "samlify": "2.12.0",
+    "word-extractor": "1.0.4",
     "ws": "^8.20.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },
   "devDependencies": {
