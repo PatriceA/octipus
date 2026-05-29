@@ -45,6 +45,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
         if (v === 'auto' || v === 'required') return v;
         return 'off';
       })(),
+      vaultDenyUnscopedSecrets: process.env.VAULT_DENY_UNSCOPED_SECRETS === 'true',
       dockerIsolation: process.env.DOCKER_ISOLATION === 'enforce' ? 'enforce' : 'off',
     },
     api: {

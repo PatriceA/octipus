@@ -60,6 +60,7 @@ export const securityConfigSchema = z.object({
    * `auto` reduces to `off`.
    */
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
+  vaultDenyUnscopedSecrets: z.boolean().default(false),
   /**
    * Docker tool per-user isolation — Phase 3f. When `'enforce'` and
    * `multiuser.enabled` is true, the Docker tool:
