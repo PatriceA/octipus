@@ -207,7 +207,13 @@ export class ToolRegistry {
   async shutdownAll(): Promise<void> {
     for (const [toolId, tool] of this.tools) {
       if (this.initialized.has(toolId)) {
-        await tool.shutdown();
+        // One tool failing to shut down (e.g. the browser tool's Chromium
+        // already gone) must not block disposing the rest on the shutdown path.
+        try {
+          await tool.shutdown();
+        } catch (err) {
+          toolLogger.warn({ toolId, err }, 'Tool shutdown failed');
+        }
         this.initialized.delete(toolId);
       }
     }
