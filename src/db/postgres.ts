@@ -116,6 +116,10 @@ export function getDb(): DrizzleDB {
     const sql = postgres(config.database.url, {
       max: config.database.poolSize,
       idle_timeout: config.database.idleTimeout / 1000,
+      // Parity with initExternal(): recycle sockets after 30 min and disable
+      // prepared statements so a bad slot can't keep returning CONNECTION_ENDED.
+      max_lifetime: 30 * 60,
+      prepare: false,
       connect_timeout: config.database.connectionTimeout / 1000,
       onnotice: (notice: any) => dbLogger.debug({ notice }, 'PostgreSQL notice'),
     });

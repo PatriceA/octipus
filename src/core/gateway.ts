@@ -167,8 +167,16 @@ export class Gateway {
       process.exit(0);
     };
 
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    // When the process entrypoint (src/index.ts) owns signal handling it sets
+    // OCTIPUS_SIGNALS_OWNED and runs a more complete shutdown that also calls
+    // gateway.stop(). Registering our own SIGTERM/SIGINT there would race two
+    // exit(0)s and truncate the other handler's async cleanup, so we skip them
+    // and only install the process-global safety nets below. Standalone callers
+    // (no entrypoint) still get graceful signal handling.
+    if (process.env.OCTIPUS_SIGNALS_OWNED !== '1') {
+      process.on('SIGTERM', () => shutdown('SIGTERM'));
+      process.on('SIGINT', () => shutdown('SIGINT'));
+    }
 
     process.on('uncaughtException', (error) => {
       coreLogger.error({ error }, 'Uncaught exception');
@@ -176,7 +184,12 @@ export class Gateway {
     });
 
     process.on('unhandledRejection', (reason) => {
-      coreLogger.error({ reason }, 'Unhandled rejection');
+      // Surface loudly with the rejection value and a stack when present. We
+      // deliberately do NOT crash: a long-running multi-channel server should
+      // not be taken down by a single stray rejection, but the error-level log
+      // ensures the failure is visible rather than silently swallowed.
+      const err = reason instanceof Error ? reason : new Error(String(reason));
+      coreLogger.error({ err, stack: err.stack }, 'Unhandled promise rejection');
     });
   }
 
