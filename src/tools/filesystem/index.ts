@@ -25,13 +25,22 @@ function getWorkspacePaths(): { root: string; additional: string[] } {
   }
 }
 
-// File extensions eligible for RAG auto-indexing
-const INDEXABLE_EXTENSIONS = new Set([
-  '.md', '.txt', '.rst', '.csv', '.json', '.yaml', '.yml',
-  '.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs', '.java',
-  '.sh', '.bash', '.zsh', '.sql', '.html', '.css', '.xml',
-  '.toml', '.ini', '.cfg', '.conf', '.env.example', '.log',
+// Prose/doc extensions auto-indexed into RAG on write. Code and config are
+// intentionally excluded — see autoIndexFile for the rationale.
+const AUTO_INDEX_EXTENSIONS = new Set([
+  '.md', '.txt', '.rst', '.csv', '.log',
 ]);
+
+/**
+ * Decide whether a written file should be auto-indexed and, if so, under
+ * which RAG purpose. Pure (extension lookup only) so the doc-vs-code policy
+ * is unit-testable without touching config, the indexer, or the filesystem.
+ * Returns `'document'` for prose/doc formats, `null` for everything else
+ * (code, config, binaries) — code is indexed on demand, never on write.
+ */
+export function autoIndexPurpose(filePath: string): 'document' | null {
+  return AUTO_INDEX_EXTENSIONS.has(extname(filePath).toLowerCase()) ? 'document' : null;
+}
 
 /**
  * Project markers that signal "this directory is a real codebase the user
@@ -127,18 +136,25 @@ async function getSessionOutputDir(context?: AgentContext): Promise<string | nul
 
 /**
  * Auto-index a written file into the RAG knowledge base (fire-and-forget).
+ *
+ * Prose/docs only (`purpose='document'`). Code is deliberately NOT
+ * auto-indexed on write: agents read source directly (always fresher than a
+ * stored chunk), grep/ripgrep beats vector search for exact symbols, and a
+ * chunk for any file edited outside the agent (git pull, IDE, another dev)
+ * silently goes stale. Code can still be indexed on demand via the knowledge
+ * tool's `index_directory` / `index_file` — useful for repos the agent can't
+ * read off the local filesystem.
  */
 function autoIndexFile(filePath: string): void {
   try {
     const config = getConfig();
     if (!config.workspace.autoIndexFiles) return;
 
-    const ext = extname(filePath).toLowerCase();
-    if (!INDEXABLE_EXTENSIONS.has(ext)) return;
+    const purpose = autoIndexPurpose(filePath);
+    if (!purpose) return;
 
     // Fire-and-forget — don't block the write operation
     import('@/core/rag/indexer').then(({ getFileIndexer }) => {
-      const purpose = ['.md', '.txt', '.rst', '.csv', '.log'].includes(ext) ? 'document' : 'code';
       getFileIndexer().indexFile(filePath, purpose).then((chunks) => {
         coreLogger.debug({ filePath, chunks }, 'Auto-indexed file into knowledge base');
       }).catch((err) => {

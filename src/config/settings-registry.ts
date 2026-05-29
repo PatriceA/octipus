@@ -548,7 +548,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'workspace',
     valueType: 'boolean',
     defaultValue: true,
-    description: 'Automatically index written files into the RAG knowledge base',
+    description: 'Auto-index written prose/doc files (.md/.txt/.rst/.csv/.log) into the RAG knowledge base. Code is indexed on demand only (knowledge tool).',
     isSecret: false,
   },
 

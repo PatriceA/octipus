@@ -1367,6 +1367,86 @@ every turn.
    `search_knowledge`. The `agent_output` tag is gone; cosine
    similarity over peer outputs is structurally impossible.
 
+### 9.13 Memory tier empty while knowledge fills — diagnostic
+
+**Symptom under test:** the knowledge base (`embeddings`) accumulates
+rows normally, but `SELECT count(*) FROM memories` stays at `0`. This
+is the expected behaviour of an install that has an `embedding` model
+bound but **no `memory_extraction` model bound** — the extractor and
+judge both short-circuit silently (debug-level log, no error). Walk
+these steps to confirm the cause and prove the fix.
+
+1. **Confirm the asymmetry.** Two queries:
+   ```sql
+   SELECT count(*) FROM embeddings;   -- expect > 0 (knowledge works)
+   SELECT count(*) FROM memories;     -- the symptom: 0
+   ```
+
+2. **Confirm `embedding` is bound but `memory_extraction` is not.**
+   ```sql
+   SELECT name, topics, is_enabled FROM model_config
+   WHERE 'embedding'        = ANY(topics) AND is_enabled;  -- expect ≥ 1 row
+   SELECT name, topics, is_enabled FROM model_config
+   WHERE 'memory_extraction' = ANY(topics) AND is_enabled;  -- expect 0 rows
+   ```
+   Note: nothing is auto-seeded — startup runs `bootstrapDefaultModel()`
+   (single `BOOTSTRAP_*` model on topic `general`), **not**
+   `initializeDefaultModels()`. So both `embedding` and
+   `memory_extraction` are bound only if an operator bound them.
+
+3. **Reproduce the silent short-circuit.** With `memory_extraction`
+   still unbound, send a first-person fact: *"I prefer dark mode and
+   I work in TypeScript."* (≥ 12 chars + a first-person pronoun, so it
+   passes `looksWorthExtracting`). Watch the log at **debug** level —
+   **expect** one of:
+   ```
+   memory.extractor: no model bound to topic="memory_extraction" — skipping
+   memory.judge: no model bound to topic="memory_extraction" — defaulting to NOOP
+   ```
+   These lines are the definitive proof. No error is raised; the turn
+   completes normally. `SELECT count(*) FROM memories` is still `0`.
+
+4. **Bind a model and prove the fix.** Bind any cheap chat model to
+   topic `memory_extraction`.
+   - **Known UI gap (verify it reproduces):** Settings → Models →
+     edit a model → the **Topics** list does **not** offer a
+     "Memory Extraction" entry (`AVAILABLE_TOPICS` in
+     `web/lib/types/models.ts` omits it). Worse, opening + saving any
+     model in that modal silently strips any pre-existing
+     `memory_extraction` binding (the modal filters `model.topics` to
+     `AVAILABLE_TOPICS` on load). Until the UI lists the topic, bind it
+     out-of-band:
+     ```sql
+     UPDATE model_config
+     SET topics = array_append(topics, 'memory_extraction')
+     WHERE name = '<a cheap enabled chat model>'
+       AND NOT ('memory_extraction' = ANY(topics));
+     ```
+     (or via the models topic-binding API). **Do not** re-save that
+     model through the web UI afterwards or the binding is dropped.
+5. **Re-test extraction.** Re-send the step-3 message. **Expect** a new
+   row:
+   ```sql
+   SELECT fact_type, content, confidence
+   FROM memories WHERE superseded_by IS NULL
+   ORDER BY created_at DESC LIMIT 3;
+   ```
+   `fact_type='preference'`, content paraphrasing the message,
+   `confidence ≥ 0.5`.
+6. **Embedding dependency check.** The judge embeds each candidate via
+   topic `embedding` before writing (it is in the write path too). With
+   `memory_extraction` bound but `embedding` unbound, **expect** the log
+   `memory.judge: embed failed — skipping` and still **zero** rows — i.e.
+   the memory tier needs *both* topics, not just `memory_extraction`.
+
+**Expected results — symptom → cause → fix:**
+
+| Observation | Cause | Fix |
+|---|---|---|
+| `embeddings` fills, `memories` empty, debug log `no model bound to topic="memory_extraction"` | `memory_extraction` topic unbound (UI offers no such checkbox) | Bind a chat model to `memory_extraction` (SQL/API until UI lists it) |
+| `memory_extraction` bound, still empty, log `embed failed — skipping` | `embedding` topic unbound — judge can't embed candidates | Bind an embedding model to topic `embedding` |
+| `memory_extraction` bound, no debug log fires at all | message failed `looksWorthExtracting` (< 12 chars or no first-person pronoun), or `memory.extractionCadence='off'` | Send a genuine first-person fact; set cadence to `per_turn` |
+
 ---
 
 ## Reporting issues

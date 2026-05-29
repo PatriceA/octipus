@@ -98,6 +98,7 @@ export const AVAILABLE_TOPICS = [
   { value: 'writing', label: 'Writing', description: 'Documentation, technical writing' },
   { value: 'voice', label: 'Voice', description: 'Phone call conversations — use a fast model for low latency' },
   { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
+  { value: 'memory_extraction', label: 'Memory Extraction', description: 'Long-term memory extractor + judge. Runs per turn — bind a cheap, fast model. Unbound = memory tier stays off.' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */
