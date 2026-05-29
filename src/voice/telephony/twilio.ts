@@ -9,6 +9,7 @@
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { fetchWithTimeout } from '@/utils/http';
 import { logger } from '@/utils/logger';
 import type { CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } from './interface';
 
@@ -52,7 +53,7 @@ export class TwilioProvider implements TelephonyProvider {
       params.set('Url', options.webhookUrl); // TwiML will be served from webhook
     }
 
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${this.baseUrl}/Accounts/${this.accountSid}/Calls.json`,
       {
         method: 'POST',
@@ -131,7 +132,7 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   async endCall(providerCallId: string): Promise<void> {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${this.baseUrl}/Accounts/${this.accountSid}/Calls/${providerCallId}.json`,
       {
         method: 'POST',
@@ -149,7 +150,7 @@ export class TwilioProvider implements TelephonyProvider {
   }
 
   async getCallStatus(providerCallId: string): Promise<CallStatus> {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${this.baseUrl}/Accounts/${this.accountSid}/Calls/${providerCallId}.json`,
       {
         headers: {
@@ -198,7 +199,7 @@ export class TwilioProvider implements TelephonyProvider {
    */
   async autoDetectPhoneNumber(): Promise<string | null> {
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${this.baseUrl}/Accounts/${this.accountSid}/IncomingPhoneNumbers.json?PageSize=1`,
         {
           headers: {
@@ -235,7 +236,7 @@ export class TwilioProvider implements TelephonyProvider {
     }
 
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${this.baseUrl}/Accounts/${this.accountSid}.json`,
         {
           headers: {

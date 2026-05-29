@@ -1,4 +1,5 @@
 import { Elysia, t } from 'elysia';
+import { fetchWithTimeout } from '@/utils/http';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
@@ -274,7 +275,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
           formData.append('file', blob, `audio.${format || 'webm'}`);
           formData.append('model', transcriptionModel === 'local' ? 'whisper-1' : transcriptionModel);
 
-          const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          const response = await fetchWithTimeout('https://api.openai.com/v1/audio/transcriptions', {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${process.env.OPENAI_API_KEY || ''}`,

@@ -1,4 +1,5 @@
 import type { AgentContext } from '@/core/types';
+import { fetchWithTimeout } from '@/utils/http';
 import { createParameterSchema } from '../base-tool';
 
 type RegisterFn = (name: string, desc: string, params: any, exec: (args: any, ctx: AgentContext) => Promise<any>, opts?: any) => void;
@@ -82,7 +83,7 @@ export function registerDriveTools(registerTool: RegisterFn, googleApi: ApiFn): 
       `--${boundary}--`,
     ].join('\r\n');
 
-    const response = await fetch(`${DRIVE_UPLOAD_BASE}/files?uploadType=multipart`, {
+    const response = await fetchWithTimeout(`${DRIVE_UPLOAD_BASE}/files?uploadType=multipart`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
