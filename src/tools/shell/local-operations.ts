@@ -177,6 +177,52 @@ export class LocalShellOperations implements ShellOperations {
     });
   }
 
+  async spawnBackground(
+    command: string,
+    cwd: string,
+    options: { env?: Record<string, string>; unsafe?: boolean } = {},
+  ): Promise<{ pid: number | undefined }> {
+    const argv = options.unsafe ? null : tokenizeSafe(command);
+
+    if (!options.unsafe && argv === null) {
+      throw new Error(
+        `Background command rejected — contains metacharacters (;, &, |, <, >, $(), \`, newline, brace expansion). ` +
+          `Pass useShell: true to bypass and run via sh -c. Refused command (truncated): ${command.slice(0, 80)}`,
+      );
+    }
+
+    if (options.unsafe) {
+      coreLogger.warn(
+        { cmdPreview: command.slice(0, 120), cwd },
+        'shell.spawnBackground: unsafe sh -c invocation — caller opted in',
+      );
+    }
+
+    const baseArgv: string[] = options.unsafe
+      ? ['sh', '-c', command]
+      : [argv![0], ...argv!.slice(1)];
+
+    const { wrapCommand } = await import('@/security/shell-sandbox');
+    const wrap = wrapCommand(baseArgv, {
+      workspaceRoot: cwd,
+      allowNetwork: !!options.unsafe,
+    });
+
+    const child = spawn(wrap.argv[0], wrap.argv.slice(1), {
+      cwd,
+      env: { ...process.env, ...options.env },
+      detached: true,
+      stdio: 'ignore',
+    });
+    // Detached process is fire-and-forget; release the sandbox handle once the
+    // child has exited so we don't leak any wrapper state.
+    child.on('close', () => wrap.cleanup());
+    child.on('error', () => wrap.cleanup());
+    child.unref();
+
+    return { pid: child.pid };
+  }
+
   async which(command: string): Promise<string | null> {
     // Reject anything that could break out of the single-arg invocation.
     if (!/^[a-zA-Z0-9_.\-/]+$/.test(command)) return null;

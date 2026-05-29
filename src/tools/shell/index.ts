@@ -1,4 +1,3 @@
-import { spawn } from 'child_process';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import type { ToolManifest } from '@/core/types';
@@ -156,38 +155,46 @@ export class ShellTool extends BaseTool {
           ...(interpretation.semantic ? { semantic: interpretation.semantic } : {}),
         };
       },
-      { permissionAction: this.getPermissionAction(args => args.command as string) }
+      { permissionAction: (args) => this.resolvePermissionAction(args.command as string) }
     );
 
     this.registerTool(
       'run_background',
-      'Execute a command in the background',
+      'Execute a command in the background (detached). Safe by default: simple commands are spawned with no shell. Set useShell:true only if you need pipes, redirects, or command substitution (audited).',
       createParameterSchema({
         command: { type: 'string', description: 'Shell command to execute', required: true },
         cwd: { type: 'string', description: 'Working directory' },
+        env: { type: 'object', description: 'Additional environment variables' },
+        useShell: { type: 'boolean', description: 'Set true ONLY when the command genuinely needs shell features (pipes, redirects, $(), backticks). Audited. Default false.', default: false },
       }),
-      async (args) => {
+      async (args, context) => {
         if (typeof args.command !== 'string' || !args.command) {
           throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
         const cwd = (args.cwd as string) || this.getWorkspaceRoot();
+        const env = args.env as Record<string, string> | undefined;
+        const unsafe = args.useShell === true;
 
+        // Same security contract as `run`: denylist + injection checks, then
+        // the operations layer tokenizes (or refuses) the command. No raw
+        // `sh -c` bypass.
         this.validateCommand(command);
 
-        // Run detached process — fire-and-forget doesn't fit the ops interface,
-        // so we keep the direct spawn for background/detached processes.
-        const child = spawn('sh', ['-c', command], {
+        toolLogger.info({
+          command: command.slice(0, 500),
           cwd,
-          detached: true,
-          stdio: 'ignore',
-        });
+          unsafe,
+          background: true,
+          agentId: context?.id,
+          role: context?.role,
+        }, 'Shell background command spawning');
 
-        child.unref();
+        const { pid } = await this.ops.spawnBackground(command, cwd, { env, unsafe });
 
-        return { pid: child.pid, command, status: 'running' };
+        return { pid, command, status: 'running' };
       },
-      { permissionAction: 'execute' }
+      { permissionAction: (args) => this.resolvePermissionAction(args.command as string) }
     );
 
     this.registerTool(
@@ -233,7 +240,9 @@ export class ShellTool extends BaseTool {
   }
 
   private validateCommand(command: string): void {
-    const lowerCommand = command.toLowerCase();
+    // Normalize runs of whitespace so trivial evasions of the denylist
+    // (`rm -rf  /`, tabs, newlines between tokens) still match.
+    const lowerCommand = command.toLowerCase().replace(/\s+/g, ' ');
 
     // Check for blocked commands
     for (const blocked of BLOCKED_COMMANDS) {
@@ -268,25 +277,41 @@ export class ShellTool extends BaseTool {
       }
     }
 
-    // Check for elevated commands at the start or after pipe/semicolon
+    const elevated = this.matchElevatedCommand(command);
+    if (elevated) {
+      toolLogger.warn({ command: command.slice(0, 200), elevated }, 'Elevated command detected — requires elevated permission');
+    }
+  }
+
+  /**
+   * Return the elevated keyword if the command invokes a privileged tool at
+   * the start of the line or after a pipe/`;`/`&&` separator, else null.
+   */
+  private matchElevatedCommand(command: string): string | null {
     for (const elevated of ELEVATED_COMMANDS) {
-      const elevatedPatterns = [
+      const patterns = [
         new RegExp(`^${elevated}\\b`, 'i'),
         new RegExp(`\\|\\s*${elevated}\\b`, 'i'),
         new RegExp(`;\\s*${elevated}\\b`, 'i'),
         new RegExp(`&&\\s*${elevated}\\b`, 'i'),
       ];
-      for (const pattern of elevatedPatterns) {
-        if (pattern.test(command)) {
-          toolLogger.warn({ command, elevated }, 'Elevated command detected — requires permission');
-          break;
-        }
-      }
+      if (patterns.some((p) => p.test(command))) return elevated;
     }
+    return null;
   }
 
-  private getPermissionAction(getCommand: (args: Record<string, unknown>) => string): string {
-    return 'execute'; // Could be made dynamic based on command analysis
+  /**
+   * Map a command to the permission action it must satisfy. Privileged
+   * commands (sudo/docker/systemctl/…) require the `execute_elevated`
+   * permission, which defaults to DENY — so they are blocked unless an admin
+   * has explicitly granted elevation, instead of running under the ASK-level
+   * `execute` permission like ordinary commands.
+   */
+  private resolvePermissionAction(command: string): string {
+    if (typeof command === 'string' && this.matchElevatedCommand(command)) {
+      return 'execute_elevated';
+    }
+    return 'execute';
   }
 }
 
