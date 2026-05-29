@@ -9,6 +9,25 @@ const AUTH_RATE_LIMIT = 20; // requests per window
 const AUTH_RATE_WINDOW_SECS = 60; // 1 minute
 const USER_QUOTA_WINDOW_SECS = 60;
 
+// Baseline per-IP ceiling on all /api/* traffic, applied in EVERY deployment
+// mode (including single-user, where the per-user quota layer below is off).
+// Generous enough not to bother a real interactive user (~10 req/s) while
+// still capping a runaway client or scripted abuse of expensive model routes.
+// Override with API_RATE_LIMIT_PER_MINUTE (0 disables the baseline).
+const BASELINE_IP_LIMIT = (() => {
+  const raw = Number(process.env.API_RATE_LIMIT_PER_MINUTE);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 600;
+})();
+const BASELINE_IP_WINDOW_SECS = 60;
+
+function clientIp(request: Request): string {
+  return (
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    'unknown'
+  );
+}
+
 /**
  * Rate-limiting middleware.
  *
@@ -39,10 +58,7 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
 
     // ── Layer 1: per-IP on auth endpoints ──────────────────────────
     if (url.pathname.startsWith('/api/auth')) {
-      const ip =
-        request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-        request.headers.get('x-real-ip') ||
-        'unknown';
+      const ip = clientIp(request);
 
       const rateLimiter = getRateLimiter();
       const result = await rateLimiter.check(`auth:ip:${ip}`, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW_SECS);
@@ -59,8 +75,24 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
       return;
     }
 
+    // Only /api/* below this point. Health probes are never limited so
+    // liveness/readiness checks can't be starved by a noisy neighbour.
+    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/health')) return;
+
+    // ── Layer 1b: baseline per-IP cap on all /api/* (any mode) ──────
+    if (BASELINE_IP_LIMIT > 0) {
+      const ip = clientIp(request);
+      const rateLimiter = getRateLimiter();
+      const result = await rateLimiter.check(`api:ip:${ip}`, BASELINE_IP_LIMIT, BASELINE_IP_WINDOW_SECS);
+      if (!result.allowed) {
+        apiLogger.warn({ ip, path: url.pathname, retryAfter: result.retryAfter }, 'Baseline per-IP API rate limit exceeded');
+        set.status = 429;
+        set.headers['Retry-After'] = String(result.retryAfter);
+        return { error: 'Too many requests. Please try again later.', retryAfter: result.retryAfter };
+      }
+    }
+
     // ── Layer 2: per-user (Phase 3c-2) ─────────────────────────────
-    if (!url.pathname.startsWith('/api/')) return;
     let multiuser = false;
     try { multiuser = !!getConfig().multiuser?.enabled; } catch { /* config not loaded */ }
     if (!multiuser) return;

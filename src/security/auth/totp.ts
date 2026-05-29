@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { authenticator } from 'otplib';
 import { getConfig } from '@/config';
 import { userRepository } from '@/db/repositories/user-repository';
-import { decrypt, deriveKey, encrypt } from '@/utils/crypto';
+import { decrypt, deriveDek, encrypt } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
 
 // Configure TOTP
@@ -20,9 +20,13 @@ async function getEncryptionKey(): Promise<Buffer> {
   }
 
   const config = getConfig();
-  const { key } = await deriveKey(config.security.masterKey);
-  encryptionKey = key;
-  return key;
+  // Deterministic HKDF derivation (same primitive the vault uses), keyed only
+  // on the master key. The previous deriveKey() call generated a fresh random
+  // scrypt salt on every process start and never persisted it, so after a
+  // restart the derived key changed and every stored TOTP secret / backup code
+  // failed to decrypt. deriveDek is stable across restarts.
+  encryptionKey = deriveDek(Buffer.from(config.security.masterKey), 'totp', 'global');
+  return encryptionKey;
 }
 
 export class TOTPAuth {

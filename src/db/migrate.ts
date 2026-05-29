@@ -103,8 +103,6 @@ async function runEmbeddedMigrations(): Promise<void> {
         .replace(/CREATE EXTENSION IF NOT EXISTS "uuid-ossp";?/gi, '-- uuid-ossp not needed (using gen_random_uuid)')
         .replace(/uuid_generate_v4\(\)/gi, 'gen_random_uuid()');
 
-      logger.info({ tag: entry.tag }, 'Applying migration');
-      await executeRaw(patchedSql);
       // Use parameterized-safe values: hash is a hex SHA-256 (safe chars only),
       // entry.when is a number from the journal. Validate both defensively.
       const safeHash = hash.replace(/[^a-f0-9]/g, '');
@@ -112,9 +110,24 @@ async function runEmbeddedMigrations(): Promise<void> {
       if (!safeHash || isNaN(safeWhen)) {
         throw new Error(`Invalid migration metadata: hash=${hash}, when=${entry.when}`);
       }
-      await executeRaw(
-        `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
-      );
+
+      logger.info({ tag: entry.tag }, 'Applying migration');
+      // Apply the migration and record it atomically. Without the transaction a
+      // failure partway through a multi-statement file left earlier statements
+      // committed and the tracking row unwritten — so a re-run replayed the
+      // whole file and hit duplicate-object errors. None of the migrations use
+      // CREATE INDEX CONCURRENTLY, so wrapping in a transaction is safe.
+      await executeRaw('BEGIN');
+      try {
+        await executeRaw(patchedSql);
+        await executeRaw(
+          `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
+        );
+        await executeRaw('COMMIT');
+      } catch (err) {
+        await executeRaw('ROLLBACK').catch(() => { /* connection may be aborted */ });
+        throw err;
+      }
     }
 
     logger.info('Migrations completed successfully (PGlite)');
