@@ -2,7 +2,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 import { isCancellationError } from '@/core/swarm/errors';
 import type { AgentContext, ToolManifest, } from '@/core/types';
 import { getPermissionManager } from '@/security/permissions';
-import { injectSecrets } from '@/security/secret-injector';
+import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
 
 export interface ToolContext extends AgentContext {
