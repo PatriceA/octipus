@@ -170,7 +170,19 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     }
     const config = getConfig();
     const rootPath = resolve(config.workspace.rootPath);
-    const repoPath = join(rootPath, body.name);
+
+    // Containment: reject names that escape the workspace root via traversal
+    // (`../`), absolute paths, or null bytes. Without this, name="../../x"
+    // creates an attacker-chosen directory anywhere the process can write.
+    if (body.name.includes('\0') || body.name.includes('/') || body.name.includes('\\')) {
+      set.status = 400;
+      return { error: 'Invalid repository name: must not contain path separators or null bytes' };
+    }
+    const repoPath = resolve(rootPath, body.name);
+    if (repoPath !== join(rootPath, body.name) || !repoPath.startsWith(rootPath + '/')) {
+      set.status = 400;
+      return { error: 'Invalid repository name: resolves outside the workspace root' };
+    }
 
     if (existsSync(repoPath)) {
       set.status = 409;

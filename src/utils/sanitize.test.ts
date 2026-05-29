@@ -76,6 +76,31 @@ describe('validateExternalUrl', () => {
     const r = await validateExternalUrl('http://[fe80::1]/');
     expect(r.valid).toBe(false);
   });
+
+  test('rejects decimal IP literal for 127.0.0.1 (2130706433)', async () => {
+    const r = await validateExternalUrl('http://2130706433/');
+    expect(r.valid).toBe(false);
+  });
+
+  test('rejects hex IP literal 0x7f000001', async () => {
+    const r = await validateExternalUrl('http://0x7f000001/');
+    expect(r.valid).toBe(false);
+  });
+
+  test('rejects octal-encoded octet 0177.0.0.1', async () => {
+    const r = await validateExternalUrl('http://0177.0.0.1/');
+    expect(r.valid).toBe(false);
+  });
+
+  test('rejects CGNAT range 100.64.0.1', async () => {
+    const r = await validateExternalUrl('http://100.64.0.1/');
+    expect(r.valid).toBe(false);
+  });
+
+  test('rejects IPv4-mapped IPv6 loopback ::ffff:127.0.0.1', async () => {
+    const r = await validateExternalUrl('http://[::ffff:127.0.0.1]/');
+    expect(r.valid).toBe(false);
+  });
 });
 
 describe('safeRegExp', () => {
