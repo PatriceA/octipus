@@ -4,6 +4,35 @@ import type { ShellExecResult, ShellOperations } from './operations';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 
+// Octipus's own root secrets — never leak these into spawned commands.
+const SENSITIVE_ENV_EXACT = new Set([
+  'MASTER_KEY',
+  'JWT_SECRET',
+  'SESSION_SECRET',
+  'DATABASE_URL',
+  'REDIS_URL',
+  'POSTGRES_PASSWORD',
+]);
+// Provider/channel credentials and anything that smells like a secret.
+const SENSITIVE_ENV_PATTERN = /(API_KEY|_TOKEN|SECRET|PASSWORD|PRIVATE_KEY)$/i;
+
+/**
+ * Build the environment for a spawned child. The full `process.env` would
+ * otherwise hand every command the master key, JWT/session secrets, the DB URL
+ * and every provider API key — so a single `env`-dumping or exfiltrating
+ * command could read them. Strip the known-sensitive vars; callers that
+ * genuinely need a value still pass it explicitly via `extra`.
+ */
+function buildChildEnv(extra?: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined) continue;
+    if (SENSITIVE_ENV_EXACT.has(k) || SENSITIVE_ENV_PATTERN.test(k)) continue;
+    out[k] = v;
+  }
+  return { ...out, ...extra };
+}
+
 /**
  * Conservative POSIX-ish tokenizer. Splits a command string into argv,
  * stripping single/double quotes. Returns `null` if the command contains
@@ -123,7 +152,7 @@ export class LocalShellOperations implements ShellOperations {
     return new Promise((resolve, reject) => {
       const child = spawn(finalArgv[0], finalArgv.slice(1), {
         cwd,
-        env: { ...process.env, ...options.env },
+        env: buildChildEnv(options.env),
         timeout: options.timeout,
       });
 
@@ -210,7 +239,7 @@ export class LocalShellOperations implements ShellOperations {
 
     const child = spawn(wrap.argv[0], wrap.argv.slice(1), {
       cwd,
-      env: { ...process.env, ...options.env },
+      env: buildChildEnv(options.env),
       detached: true,
       stdio: 'ignore',
     });
