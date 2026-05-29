@@ -37,11 +37,16 @@ services:
       - octipus-workspace:/data/workspace
       - octipus-documents:/data/documents
       - octipus-extensions:/data/extensions
-      # Docker socket: allows Octipus to spawn sibling containers
-      # for running tools not installed in the main container image.
-      # On Linux/macOS: /var/run/docker.sock:/var/run/docker.sock
-      # On Windows (Docker Desktop): //var/run/docker.sock:/var/run/docker.sock
-      - //var/run/docker.sock:/var/run/docker.sock
+      # Docker socket (OPT-IN — disabled by default): lets Octipus spawn
+      # sibling containers for tools not installed in the main image.
+      #
+      # ⚠️  SECURITY: mounting the host Docker socket grants the container
+      # (and therefore any agent shell command that reaches it) root-equivalent
+      # control of the HOST. Only enable this on a trusted, single-tenant host,
+      # and keep the agent shell sandbox enabled. Uncomment to enable:
+      #   On Linux/macOS:           /var/run/docker.sock:/var/run/docker.sock
+      #   On Windows (Docker Desktop): //var/run/docker.sock:/var/run/docker.sock
+      # - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       octipus-db:
         condition: service_healthy

@@ -75,7 +75,13 @@ RUN mkdir -p /data/workspace /data/documents /data/extensions
 #
 # - Playwright Chromium → `browser`, `visual` tools
 # - mcp-server build    → `mcp` capability (external MCP clients)
+#
+# Browsers install to a shared, world-readable path so the non-root
+# runtime user (below) can launch them — the default per-user cache
+# (~/.cache/ms-playwright) would be unreadable after the USER switch.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN bunx playwright install chromium && \
+    chmod -R a+rX /ms-playwright && \
     cd mcp-server && npm install --silent && npm run build --silent && cd ..
 
 # Environment defaults
@@ -88,12 +94,19 @@ ENV NODE_ENV=production \
     DOCUMENTS_PATH=/data/documents \
     LOG_FORMAT=json
 
-# Health check
+# Drop root. The oven/bun image ships a non-root `bun` user (uid 1000);
+# a compromised agent shell tool would otherwise run as root inside the
+# container (and, if the Docker socket is mounted, host-root-equivalent).
+RUN chown -R bun:bun /app /data
+USER bun
+
+# Health check — probe readiness (DB + Redis reachable), not just liveness,
+# so the container is only "healthy" when it can actually serve requests.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:3005/api/health/ || exit 1
+    CMD curl -f http://localhost:3005/api/health/ready || exit 1
 
 EXPOSE 3005 3007
 
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY --chown=bun:bun docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
