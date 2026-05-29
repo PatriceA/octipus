@@ -77,7 +77,7 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
 
     // Only /api/* below this point. Health probes are never limited so
     // liveness/readiness checks can't be starved by a noisy neighbour.
-    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/health')) return;
+    if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/health') || url.pathname.startsWith('/api/metrics')) return;
 
     // ── Layer 1b: baseline per-IP cap on all /api/* (any mode) ──────
     if (BASELINE_IP_LIMIT > 0) {
