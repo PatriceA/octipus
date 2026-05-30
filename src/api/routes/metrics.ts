@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import { checkDbHealth } from '@/db/postgres';
-import { getRedis } from '@/db/redis';
+import { checkRedisHealth } from '@/db/redis';
 import { secureCompare } from '@/utils/crypto';
 
 /**
@@ -17,21 +17,25 @@ function escapeLabel(v: string): string {
   return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 }
 
+/** Resolve a probe to `0` if it rejects OR exceeds `ms` — a scrape must never
+ *  block on a wedged dependency, and unit tests have no live DB/Redis. */
+function withTimeout(probe: Promise<number>, ms: number): Promise<number> {
+  return Promise.race([
+    probe.catch(() => 0),
+    new Promise<number>((resolve) => setTimeout(() => resolve(0), ms).unref?.()),
+  ]);
+}
+
 async function renderMetrics(): Promise<string> {
   const mem = process.memoryUsage();
   const version = process.env.npm_package_version || '0.0.0';
 
   const [db, redisUp] = await Promise.all([
-    checkDbHealth().then((h) => (h.healthy ? 1 : 0)).catch(() => 0),
-    (async () => {
-      try {
-        const redis = getRedis();
-        const pong = await redis.ping();
-        return pong === 'PONG' ? 1 : 0;
-      } catch {
-        return 0;
-      }
-    })(),
+    withTimeout(checkDbHealth().then((h) => (h.healthy ? 1 : 0)), 2000),
+    withTimeout(
+      checkRedisHealth().then((h) => (h.healthy ? 1 : 0)),
+      2000,
+    ),
   ]);
 
   const lines = [

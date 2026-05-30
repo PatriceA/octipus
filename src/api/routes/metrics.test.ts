@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { Elysia } from 'elysia';
 import { metricsRoutes } from './metrics';
+
+type ElysiaLike = { handle: (req: Request) => Promise<Response> };
+
+// Mount the route under a parent app so Elysia builds/compiles the route tree
+// (calling .handle() on a bare sub-instance does not resolve routes).
+const app = new Elysia().group('/api', (a) => a.use(metricsRoutes)) as unknown as ElysiaLike;
 
 const prev = process.env.METRICS_TOKEN;
 afterEach(() => {
@@ -10,24 +17,24 @@ afterEach(() => {
 describe('metrics route (M11)', () => {
   test('404 when METRICS_TOKEN is unset (disabled by default)', async () => {
     delete process.env.METRICS_TOKEN;
-    const res = await metricsRoutes.handle(new Request('http://x/metrics'));
+    const res = await app.handle(new Request('http://localhost/api/metrics'));
     expect(res.status).toBe(404);
   });
 
   test('401 with a missing/wrong token', async () => {
     process.env.METRICS_TOKEN = 'scrape-secret-token';
-    const noTok = await metricsRoutes.handle(new Request('http://x/metrics'));
+    const noTok = await app.handle(new Request('http://localhost/api/metrics'));
     expect(noTok.status).toBe(401);
-    const wrong = await metricsRoutes.handle(
-      new Request('http://x/metrics', { headers: { authorization: 'Bearer nope' } }),
+    const wrong = await app.handle(
+      new Request('http://localhost/api/metrics', { headers: { authorization: 'Bearer nope' } }),
     );
     expect(wrong.status).toBe(401);
   });
 
   test('200 + Prometheus exposition with the correct token', async () => {
     process.env.METRICS_TOKEN = 'scrape-secret-token';
-    const res = await metricsRoutes.handle(
-      new Request('http://x/metrics', { headers: { authorization: 'Bearer scrape-secret-token' } }),
+    const res = await app.handle(
+      new Request('http://localhost/api/metrics', { headers: { authorization: 'Bearer scrape-secret-token' } }),
     );
     expect(res.status).toBe(200);
     const body = await res.text();
@@ -38,8 +45,8 @@ describe('metrics route (M11)', () => {
 
   test('accepts the token via ?token= query param', async () => {
     process.env.METRICS_TOKEN = 'scrape-secret-token';
-    const res = await metricsRoutes.handle(
-      new Request('http://x/metrics?token=scrape-secret-token'),
+    const res = await app.handle(
+      new Request('http://localhost/api/metrics?token=scrape-secret-token'),
     );
     expect(res.status).toBe(200);
   });
