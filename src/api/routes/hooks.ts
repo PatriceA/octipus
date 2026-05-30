@@ -1,188 +1,388 @@
+import { desc, eq, or, sql } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
-import { getHookManager } from '@/hooks/manager';
 import { apiContext } from '@/api/context';
+import { getDb } from '@/db/postgres';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { hookExecutions } from '@/db/schema/hook-executions';
+import { hooks as hooksTable } from '@/db/schema/hooks';
+import { recurringTasks } from '@/db/schema/recurring-tasks';
+import { getHookManager } from '@/hooks/manager';
+import { getHookSuggestions } from '@/hooks/suggestions';
+import { isAuthenticated } from '@/security/principal';
 
-// Boundary schemas — these mirror the hook domain types (src/hooks/types.ts)
-// so Elysia validates the request precisely and the handlers can pass the body
-// straight through without `as any` coercion (DESIGN.md rules #1 and #8).
-const triggerSchema = t.Union([
-  t.Literal('message.received'),
-  t.Literal('message.sent'),
-  t.Literal('agent.completed'),
-  t.Literal('agent.failed'),
-  t.Literal('tool.called'),
-  t.Literal('tool.failed'),
-  t.Literal('session.started'),
-  t.Literal('session.ended'),
-  t.Literal('schedule'),
-  t.Literal('webhook'),
-]);
+const VALID_TRIGGERS = ['message_received', 'agent_started', 'agent_completed', 'agent_failed', 'tool_executed', 'permission_requested', 'schedule', 'webhook'] as const;
+const VALID_ACTIONS = ['notify', 'spawn_agent', 'webhook', 'n8n_workflow', 'execute_tool'] as const;
 
-const conditionSchema = t.Object({
-  field: t.String(),
-  operator: t.Union([
-    t.Literal('equals'),
-    t.Literal('contains'),
-    t.Literal('matches'),
-    t.Literal('gt'),
-    t.Literal('lt'),
-    t.Literal('exists'),
-  ]),
-  value: t.Optional(t.Unknown()),
-});
-
-const actionSchema = t.Object({
-  type: t.Union([
-    t.Literal('http_request'),
-    t.Literal('send_message'),
-    t.Literal('run_tool'),
-    t.Literal('spawn_agent'),
-    t.Literal('log'),
-  ]),
-  config: t.Record(t.String(), t.Unknown()),
-});
-
-const configSchema = t.Record(t.String(), t.Unknown());
-
+/**
+ * Hooks — Phase 1a multi-user conversion.
+ *
+ * The hookManager itself stays the source of truth for cron scheduling
+ * and triggered execution. Each route handler now resolves the hook
+ * through `scopedRepos(principal).hooks.findById`, which returns null
+ * for cross-tenant lookups. Mutations go through hookManager only after
+ * the scope check confirms ownership; cross-tenant attempts surface as
+ * "Hook not found" instead of "Not authorized" so attackers can't
+ * enumerate hook ids.
+ */
 export const hookRoutes = new Elysia({ prefix: '/hooks' })
   .use(apiContext)
-  .get('/', async ({ user, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
+  // List user's hooks
+  .get(
+    '/',
+    async ({ user, principal }) => {
+      if (!user || !isAuthenticated(principal)) {
+        return { error: 'Not authenticated' };
       }
-      const mgr = getHookManager();
-      return { hooks: mgr.list() };
+
+      const hooks = await scopedRepos(principal).hooks.listOwn();
+      return { hooks };
     },
     { detail: { tags: ['hooks'] } }
   )
-  .post('/', async ({ user, body, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
+
+  // Get hook by ID
+  .get(
+    '/:id',
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
+        return { error: 'Not authenticated' };
       }
-      const mgr = getHookManager();
-      const hook = await mgr.create(
-        user.id,
-        body.name,
-        body.trigger,
-        body.config ?? {},
-        body.conditions ?? [],
-        body.actions ?? [],
-      );
-      return { hook };
+
+      const hook = await scopedRepos(principal).hooks.findById(params.id);
+      if (!hook) {
+        return { error: 'Hook not found' };
+      }
+      return hook;
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+      detail: { tags: ['hooks'] },
+    }
+  )
+
+  // Create hook
+  .post(
+    '/',
+    async ({ user, body }) => {
+      if (!user) {
+        return { error: 'Not authenticated' };
+      }
+
+      if (!VALID_TRIGGERS.includes(body.trigger as any)) return { error: `Invalid trigger type: ${body.trigger}` };
+      if (!VALID_ACTIONS.includes(body.action as any)) return { error: `Invalid action type: ${body.action}` };
+
+      const hookManager = getHookManager();
+
+      const hook = await hookManager.createHook({
+        userId: user.id,
+        name: body.name,
+        description: body.description,
+        trigger: body.trigger as any,
+        triggerConfig: body.triggerConfig,
+        action: body.action as any,
+        actionConfig: body.actionConfig,
+        conditions: body.conditions,
+        isEnabled: body.isEnabled ?? true,
+        priority: body.priority ?? 0,
+        maxExecutions: body.maxExecutions,
+        cooldownMs: body.cooldownMs,
+      });
+
+      return hook;
     },
     {
       body: t.Object({
         name: t.String(),
-        trigger: triggerSchema,
-        config: t.Optional(configSchema),
-        conditions: t.Optional(t.Array(conditionSchema)),
-        actions: t.Optional(t.Array(actionSchema)),
+        description: t.Optional(t.String()),
+        trigger: t.String(),
+        triggerConfig: t.Any(),
+        action: t.String(),
+        actionConfig: t.Any(),
+        conditions: t.Optional(t.Array(t.Any())),
+        isEnabled: t.Optional(t.Boolean()),
+        priority: t.Optional(t.Number()),
+        maxExecutions: t.Optional(t.Number()),
+        cooldownMs: t.Optional(t.Number()),
       }),
       detail: { tags: ['hooks'] },
     }
   )
-  .put('/:id', async ({ user, params, body, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
+
+  // Update hook
+  .patch(
+    '/:id',
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
+        return { error: 'Not authenticated' };
       }
-      const mgr = getHookManager();
-      const updated = await mgr.update(user.id, params.id, body);
-      return { updated };
+
+      const existing = await scopedRepos(principal).hooks.findById(params.id);
+      if (!existing) {
+        return { error: 'Hook not found' };
+      }
+
+      const hookManager = getHookManager();
+      const hook = await hookManager.updateHook(params.id, body as any);
+      return hook;
     },
     {
+      params: t.Object({
+        id: t.String(),
+      }),
       body: t.Object({
         name: t.Optional(t.String()),
-        trigger: t.Optional(triggerSchema),
-        config: t.Optional(configSchema),
-        conditions: t.Optional(t.Array(conditionSchema)),
-        actions: t.Optional(t.Array(actionSchema)),
-        enabled: t.Optional(t.Boolean()),
+        description: t.Optional(t.String()),
+        triggerConfig: t.Optional(t.Any()),
+        actionConfig: t.Optional(t.Any()),
+        conditions: t.Optional(t.Array(t.Any())),
+        isEnabled: t.Optional(t.Boolean()),
+        priority: t.Optional(t.Number()),
+        maxExecutions: t.Optional(t.Number()),
+        cooldownMs: t.Optional(t.Number()),
       }),
       detail: { tags: ['hooks'] },
     }
   )
-  .delete('/:id', async ({ user, params, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
+
+  // Delete hook
+  .delete(
+    '/:id',
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) {
+        return { error: 'Not authenticated' };
       }
-      const mgr = getHookManager();
-      await mgr.delete(user.id, params.id);
-      return { deleted: true };
-    },
-    { detail: { tags: ['hooks'] } }
-  )
-  .post('/:id/toggle', async ({ user, params, body, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
+
+      const existing = await scopedRepos(principal).hooks.findById(params.id);
+      if (!existing) {
+        return { error: 'Hook not found' };
       }
-      const mgr = getHookManager();
-      const toggled = await mgr.setEnabled(user.id, params.id, body.enabled);
-      return { toggled };
+
+      const hookManager = getHookManager();
+      const deleted = await hookManager.deleteHook(params.id);
+      return { deleted };
     },
     {
-      body: t.Object({ enabled: t.Boolean() }),
-      detail: { tags: ['hooks'] },
-    }
-  )
-  .post('/:id/test', async ({ user, params, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
-      const mgr = getHookManager();
-      const result = await mgr.test(user.id, params.id);
-      return { result };
-    },
-    { detail: { tags: ['hooks'] } }
-  )
-  .get('/:id/executions', async ({ user, params, query, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
-      const mgr = getHookManager();
-      const executions = await mgr.getExecutions(user.id, params.id, query);
-      return { executions };
-    },
-    { detail: { tags: ['hooks'] } }
-  )
-  .post('/preview', async ({ user, body, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
-      const mgr = getHookManager();
-      const preview = mgr.preview(body.trigger ?? undefined);
-      return { preview };
-    },
-    {
-      body: t.Object({
-        trigger: t.Optional(triggerSchema),
+      params: t.Object({
+        id: t.String(),
       }),
       detail: { tags: ['hooks'] },
     }
   )
-  .post('/validate', async ({ user, body, set }) => {
-      if (!user) {
-        set.status = 401;
-        return { error: 'Authentication required' };
+
+  // Enable/disable hook
+  .post(
+    '/:id/toggle',
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
+        return { error: 'Not authenticated' };
       }
-      const mgr = getHookManager();
-      const result = mgr.validate(body);
-      return { result };
+
+      const existing = await scopedRepos(principal).hooks.findById(params.id);
+      if (!existing) {
+        return { error: 'Hook not found' };
+      }
+
+      const hookManager = getHookManager();
+      const success = await hookManager.setEnabled(params.id, body.enabled);
+      return { success, enabled: body.enabled };
     },
     {
+      params: t.Object({
+        id: t.String(),
+      }),
       body: t.Object({
-        name: t.Optional(t.String()),
-        trigger: t.Optional(triggerSchema),
-        config: t.Optional(configSchema),
-        conditions: t.Optional(t.Array(conditionSchema)),
-        actions: t.Optional(t.Array(actionSchema)),
+        enabled: t.Boolean(),
+      }),
+      detail: { tags: ['hooks'] },
+    }
+  )
+
+  // Get hook suggestions based on configured integrations
+  .get(
+    '/suggestions',
+    async ({ user }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const suggestions = await getHookSuggestions(user.id);
+
+      // Filter out suggestions that match existing hooks
+      const hookManager = getHookManager();
+      const existingHooks = await hookManager.getUserHooks(user.id);
+      const existingNames = new Set(existingHooks.map(h => h.name));
+      const filtered = suggestions.filter(s => !existingNames.has(s.name));
+
+      return { suggestions: filtered };
+    },
+    { detail: { tags: ['hooks'] } },
+  )
+
+  // Apply a hook suggestion (create hook from template)
+  .post(
+    '/suggestions/:suggestionId/apply',
+    async ({ user, params }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const suggestions = await getHookSuggestions(user.id);
+      const suggestion = suggestions.find(s => s.id === params.suggestionId);
+      if (!suggestion) return { error: 'Suggestion not found' };
+
+      if (!(VALID_TRIGGERS as readonly string[]).includes(suggestion.trigger)) return { error: `Invalid trigger type: ${suggestion.trigger}` };
+      if (!(VALID_ACTIONS as readonly string[]).includes(suggestion.action)) return { error: `Invalid action type: ${suggestion.action}` };
+
+      const hookManager = getHookManager();
+      const hook = await hookManager.createHook({
+        userId: user.id,
+        name: suggestion.name,
+        description: suggestion.description,
+        trigger: suggestion.trigger as any,
+        triggerConfig: suggestion.triggerConfig,
+        action: suggestion.action as any,
+        actionConfig: suggestion.actionConfig,
+        isEnabled: false, // Create disabled, user enables manually
+      });
+
+      return hook;
+    },
+    {
+      params: t.Object({ suggestionId: t.String() }),
+      detail: { tags: ['hooks'] },
+    },
+  )
+
+  // Get execution history for a hook
+  .get(
+    '/:id/executions',
+    async ({ user, principal, params, query }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+
+      const hook = await scopedRepos(principal).hooks.findById(params.id);
+      if (!hook) return { error: 'Hook not found' };
+
+      const limit = query.limit ? parseInt(query.limit, 10) : 50;
+      const offset = query.offset ? parseInt(query.offset, 10) : 0;
+
+      const hookManager = getHookManager();
+      const { executions, total } = await hookManager.getExecutions({
+        hookId: params.id,
+        limit,
+        offset,
+      });
+
+      return { executions, total };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: t.Object({
+        limit: t.Optional(t.String()),
+        offset: t.Optional(t.String()),
+      }),
+      detail: { tags: ['hooks'] },
+    }
+  )
+
+  // Test hook (trigger manually)
+  .post(
+    '/:id/test',
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) {
+        return { error: 'Not authenticated' };
+      }
+
+      const hook = await scopedRepos(principal).hooks.findById(params.id);
+      if (!hook) {
+        return { error: 'Hook not found' };
+      }
+
+      const hookManager = getHookManager();
+      // Trigger the hook with test context
+      const results = await hookManager.trigger(
+        { type: hook.trigger, data: body.data || {}, timestamp: new Date() },
+        body.context || {}
+      );
+
+      return { results };
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+      body: t.Object({
+        data: t.Optional(t.Any()),
+        context: t.Optional(t.Any()),
+      }),
+      detail: { tags: ['hooks'] },
+    }
+  )
+
+  // Get all execution history (across all hooks and recurring tasks for this user)
+  .get(
+    '/executions/all',
+    async ({ user, query }) => {
+      if (!user) return { error: 'Not authenticated' };
+
+      const db = getDb();
+      const limit = query.limit ? parseInt(query.limit, 10) : 50;
+      const offset = query.offset ? parseInt(query.offset, 10) : 0;
+
+      // Get IDs of user's hooks and recurring tasks
+      const userHooks = await db.select({ id: hooksTable.id }).from(hooksTable).where(eq(hooksTable.userId, user.id));
+      const userTasks = await db.select({ id: recurringTasks.id }).from(recurringTasks).where(eq(recurringTasks.userId, user.id));
+
+      const hookIds = userHooks.map(h => h.id);
+      const taskIds = userTasks.map(t => t.id);
+
+      if (hookIds.length === 0 && taskIds.length === 0) {
+        return { executions: [], total: 0 };
+      }
+
+      // Build conditions
+      const conditions = [];
+      if (hookIds.length > 0) {
+        conditions.push(sql`${hookExecutions.hookId} = ANY(ARRAY[${sql.join(hookIds.map(id => sql`${id}::uuid`), sql`, `)}])`);
+      }
+      if (taskIds.length > 0) {
+        conditions.push(sql`${hookExecutions.recurringTaskId} = ANY(ARRAY[${sql.join(taskIds.map(id => sql`${id}::uuid`), sql`, `)}])`);
+      }
+
+      const where = conditions.length === 1 ? conditions[0] : or(...conditions);
+
+      const [executions, countResult] = await Promise.all([
+        db
+          .select({
+            id: hookExecutions.id,
+            hookId: hookExecutions.hookId,
+            recurringTaskId: hookExecutions.recurringTaskId,
+            source: hookExecutions.source,
+            status: hookExecutions.status,
+            triggerType: hookExecutions.triggerType,
+            actionType: hookExecutions.actionType,
+            result: hookExecutions.result,
+            error: hookExecutions.error,
+            durationMs: hookExecutions.durationMs,
+            triggerContext: hookExecutions.triggerContext,
+            createdAt: hookExecutions.createdAt,
+            hookName: hooksTable.name,
+          })
+          .from(hookExecutions)
+          .leftJoin(hooksTable, eq(hookExecutions.hookId, hooksTable.id))
+          .where(where)
+          .orderBy(desc(hookExecutions.createdAt))
+          .limit(limit)
+          .offset(offset),
+        db
+          .select({ count: sql`count(*)::int` })
+          .from(hookExecutions)
+          .where(where),
+      ]);
+
+      return { executions, total: (countResult[0]?.count as number) || 0 };
+    },
+    {
+      query: t.Object({
+        limit: t.Optional(t.String()),
+        offset: t.Optional(t.String()),
       }),
       detail: { tags: ['hooks'] },
     }
