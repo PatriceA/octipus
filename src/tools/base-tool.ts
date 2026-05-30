@@ -168,8 +168,9 @@ export abstract class BaseTool {
 
     // Inject secrets if needed
     let processedArgs = args;
+    const resolvedSecretValues: string[] = [];
     if (options?.injectSecrets !== false) {
-      processedArgs = await this.injectSecretsInArgs(args, context.userId);
+      processedArgs = await this.injectSecretsInArgs(args, context.userId, resolvedSecretValues);
     }
 
     // Execute the tool
@@ -178,6 +179,26 @@ export abstract class BaseTool {
     try {
       const result = await execute(processedArgs, toolContext);
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
+
+      // Egress control (M2): scrub any resolved secret value from the result so
+      // a resolved {{secret:NAME}} cannot be echoed back to the model or logs.
+      // No-op when nothing was resolved; non-serializable results are left as-is
+      // (they aren't stringified into model context here).
+      if (resolvedSecretValues.length > 0) {
+        try {
+          const serialized = JSON.stringify(result);
+          const redacted = redactSecretValues(serialized, resolvedSecretValues);
+          if (redacted !== serialized) {
+            toolLogger.warn(
+              { toolId: this.id, tool: toolName },
+              'Redacted resolved secret value(s) from tool output'
+            );
+            return JSON.parse(redacted);
+          }
+        } catch {
+          /* non-serializable result — nothing to redact */
+        }
+      }
       return result;
     } catch (error) {
       if (isCancellationError(error)) {
@@ -206,27 +227,33 @@ export abstract class BaseTool {
    */
   private async injectSecretsInArgs(
     args: Record<string, unknown>,
-    userId: string
+    userId: string,
+    resolvedValues?: string[]
   ): Promise<Record<string, unknown>> {
     const result: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(args)) {
-      result[key] = await this.injectIntoValue(value, userId);
+      result[key] = await this.injectIntoValue(value, userId, resolvedValues);
     }
 
     return result;
   }
 
-  private async injectIntoValue(value: unknown, userId: string): Promise<unknown> {
+  private async injectIntoValue(
+    value: unknown,
+    userId: string,
+    resolvedValues?: string[]
+  ): Promise<unknown> {
     if (typeof value === 'string') {
-      const { content } = await injectSecrets(value, { userId, toolId: this.id });
+      const { content, resolvedValues: resolved } = await injectSecrets(value, { userId, toolId: this.id });
+      if (resolvedValues && resolved.length > 0) resolvedValues.push(...resolved);
       return content;
     }
     if (Array.isArray(value)) {
-      return Promise.all(value.map((item) => this.injectIntoValue(item, userId)));
+      return Promise.all(value.map((item) => this.injectIntoValue(item, userId, resolvedValues)));
     }
     if (typeof value === 'object' && value !== null) {
-      return this.injectSecretsInArgs(value as Record<string, unknown>, userId);
+      return this.injectSecretsInArgs(value as Record<string, unknown>, userId, resolvedValues);
     }
     return value;
   }
