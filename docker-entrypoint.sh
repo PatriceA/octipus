@@ -28,6 +28,30 @@ NEXT_PID=$!
   done
 ) &
 
-# Start backend (foreground — main process)
+# Start backend in background as well so we can supervise both processes.
 cd /app
-exec bun run src/index.ts
+bun run src/index.ts &
+BACKEND_PID=$!
+
+# Forward termination to both children on container stop.
+term() {
+  kill -TERM "$NEXT_PID" "$BACKEND_PID" 2>/dev/null || true
+}
+trap term TERM INT
+
+# Supervise: if EITHER the web frontend or the backend exits, tear the
+# container down so the restart policy (compose/k8s) brings it back
+# cleanly. Previously the backend ran as the foreground process and a
+# crashed web UI left the container reporting "healthy" with a dead UI.
+while kill -0 "$NEXT_PID" 2>/dev/null && kill -0 "$BACKEND_PID" 2>/dev/null; do
+  sleep 5
+done
+
+if kill -0 "$BACKEND_PID" 2>/dev/null; then
+  echo "[octipus] web frontend exited — shutting down container" >&2
+else
+  echo "[octipus] backend exited — shutting down container" >&2
+fi
+
+term
+exit 1

@@ -23,6 +23,11 @@ import { logger } from '@/utils/logger';
 async function main() {
   logger.info('Starting Octipus...');
 
+  // Claim process signal ownership before starting the gateway so it doesn't
+  // also register SIGTERM/SIGINT — otherwise two handlers race their exit(0)
+  // and truncate each other's async cleanup.
+  process.env.OCTIPUS_SIGNALS_OWNED = '1';
+
   try {
     // Initialize vault first — gateway.start() runs the KB self-check which
     // exercises the embedding provider, and that provider needs the vault to
@@ -243,8 +248,12 @@ async function main() {
 
     logger.info('Octipus started successfully');
 
-    // Handle graceful shutdown
+    // Handle graceful shutdown. Idempotent: SIGTERM immediately followed by
+    // SIGINT (or a double Ctrl-C) must not run the teardown twice.
+    let shuttingDown = false;
     const shutdown = async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       logger.info('Shutting down...');
 
       // Stop all running agents (kills CLI child processes)
@@ -261,6 +270,15 @@ async function main() {
       try {
         const { getExtensionRegistry } = await import('@/extensions');
         await getExtensionRegistry().disposeAll();
+      } catch {
+        // registry may not have been initialized
+      }
+
+      // Dispose tools that hold long-lived resources (e.g. the browser
+      // tool's headless Chromium) before tearing down the rest.
+      try {
+        const { getToolRegistry } = await import('@/tools/registry');
+        await getToolRegistry().shutdownAll();
       } catch {
         // registry may not have been initialized
       }

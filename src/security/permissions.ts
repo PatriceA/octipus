@@ -7,6 +7,7 @@ import {
   type PermissionCondition,
   type PermissionRequest,
   permissionRequests,
+  type RateLimitConfig,
   type ToolPermission,
   toolPermissions,
 } from '@/db/schema/permissions';
@@ -113,7 +114,11 @@ export class PermissionManager {
 
     // Check conditions if any
     if (permission[0]?.conditions && context) {
-      const conditionsResult = this.checkConditions(permission[0].conditions as PermissionCondition[], context);
+      const conditionsResult = await this.checkConditions(
+        permission[0].conditions as PermissionCondition[],
+        context,
+        { userId, toolId, action },
+      );
       if (!conditionsResult.passed) {
         return {
           allowed: false,
@@ -153,10 +158,11 @@ export class PermissionManager {
   /**
    * Check permission conditions
    */
-  private checkConditions(
+  private async checkConditions(
     conditions: PermissionCondition[],
-    context: Record<string, unknown>
-  ): { passed: boolean; reason?: string } {
+    context: Record<string, unknown>,
+    identity: { userId: string; toolId: string; action: string }
+  ): Promise<{ passed: boolean; reason?: string }> {
     for (const condition of conditions) {
       switch (condition.type) {
         case 'path_pattern': {
@@ -204,8 +210,19 @@ export class PermissionManager {
         }
 
         case 'rate_limit': {
-          // Rate limiting would need to be implemented with Redis
-          // For now, pass through
+          const cfg = condition.value as RateLimitConfig;
+          if (!cfg || !Number.isFinite(cfg.maxRequests) || !Number.isFinite(cfg.windowMs) || cfg.maxRequests <= 0 || cfg.windowMs <= 0) {
+            // Fail loud: a misconfigured rate-limit policy must not silently
+            // grant access (DESIGN.md rule #1).
+            return { passed: false, reason: 'Invalid rate_limit condition (maxRequests/windowMs)' };
+          }
+          const { getRateLimiter } = await import('./rate-limiter');
+          const key = `perm:rl:${identity.userId}:${identity.toolId}:${identity.action}`;
+          const windowSecs = Math.max(1, Math.ceil(cfg.windowMs / 1000));
+          const result = await getRateLimiter().check(key, cfg.maxRequests, windowSecs);
+          if (!result.allowed) {
+            return { passed: false, reason: `Rate limit exceeded (${cfg.maxRequests}/${windowSecs}s); retry in ${result.retryAfter}s` };
+          }
           break;
         }
       }

@@ -11,7 +11,13 @@ export interface ToolContext extends AgentContext {
 
 export interface ToolExecutionOptions {
   requiresPermission?: boolean;
-  permissionAction?: string;
+  /**
+   * Permission action to check. A string is resolved once at registration;
+   * a function is resolved per call against the live args, which lets a tool
+   * escalate to a more dangerous action (e.g. `execute_elevated`) based on the
+   * command being run.
+   */
+  permissionAction?: string | ((args: Record<string, unknown>) => string);
   injectSecrets?: boolean;
 }
 
@@ -123,7 +129,10 @@ export abstract class BaseTool {
     const skipForAutonomousWorker = isAutonomousWorker;
     if (options?.requiresPermission !== false && !skipForSystem && !skipForAutonomousWorker) {
       const permissionManager = getPermissionManager();
-      const action = options?.permissionAction || toolName;
+      const action =
+        typeof options?.permissionAction === 'function'
+          ? options.permissionAction(args)
+          : options?.permissionAction || toolName;
 
       const check = await permissionManager.check(context.userId, this.id, action, args);
 

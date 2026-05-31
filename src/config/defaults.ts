@@ -33,6 +33,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyRpName: 'Octipus',
     passkeyOrigin: 'http://localhost:3000',
     shellSandbox: 'off',
+    vaultDenyUnscopedSecrets: false,
     dockerIsolation: 'off',
   },
   api: {

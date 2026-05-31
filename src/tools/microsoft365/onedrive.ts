@@ -1,4 +1,5 @@
 import type { AgentContext } from '@/core/types';
+import { fetchWithTimeout } from '@/utils/http';
 import { getOAuthManager } from '@/security/oauth';
 import { createParameterSchema } from '../base-tool';
 
@@ -54,7 +55,7 @@ export function registerOneDriveTools(registerTool: RegisterFn, graphApi: ApiFn)
       const token = await getOAuthManager().getValidToken(ctx.userId, 'microsoft');
       if (!token) throw new Error('Microsoft 365 not connected. Connect your Microsoft account in Settings > Integrations.');
 
-      const response = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${args.id}/content`, {
+      const response = await fetchWithTimeout(`https://graph.microsoft.com/v1.0/me/drive/items/${args.id}/content`, {
         headers: { 'Authorization': `Bearer ${token}` },
         redirect: 'follow',
       });
@@ -84,7 +85,7 @@ export function registerOneDriveTools(registerTool: RegisterFn, graphApi: ApiFn)
       const token = await getOAuthManager().getValidToken(ctx.userId, 'microsoft');
       if (!token) throw new Error('Microsoft 365 not connected. Connect your Microsoft account in Settings > Integrations.');
 
-      const response = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/${args.path}:/content`, {
+      const response = await fetchWithTimeout(`https://graph.microsoft.com/v1.0/me/drive/root:/${args.path}:/content`, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' },
         body: args.content,

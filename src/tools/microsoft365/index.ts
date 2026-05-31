@@ -1,4 +1,5 @@
 import type { ToolManifest, } from '@/core/types';
+import { fetchWithTimeout } from '@/utils/http';
 import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
 import { BaseTool, type ToolAvailability } from '../base-tool';
 import { registerCalendarTools } from './calendar';
@@ -51,7 +52,7 @@ export class Microsoft365Tool extends BaseTool {
   private async graphApi(userId: string, method: string, path: string, body?: unknown): Promise<unknown> {
     const token = await getOAuthManager().getValidToken(userId, 'microsoft');
     if (!token) throw new Error('Microsoft 365 not connected. Connect your Microsoft account in Settings > Integrations.');
-    const response = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+    const response = await fetchWithTimeout(`https://graph.microsoft.com/v1.0${path}`, {
       method,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,

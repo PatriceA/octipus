@@ -108,10 +108,15 @@ export async function injectSecrets(
 }
 
 /**
- * Check if content contains secret placeholders
+ * Check if content contains secret placeholders.
+ *
+ * NOTE: `SECRET_PLACEHOLDER_PATTERN` is a global (`/g`) regex, so calling
+ * `.test()` on it directly advances and persists `lastIndex` between calls —
+ * consecutive checks on the same input would alternate true/false. Use a
+ * fresh, non-global matcher here so the result is deterministic.
  */
 export function hasSecretPlaceholders(content: string): boolean {
-  return SECRET_PLACEHOLDER_PATTERN.test(content);
+  return new RegExp(SECRET_PLACEHOLDER_PATTERN.source).test(content);
 }
 
 /**

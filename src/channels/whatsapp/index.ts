@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto';
+import { fetchWithTimeout } from '@/utils/http';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
@@ -365,7 +366,7 @@ export class WhatsAppChannel extends BaseChannel {
   private async callApi(endpoint: string, payload: Record<string, unknown>): Promise<any> {
     const url = `https://graph.facebook.com/v21.0/${this.phoneNumberId}/${endpoint}`;
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.accessToken}`,
@@ -389,7 +390,7 @@ export class WhatsAppChannel extends BaseChannel {
   private async callGraphApi(path: string): Promise<any> {
     const url = `https://graph.facebook.com/v21.0/${path}`;
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: {
         'Authorization': `Bearer ${this.accessToken}`,
       },

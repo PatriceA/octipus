@@ -1,4 +1,5 @@
 import type { ToolManifest, } from '@/core/types';
+import { fetchWithTimeout } from '@/utils/http';
 import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
 import { BaseTool, type ToolAvailability } from '../base-tool';
 import { registerCalendarTools } from './calendar';
@@ -53,7 +54,7 @@ export class GoogleWorkspaceTool extends BaseTool {
   private async googleApi(userId: string, method: string, url: string, body?: unknown): Promise<unknown> {
     const token = await getOAuthManager().getValidToken(userId, 'google');
     if (!token) throw new Error('Google Workspace not connected. Connect your Google account in Settings > Integrations.');
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method,
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,

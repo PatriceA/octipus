@@ -205,7 +205,7 @@ export function createServer() {
           if (masterKey && secureCompare(token, masterKey)) {
             apiLogger.warn(
               { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
-              'MASTER_KEY authentication used — admin user access'
+              'MASTER_KEY used as API bearer (admin access, single-user mode). The master key is the vault root encryption secret — prefer minting a scoped API token (POST /api/tokens) for automation.'
             );
             // Resolve to the first admin user so UUID-typed queries work
             const db = getDb();
