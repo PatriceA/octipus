@@ -272,7 +272,7 @@ export class WebSearchTool extends BaseTool {
     const url = args.url as string;
     const maxLength = (args.max_length as number) || 10000;
 
-    const { validateExternalUrl } = await import('@/utils/sanitize');
+    const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
     const validation = await validateExternalUrl(url);
     if (!validation.valid) {
       return { error: `URL blocked: ${validation.reason}` };
@@ -283,7 +283,14 @@ export class WebSearchTool extends BaseTool {
     const page = await context.newPage();
 
     try {
-      await page.goto(url, { timeout: 20000, waitUntil: 'domcontentloaded' });
+      const response = await page.goto(url, { timeout: 20000, waitUntil: 'domcontentloaded' });
+
+      // Post-connect SSRF check: reject a rebind to a private IP that happened
+      // between validation and this navigation (Playwright can't be IP-pinned).
+      const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
+      if (!addrCheck.ok) {
+        return { error: `URL blocked: ${addrCheck.reason}` };
+      }
 
       // Wait briefly for dynamic content
       await page.waitForTimeout(1000);

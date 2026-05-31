@@ -2,13 +2,25 @@ import dns from 'node:dns';
 
 const DEFAULT_MAX_LENGTH = 50_000;
 
+export interface UrlValidation {
+  valid: boolean;
+  reason?: string;
+  /**
+   * The public IPs the hostname resolved to during validation. Present only
+   * when `valid` and the host was a DNS name (empty for IP-literal URLs, which
+   * carry the address in the URL itself). Callers pin their connection to one
+   * of these to close the DNS-rebinding (TOCTOU) gap — see {@link fetchGuarded}.
+   */
+  addresses?: string[];
+}
+
 /**
  * Validate a URL against SSRF attacks.
  * Rejects private/reserved IPs, non-http(s) schemes, and localhost.
  */
 export async function validateExternalUrl(
   url: string
-): Promise<{ valid: boolean; reason?: string }> {
+): Promise<UrlValidation> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -65,10 +77,65 @@ export async function validateExternalUrl(
     }
   }
 
-  // NOTE: callers re-resolve at connect time (fetch/page.goto), so a malicious
-  // resolver can still rebind to a private IP between this check and the
-  // connection (TOCTOU). Connect-time pinning is tracked as a follow-up.
-  return { valid: true };
+  // Return the vetted addresses so callers can pin the connection to one of
+  // them (see fetchGuarded) rather than re-resolving — which is what closes the
+  // DNS-rebinding (TOCTOU) gap where a malicious resolver answers with a public
+  // IP here and a private one at connect time.
+  return { valid: true, addresses };
+}
+
+/**
+ * Assert that a concrete connected IP (e.g. from Playwright's
+ * `response.serverAddr()`) is public. Defense-in-depth for connection paths
+ * that can't be IP-pinned: verify *after* connecting and reject a rebind.
+ */
+export function assertPublicAddress(ip: string | null | undefined): { ok: boolean; reason?: string } {
+  if (!ip) return { ok: true }; // nothing to check (e.g. served from cache)
+  if (isPrivateIP(ip)) return { ok: false, reason: `Connected to private/reserved IP ${ip}` };
+  return { ok: true };
+}
+
+/**
+ * SSRF-safe fetch. Validates the URL, then pins the connection to a vetted IP
+ * so the host is never re-resolved between check and connect (closes DNS
+ * rebinding). For https, SNI + Host are kept as the original hostname so TLS
+ * cert validation is unchanged. Throws on a blocked URL.
+ */
+export async function fetchGuarded(url: string, init: RequestInit = {}): Promise<Response> {
+  const validation = await validateExternalUrl(url);
+  if (!validation.valid) {
+    throw new Error(`URL blocked (SSRF guard): ${validation.reason}`);
+  }
+
+  const parsed = new URL(url);
+  const addresses = validation.addresses ?? [];
+  // IP-literal URLs have no resolved addresses — they were vetted directly and
+  // carry the address in the URL, so there is nothing to re-resolve.
+  if (addresses.length === 0) {
+    return fetch(url, init);
+  }
+
+  const pinnedIp = addresses[0];
+  const host = parsed.hostname;
+  // Bracket IPv6 literals in the URL authority.
+  const ipAuthority = pinnedIp.includes(':') ? `[${pinnedIp}]` : pinnedIp;
+  const pinnedUrl = new URL(url);
+  pinnedUrl.hostname = ipAuthority;
+
+  const headers = new Headers(init.headers);
+  if (!headers.has('host')) headers.set('host', parsed.host);
+
+  const pinnedInit: RequestInit & { tls?: { serverName: string } } = {
+    ...init,
+    headers,
+  };
+  if (parsed.protocol === 'https:') {
+    // Keep correct SNI + cert hostname verification against the real host while
+    // the socket goes to the vetted IP (Bun-specific tls option).
+    pinnedInit.tls = { serverName: host };
+  }
+
+  return fetch(pinnedUrl.toString(), pinnedInit);
 }
 
 /** True for a clean dotted-quad IPv4 or a hex-grouped IPv6 literal. */
