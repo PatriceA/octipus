@@ -1,3 +1,9 @@
+// Canonical, dependency-free definition shared with the backend (M19). Imported
+// for local use (UserProfile.channelBindings) and re-exported so existing
+// `import { ChannelBinding } from '@/lib/types/settings'` consumers keep working.
+import type { ChannelBinding } from '../../../src/shared/types';
+export type { ChannelBinding };
+
 export interface UserProfile {
   id: string;
   username: string;
@@ -12,14 +18,6 @@ export interface UserProfile {
     defaultModel?: string;
     timezone?: string;
   };
-}
-
-export interface ChannelBinding {
-  channelType: string;
-  channelUserId: string;
-  channelUserName?: string;
-  isVerified: boolean;
-  createdAt: string;
 }
 
 export interface HealthStatus {
