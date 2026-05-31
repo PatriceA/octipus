@@ -13,6 +13,12 @@ export interface InjectionResult {
   content: string;
   injectedSecrets: string[];
   errors: string[];
+  /**
+   * The actual secret values that were resolved into `content`. Callers use
+   * these to redact the values from tool output/logs so a resolved secret
+   * can't be echoed back to the model (egress control). Never logged.
+   */
+  resolvedValues: string[];
 }
 
 /**
@@ -26,6 +32,7 @@ export async function injectSecrets(
 ): Promise<InjectionResult> {
   const vault = getVault();
   const injectedSecrets: string[] = [];
+  const resolvedValues: string[] = [];
   const errors: string[] = [];
 
   // Find all placeholders
@@ -75,6 +82,7 @@ export async function injectSecrets(
 
       replacements.set(fullMatch, value);
       injectedSecrets.push(secretName);
+      resolvedValues.push(value);
 
       securityLogger.debug(
         { userId: context.userId, secretName, toolId: context.toolId },
@@ -104,7 +112,23 @@ export async function injectSecrets(
     content: result,
     injectedSecrets,
     errors,
+    resolvedValues,
   };
+}
+
+/**
+ * Redact any resolved secret values from arbitrary content (e.g. a tool's
+ * output before it is returned to the model or logged). Prevents a resolved
+ * `{{secret:…}}` value from being echoed back out — the egress half of the
+ * injection contract. No-op when no secrets were resolved.
+ */
+export function redactSecretValues(content: string, resolvedValues: string[]): string {
+  if (resolvedValues.length === 0) return content;
+  let out = content;
+  for (const value of resolvedValues) {
+    if (value) out = out.split(value).join('[REDACTED_SECRET]');
+  }
+  return out;
 }
 
 /**
