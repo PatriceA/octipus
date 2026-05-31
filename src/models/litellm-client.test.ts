@@ -201,6 +201,12 @@ afterAll(() => {
   mock.module('@/models/providers', () => realProviders);
   mock.module('@/models/model-registry', () => realRegistry);
   mock.module('openai', () => realOpenAIMod);
+  // Several tests here call resetConfig(), leaving the config cache cleared (or
+  // loaded from a temporarily mutated env). Reset once more so the *next* test
+  // file in the same worker re-derives a clean config from env on first
+  // getConfig() rather than inheriting a half-mutated cache — the root of the
+  // swarm-test ordering flake (T1).
+  (realConfig as { resetConfig: () => void }).resetConfig();
 });
 
 describe('LiteLLMClient — constructor', () => {
