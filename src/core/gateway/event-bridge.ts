@@ -1,3 +1,6 @@
+import type { AgentEvent } from '@/core/agent-base';
+import type { OrchestratorEvent } from '@/core/orchestrator/service';
+import type { PermissionRequestEvent } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';
 
@@ -15,7 +18,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const { getOrchestratorService } = require('@/core/orchestrator');
     const orchestrator = getOrchestratorService();
 
-    const unsubOrch = orchestrator.onEvent((event: any) => {
+    const unsubOrch = orchestrator.onEvent((event: OrchestratorEvent) => {
       hub.publishEvent({
         type: mapOrchestratorEventType(event.type),
         source: 'orchestrator',
@@ -36,7 +39,14 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const { getAgentManager } = require('@/core/agent-manager');
     const agentManager = getAgentManager();
 
-    const unsubAgent = agentManager.onEvent((event: any) => {
+    const unsubAgent = agentManager.onEvent((event: AgentEvent) => {
+      // AgentEvent carries { type, agentId, data, timestamp } — no userId/
+      // sessionId (those are undefined here; agent lifecycle events reach
+      // clients via the orchestrator bridge's worker_spawned/worker_completed
+      // → agent.spawned/agent.completed mapping above). The worker's emitted
+      // `type` union is thought|action|observation|error|complete|
+      // status_change|permission_request.
+
       // Filter `thought` events down to the iteration-update sub-shape so
       // chats and TUIs can show a "iter N/M" tick while the agent is
       // still reasoning. The other `thought` payloads (free-form chain-
@@ -47,29 +57,20 @@ export function connectEventBridge(hub: GatewayHub): () => void {
         if (data?.type === 'iteration_update' && typeof data.iteration === 'number') {
           hub.publishEvent({
             type: 'agent.iteration',
-            source: `agent:${event.agentId || 'unknown'}`,
-            userId: event.userId,
-            sessionId: event.sessionId,
+            source: `agent:${event.agentId}`,
             payload: { agentId: event.agentId, iteration: data.iteration },
           });
         }
         return;
       }
-      const subtype = event.type === 'spawned' ? 'agent.spawned'
-        : event.type === 'completed' ? 'agent.completed'
-        : event.type === 'stopped' ? 'agent.stopped'
-        // 'action' carries the tool-call stream payload — bridge it as
-        // its own subtype so the TUI (and any other `/gateway` client)
-        // can match it instead of fishing through the generic
-        // `agent.event` bucket.
-        : event.type === 'action' ? 'agent.action'
-        : 'agent.event';
+      // 'action' carries the tool-call stream payload — bridge it as its own
+      // subtype so the TUI (and any other `/gateway` client) can match it
+      // instead of fishing through the generic `agent.event` bucket.
+      const subtype = event.type === 'action' ? 'agent.action' : 'agent.event';
       hub.publishEvent({
         type: subtype,
-        source: `agent:${event.agentId || 'unknown'}`,
-        userId: event.userId,
-        sessionId: event.sessionId,
-        payload: event.data || event,
+        source: `agent:${event.agentId}`,
+        payload: event.data ?? event,
       });
     });
 
@@ -84,7 +85,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const { getPermissionManager } = require('@/security/permissions');
     const permissionManager = getPermissionManager();
 
-    const unsubPerm = permissionManager.onRequest((request: any) => {
+    const unsubPerm = permissionManager.onRequest((request: PermissionRequestEvent) => {
       // Field names must match `PermissionManager.emitRequest` in
       // `src/security/permissions.ts` — the emitter sends `requestId`,
       // `toolName`, and `args`. Reading `request.id`/`request.context` here

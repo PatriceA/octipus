@@ -5,7 +5,7 @@ import { getAgentManager } from '@/core/agent-manager';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { getOrchestratorService } from '@/core/orchestrator';
 import { getSessionManager } from '@/security/auth/session';
-import { getPermissionManager } from '@/security/permissions';
+import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { getBrowserBridge } from './browser-bridge';
@@ -392,7 +392,7 @@ export function setupWebSocket(app: Elysia): void {
       // existed at connect time reached this endpoint. New `permission_request`
       // events fired during the session were dropped, so the global permission
       // banner on non-chat pages never lit up.
-      const unsubscribe = permissionManager.onRequest?.((request: Record<string, unknown>) => {
+      const unsubscribe = permissionManager.onRequest?.((request: PermissionRequestEvent) => {
         if (request.userId !== session.userId) return;
         try {
           ws.send(JSON.stringify({
