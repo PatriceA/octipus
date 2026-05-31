@@ -29,18 +29,25 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
       const expertRole = (body as any)?.role ?? 'general';
       const systemPrompt = (body as any)?.systemPrompt ?? proposal.draftPromptTemplate;
 
-      const [expert] = await db.insert(experts).values({
-        userId: proposal.userId,
-        name: expertName,
-        description: proposal.description,
-        role: expertRole,
-        systemPrompt,
-        isSystem: false,
-      }).returning();
+      // Atomic: create the expert and mark the proposal promoted in one
+      // transaction. Without it, a failure on the status update would leave an
+      // orphan expert with the proposal still 'pending' (re-approvable → dupes).
+      const expert = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(experts).values({
+          userId: proposal.userId,
+          name: expertName,
+          description: proposal.description,
+          role: expertRole,
+          systemPrompt,
+          isSystem: false,
+        }).returning();
 
-      await db.update(skillProposals)
-        .set({ status: 'promoted' })
-        .where(eq(skillProposals.id, params.id));
+        await tx.update(skillProposals)
+          .set({ status: 'promoted' })
+          .where(eq(skillProposals.id, params.id));
+
+        return created;
+      });
 
       coreLogger.info({ proposalId: params.id, expertId: expert?.id }, 'Skill proposal promoted to expert');
       return { promoted: true, expert };
