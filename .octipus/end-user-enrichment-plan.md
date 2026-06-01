@@ -6,10 +6,17 @@
 > Odysseus (8.6k★) / opencode comparison — they out-adopt us on first-run UX and
 > breadth of *destinations a non-developer opens daily*, not on engineering.
 >
-> This is the umbrella plan. Each feature below has (or gets) its own detailed
-> design note; the workspace/work-stream trio is already specced in
-> `end-user-ux-design.md`. Owners decide sequencing — features are ordered by
-> value-to-effort with dependencies called out.
+> This is the umbrella plan. Each feature below has its own detailed design
+> note (all written as of 2026-06-01):
+> - Work stream + file view + chat/work split → `end-user-ux-design.md`
+> - Hardware-aware onboarding → `hardware-onboarding-design.md`
+> - Deep Research → `deep-research-design.md`
+> - Reader → `reader-design.md`
+> - Tasks/TODOs → `tasks-todos-design.md`
+> - Email (triage-lite) → `email-triage-design.md`
+>
+> Owners decide sequencing — features are ordered by value-to-effort with
+> dependencies called out.
 
 ## North star
 Turn Octipus from "a platform builders configure" into "a workspace a person
