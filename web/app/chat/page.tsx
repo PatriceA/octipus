@@ -8,6 +8,7 @@ import MessageTimeline, {
   type TeamState,
   type TrackedAgent,
 } from '@/components/chat/message-timeline';
+import FileViewer from '@/components/chat/file-viewer';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
@@ -112,6 +113,8 @@ export default function ChatPage() {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
+  // In-chat file view (Thread 2): the path currently open in the FileViewer.
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   // Append-only queue of swarm events from the WS stream. We used to hold the
@@ -1391,6 +1394,15 @@ export default function ChatPage() {
         onCreate={handleCreateSession}
       />
 
+      {/* In-chat file view (Thread 2) */}
+      {openFilePath && activeSessionId && (
+        <FileViewer
+          sessionId={activeSessionId}
+          path={openFilePath}
+          onClose={() => setOpenFilePath(null)}
+        />
+      )}
+
       {/* Left panel — Session list */}
       <div className="w-64 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
         <SessionList
@@ -1443,6 +1455,8 @@ export default function ChatPage() {
             maxTokenBudget={maxTokenBudget}
             trackedAgents={trackedAgents}
             teams={teams}
+            sessionFiles={activeState?.fileChanges}
+            onOpenFile={setOpenFilePath}
             connectionStatus={connectionStatus}
             selectedModel={selectedModel}
             models={models}
