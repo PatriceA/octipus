@@ -61,6 +61,7 @@ async function runTestUnit(
       confidence: classification.confidence,
       complexity: classification.complexity,
       topic: classification.topic,
+      outputMode: classification.outputMode,
     },
     // In unit mode, routedRole comes from classifier topic heuristic
     routedRole: classification.topic,

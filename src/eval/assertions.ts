@@ -43,6 +43,23 @@ register('classification', (assertion, ctx) => {
   };
 });
 
+register('output_mode', (assertion, ctx) => {
+  const expected = String(assertion.value);
+  // Absent ⇒ inline, mirroring the runtime default.
+  const actual = ctx.classification?.outputMode || 'inline';
+  const passed = actual === expected;
+  return {
+    type: 'output_mode',
+    passed,
+    expected,
+    actual,
+    score: passed ? 1 : 0,
+    message: passed
+      ? `Output mode "${actual}"`
+      : `Expected output mode "${expected}", got "${actual}"`,
+  };
+});
+
 register('confidence_above', (assertion, ctx) => {
   const threshold = Number(assertion.value) || 0;
   const actual = ctx.classification?.confidence ?? 0;

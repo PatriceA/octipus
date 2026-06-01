@@ -15,6 +15,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
+import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
@@ -60,6 +61,8 @@ export async function handleExpertMessage(
    * preset-selected turn still operates on the live file — design Thread 2.
    */
   attachedFilesBlock = '',
+  /** Chat/work split (Thread 3): inline vs file deliverable directive. */
+  outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
 ): Promise<{ response: string; sessionId: string; classification: import('./types').MessageClassification; metadata?: import('./types').ResponseMetadata }> {
   const { getDb } = await import('@/db/postgres');
   const db = getDb();
@@ -143,6 +146,9 @@ export async function handleExpertMessage(
     if (attachedFilesBlock) {
       expertPrompt += attachedFilesBlock;
     }
+
+    // Chat/work split (Thread 3): deliver inline vs as a file.
+    expertPrompt += buildOutputDirective(outputDirective.mode, outputDirective.forced);
 
     // Domain knowledge from skills
     const skillIds = (expert.skillIds as string[]) || [];

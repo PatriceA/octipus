@@ -258,6 +258,8 @@ export function setupWebSocket(app: Elysia): void {
               if (refs.success) fileRefs = refs.data;
               else apiLogger.warn({ issues: refs.error.issues }, 'Ignoring malformed chat fileRefs');
             }
+            // Chat/work split: per-message deliverable override (inline | file).
+            const outputMode = parsed.outputMode === 'inline' || parsed.outputMode === 'file' ? parsed.outputMode : undefined;
 
             // Route through orchestrator (commands are handled inside handleMessage)
             const orchestrator = getOrchestratorService();
@@ -269,6 +271,7 @@ export function setupWebSocket(app: Elysia): void {
                 'webchat',
                 parsed.expertId,
                 fileRefs,
+                outputMode,
               );
               const resolvedId = result.sessionId || sessionId;
               ws.send(JSON.stringify({

@@ -26,6 +26,7 @@ import { getOrchestratorHooks } from './hooks';
 import { buildSecurityReminder, guardInput } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { ModelSelector } from './model-selector';
+import { buildOutputDirective } from './output-directive';
 import { guardOutput } from './output-guard';
 import { filterPII } from './pii-filter';
 import { getRoleConfig } from './roles';
@@ -100,6 +101,12 @@ export class OrchestratorService {
      * so the agent operates on the live file, not a stale transcript copy.
      */
     attachedFiles: AttachedFileRef[] = [],
+    /**
+     * Chat/work split (Thread 3): the user's per-message override of the
+     * deliverable mode. When set it wins over the classifier heuristic;
+     * undefined ⇒ use the heuristic.
+     */
+    forcedOutputMode?: 'inline' | 'file',
   ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
@@ -335,7 +342,13 @@ export class OrchestratorService {
 
       // Expert bypass
       if (expertId) {
-        const expertResult = await handleExpertMessage(expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags, workspaceId, attachedFilesBlock);
+        // Chat/work split (Thread 3): preset turns honor the toggle too — the
+        // forced mode wins, else the classifier heuristic for this message.
+        const expertMode = forcedOutputMode ?? classifyMessage(message).outputMode ?? 'inline';
+        const expertResult = await handleExpertMessage(
+          expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags, workspaceId, attachedFilesBlock,
+          { mode: expertMode, forced: forcedOutputMode !== undefined },
+        );
         const outputCheck = guardOutput(expertResult.response, inputGuard.flags);
         if (outputCheck.action === 'replace') {
           coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced expert response');
@@ -345,8 +358,14 @@ export class OrchestratorService {
       }
 
       const classification = classifyMessage(message);
+      // Chat/work split (Thread 3): resolve the effective deliverable mode (the
+      // per-message toggle wins over the heuristic) and reflect it on the
+      // classification so downstream + the returned value agree.
+      const effectiveOutputMode: 'inline' | 'file' = forcedOutputMode ?? classification.outputMode ?? 'inline';
+      classification.outputMode = effectiveOutputMode;
+      const outputForced = forcedOutputMode !== undefined;
       coreLogger.info(
-        { sessionId, classification: classification.type, confidence: classification.confidence, channel },
+        { sessionId, classification: classification.type, confidence: classification.confidence, outputMode: effectiveOutputMode, channel },
         'Message classified',
       );
 
@@ -420,7 +439,10 @@ export class OrchestratorService {
         })();
       };
 
-      if (classification.type === 'casual' && classification.confidence >= 0.7) {
+      // Chat/work split: a file-mode request (e.g. "write me a poem", which
+      // classifies casual) must reach the orchestrator so a file is actually
+      // produced — don't let the inline fast-path swallow it.
+      if (classification.type === 'casual' && classification.confidence >= 0.7 && effectiveOutputMode !== 'file') {
         // Emit worker_spawned so channel feedback shows a reaction (even for direct responses).
         // Role label is 'octipus' (the persona itself answering casually), NOT a specialist
         // expert — the direct-response path doesn't pick an expert. UI badges treat this as
@@ -473,6 +495,7 @@ export class OrchestratorService {
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext,
         workspaceId,
+        { mode: effectiveOutputMode, forced: outputForced },
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -543,6 +566,8 @@ export class OrchestratorService {
     extraSystemContext: string = '',
     /** Workspace scope inherited by every spawned child. */
     workspaceId: string | null = null,
+    /** Chat/work split (Thread 3): inline vs file deliverable directive. */
+    outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
   ): Promise<{ response: string; agentId: string; sources: string[] }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration(sessionId);
@@ -681,6 +706,10 @@ export class OrchestratorService {
     if (classification.type === 'ambiguous') {
       systemPrompt += `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`;
     }
+
+    // Chat/work split (Thread 3): tell the orchestrator whether to deliver in
+    // chat or as a file. Empty for the default-inline case, so unchanged.
+    systemPrompt += buildOutputDirective(outputDirective.mode, outputDirective.forced);
 
     // Inject workspace awareness
     const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;

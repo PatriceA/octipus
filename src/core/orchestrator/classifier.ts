@@ -28,7 +28,8 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'refactor', 'fix bug', 'fix the bug', 'debug', 'add feature',
     'api endpoint', 'frontend', 'backend', 'component',
     'function', 'class', 'module', 'unit test', 'test suite',
-    'webpack', 'typescript', 'javascript', 'python',
+    'webpack', 'typescript', 'javascript', 'python', 'python script',
+    'matplotlib',
     'rust', 'java', 'css', 'html', 'react', 'next.js',
     'vue', 'angular', 'npm', 'package.json',
     'commit the', 'pull request', 'merge request', 'git status',
@@ -167,10 +168,36 @@ function scoreComplexity(message: string): 'simple' | 'moderate' | 'complex' {
 }
 
 /**
- * Classify a message using keyword heuristics.
- * Returns 'ambiguous' when confidence is too low for a definitive answer.
+ * Document-authoring intent for the chat/work split (Thread 3): an authoring
+ * verb followed (within a short span) by a document-shaped noun. Matches
+ * "write me a poem", "draft a cover letter", "create a project proposal",
+ * "generate a README" — the cases where the answer wants to live in an editable
+ * file rather than as a wall of text in chat. Deliberately conservative: a bare
+ * "build a REST API" or "implement X" has no document noun and stays inline, so
+ * coding/devops routing and file-writing behavior are unchanged.
+ */
+const DOC_AUTHORING_RE =
+  /\b(write|draft|compose|create|generate|make|produce|put together|prepare)\b[^.?!\n]{0,40}\b(poems?|stor(?:y|ies)|essays?|letters?|cover letter|reports?|proposals?|plans?|documents?|docs?|readme|articles?|blog ?posts?|blog|posts?|specs?|specifications?|summary|outline|scripts?|songs?|memos?|resumes?|cv|guides?|tutorials?|changelog|emails?|newsletters?|press release|speech|bio|biography|chapters?|whitepapers?)\b/i;
+
+/**
+ * Heuristic default for the chat/work split. The user can still force a mode
+ * per-message via the composer toggle (applied at runtime in the orchestrator),
+ * and the orchestrator LLM makes the final call — this is just the default.
+ */
+function inferOutputMode(message: string): 'inline' | 'file' {
+  return DOC_AUTHORING_RE.test(message) ? 'file' : 'inline';
+}
+
+/**
+ * Classify a message using keyword heuristics, tagging the chat/work-split
+ * `outputMode`. Returns 'ambiguous' when confidence is too low for a definitive
+ * answer.
  */
 export function classifyMessage(message: string): MessageClassification {
+  return { ...classifyMessageBase(message), outputMode: inferOutputMode(message) };
+}
+
+function classifyMessageBase(message: string): MessageClassification {
   // Strip backticked identifiers before keyword matching. Names like
   // `qa-issues` are user-chosen labels, not intent — without this the bare
   // `qa` keyword (and other short tokens) get spurious matches inside

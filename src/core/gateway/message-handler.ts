@@ -159,6 +159,7 @@ async function handleChatSend(
       context.clientType,
       expertId,
       message.fileRefs,
+      message.outputMode,
     );
 
     // Send response back through gateway

@@ -122,6 +122,10 @@ export default function ChatPage() {
   const attachFile = useCallback((ref: { path: string; version: string }) => {
     setAttachedFiles((prev) => [...prev.filter((f) => f.path !== ref.path), ref].slice(-10));
   }, []);
+  // Chat/work split (Thread 3): per-message deliverable override. 'auto' lets
+  // the classifier/orchestrator decide; 'chat' forces inline; 'file' forces a
+  // file deliverable. Sticky across messages until the user changes it.
+  const [outputMode, setOutputMode] = useState<'auto' | 'chat' | 'file'>('auto');
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   // Append-only queue of swarm events from the WS stream. We used to hold the
@@ -1247,6 +1251,8 @@ export default function ChatPage() {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
     const fileRefs = attachedFiles.length ? attachedFiles : undefined;
+    // Chat/work split override: 'auto' → no override (heuristic decides).
+    const outputModeOverride = outputMode === 'auto' ? undefined : outputMode === 'chat' ? 'inline' : 'file';
 
     // Auto-create a session if none is active
     if (!sid) {
@@ -1310,6 +1316,7 @@ export default function ChatPage() {
           sessionId: sid,
           expertId: selectedPresetId || undefined,
           fileRefs,
+          outputMode: outputModeOverride,
         }));
         if (fileRefs) setAttachedFiles([]);
       };
@@ -1345,7 +1352,7 @@ export default function ChatPage() {
         agentId?: string;
         classification?: { type: string };
         metadata?: MessageMetadata;
-      }>('/chat', { message: userInput, sessionId: sid, expertId: selectedPresetId || undefined, fileRefs });
+      }>('/chat', { message: userInput, sessionId: sid, expertId: selectedPresetId || undefined, fileRefs, outputMode: outputModeOverride });
       if (fileRefs) setAttachedFiles([]);
 
       const responseSid = result.sessionId || sid;
@@ -1480,29 +1487,47 @@ export default function ChatPage() {
 
         {/* Prompt input */}
         <div className="border-t border-outline-variant/10 bg-surface-container p-3">
-          {/* Edit-and-continue: files the next message will carry (live version). */}
-          {attachedFiles.length > 0 && (
-            <div className="mb-2 flex flex-wrap items-center gap-1.5">
-              {attachedFiles.map((f) => (
-                <span
-                  key={f.path}
-                  title={`${f.path} — the agent's next reply will see this file's current contents`}
-                  className="flex items-center gap-1 rounded-full border border-outline-variant/30 bg-surface-container-high px-2 py-0.5 text-xs text-on-surface-variant"
+          {/* Edit-and-continue attachments (left) + chat/work-split toggle (right). */}
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            {attachedFiles.map((f) => (
+              <span
+                key={f.path}
+                title={`${f.path} — the agent's next reply will see this file's current contents`}
+                className="flex items-center gap-1 rounded-full border border-outline-variant/30 bg-surface-container-high px-2 py-0.5 text-xs text-on-surface-variant"
+              >
+                <Paperclip className="h-3 w-3 shrink-0 text-primary" />
+                <span className="max-w-[12rem] truncate font-mono">{f.path.split(/[/\\]/).pop()}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttachedFiles((prev) => prev.filter((p) => p.path !== f.path))}
+                  title="Remove attachment"
+                  className="rounded-full p-0.5 hover:bg-surface-container-highest hover:text-on-surface"
                 >
-                  <Paperclip className="h-3 w-3 shrink-0 text-primary" />
-                  <span className="max-w-[12rem] truncate font-mono">{f.path.split(/[/\\]/).pop()}</span>
-                  <button
-                    type="button"
-                    onClick={() => setAttachedFiles((prev) => prev.filter((p) => p.path !== f.path))}
-                    title="Remove attachment"
-                    className="rounded-full p-0.5 hover:bg-surface-container-highest hover:text-on-surface"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {/* Chat/work split (Thread 3): force where the next answer lands. */}
+            <div className="ml-auto flex items-center gap-0.5 rounded-md border border-outline-variant/30 p-0.5">
+              {(['auto', 'chat', 'file'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setOutputMode(m)}
+                  title={
+                    m === 'auto'
+                      ? 'Auto — let the assistant choose chat vs a file'
+                      : m === 'chat'
+                        ? 'Always answer in chat'
+                        : 'Always produce an editable file'
+                  }
+                  className={`rounded px-2 py-0.5 text-[11px] capitalize ${outputMode === m ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}
+                >
+                  {m}
+                </button>
               ))}
             </div>
-          )}
+          </div>
           <PromptInput
             onSend={sendMessage}
             disabled={isLoading}

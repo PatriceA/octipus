@@ -1,0 +1,93 @@
+name: Chat/Work Split (output mode)
+description: >
+  Verify the classifier's chat/work split heuristic (.octipus/end-user-ux-design.md
+  Thread 3): document-authoring requests default to a file deliverable; questions,
+  chit-chat, and code/infra tasks default to an inline chat answer. This is the
+  DEFAULT only — the composer toggle can force a mode at runtime.
+
+tests:
+  # ── File: explicit document-authoring intent ──────────────────────
+  - id: output-poem-file
+    description: "Write me a poem" → file deliverable
+    input: "Write me a poem about the ocean at night"
+    assertions:
+      - type: output_mode
+        value: file
+    tags: [output-mode, file]
+
+  - id: output-cover-letter-file
+    description: Cover letter drafting → file
+    input: "Draft a cover letter for a senior backend engineer role"
+    assertions:
+      - type: output_mode
+        value: file
+    tags: [output-mode, file]
+
+  - id: output-proposal-file
+    description: Project proposal → file
+    input: "Create a project proposal for migrating our monolith to microservices"
+    assertions:
+      - type: output_mode
+        value: file
+    tags: [output-mode, file]
+
+  - id: output-readme-file
+    description: README generation → file
+    input: "Generate a README for this library"
+    assertions:
+      - type: output_mode
+        value: file
+    tags: [output-mode, file]
+
+  - id: output-report-file
+    description: Report writing → file (and still a writing task)
+    input: "Write a report summarizing this quarter's sales numbers"
+    assertions:
+      - type: output_mode
+        value: file
+      - type: classification
+        value: task
+    tags: [output-mode, file]
+
+  # ── Inline: questions, chit-chat, and code/infra tasks ────────────
+  - id: output-fact-inline
+    description: One-shot factual question → inline
+    input: "What's the capital of France?"
+    assertions:
+      - type: output_mode
+        value: inline
+    tags: [output-mode, inline]
+
+  - id: output-explain-inline
+    description: Explanation request → inline
+    input: "Explain how OAuth2 PKCE works"
+    assertions:
+      - type: output_mode
+        value: inline
+    tags: [output-mode, inline]
+
+  - id: output-greeting-inline
+    description: Casual greeting → inline
+    input: "Thanks, that's great!"
+    assertions:
+      - type: output_mode
+        value: inline
+    tags: [output-mode, inline]
+
+  - id: output-coding-inline
+    description: Coding task defaults inline (it writes files via its own tools, not the content-file directive)
+    input: "Implement a REST API endpoint for user registration with email validation"
+    assertions:
+      - type: output_mode
+        value: inline
+      - type: classification
+        value: task
+    tags: [output-mode, inline]
+
+  - id: output-devops-inline
+    description: Infra task → inline (not a document deliverable)
+    input: "Set up a Docker Compose configuration for our microservices with health checks"
+    assertions:
+      - type: output_mode
+        value: inline
+    tags: [output-mode, inline]

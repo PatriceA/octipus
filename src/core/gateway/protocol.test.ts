@@ -67,6 +67,26 @@ describe('Protocol', () => {
       expect(result.ok).toBe(true);
     });
 
+    test('parses chat.send with an outputMode override', () => {
+      const result = parseClientMessage(JSON.stringify({
+        type: 'chat.send',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: 'write me a poem',
+        outputMode: 'file',
+      }));
+      expect(result.ok).toBe(true);
+    });
+
+    test('rejects chat.send with an invalid outputMode', () => {
+      const result = parseClientMessage(JSON.stringify({
+        type: 'chat.send',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: 'hi',
+        outputMode: 'pdf',
+      }));
+      expect(result.ok).toBe(false);
+    });
+
     test('rejects chat.send with a fileRef missing its path', () => {
       const result = parseClientMessage(JSON.stringify({
         type: 'chat.send',

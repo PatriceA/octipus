@@ -66,6 +66,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           channel,
           body.expertId,
           body.fileRefs,
+          body.outputMode,
         );
 
         return {
@@ -97,6 +98,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           path: t.String(),
           version: t.Optional(t.String()),
         }), { maxItems: 10 })),
+        // Chat/work split (Thread 3): force the deliverable mode for this message.
+        outputMode: t.Optional(t.Union([t.Literal('inline'), t.Literal('file')])),
       }),
       detail: { tags: ['chat'] },
     },

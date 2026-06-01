@@ -143,6 +143,8 @@ export const ChatSendSchema = z.object({
   })).optional(),
   /** Session files to inline (current version) into this turn's context. */
   fileRefs: z.array(FileRefSchema).max(10).optional(),
+  /** Chat/work split (Thread 3): force the deliverable mode for this message. */
+  outputMode: z.enum(['inline', 'file']).optional(),
 });
 
 export const CommandSchema = z.object({

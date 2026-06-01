@@ -10,7 +10,7 @@ import type { Assertion, AssertionType, EvalSuite, EvalTest } from './types';
 const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'routes_to_role', 'uses_tool', 'not_uses_tool',
   'contains', 'not_contains', 'matches_regex',
-  'classification', 'confidence_above',
+  'classification', 'confidence_above', 'output_mode',
   'response_quality', 'latency_under',
   'no_hallucination', 'follows_format', 'token_count_under',
 ]);

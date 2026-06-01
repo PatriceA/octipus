@@ -17,6 +17,7 @@ export type AssertionType =
   | 'matches_regex'
   | 'classification'
   | 'confidence_above'
+  | 'output_mode'
   | 'response_quality'
   | 'latency_under'
   | 'no_hallucination'
@@ -136,6 +137,7 @@ export interface TestExecutionContext {
     confidence: number;
     complexity?: string;
     topic?: string;
+    outputMode?: string;
   };
   routedRole?: string;
   toolsUsed?: string[];
