@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import CodeEditor from '@/components/chat/code-editor';
 import { api } from '@/lib/api';
 
 // In-chat file view (Thread 2): a lightweight reader/editor over the
@@ -199,18 +200,13 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
           )}
 
           {!loading && !error && data?.type === 'text' && (
-            editing ? (
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                spellCheck={false}
-                className="h-[60vh] w-full resize-none bg-[#0d1117] p-3 font-mono text-xs leading-relaxed text-on-surface outline-none"
-              />
-            ) : (
-              <pre className="m-0 overflow-auto bg-[#0d1117] p-3 font-mono text-xs leading-relaxed text-on-surface/90">
-                <code>{data.content || '(empty file)'}</code>
-              </pre>
-            )
+            <CodeEditor
+              value={editing ? draft : data.content}
+              onChange={editing ? setDraft : undefined}
+              editable={editing}
+              filename={path}
+              height="60vh"
+            />
           )}
 
           {!loading && !error && data?.type === 'image' && (
