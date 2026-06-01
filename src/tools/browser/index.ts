@@ -63,14 +63,23 @@ export class BrowserTool extends BaseTool {
         headless: { type: 'boolean', description: 'Run headless', default: true },
       }),
       async (args) => {
-        const { validateExternalUrl } = await import('@/utils/sanitize');
+        const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
         const validation = await validateExternalUrl(args.url as string);
         if (!validation.valid) {
           return { error: `URL blocked: ${validation.reason}` };
         }
 
         const page = await this.getOrCreatePage(args.contextId as string);
-        await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
+        const response = await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
+
+        // Post-connect SSRF check: Playwright can't be IP-pinned, so verify the
+        // address actually connected to wasn't a private IP a rebinding resolver
+        // swapped in between validation and navigation.
+        const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
+        if (!addrCheck.ok) {
+          await page.goto('about:blank').catch(() => {});
+          return { error: `URL blocked: ${addrCheck.reason}` };
+        }
 
         const pageId = this.generatePageId();
         this.pages.set(pageId, page);
@@ -92,14 +101,21 @@ export class BrowserTool extends BaseTool {
         url: { type: 'string', description: 'URL to navigate to', required: true },
       }),
       async (args) => {
-        const { validateExternalUrl } = await import('@/utils/sanitize');
+        const { validateExternalUrl, assertPublicAddress } = await import('@/utils/sanitize');
         const validation = await validateExternalUrl(args.url as string);
         if (!validation.valid) {
           return { error: `URL blocked: ${validation.reason}` };
         }
 
         const page = this.getPage(args.pageId as string);
-        await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
+        const response = await page.goto(args.url as string, { timeout: DEFAULT_TIMEOUT });
+
+        // Post-connect SSRF check (see comment in `open`).
+        const addrCheck = assertPublicAddress((await response?.serverAddr())?.ipAddress);
+        if (!addrCheck.ok) {
+          await page.goto('about:blank').catch(() => {});
+          return { error: `URL blocked: ${addrCheck.reason}` };
+        }
 
         return {
           url: page.url(),

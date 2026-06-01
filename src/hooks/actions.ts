@@ -233,26 +233,29 @@ async function executeWebhook(
     return { success: false, error: 'Webhook URL not configured' };
   }
 
-  const { validateExternalUrl } = await import('@/utils/sanitize');
-  const validation = await validateExternalUrl(url);
-  if (!validation.valid) {
-    return { success: false, error: `Webhook URL blocked: ${validation.reason}` };
-  }
-
   const method = config.webhookMethod || 'POST';
   const headers = config.webhookHeaders || {};
   const body = config.webhookBody
     ? interpolateTemplate(config.webhookBody, context)
     : JSON.stringify(context);
 
-  const response = await fetch(url, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
-    body: method !== 'GET' ? body : undefined,
-  });
+  // fetchGuarded validates the URL against SSRF *and* pins the connection to the
+  // vetted IP so a rebinding resolver can't swap in a private address between
+  // the check and the connect.
+  const { fetchGuarded } = await import('@/utils/sanitize');
+  let response: Response;
+  try {
+    response = await fetchGuarded(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: method !== 'GET' ? body : undefined,
+    });
+  } catch (err) {
+    return { success: false, error: `Webhook URL blocked: ${(err as Error).message}` };
+  }
 
   const responseData = await response.text();
 

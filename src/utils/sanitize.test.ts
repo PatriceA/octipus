@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { safeRegExp, sanitizeToolOutput, validateExternalUrl } from './sanitize';
+import { assertPublicAddress, fetchGuarded, safeRegExp, sanitizeToolOutput, validateExternalUrl } from './sanitize';
 
 describe('validateExternalUrl', () => {
   test('rejects malformed URL', async () => {
@@ -164,5 +164,43 @@ describe('sanitizeToolOutput', () => {
 
   test('number is JSON-stringified', () => {
     expect(sanitizeToolOutput(42)).toBe('42');
+  });
+});
+
+describe('assertPublicAddress (H3 post-connect rebinding check)', () => {
+  test('accepts a public IP', () => {
+    expect(assertPublicAddress('8.8.8.8').ok).toBe(true);
+  });
+  test('accepts null/undefined (nothing to check)', () => {
+    expect(assertPublicAddress(null).ok).toBe(true);
+    expect(assertPublicAddress(undefined).ok).toBe(true);
+  });
+  test('rejects loopback', () => {
+    const r = assertPublicAddress('127.0.0.1');
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/private|reserved/i);
+  });
+  test('rejects RFC1918 + link-local + CGNAT', () => {
+    expect(assertPublicAddress('10.1.2.3').ok).toBe(false);
+    expect(assertPublicAddress('169.254.169.254').ok).toBe(false);
+    expect(assertPublicAddress('100.64.0.1').ok).toBe(false);
+  });
+});
+
+describe('validateExternalUrl returns vetted addresses (H3)', () => {
+  test('public DNS host resolves to addresses for pinning', async () => {
+    const r = await validateExternalUrl('https://one.one.one.one/');
+    expect(r.valid).toBe(true);
+    expect(Array.isArray(r.addresses)).toBe(true);
+    expect((r.addresses ?? []).length).toBeGreaterThan(0);
+  });
+});
+
+describe('fetchGuarded (H3)', () => {
+  test('throws on a blocked (private) URL instead of connecting', async () => {
+    await expect(fetchGuarded('http://127.0.0.1/')).rejects.toThrow(/SSRF guard|private|reserved/i);
+  });
+  test('throws on a disallowed scheme', async () => {
+    await expect(fetchGuarded('file:///etc/passwd')).rejects.toThrow(/SSRF guard|scheme/i);
   });
 });
