@@ -32,13 +32,11 @@ export interface PasskeyCredential {
   createdAt: string;
 }
 
-export interface ChannelBinding {
-  channelType: 'telegram' | 'teams' | 'slack' | 'whatsapp' | 'webchat';
-  channelUserId: string;
-  channelUserName?: string;
-  isVerified: boolean;
-  createdAt: string;
-}
+// Canonical definition lives in the dependency-free shared module so the web UI
+// can import the same type instead of re-declaring it (M19). Imported for local
+// use below and re-exported for existing `from '@/db/schema/users'` consumers.
+import type { ChannelBinding } from '@/shared/types';
+export type { ChannelBinding };
 
 export interface UserPreferences {
   theme?: 'light' | 'dark' | 'system';
