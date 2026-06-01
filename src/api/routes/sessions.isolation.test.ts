@@ -26,6 +26,9 @@ process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
+// Point the workspace root at a throwaway dir so the file-route round-trip
+// test doesn't write into the repo's ./workspace. Set before any getConfig().
+process.env.WORKSPACE_PATH ??= mkdtempSync(join(tmpdir(), 'octipus-sess-iso-ws-'));
 
 let aliceApp: ElysiaLike;
 let bobApp: ElysiaLike;
@@ -93,6 +96,14 @@ async function del(app: ElysiaLike, path: string): Promise<{ status: number; bod
   const res = await app.handle(new Request(`http://localhost${path}`, { method: 'DELETE' }));
   return { status: res.status, body: await res.json() };
 }
+async function put(app: ElysiaLike, path: string, body: unknown): Promise<{ status: number; body: any }> {
+  const res = await app.handle(new Request(`http://localhost${path}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
+  return { status: res.status, body: await res.json() };
+}
 
 describe('GET /api/sessions/:id cross-tenant', () => {
   test('alice cannot read bob’s session — sees the same not-found shape', async () => {
@@ -146,5 +157,40 @@ describe('DELETE /api/sessions/:id cross-tenant', () => {
 
     const verify = await get(bobApp, `/api/sessions/${bobSessionId}`);
     expect(verify.body.id).toBe(bobSessionId);
+  });
+});
+
+describe('GET/PUT /api/sessions/:id/files cross-tenant', () => {
+  test('writing then reading a file round-trips with a version', async () => {
+    const w = await put(bobApp, `/api/sessions/${bobSessionId}/files?path=notes.md`, { content: 'bob notes' });
+    expect(w.status).toBe(200);
+    expect(typeof w.body.version).toBe('string');
+
+    const r = await get(bobApp, `/api/sessions/${bobSessionId}/files?path=notes.md`);
+    expect(r.body.type).toBe('text');
+    expect(r.body.content).toBe('bob notes');
+  });
+
+  test('a stale baseVersion is rejected 409', async () => {
+    await put(bobApp, `/api/sessions/${bobSessionId}/files?path=race.md`, { content: 'v1' });
+    const stale = await put(bobApp, `/api/sessions/${bobSessionId}/files?path=race.md`, {
+      content: 'v2',
+      baseVersion: 'deadbeefdeadbeef',
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('stale_version');
+  });
+
+  test('alice cannot read or write files on bob’s session', async () => {
+    const read = await get(aliceApp, `/api/sessions/${bobSessionId}/files?path=notes.md`);
+    expect(read.body).toEqual({ error: 'Session not found' });
+
+    const write = await put(aliceApp, `/api/sessions/${bobSessionId}/files?path=notes.md`, { content: 'pwned' });
+    expect(write.body).toEqual({ error: 'Session not found' });
+  });
+
+  test('path traversal is rejected', async () => {
+    const r = await get(bobApp, `/api/sessions/${bobSessionId}/files?path=${encodeURIComponent('../../../etc/passwd')}`);
+    expect(r.status).toBe(400);
   });
 });

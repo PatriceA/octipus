@@ -120,6 +120,46 @@ describe('decodeGatewayEvent', () => {
     expect(event.tool.state).toBe('error');
   });
 
+  test('agent.action → tool_call_complete uses the rich title + structured result', () => {
+    const out = decodeGatewayEvent({
+      type: 'agent.action',
+      payload: {
+        data: {
+          type: 'tool_call_complete',
+          name: 'filesystem__read_file',
+          title: 'Read poem.md (3 lines)',
+          status: 'ok',
+          role: 'writing',
+          durationMs: 200,
+          result: { kind: 'text', text: 'roses are red\nviolets are blue' },
+        },
+      },
+    });
+    const toolEvent = out.find((e) => e.kind === 'tool');
+    if (!toolEvent || toolEvent.kind !== 'tool') throw new Error('expected tool');
+    expect(toolEvent.tool.state).toBe('completed');
+    // Row identity is now the human title, not the raw tool name.
+    expect(toolEvent.tool.name).toBe('Read poem.md (3 lines)');
+    expect(toolEvent.tool.preview).toBe('roses are red');
+    // Narration uses the title too.
+    const narration = out.find((e) => e.kind === 'message');
+    if (!narration || narration.kind !== 'message') throw new Error('expected narration');
+    expect(narration.content).toContain('writing arm · Read poem.md (3 lines)');
+  });
+
+  test('agent.action → tool_call_complete falls back to name + resultPreview (old server)', () => {
+    const out = decodeGatewayEvent({
+      type: 'agent.action',
+      payload: {
+        data: { type: 'tool_call_complete', name: 'read_file', status: 'ok', resultPreview: 'legacy preview' },
+      },
+    });
+    const toolEvent = out.find((e) => e.kind === 'tool');
+    if (!toolEvent || toolEvent.kind !== 'tool') throw new Error('expected tool');
+    expect(toolEvent.tool.name).toBe('read_file');
+    expect(toolEvent.tool.preview).toBe('legacy preview');
+  });
+
   test('agent.action → propagates mcpServer badge when present', () => {
     const out = decodeGatewayEvent({
       type: 'agent.action',

@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Clock,
   Coins,
+  FileText,
   Layers,
   Loader2,
   Settings2,
@@ -43,11 +44,22 @@ interface TeamState {
   durationMs?: number;
 }
 
+/** A file the agents touched this session — the Files tab list (Thread 2). */
+interface SessionFile {
+  path: string;
+  action: string;
+  agentRole: string;
+}
+
 interface SidePanelProps {
   totalTokens: number;
   maxTokenBudget: number;
   trackedAgents: Map<string, TrackedAgent>;
   teams: Map<string, TeamState>;
+  /** Files written/edited this session — opened in the in-chat file view. */
+  sessionFiles?: SessionFile[];
+  /** Open a file in the in-chat file view (Thread 2). */
+  onOpenFile?: (path: string) => void;
   connectionStatus: 'connected' | 'disconnected' | 'connecting';
   selectedModel: string;
   models: Array<{ name: string; isDefault: boolean }>;
@@ -271,6 +283,8 @@ export default function SidePanel({
   maxTokenBudget,
   trackedAgents,
   teams,
+  sessionFiles,
+  onOpenFile,
   connectionStatus,
   selectedModel,
   models,
@@ -283,6 +297,14 @@ export default function SidePanel({
   swarmDurationMs = 0,
   onSwarmHydratedTotals,
 }: SidePanelProps) {
+  // Dedupe touched files by path (keep the most recent action) for the Files
+  // tab. `delete` actions drop out — there's nothing to open.
+  const dedupedFiles = (() => {
+    const byPath = new Map<string, SessionFile>();
+    for (const f of sessionFiles ?? []) byPath.set(f.path, f);
+    return Array.from(byPath.values()).filter((f) => !/delete/i.test(f.action));
+  })();
+
   const agentArray = Array.from(trackedAgents.values()).filter((a) => a.role !== 'orchestrator');
 
   const runningAgents = agentArray.filter((a) => a.status === 'running');
@@ -417,6 +439,34 @@ export default function SidePanel({
             </div>
           )}
         </div>
+      </CollapsibleSection>
+
+      {/* Files touched this session — click to open the in-chat file view. */}
+      <CollapsibleSection title="files" icon={FileText} defaultOpen={dedupedFiles.length > 0}>
+        {dedupedFiles.length === 0 ? (
+          <p className="text-[10px] italic text-outline">no files yet — ask the agent to write one.</p>
+        ) : (
+          <ul className="space-y-0.5">
+            {dedupedFiles.map((f) => {
+              const name = f.path.replace(/\\/g, '/').split('/').pop() || f.path;
+              return (
+                <li key={f.path}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenFile?.(f.path)}
+                    disabled={!onOpenFile}
+                    title={f.path}
+                    className="flex w-full items-center gap-1.5 rounded-xs px-1 py-0.5 text-left text-[11px] text-on-surface-variant hover:bg-surface-container hover:text-on-surface disabled:cursor-default"
+                  >
+                    <FileText className="h-3 w-3 shrink-0 text-primary" />
+                    <span className="truncate font-mono">{name}</span>
+                    <span className="ml-auto shrink-0 text-[9px] uppercase text-outline">{f.action}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </CollapsibleSection>
 
       {/* Section 3: Swarm Tree (replaces the old Agent Activity section) */}

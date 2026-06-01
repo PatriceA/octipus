@@ -1,8 +1,10 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { readSessionFile, SessionFileError, writeSessionFile } from '@/core/session-files';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
+import { WorkspaceFS } from '@/security/workspace-fs';
 
 /**
  * Session routes — Phase 1a multi-user conversion.
@@ -227,6 +229,92 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         offset: t.Optional(t.String()),
         roles: t.Optional(t.String()),
         aggregate: t.Optional(t.String()),
+      }),
+      detail: { tags: ['sessions'] },
+    }
+  )
+
+  // ── In-chat file view (Thread 2) ─────────────────────────────────
+  // Session-scoped file read backed by WorkspaceFS (containment + null-byte
+  // rejection inherited). `path` may be relative to the workspace root or an
+  // absolute path inside it — the work-stream `file` result hands the UI a
+  // resolved absolute path, which `WorkspaceFS.resolve` vets either way.
+  .get(
+    '/:id/files',
+    async ({ user, principal, params, query, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const session = await scopedRepos(principal).sessions.findById(params.id);
+      if (!session) {
+        set.status = 404;
+        return { error: 'Session not found' };
+      }
+      if (!query.path) {
+        set.status = 400;
+        return { error: 'Missing required query param: path' };
+      }
+      try {
+        const fs = WorkspaceFS.forAgent({ userId: session.userId });
+        const result = await readSessionFile(fs, query.path);
+        if ('version' in result) set.headers.ETag = `"${result.version}"`;
+        return result;
+      } catch (err) {
+        if (err instanceof SessionFileError) {
+          set.status = err.status;
+          return { error: err.message, code: err.code };
+        }
+        throw err;
+      }
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: t.Object({ path: t.Optional(t.String()) }),
+      detail: { tags: ['sessions'] },
+    }
+  )
+
+  // Session-scoped file write with optimistic concurrency. A `baseVersion`
+  // that no longer matches on disk is rejected 409 (fail-loud) — the
+  // edit-and-continue concurrency story.
+  .put(
+    '/:id/files',
+    async ({ user, principal, params, query, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const session = await scopedRepos(principal).sessions.findById(params.id);
+      if (!session) {
+        set.status = 404;
+        return { error: 'Session not found' };
+      }
+      const path = query.path ?? body.path;
+      if (!path) {
+        set.status = 400;
+        return { error: 'Missing required param: path' };
+      }
+      try {
+        const fs = WorkspaceFS.forAgent({ userId: session.userId });
+        const result = await writeSessionFile(fs, path, body.content, body.baseVersion);
+        set.headers.ETag = `"${result.version}"`;
+        return result;
+      } catch (err) {
+        if (err instanceof SessionFileError) {
+          set.status = err.status;
+          return { error: err.message, code: err.code };
+        }
+        throw err;
+      }
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: t.Object({ path: t.Optional(t.String()) }),
+      body: t.Object({
+        path: t.Optional(t.String()),
+        content: t.String(),
+        baseVersion: t.Optional(t.String()),
       }),
       detail: { tags: ['sessions'] },
     }

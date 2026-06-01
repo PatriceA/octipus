@@ -21,6 +21,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { compareTimelineEntries } from '../../../src/shared/timeline-order';
+import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -58,6 +60,10 @@ export interface TrackedAgent {
     durationMs?: number;
     resultPreview?: string;
     error?: string;
+    /** Rich work-stream fields (Thread 1) — human title + structured preview. */
+    title?: string;
+    input?: ToolInputPreview;
+    result?: ToolResultPreview;
   }>;
   startTime: number;
   endTime?: number;
@@ -390,7 +396,127 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
 // AgentActivityInline
 // ---------------------------------------------------------------------------
 
-function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
+type ToolCall = TrackedAgent['toolCalls'][number];
+
+// Structured result preview (Thread 1) — picks a renderer per result `kind` so
+// the user sees a diff / exit code / file list / image / text excerpt instead
+// of a truncated one-line JSON blob. A `file` result is click-to-open in the
+// in-chat file view (Thread 2) when `onOpenFile` is wired.
+function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPreview; onOpenFile?: (path: string) => void }) {
+  switch (result.kind) {
+    case 'empty':
+      return null;
+    case 'text':
+      return (
+        <pre className="mt-1 max-h-40 overflow-auto rounded bg-[#0d1117] border border-white/10 px-2 py-1 text-[11px] font-mono text-on-surface/80 whitespace-pre-wrap">
+          {result.text}{result.truncated ? '\n…' : ''}
+        </pre>
+      );
+    case 'exit':
+      return (
+        <div className="mt-1 max-h-40 overflow-auto rounded bg-[#0d1117] border border-white/10 text-[11px] font-mono">
+          <div className={cn('px-2 py-0.5', result.ok ? 'text-tertiary' : 'text-error')}>
+            exit {result.code}
+          </div>
+          {result.tail && (
+            <pre className="px-2 py-1 text-on-surface/70 whitespace-pre-wrap border-t border-white/5">{result.tail}</pre>
+          )}
+        </div>
+      );
+    case 'list':
+      return (
+        <ul className="mt-1 max-h-40 overflow-auto rounded bg-[#0d1117] border border-white/10 px-2 py-1 text-[11px] font-mono text-on-surface/80 space-y-px">
+          {result.items.map((item, i) => (
+            <li key={i} className="truncate" title={item}>{item}</li>
+          ))}
+          {result.total != null && result.total > result.items.length && (
+            <li className="text-on-surface-variant/60 italic">…{result.total - result.items.length} more</li>
+          )}
+        </ul>
+      );
+    case 'diff':
+      return (
+        <pre className="mt-1 max-h-40 overflow-auto rounded bg-[#0d1117] border border-white/10 px-2 py-1 text-[11px] font-mono whitespace-pre">
+          {result.patch}
+        </pre>
+      );
+    case 'file': {
+      const label = (
+        <>
+          <FileText className="h-3 w-3 shrink-0" />
+          <span className="truncate" title={result.path}>{result.path.replace(/\\/g, '/').split('/').slice(-2).join('/')}</span>
+          {result.bytes != null && <span className="text-on-surface-variant/60">({result.bytes}B)</span>}
+        </>
+      );
+      return onOpenFile ? (
+        <button
+          type="button"
+          onClick={() => onOpenFile(result.path)}
+          title={`Open ${result.path}`}
+          className="mt-1 flex w-full items-center gap-1.5 rounded-xs px-1 py-0.5 text-left text-[11px] font-mono text-primary hover:bg-surface-container hover:underline"
+        >
+          {label}
+        </button>
+      ) : (
+        <div className="mt-1 flex items-center gap-1.5 px-1 text-[11px] text-on-surface-variant font-mono">
+          {label}
+        </div>
+      );
+    }
+    case 'image':
+      return (
+        <img
+          src={result.ref}
+          alt="tool result"
+          className="mt-1 max-h-40 rounded border border-white/10 object-contain"
+        />
+      );
+  }
+}
+
+function statusDot(status?: string) {
+  if (status === 'error') return <XCircle className="h-3 w-3 shrink-0 text-error" />;
+  if (status === 'cancelled') return <XCircle className="h-3 w-3 shrink-0 text-warning" />;
+  if (status === 'ok' || status === 'completed') return <CheckCircle className="h-3 w-3 shrink-0 text-tertiary" />;
+  return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />;
+}
+
+// One tool call in the expanded list: a human title (falls back to the raw
+// name), an inline input subject, a duration, and a collapsible result preview.
+function ToolCallRow({ tc, onOpenFile }: { tc: ToolCall; onOpenFile?: (path: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const label = tc.title || tc.name;
+  const hasPreview = (tc.result && tc.result.kind !== 'empty') || !!tc.error;
+  return (
+    <div className="text-[11px]">
+      <div
+        className={cn('flex items-center gap-1.5 py-0.5', hasPreview && 'cursor-pointer hover:text-on-surface')}
+        onClick={hasPreview ? () => setOpen((v) => !v) : undefined}
+      >
+        {statusDot(tc.status)}
+        <span className="text-on-surface/80 truncate" title={tc.input?.value}>{label}</span>
+        {tc.durationMs != null && (
+          <span className="text-on-surface-variant/60 tabular-nums shrink-0">{formatDuration(tc.durationMs)}</span>
+        )}
+        {hasPreview && (
+          open
+            ? <ChevronDown className="h-3 w-3 text-on-surface-variant ml-auto shrink-0" />
+            : <ChevronRight className="h-3 w-3 text-on-surface-variant ml-auto shrink-0" />
+        )}
+      </div>
+      {open && (
+        <div className="ml-4">
+          {tc.error
+            ? <pre className="mt-1 rounded bg-error-container/20 border border-error/20 px-2 py-1 text-[11px] text-error whitespace-pre-wrap">{tc.error}</pre>
+            : tc.result && <ToolResultPreviewView result={tc.result} onOpenFile={onOpenFile} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentActivityInline({ agent, onOpenFile }: { agent: TrackedAgent; onOpenFile?: (path: string) => void }) {
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   const statusIcon =
     agent.status === 'running' ? (
@@ -444,12 +570,26 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
         )}
 
         {agent.toolCalls.length > 0 && (
-          <span className="flex items-center gap-0.5 text-on-surface-variant ml-auto" title={`${agent.toolCalls.length} tool call${agent.toolCalls.length === 1 ? '' : 's'}`}>
+          <button
+            type="button"
+            onClick={() => setToolsOpen((v) => !v)}
+            className="flex items-center gap-0.5 text-on-surface-variant hover:text-on-surface ml-auto cursor-pointer"
+            title={`${agent.toolCalls.length} tool call${agent.toolCalls.length === 1 ? '' : 's'}`}
+          >
             <Wrench className="h-3 w-3" />
             {agent.toolCalls.length}
-          </span>
+            {toolsOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          </button>
         )}
       </div>
+
+      {toolsOpen && agent.toolCalls.length > 0 && (
+        <div className="mt-1.5 space-y-0.5 border-t border-outline-variant/20 pt-1.5">
+          {agent.toolCalls.map((tc) => (
+            <ToolCallRow key={tc.id} tc={tc} onOpenFile={onOpenFile} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -463,11 +603,13 @@ function TeamActivityInline({
   members,
   status,
   durationMs,
+  onOpenFile,
 }: {
   teamId: string;
   members: TrackedAgent[];
   status: string;
   durationMs?: number;
+  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
 
@@ -505,7 +647,7 @@ function TeamActivityInline({
       {expanded && (
         <div className="px-1 pb-2 space-y-0.5">
           {members.map((agent) => (
-            <AgentActivityInline key={agent.id} agent={agent} />
+            <AgentActivityInline key={agent.id} agent={agent} onOpenFile={onOpenFile} />
           ))}
         </div>
       )}
@@ -670,6 +812,8 @@ interface MessageTimelineProps {
   fileChanges?: FileChange[];
   isLoading: boolean;
   statusMessage: string | null;
+  /** Open a file (by resolved path) in the in-chat file view (Thread 2). */
+  onOpenFile?: (path: string) => void;
 }
 
 type TimelineEntry =
@@ -685,6 +829,7 @@ export default function MessageTimeline({
   fileChanges,
   isLoading,
   statusMessage,
+  onOpenFile,
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -770,13 +915,7 @@ export default function MessageTimeline({
     }
   }
 
-  // Stable sort: by timestamp, then messages before agents (agents respond to messages)
-  const kindOrder: Record<string, number> = { message: 0, agent: 1, team: 1, file_changes: 2 };
-  timeline.sort((a, b) => {
-    const diff = a.sortKey - b.sortKey;
-    if (diff !== 0) return diff;
-    return (kindOrder[a.kind] ?? 1) - (kindOrder[b.kind] ?? 1);
-  });
+  timeline.sort(compareTimelineEntries);
 
   // Auto-scroll
   const scrollToBottom = useCallback(() => {
@@ -818,7 +957,7 @@ export default function MessageTimeline({
           case 'message':
             return <MessageBubble key={`msg-${entry.data.id}`} message={entry.data} />;
           case 'agent':
-            return <AgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} />;
+            return <AgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':
             return (
               <TeamActivityInline
@@ -827,6 +966,7 @@ export default function MessageTimeline({
                 members={entry.data.members}
                 status={entry.data.status}
                 durationMs={entry.data.durationMs}
+                onOpenFile={onOpenFile}
               />
             );
           case 'file_changes':

@@ -8,12 +8,14 @@ import MessageTimeline, {
   type TeamState,
   type TrackedAgent,
 } from '@/components/chat/message-timeline';
+import FileViewer from '@/components/chat/file-viewer';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
+import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -26,6 +28,10 @@ interface ToolCallInfo {
   durationMs?: number;
   resultPreview?: string;
   error?: string;
+  /** Rich work-stream fields (Thread 1). */
+  title?: string;
+  input?: ToolInputPreview;
+  result?: ToolResultPreview;
 }
 
 export interface FileChange {
@@ -107,6 +113,8 @@ export default function ChatPage() {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
+  // In-chat file view (Thread 2): the path currently open in the FileViewer.
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   // Append-only queue of swarm events from the WS stream. We used to hold the
@@ -221,18 +229,22 @@ export default function ChatPage() {
         const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
         const sessionAgents = agentData?.agents || [];
         for (const a of sessionAgents) {
-          const toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
+          const toolCalls: ToolCallInfo[] = [];
           let cliIterations = 0;
           try {
             const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
             for (const ev of evData?.events || []) {
               if (ev.type === 'action') {
-                // Standard agent tool calls (array format)
+                // Standard agent tool calls (array format). Carries the rich
+                // work-stream fields (title/input) so a cold reload shows the
+                // same "Read poem.md" rows the live stream did (Thread 1).
                 if (ev.data?.toolCalls) {
                   toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
                     id: tc.id || Date.now().toString(),
                     name: tc.name,
                     argsSummary: tc.argsSummary,
+                    title: tc.title,
+                    input: tc.input,
                   })));
                   // File changes come from explicit `file_change` events
                   // emitted by tool-executor.ts after a successful write — see
@@ -242,6 +254,24 @@ export default function ChatPage() {
                   // spaces (e.g. "C:/Users/patri/Github Reps/...") get cut off
                   // at the first space and we end up with a fake duplicate
                   // entry like "C:/Users/patri/Github" alongside the real one.
+                }
+                // Per-tool completion (tool_call_complete) — merge the streamed
+                // status/duration/title/result onto the matching call so the
+                // rich preview survives a page reload, not just the live stream.
+                else if (ev.data?.type === 'tool_call_complete' && ev.data?.toolCallId) {
+                  const d = ev.data;
+                  const patch = {
+                    status: typeof d.status === 'string' ? d.status : undefined,
+                    durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
+                    resultPreview: typeof d.resultPreview === 'string' ? d.resultPreview : undefined,
+                    error: typeof d.error === 'string' ? d.error : undefined,
+                    title: typeof d.title === 'string' ? d.title : undefined,
+                    input: d.input as ToolInputPreview | undefined,
+                    result: d.result as ToolResultPreview | undefined,
+                  };
+                  const idx = toolCalls.findIndex((tc) => tc.id === d.toolCallId);
+                  if (idx >= 0) toolCalls[idx] = { ...toolCalls[idx], ...patch };
+                  else toolCalls.push({ id: String(d.toolCallId), name: typeof d.name === 'string' ? d.name : '', ...patch });
                 }
                 // CLI agent tool use (single tool format from cli_tool_use events)
                 else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
@@ -325,7 +355,14 @@ export default function ChatPage() {
               // Phase 5: keep live tool-call entries so the streamed
               // status/duration/preview don't get wiped by the poll.
               toolCalls: liveHasToolData ? liveAgent.toolCalls : restored.toolCalls,
-              // Live durationMs/endTime can be fresher than the DB row.
+              // Anchor to the startTime the user already saw. The live value is
+              // client-receipt time; `restored.startTime` is the DB createdAt
+              // (different clock). Without this the card jumps position on the
+              // first poll as its sortKey flips from one clock to the other.
+              startTime: liveAgent.startTime ?? restored.startTime,
+              // Live durationMs/endTime can be fresher than the DB row. Keep
+              // endTime consistent with the anchored startTime + duration so
+              // the elapsed display doesn't desync after the swap above.
               durationMs:
                 liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)
                   ? liveAgent.durationMs
@@ -928,6 +965,8 @@ export default function ChatPage() {
           id: tc.id || Date.now().toString(),
           name: tc.name,
           argsSummary: tc.argsSummary,
+          title: tc.title,
+          input: tc.input,
         }));
         // File-change entries come from the dedicated `file_change` event
         // emitted by `tool-executor.ts` after a successful filesystem write.
@@ -1024,6 +1063,9 @@ export default function ChatPage() {
         // don't need to look it up in trackedAgents (which loses races
         // when several events fire faster than React's setState batches).
         const toolName = typeof d.name === 'string' ? d.name : '';
+        // Human title from the work-stream renderer ("Wrote poem.md") — falls
+        // back to the raw tool name so narration still reads sensibly.
+        const toolLabel = typeof d.title === 'string' && d.title ? d.title : `\`${toolName}\``;
         const status = String(d.status ?? 'ok');
         const dur = typeof d.durationMs === 'number'
           ? ` · ${(d.durationMs / 1000).toFixed(d.durationMs >= 1000 ? 1 : 2)}s`
@@ -1038,6 +1080,9 @@ export default function ChatPage() {
             durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
             resultPreview: typeof d.resultPreview === 'string' ? d.resultPreview : undefined,
             error: typeof d.error === 'string' ? d.error : undefined,
+            title: typeof d.title === 'string' ? d.title : undefined,
+            input: d.input as ToolInputPreview | undefined,
+            result: d.result as ToolResultPreview | undefined,
           };
           if (!existing) {
             // Agent record not yet hydrated — stash the completion on a
@@ -1079,11 +1124,11 @@ export default function ChatPage() {
         });
         if (toolName) {
           if (status === 'error' && err) {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` failed: ${err}`);
+            pushTransientNarration(sessionId, `${completionRole} arm · ${toolLabel} failed: ${err}`);
           } else if (status === 'cancelled') {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` cancelled`);
+            pushTransientNarration(sessionId, `${completionRole} arm · ${toolLabel} cancelled`);
           } else {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\`${dur}`);
+            pushTransientNarration(sessionId, `${completionRole} arm · ${toolLabel}${dur}`);
           }
         }
       }
@@ -1378,6 +1423,15 @@ export default function ChatPage() {
         onCreate={handleCreateSession}
       />
 
+      {/* In-chat file view (Thread 2) */}
+      {openFilePath && activeSessionId && (
+        <FileViewer
+          sessionId={activeSessionId}
+          path={openFilePath}
+          onClose={() => setOpenFilePath(null)}
+        />
+      )}
+
       {/* Left panel — Session list */}
       <div className="w-64 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
         <SessionList
@@ -1400,6 +1454,7 @@ export default function ChatPage() {
           fileChanges={activeState?.fileChanges}
           isLoading={isLoading}
           statusMessage={statusMessage}
+          onOpenFile={setOpenFilePath}
         />
 
         {/* Permission / approval banner — sits directly above the prompt
@@ -1430,6 +1485,8 @@ export default function ChatPage() {
             maxTokenBudget={maxTokenBudget}
             trackedAgents={trackedAgents}
             teams={teams}
+            sessionFiles={activeState?.fileChanges}
+            onOpenFile={setOpenFilePath}
             connectionStatus={connectionStatus}
             selectedModel={selectedModel}
             models={models}

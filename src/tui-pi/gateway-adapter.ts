@@ -327,31 +327,39 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         // Phase 5 per-tool completion event. Web chat uses it for the
         // streaming status update; the TUI maps it onto its `tool`
         // state machine so the existing renderer marks the row done.
+        //
+        // Thread 1 (rich work stream): prefer the renderer-supplied human
+        // title ("Read poem.md") over the raw tool name, and summarize the
+        // structured result for the row preview — falling back to the legacy
+        // `resultPreview` string so older servers still render.
         const name = pickString(data, 'name') ?? 'tool';
+        const title = pickString(data, 'title');
+        const label = title ?? name;
         const status = pickString(data, 'status') ?? 'ok';
         const role = pickString(data, 'role');
         const durationMs = pickNumber(data, 'durationMs');
         const error = pickString(data, 'error');
         const resultPreview = pickString(data, 'resultPreview');
+        const resultSummary = summarizeResultPreview(asRecord(data.result));
         const isError = status === 'error' || status === 'cancelled';
         const preview = isError
           ? (error ? error.slice(0, 80) : status)
-          : (resultPreview ? resultPreview.slice(0, 80) : undefined);
+          : (resultSummary ?? (resultPreview ? resultPreview.slice(0, 80) : undefined));
         out.push({
           kind: 'tool',
-          tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer },
+          tool: { state: isError ? 'error' : 'completed', name: label, preview, mcpServer },
         });
         // Surface a one-liner narration too so the activity log shows
         // who did what with what timing — matches the web chat's
-        // transient bubble ("data arm · read_file · 0.2s").
+        // transient bubble ("data arm · Read poem.md · 0.2s").
         if (role) {
           const dur = durationMs != null
             ? ` · ${(durationMs / 1000).toFixed(durationMs >= 1000 ? 1 : 2)}s`
             : '';
           if (isError && error) {
-            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${name} failed: ${error}` });
+            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${label} failed: ${error}` });
           } else if (!isError) {
-            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${name}${dur}` });
+            out.push({ kind: 'message', role: 'system', content: `${role} arm · ${label}${dur}` });
           }
         }
       }
@@ -368,6 +376,47 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+}
+
+/**
+ * Collapse a structured work-stream `ToolResultPreview` (Thread 1) into a
+ * single 80-char line for the activity row. Mirrors the web file/exit/list/…
+ * renderers so the TUI and web read the same. Returns undefined when there's
+ * nothing useful to show (empty result / unknown shape).
+ */
+function summarizeResultPreview(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) return undefined;
+  const kind = pickString(result, 'kind');
+  switch (kind) {
+    case 'text': {
+      const text = pickString(result, 'text') ?? '';
+      return text.split('\n')[0]?.slice(0, 80) || undefined;
+    }
+    case 'exit': {
+      const code = pickNumber(result, 'code');
+      return `exit ${code ?? '?'}`;
+    }
+    case 'list': {
+      const items = Array.isArray(result.items) ? result.items : [];
+      const total = pickNumber(result, 'total') ?? items.length;
+      return `${total} item${total === 1 ? '' : 's'}`;
+    }
+    case 'diff': {
+      const added = pickNumber(result, 'added') ?? 0;
+      const removed = pickNumber(result, 'removed') ?? 0;
+      return `+${added} −${removed}`;
+    }
+    case 'file': {
+      const path = pickString(result, 'path') ?? '';
+      const name = path.replace(/[/\\]+$/, '').split(/[/\\]/).pop();
+      const bytes = pickNumber(result, 'bytes');
+      return name ? `${name}${bytes != null ? ` (${bytes}B)` : ''}` : undefined;
+    }
+    case 'image':
+      return 'image';
+    default:
+      return undefined;
+  }
 }
 
 const WRITE_TOOL_NAMES = new Set(['write_file', 'write', 'edit', 'apply_patch', 'str_replace_editor']);
