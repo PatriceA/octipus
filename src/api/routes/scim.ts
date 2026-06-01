@@ -183,32 +183,37 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       // Upsert by userName. SCIM clients re-POST on every reconciliation.
       const [existing] = await db.select().from(users).where(eq(users.username, body.userName)).limit(1);
 
-      let userId: string;
       let row: { id: string; username: string; email: string | null; isActive: boolean; createdAt: Date; updatedAt: Date };
       if (existing) {
-        userId = existing.id;
         row = existing as typeof row;
+        // Existing user: just ensure membership (single write, no tx needed).
+        await db
+          .insert(orgMembers)
+          .values({ orgId: ctx.orgId, userId: existing.id, role: 'member' })
+          .onConflictDoNothing();
       } else {
-        const [created] = await db
-          .insert(users)
-          .values({
-            username: body.userName,
-            email,
-            isActive: body.active ?? true,
-            isAdmin: false,
-            // Provisioned users have no password — they sign in via SAML.
-            passwordHash: null,
-          })
-          .returning();
-        userId = created.id;
-        row = created as typeof row;
+        // Atomic: provision the user and their org membership together so a
+        // failure on the membership insert can't leave an orphan user with no
+        // org (which SCIM reconciliation would never re-link).
+        row = await db.transaction(async (tx) => {
+          const [created] = await tx
+            .insert(users)
+            .values({
+              username: body.userName,
+              email,
+              isActive: body.active ?? true,
+              isAdmin: false,
+              // Provisioned users have no password — they sign in via SAML.
+              passwordHash: null,
+            })
+            .returning();
+          await tx
+            .insert(orgMembers)
+            .values({ orgId: ctx.orgId, userId: created.id, role: 'member' })
+            .onConflictDoNothing();
+          return created as typeof row;
+        });
       }
-
-      // Ensure membership in the org.
-      await db
-        .insert(orgMembers)
-        .values({ orgId: ctx.orgId, userId, role: 'member' })
-        .onConflictDoNothing();
 
       set.status = existing ? 200 : 201;
       return scimUser(row);
@@ -282,10 +287,14 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       const db = getDb();
       // SCIM DELETE = deprovision. Soft-delete: drop org membership +
       // mark inactive. The user row stays so audit logs remain valid.
-      await db
-        .delete(orgMembers)
-        .where(and(eq(orgMembers.orgId, ctx.orgId), eq(orgMembers.userId, params.id)));
-      await db.update(users).set({ isActive: false }).where(eq(users.id, params.id));
+      // Atomic: a failure between the two writes would otherwise leave the user
+      // still a member but inactive (or vice-versa) — an inconsistent state.
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(orgMembers)
+          .where(and(eq(orgMembers.orgId, ctx.orgId), eq(orgMembers.userId, params.id)));
+        await tx.update(users).set({ isActive: false }).where(eq(users.id, params.id));
+      });
       set.status = 204;
       return '';
     },
