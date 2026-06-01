@@ -229,18 +229,22 @@ export default function ChatPage() {
         const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
         const sessionAgents = agentData?.agents || [];
         for (const a of sessionAgents) {
-          const toolCalls: Array<{ id: string; name: string; argsSummary?: string }> = [];
+          const toolCalls: ToolCallInfo[] = [];
           let cliIterations = 0;
           try {
             const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
             for (const ev of evData?.events || []) {
               if (ev.type === 'action') {
-                // Standard agent tool calls (array format)
+                // Standard agent tool calls (array format). Carries the rich
+                // work-stream fields (title/input) so a cold reload shows the
+                // same "Read poem.md" rows the live stream did (Thread 1).
                 if (ev.data?.toolCalls) {
                   toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
                     id: tc.id || Date.now().toString(),
                     name: tc.name,
                     argsSummary: tc.argsSummary,
+                    title: tc.title,
+                    input: tc.input,
                   })));
                   // File changes come from explicit `file_change` events
                   // emitted by tool-executor.ts after a successful write — see
@@ -250,6 +254,24 @@ export default function ChatPage() {
                   // spaces (e.g. "C:/Users/patri/Github Reps/...") get cut off
                   // at the first space and we end up with a fake duplicate
                   // entry like "C:/Users/patri/Github" alongside the real one.
+                }
+                // Per-tool completion (tool_call_complete) — merge the streamed
+                // status/duration/title/result onto the matching call so the
+                // rich preview survives a page reload, not just the live stream.
+                else if (ev.data?.type === 'tool_call_complete' && ev.data?.toolCallId) {
+                  const d = ev.data;
+                  const patch = {
+                    status: typeof d.status === 'string' ? d.status : undefined,
+                    durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
+                    resultPreview: typeof d.resultPreview === 'string' ? d.resultPreview : undefined,
+                    error: typeof d.error === 'string' ? d.error : undefined,
+                    title: typeof d.title === 'string' ? d.title : undefined,
+                    input: d.input as ToolInputPreview | undefined,
+                    result: d.result as ToolResultPreview | undefined,
+                  };
+                  const idx = toolCalls.findIndex((tc) => tc.id === d.toolCallId);
+                  if (idx >= 0) toolCalls[idx] = { ...toolCalls[idx], ...patch };
+                  else toolCalls.push({ id: String(d.toolCallId), name: typeof d.name === 'string' ? d.name : '', ...patch });
                 }
                 // CLI agent tool use (single tool format from cli_tool_use events)
                 else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
