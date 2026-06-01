@@ -399,8 +399,9 @@ type ToolCall = TrackedAgent['toolCalls'][number];
 
 // Structured result preview (Thread 1) — picks a renderer per result `kind` so
 // the user sees a diff / exit code / file list / image / text excerpt instead
-// of a truncated one-line JSON blob.
-function ToolResultPreviewView({ result }: { result: ToolResultPreview }) {
+// of a truncated one-line JSON blob. A `file` result is click-to-open in the
+// in-chat file view (Thread 2) when `onOpenFile` is wired.
+function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPreview; onOpenFile?: (path: string) => void }) {
   switch (result.kind) {
     case 'empty':
       return null;
@@ -438,14 +439,29 @@ function ToolResultPreviewView({ result }: { result: ToolResultPreview }) {
           {result.patch}
         </pre>
       );
-    case 'file':
-      return (
-        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-on-surface-variant font-mono">
+    case 'file': {
+      const label = (
+        <>
           <FileText className="h-3 w-3 shrink-0" />
           <span className="truncate" title={result.path}>{result.path.replace(/\\/g, '/').split('/').slice(-2).join('/')}</span>
           {result.bytes != null && <span className="text-on-surface-variant/60">({result.bytes}B)</span>}
+        </>
+      );
+      return onOpenFile ? (
+        <button
+          type="button"
+          onClick={() => onOpenFile(result.path)}
+          title={`Open ${result.path}`}
+          className="mt-1 flex w-full items-center gap-1.5 rounded-xs px-1 py-0.5 text-left text-[11px] font-mono text-primary hover:bg-surface-container hover:underline"
+        >
+          {label}
+        </button>
+      ) : (
+        <div className="mt-1 flex items-center gap-1.5 px-1 text-[11px] text-on-surface-variant font-mono">
+          {label}
         </div>
       );
+    }
     case 'image':
       return (
         <img
@@ -466,7 +482,7 @@ function statusDot(status?: string) {
 
 // One tool call in the expanded list: a human title (falls back to the raw
 // name), an inline input subject, a duration, and a collapsible result preview.
-function ToolCallRow({ tc }: { tc: ToolCall }) {
+function ToolCallRow({ tc, onOpenFile }: { tc: ToolCall; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const label = tc.title || tc.name;
   const hasPreview = (tc.result && tc.result.kind !== 'empty') || !!tc.error;
@@ -491,14 +507,14 @@ function ToolCallRow({ tc }: { tc: ToolCall }) {
         <div className="ml-4">
           {tc.error
             ? <pre className="mt-1 rounded bg-error-container/20 border border-error/20 px-2 py-1 text-[11px] text-error whitespace-pre-wrap">{tc.error}</pre>
-            : tc.result && <ToolResultPreviewView result={tc.result} />}
+            : tc.result && <ToolResultPreviewView result={tc.result} onOpenFile={onOpenFile} />}
         </div>
       )}
     </div>
   );
 }
 
-function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
+function AgentActivityInline({ agent, onOpenFile }: { agent: TrackedAgent; onOpenFile?: (path: string) => void }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
   const statusIcon =
@@ -569,7 +585,7 @@ function AgentActivityInline({ agent }: { agent: TrackedAgent }) {
       {toolsOpen && agent.toolCalls.length > 0 && (
         <div className="mt-1.5 space-y-0.5 border-t border-outline-variant/20 pt-1.5">
           {agent.toolCalls.map((tc) => (
-            <ToolCallRow key={tc.id} tc={tc} />
+            <ToolCallRow key={tc.id} tc={tc} onOpenFile={onOpenFile} />
           ))}
         </div>
       )}
@@ -586,11 +602,13 @@ function TeamActivityInline({
   members,
   status,
   durationMs,
+  onOpenFile,
 }: {
   teamId: string;
   members: TrackedAgent[];
   status: string;
   durationMs?: number;
+  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
 
@@ -628,7 +646,7 @@ function TeamActivityInline({
       {expanded && (
         <div className="px-1 pb-2 space-y-0.5">
           {members.map((agent) => (
-            <AgentActivityInline key={agent.id} agent={agent} />
+            <AgentActivityInline key={agent.id} agent={agent} onOpenFile={onOpenFile} />
           ))}
         </div>
       )}
@@ -793,6 +811,8 @@ interface MessageTimelineProps {
   fileChanges?: FileChange[];
   isLoading: boolean;
   statusMessage: string | null;
+  /** Open a file (by resolved path) in the in-chat file view (Thread 2). */
+  onOpenFile?: (path: string) => void;
 }
 
 type TimelineEntry =
@@ -808,6 +828,7 @@ export default function MessageTimeline({
   fileChanges,
   isLoading,
   statusMessage,
+  onOpenFile,
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -941,7 +962,7 @@ export default function MessageTimeline({
           case 'message':
             return <MessageBubble key={`msg-${entry.data.id}`} message={entry.data} />;
           case 'agent':
-            return <AgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} />;
+            return <AgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':
             return (
               <TeamActivityInline
@@ -950,6 +971,7 @@ export default function MessageTimeline({
                 members={entry.data.members}
                 status={entry.data.status}
                 durationMs={entry.data.durationMs}
+                onOpenFile={onOpenFile}
               />
             );
           case 'file_changes':

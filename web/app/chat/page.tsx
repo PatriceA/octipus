@@ -1425,6 +1425,7 @@ export default function ChatPage() {
           fileChanges={activeState?.fileChanges}
           isLoading={isLoading}
           statusMessage={statusMessage}
+          onOpenFile={setOpenFilePath}
         />
 
         {/* Permission / approval banner — sits directly above the prompt
