@@ -35,7 +35,6 @@ import { evaluationRoutes } from './routes/evaluations';
 import { expertRoutes } from './routes/experts';
 import { gatewayRoutes } from './routes/gateway';
 import { healthRoutes } from './routes/health';
-import { metricsRoutes } from './routes/metrics';
 import { hookRoutes } from './routes/hooks';
 import { knowledgeRoutes } from './routes/knowledge';
 import { logRoutes } from './routes/logs';

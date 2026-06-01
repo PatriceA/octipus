@@ -355,7 +355,14 @@ export default function ChatPage() {
               // Phase 5: keep live tool-call entries so the streamed
               // status/duration/preview don't get wiped by the poll.
               toolCalls: liveHasToolData ? liveAgent.toolCalls : restored.toolCalls,
-              // Live durationMs/endTime can be fresher than the DB row.
+              // Anchor to the startTime the user already saw. The live value is
+              // client-receipt time; `restored.startTime` is the DB createdAt
+              // (different clock). Without this the card jumps position on the
+              // first poll as its sortKey flips from one clock to the other.
+              startTime: liveAgent.startTime ?? restored.startTime,
+              // Live durationMs/endTime can be fresher than the DB row. Keep
+              // endTime consistent with the anchored startTime + duration so
+              // the elapsed display doesn't desync after the swap above.
               durationMs:
                 liveAgent.durationMs && (!restored.durationMs || restored.durationMs === 0)
                   ? liveAgent.durationMs

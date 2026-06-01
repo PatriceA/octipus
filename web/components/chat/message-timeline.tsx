@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import { cn } from '@/lib/utils';
 
@@ -914,13 +915,7 @@ export default function MessageTimeline({
     }
   }
 
-  // Stable sort: by timestamp, then messages before agents (agents respond to messages)
-  const kindOrder: Record<string, number> = { message: 0, agent: 1, team: 1, file_changes: 2 };
-  timeline.sort((a, b) => {
-    const diff = a.sortKey - b.sortKey;
-    if (diff !== 0) return diff;
-    return (kindOrder[a.kind] ?? 1) - (kindOrder[b.kind] ?? 1);
-  });
+  timeline.sort(compareTimelineEntries);
 
   // Auto-scroll
   const scrollToBottom = useCallback(() => {
