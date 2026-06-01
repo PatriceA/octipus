@@ -53,6 +53,14 @@ describe('reapOrphanedSwarmNodes', () => {
   });
 
   test('uses config default when olderThanMs is omitted', async () => {
+    // This is the one case that reads getConfig() (for the default threshold).
+    // Reset + reload the config cache from this worker's test env so the result
+    // can't depend on a half-mutated singleton an earlier test left behind
+    // (T1 — the source of the cross-file ordering flake).
+    const { resetConfig, loadConfig } = await import('@/config');
+    resetConfig();
+    loadConfig();
+
     const { repo, calls } = makeRepoMock(1);
     await reapOrphanedSwarmNodes({ repo });
     // Default from config is 600_000 (10 min). Accept whatever the loaded
