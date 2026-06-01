@@ -11,7 +11,7 @@ export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 import { getConfig } from '@/config';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getPermissionManager } from '@/security/permissions';
+import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { channelLogger } from '@/utils/logger';
 import { processChannelAttachments } from './attachment-handler';
 import { getUMI } from './interface';
@@ -340,9 +340,9 @@ export async function initializeChannels(): Promise<void> {
 
   // Subscribe to permission requests and forward them to the originating channel
   const permissionManager = getPermissionManager();
-  permissionManager.onRequest(async (request: Record<string, unknown>) => {
-    const userId = request.userId as string;
-    const sessionId = request.sessionId as string;
+  permissionManager.onRequest(async (request: PermissionRequestEvent) => {
+    const userId = request.userId;
+    const sessionId = request.sessionId;
     if (!userId || !sessionId) return;
 
     // Look up the session to find which channel originated it
@@ -355,7 +355,7 @@ export async function initializeChannels(): Promise<void> {
 
     // Track this pending permission for the user
     pendingChannelPermissions.set(userId, {
-      requestId: request.requestId as string,
+      requestId: request.requestId,
       channelType,
       channelId,
     });

@@ -26,20 +26,37 @@ export interface PermissionCheckResult {
   reason?: string;
 }
 
+/**
+ * Payload broadcast when a tool call needs interactive approval. Emitted by
+ * `requestApproval` and consumed by the gateway event bridge (→ WS clients) and
+ * the TUI permission prompt. Field names are load-bearing — keep them in sync
+ * with the `emitRequest({...})` call in `requestApproval`.
+ */
+export interface PermissionRequestEvent {
+  requestId: string;
+  userId: string;
+  agentId: string;
+  toolId: string;
+  action: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  sessionId?: string;
+}
+
 export class PermissionManager {
   private get db() { return getDb(); }
   private pendingRequests: Map<string, (approved: boolean, resolution?: string) => void> = new Map();
-  private requestListeners: Set<(request: Record<string, unknown>) => void> = new Set();
+  private requestListeners: Set<(request: PermissionRequestEvent) => void> = new Set();
 
   /**
    * Subscribe to new permission requests (for WebSocket forwarding)
    */
-  onRequest(handler: (request: Record<string, unknown>) => void): () => void {
+  onRequest(handler: (request: PermissionRequestEvent) => void): () => void {
     this.requestListeners.add(handler);
     return () => this.requestListeners.delete(handler);
   }
 
-  private emitRequest(request: Record<string, unknown>): void {
+  private emitRequest(request: PermissionRequestEvent): void {
     for (const handler of this.requestListeners) {
       try { handler(request); } catch { /* ignore */ }
     }
