@@ -1,4 +1,5 @@
-import type { ToolManifest } from '@/core/types';
+import type { AgentContext, ToolManifest } from '@/core/types';
+import { getVault } from '@/security/vault';
 import { BaseTool, createParameterSchema } from '@/tools/base-tool';
 import type { LoadedPlugin } from './types';
 
@@ -50,9 +51,10 @@ export class PluginTool extends BaseTool {
         toolDef.name,
         toolDef.description,
         createParameterSchema(toolDef.parameters),
-        async (args) => {
+        async (args, context) => {
           try {
-            return await handler(args);
+            const config = await this.resolveSecrets(context);
+            return await handler(args, { config });
           } catch (err: any) {
             return { error: `Plugin tool error: ${err.message}` };
           }
@@ -60,6 +62,29 @@ export class PluginTool extends BaseTool {
         { permissionAction: 'execute' },
       );
     }
+  }
+
+  /**
+   * Resolve the plugin's declared secrets from the vault for the CALLING user,
+   * at call time. User-scoped secrets win; falls back to system scope. Secrets
+   * are never read from `.env` — the vault is the source of truth.
+   */
+  private async resolveSecrets(
+    context: AgentContext,
+  ): Promise<Record<string, unknown>> {
+    const config: Record<string, unknown> = {};
+    const secrets = this.plugin.manifest.secrets;
+    if (!secrets) return config;
+
+    const vault = getVault();
+    for (const [configKey, secretName] of Object.entries(secrets)) {
+      const value = await vault.getForAgent(
+        { userId: context.userId, toolId: this.id, agentId: context.id },
+        secretName,
+      );
+      if (value !== null) config[configKey] = value;
+    }
+    return config;
   }
 
   /**

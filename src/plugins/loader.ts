@@ -57,6 +57,17 @@ function validateManifest(raw: unknown, dir: string): PluginManifest {
     }
   }
 
+  if (obj.secrets !== undefined) {
+    if (typeof obj.secrets !== 'object' || obj.secrets === null || Array.isArray(obj.secrets)) {
+      throw new Error(`Invalid plugin.json in ${dir}: "secrets" must be an object`);
+    }
+    for (const [key, secretName] of Object.entries(obj.secrets)) {
+      if (typeof secretName !== 'string' || !secretName) {
+        throw new Error(`Invalid plugin.json in ${dir}: secret "${key}" must map to a non-empty secret name`);
+      }
+    }
+  }
+
   return obj as unknown as PluginManifest;
 }
 

@@ -4,6 +4,9 @@
   "description": "Full GitHub integration — repos, issues, pull requests, files, search, and more via the GitHub REST API",
   "author": "Octipus",
   "main": "index.ts",
+  "secrets": {
+    "token": "github.token"
+  },
   "tools": [
     {
       "name": "get_repo",

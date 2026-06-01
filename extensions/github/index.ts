@@ -1,38 +1,44 @@
-import type { PluginContext } from '../../src/plugins/types';
+import type { PluginContext, PluginToolContext } from '../../src/plugins/types';
 
 /**
  * GitHub plugin — thin, typed wrapper over the GitHub REST API (v3).
  *
- * Auth: reads a token from `GITHUB_TOKEN` (or `GH_TOKEN`). Public reads work
- * without one (rate-limited to 60 req/h); writes and private repos require it.
- * Errors are surfaced loudly — a failed API call throws with the status and the
- * GitHub message rather than returning a silent empty result.
+ * Auth: the token is resolved from the VAULT per call (manifest secret
+ * `github.token` → user scope first, then system fallback) and arrives in
+ * `ctx.config.token`. It is never read from `.env`/`process.env`. Public reads
+ * work without a token (rate-limited to 60 req/h); writes and private repos
+ * require one. API errors are surfaced loudly with the status + GitHub message.
  */
 
 const API = 'https://api.github.com';
 
 let log: PluginContext['logger'] | undefined;
 
-function token(): string | undefined {
-  return process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined;
+function tokenOf(ctx?: PluginToolContext): string | undefined {
+  const t = ctx?.config.token;
+  return typeof t === 'string' && t.length > 0 ? t : undefined;
 }
 
-function buildHeaders(json: boolean): Record<string, string> {
+function buildHeaders(token: string | undefined, json: boolean): Record<string, string> {
   const h: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'octipus-github-plugin',
   };
-  const t = token();
-  if (t) h.Authorization = `Bearer ${t}`;
+  if (token) h.Authorization = `Bearer ${token}`;
   if (json) h['Content-Type'] = 'application/json';
   return h;
 }
 
-async function gh(method: string, path: string, body?: unknown): Promise<unknown> {
+async function gh(
+  method: string,
+  path: string,
+  body: unknown,
+  token: string | undefined,
+): Promise<unknown> {
   const res = await fetch(`${API}${path}`, {
     method,
-    headers: buildHeaders(body !== undefined),
+    headers: buildHeaders(token, body !== undefined),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -47,6 +53,12 @@ async function gh(method: string, path: string, body?: unknown): Promise<unknown
     throw new Error(`GitHub API ${method} ${path} failed (${res.status}): ${message}`);
   }
   return data;
+}
+
+/** Build a caller bound to this invocation's token (concurrency-safe per user). */
+function api(ctx?: PluginToolContext): (method: string, path: string, body?: unknown) => Promise<unknown> {
+  const token = tokenOf(ctx);
+  return (method, path, body) => gh(method, path, body, token);
 }
 
 // --- argument helpers ------------------------------------------------------
@@ -115,23 +127,17 @@ export default {
 
   async initialize(context: PluginContext): Promise<void> {
     log = context.logger;
-    if (token()) {
-      log.info('GitHub plugin initialized (authenticated)');
-    } else {
-      log.warn(
-        'GitHub plugin initialized without GITHUB_TOKEN — only public reads will work, and at a low rate limit',
-      );
-    }
+    log.info('GitHub plugin initialized — token resolved per call from vault secret "github.token"');
   },
 
   tools: {
-    async get_repo(args: Record<string, unknown>): Promise<unknown> {
-      const owner = reqStr(args, 'owner');
-      const repo = reqStr(args, 'repo');
-      return gh('GET', `/repos/${owner}/${repo}`);
+    async get_repo(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
+      return call('GET', `/repos/${reqStr(args, 'owner')}/${reqStr(args, 'repo')}`);
     },
 
-    async list_repos(args: Record<string, unknown>): Promise<unknown> {
+    async list_repos(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const username = optStr(args, 'username');
       const query = qs({
         type: optStr(args, 'type'),
@@ -139,21 +145,22 @@ export default {
         per_page: optNum(args, 'per_page'),
         page: optNum(args, 'page'),
       });
-      const path = username ? `/users/${username}/repos${query}` : `/user/repos${query}`;
-      return gh('GET', path);
+      return call('GET', username ? `/users/${username}/repos${query}` : `/user/repos${query}`);
     },
 
-    async search_repositories(args: Record<string, unknown>): Promise<unknown> {
+    async search_repositories(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const query = qs({
         q: reqStr(args, 'query'),
         sort: optStr(args, 'sort'),
         order: optStr(args, 'order'),
         per_page: optNum(args, 'per_page'),
       });
-      return gh('GET', `/search/repositories${query}`);
+      return call('GET', `/search/repositories${query}`);
     },
 
-    async create_issue(args: Record<string, unknown>): Promise<unknown> {
+    async create_issue(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const body: Record<string, unknown> = { title: reqStr(args, 'title') };
@@ -163,10 +170,11 @@ export default {
       if (labels) body.labels = labels;
       const assignees = optList(args, 'assignees');
       if (assignees) body.assignees = assignees;
-      return gh('POST', `/repos/${owner}/${repo}/issues`, body);
+      return call('POST', `/repos/${owner}/${repo}/issues`, body);
     },
 
-    async list_issues(args: Record<string, unknown>): Promise<unknown> {
+    async list_issues(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const query = qs({
@@ -176,17 +184,18 @@ export default {
         sort: optStr(args, 'sort'),
         per_page: optNum(args, 'per_page'),
       });
-      return gh('GET', `/repos/${owner}/${repo}/issues${query}`);
+      return call('GET', `/repos/${owner}/${repo}/issues${query}`);
     },
 
-    async get_issue(args: Record<string, unknown>): Promise<unknown> {
+    async get_issue(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
-      const issueNumber = reqNum(args, 'issue_number');
-      return gh('GET', `/repos/${owner}/${repo}/issues/${issueNumber}`);
+      return call('GET', `/repos/${owner}/${repo}/issues/${reqNum(args, 'issue_number')}`);
     },
 
-    async create_pull_request(args: Record<string, unknown>): Promise<unknown> {
+    async create_pull_request(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const body: Record<string, unknown> = {
@@ -198,10 +207,11 @@ export default {
       if (prBody) body.body = prBody;
       const draft = optBool(args, 'draft');
       if (draft !== undefined) body.draft = draft;
-      return gh('POST', `/repos/${owner}/${repo}/pulls`, body);
+      return call('POST', `/repos/${owner}/${repo}/pulls`, body);
     },
 
-    async list_pull_requests(args: Record<string, unknown>): Promise<unknown> {
+    async list_pull_requests(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const query = qs({
@@ -210,17 +220,18 @@ export default {
         direction: optStr(args, 'direction'),
         per_page: optNum(args, 'per_page'),
       });
-      return gh('GET', `/repos/${owner}/${repo}/pulls${query}`);
+      return call('GET', `/repos/${owner}/${repo}/pulls${query}`);
     },
 
-    async get_pull_request(args: Record<string, unknown>): Promise<unknown> {
+    async get_pull_request(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
-      const prNumber = reqNum(args, 'pr_number');
-      return gh('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`);
+      return call('GET', `/repos/${owner}/${repo}/pulls/${reqNum(args, 'pr_number')}`);
     },
 
-    async merge_pull_request(args: Record<string, unknown>): Promise<unknown> {
+    async merge_pull_request(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const prNumber = reqNum(args, 'pr_number');
@@ -229,15 +240,16 @@ export default {
       if (method) body.merge_method = method;
       const commitTitle = optStr(args, 'commit_title');
       if (commitTitle) body.commit_title = commitTitle;
-      return gh('PUT', `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, body);
+      return call('PUT', `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, body);
     },
 
-    async get_file_contents(args: Record<string, unknown>): Promise<unknown> {
+    async get_file_contents(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const path = reqStr(args, 'path');
       const query = qs({ ref: optStr(args, 'ref') });
-      const result = await gh('GET', `/repos/${owner}/${repo}/contents/${path}${query}`);
+      const result = await call('GET', `/repos/${owner}/${repo}/contents/${path}${query}`);
 
       // For a single file, decode the base64 content into readable text.
       if (
@@ -253,7 +265,8 @@ export default {
       return result;
     },
 
-    async create_or_update_file(args: Record<string, unknown>): Promise<unknown> {
+    async create_or_update_file(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
       const path = reqStr(args, 'path');
@@ -264,10 +277,7 @@ export default {
       // An update needs the current blob SHA; a create must omit it. Look it up.
       let sha: string | undefined;
       try {
-        const existing = await gh(
-          'GET',
-          `/repos/${owner}/${repo}/contents/${path}${qs({ ref: branch })}`,
-        );
+        const existing = await call('GET', `/repos/${owner}/${repo}/contents/${path}${qs({ ref: branch })}`);
         if (existing && typeof existing === 'object' && 'sha' in existing) {
           sha = String((existing as { sha: unknown }).sha);
         }
@@ -283,24 +293,25 @@ export default {
       if (branch) body.branch = branch;
       if (sha) body.sha = sha;
 
-      return gh('PUT', `/repos/${owner}/${repo}/contents/${path}`, body);
+      return call('PUT', `/repos/${owner}/${repo}/contents/${path}`, body);
     },
 
-    async search_code(args: Record<string, unknown>): Promise<unknown> {
+    async search_code(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const query = qs({
         q: reqStr(args, 'query'),
         sort: optStr(args, 'sort'),
         order: optStr(args, 'order'),
         per_page: optNum(args, 'per_page'),
       });
-      return gh('GET', `/search/code${query}`);
+      return call('GET', `/search/code${query}`);
     },
 
-    async list_branches(args: Record<string, unknown>): Promise<unknown> {
+    async list_branches(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<unknown> {
+      const call = api(ctx);
       const owner = reqStr(args, 'owner');
       const repo = reqStr(args, 'repo');
-      const query = qs({ per_page: optNum(args, 'per_page') });
-      return gh('GET', `/repos/${owner}/${repo}/branches${query}`);
+      return call('GET', `/repos/${owner}/${repo}/branches${qs({ per_page: optNum(args, 'per_page') })}`);
     },
   },
 
