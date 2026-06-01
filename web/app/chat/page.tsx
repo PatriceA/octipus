@@ -1,6 +1,6 @@
 'use client';
 
-import { PanelRight, PanelRightClose } from 'lucide-react';
+import { Paperclip, PanelRight, PanelRightClose, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import MessageTimeline, {
   type ChatMessageData,
@@ -115,6 +115,13 @@ export default function ChatPage() {
   const [showSidePanel, setShowSidePanel] = useState(true);
   // In-chat file view (Thread 2): the path currently open in the FileViewer.
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
+  // Edit-and-continue: files attached to the NEXT chat turn. The agent re-reads
+  // each at send time and sees its current contents (no copy-paste). Deduped by
+  // path so re-attaching just refreshes the version.
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; version: string }>>([]);
+  const attachFile = useCallback((ref: { path: string; version: string }) => {
+    setAttachedFiles((prev) => [...prev.filter((f) => f.path !== ref.path), ref].slice(-10));
+  }, []);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   // Append-only queue of swarm events from the WS stream. We used to hold the
@@ -1238,6 +1245,8 @@ export default function ChatPage() {
   // Send message
   const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
     let sid = activeSessionId;
+    // Snapshot edit-and-continue attachments for this turn; cleared once sent.
+    const fileRefs = attachedFiles.length ? attachedFiles : undefined;
 
     // Auto-create a session if none is active
     if (!sid) {
@@ -1300,7 +1309,9 @@ export default function ChatPage() {
           content: userInput,
           sessionId: sid,
           expertId: selectedPresetId || undefined,
+          fileRefs,
         }));
+        if (fileRefs) setAttachedFiles([]);
       };
       if (ws.readyState === WebSocket.OPEN) {
         sendOverWs();
@@ -1334,7 +1345,8 @@ export default function ChatPage() {
         agentId?: string;
         classification?: { type: string };
         metadata?: MessageMetadata;
-      }>('/chat', { message: userInput, sessionId: sid, expertId: selectedPresetId || undefined });
+      }>('/chat', { message: userInput, sessionId: sid, expertId: selectedPresetId || undefined, fileRefs });
+      if (fileRefs) setAttachedFiles([]);
 
       const responseSid = result.sessionId || sid;
       if (responseSid) {
@@ -1429,6 +1441,7 @@ export default function ChatPage() {
           sessionId={activeSessionId}
           path={openFilePath}
           onClose={() => setOpenFilePath(null)}
+          onAttach={attachFile}
         />
       )}
 
@@ -1467,6 +1480,29 @@ export default function ChatPage() {
 
         {/* Prompt input */}
         <div className="border-t border-outline-variant/10 bg-surface-container p-3">
+          {/* Edit-and-continue: files the next message will carry (live version). */}
+          {attachedFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {attachedFiles.map((f) => (
+                <span
+                  key={f.path}
+                  title={`${f.path} — the agent's next reply will see this file's current contents`}
+                  className="flex items-center gap-1 rounded-full border border-outline-variant/30 bg-surface-container-high px-2 py-0.5 text-xs text-on-surface-variant"
+                >
+                  <Paperclip className="h-3 w-3 shrink-0 text-primary" />
+                  <span className="max-w-[12rem] truncate font-mono">{f.path.split(/[/\\]/).pop()}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedFiles((prev) => prev.filter((p) => p.path !== f.path))}
+                    title="Remove attachment"
+                    className="rounded-full p-0.5 hover:bg-surface-container-highest hover:text-on-surface"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <PromptInput
             onSend={sendMessage}
             disabled={isLoading}

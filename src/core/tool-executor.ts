@@ -1,5 +1,6 @@
 import { isCancellationError } from '@/core/swarm/errors';
 import { renderToolActivity } from '@/core/work-stream/renderers';
+import { stripWorkStreamMeta } from '@/shared/work-stream';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getPermissionManager } from '@/security/permissions';
@@ -561,9 +562,13 @@ export class ToolExecutor {
 
     // Build tool result messages
     for (const result of results) {
+      // Drop UI-only work-stream metadata (e.g. a file diff) before the result
+      // reaches the model or the persisted transcript — the model already has
+      // the inputs it acted on, so this would be redundant, token-costly context.
+      const modelSafe = result.error || sanitizeToolOutput(stripWorkStreamMeta(result.result));
       toolMessages.push({
         role: 'tool',
-        content: result.error || sanitizeToolOutput(result.result),
+        content: modelSafe,
         toolCallId: result.toolCallId,
         timestamp: new Date(),
       });
@@ -573,7 +578,7 @@ export class ToolExecutor {
         await messageRepository.create({
           sessionId: this.context.sessionId,
           role: 'tool',
-          content: result.error || sanitizeToolOutput(result.result),
+          content: modelSafe,
           toolCallId: result.toolCallId,
           agentId: this.context.id,
         });

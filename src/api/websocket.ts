@@ -3,6 +3,7 @@ import { webChatChannel } from '@/channels/webchat';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { getDocumentQueue } from '@/core/documents/queue';
+import { FileRefSchema } from '@/core/gateway/protocol';
 import { getOrchestratorService } from '@/core/orchestrator';
 import { getSessionManager } from '@/security/auth/session';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
@@ -248,6 +249,16 @@ export function setupWebSocket(app: Elysia): void {
               sessionId = session.id;
             }
 
+            // Edit-and-continue: validate any attached session-file refs. A
+            // malformed payload is logged and dropped (the turn still runs),
+            // never silently coerced.
+            let fileRefs: Array<{ path: string; version?: string }> | undefined;
+            if (parsed.fileRefs !== undefined) {
+              const refs = FileRefSchema.array().max(10).safeParse(parsed.fileRefs);
+              if (refs.success) fileRefs = refs.data;
+              else apiLogger.warn({ issues: refs.error.issues }, 'Ignoring malformed chat fileRefs');
+            }
+
             // Route through orchestrator (commands are handled inside handleMessage)
             const orchestrator = getOrchestratorService();
             try {
@@ -257,6 +268,7 @@ export function setupWebSocket(app: Elysia): void {
                 content,
                 'webchat',
                 parsed.expertId,
+                fileRefs,
               );
               const resolvedId = result.sessionId || sessionId;
               ws.send(JSON.stringify({

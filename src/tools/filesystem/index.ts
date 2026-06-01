@@ -4,10 +4,19 @@ import { basename, dirname, extname, join, relative, resolve } from 'path';
 import { getConfig } from '@/config';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
+import { computeLineDiff } from '@/shared/diff';
+import { WORK_STREAM_META_KEY } from '@/shared/work-stream';
 import { withFileMutationQueue } from '@/utils/file-mutation-queue';
 import { coreLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
 import { BaseTool, createParameterSchema } from '../base-tool';
+
+/**
+ * Cap on the file size we read back to build a work-stream diff. Past this we
+ * skip the diff (the renderer falls back to a plain "file" result) rather than
+ * pull a large file into memory on every write — Thread 1 scope guard.
+ */
+const DIFF_SOURCE_MAX_BYTES = 256 * 1024;
 
 function getWorkspacePaths(): { root: string; additional: string[] } {
   try {
@@ -300,6 +309,19 @@ export class FilesystemTool extends BaseTool {
         this.validatePath(filePath, context);
 
         return withFileMutationQueue(filePath, async () => {
+          // Capture prior content (bounded) so the work stream can show a diff
+          // of what changed. `null` ⇒ no diff (new file diffs against '' below;
+          // too-large/unreadable skips the diff and falls back to a file result).
+          let before: string | null = '';
+          try {
+            if (existsSync(filePath)) {
+              const st = await stat(filePath);
+              before = st.size <= DIFF_SOURCE_MAX_BYTES ? await readFile(filePath, 'utf-8') : null;
+            }
+          } catch {
+            before = null; // unreadable prior content must never block the write
+          }
+
           if (args.createDirs !== false) {
             const dir = dirname(filePath);
             if (!existsSync(dir)) {
@@ -307,12 +329,20 @@ export class FilesystemTool extends BaseTool {
             }
           }
 
-          await writeFile(filePath, args.content as string, 'utf-8');
+          const content = args.content as string;
+          await writeFile(filePath, content, 'utf-8');
 
           // Auto-index into RAG knowledge base
           autoIndexFile(filePath);
 
-          return { success: true, path: filePath, bytesWritten: (args.content as string).length };
+          const result: Record<string, unknown> = { success: true, path: filePath, bytesWritten: content.length };
+          // UI-only diff for the work stream / file view — stripped before the
+          // model sees the result (it already has the inputs it acted on).
+          if (before !== null && content.length <= DIFF_SOURCE_MAX_BYTES) {
+            const d = computeLineDiff(before, content);
+            result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
+          }
+          return result;
         });
       },
       { permissionAction: 'write' }
@@ -332,12 +362,20 @@ export class FilesystemTool extends BaseTool {
 
         return withFileMutationQueue(filePath, async () => {
           const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
-          await writeFile(filePath, existing + args.content, 'utf-8');
+          const content = args.content as string;
+          const next = existing + content;
+          await writeFile(filePath, next, 'utf-8');
 
           // Auto-index into RAG
           autoIndexFile(filePath);
 
-          return { success: true, path: filePath };
+          const result: Record<string, unknown> = { success: true, path: filePath };
+          // UI-only diff (see write_file) — stripped before the model sees it.
+          if (existing.length + content.length <= DIFF_SOURCE_MAX_BYTES) {
+            const d = computeLineDiff(existing, next);
+            result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
+          }
+          return result;
         });
       },
       { permissionAction: 'write' }

@@ -65,6 +65,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           message,
           channel,
           body.expertId,
+          body.fileRefs,
         );
 
         return {
@@ -90,6 +91,12 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         expertId: t.Optional(t.String()),
         devMode: t.Optional(t.Boolean()),
         projectPath: t.Optional(t.String()),
+        // Edit-and-continue: session files to inline (current version) into
+        // this turn's context — `.octipus/end-user-ux-design.md` Thread 2.
+        fileRefs: t.Optional(t.Array(t.Object({
+          path: t.String(),
+          version: t.Optional(t.String()),
+        }), { maxItems: 10 })),
       }),
       detail: { tags: ['chat'] },
     },

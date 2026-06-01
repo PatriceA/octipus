@@ -57,6 +57,26 @@ describe('Protocol', () => {
       expect(result.ok).toBe(true);
     });
 
+    test('parses chat.send with edit-and-continue fileRefs', () => {
+      const result = parseClientMessage(JSON.stringify({
+        type: 'chat.send',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: 'make it rhyme',
+        fileRefs: [{ path: 'poem.md', version: 'abc123def4567890' }, { path: 'notes.txt' }],
+      }));
+      expect(result.ok).toBe(true);
+    });
+
+    test('rejects chat.send with a fileRef missing its path', () => {
+      const result = parseClientMessage(JSON.stringify({
+        type: 'chat.send',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: 'make it rhyme',
+        fileRefs: [{ version: 'abc123' }],
+      }));
+      expect(result.ok).toBe(false);
+    });
+
     test('parses auth with all client types', () => {
       for (const ct of ['webchat', 'tui', 'channel', 'mobile', 'acp', 'agent']) {
         const result = parseClientMessage(JSON.stringify({

@@ -2,25 +2,28 @@
 
 import {
   AlertTriangle,
+  FileDiff,
   FileText,
   FolderOpen,
   Loader2,
+  Paperclip,
   Pencil,
   RotateCcw,
   Save,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { computeLineDiff } from '../../../src/shared/diff';
 import CodeEditor from '@/components/chat/code-editor';
+import DiffView from '@/components/chat/diff-view';
 import { api } from '@/lib/api';
 
-// In-chat file view (Thread 2): a lightweight reader/editor over the
-// session file API. Text flips between read-only and an editable buffer;
-// images render inline; directories are browsable. Edit-and-continue saves
-// carry the loaded version so a concurrent change is rejected (409) loudly
-// rather than silently clobbered. Deliberately NOT a full IDE — a textarea
-// buffer keeps the bundle lean (no CodeMirror dep); syntax highlighting can
-// layer on later without changing this contract.
+// In-chat file view (Threads 2–3): a lightweight reader/editor over the
+// session file API. Text flips between read-only and an editable CodeMirror
+// buffer; while editing, a Diff toggle shows unsaved changes against the loaded
+// baseline; images render inline; directories are browsable. Edit-and-continue
+// saves carry the loaded version so a concurrent change is rejected (409)
+// loudly rather than silently clobbered. Deliberately NOT a full IDE.
 
 type FileResponse =
   | { type: 'directory'; path: string; entries: Array<{ name: string; path: string; isDirectory: boolean; size?: number }> }
@@ -34,13 +37,20 @@ interface FileViewerProps {
   /** Initial path to open (relative to the workspace root or an absolute path). */
   path: string;
   onClose: () => void;
+  /**
+   * Attach this file (at its current version) to the next chat message —
+   * edit-and-continue. The agent's next turn re-reads the file and sees the
+   * live contents, so "make it rhyme" operates on the user's edits, not a
+   * stale transcript copy.
+   */
+  onAttach?: (ref: { path: string; version: string }) => void;
 }
 
 function displayName(p: string): string {
   return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
 }
 
-export default function FileViewer({ sessionId, path: initialPath, onClose }: FileViewerProps) {
+export default function FileViewer({ sessionId, path: initialPath, onClose, onAttach }: FileViewerProps) {
   const [path, setPath] = useState(initialPath);
   const [data, setData] = useState<FileResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,12 +61,15 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
   const [version, setVersion] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
+  // While editing: show a diff of unsaved changes vs the loaded baseline.
+  const [showDiff, setShowDiff] = useState(false);
 
   const load = useCallback(async (p: string) => {
     setLoading(true);
     setError(null);
     setConflict(false);
     setEditing(false);
+    setShowDiff(false);
     try {
       const res = await api.get<FileResponse>(`/sessions/${sessionId}/files?path=${encodeURIComponent(p)}`);
       setData(res);
@@ -74,6 +87,8 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
     }
   }, [sessionId]);
 
+  // Fetch-on-open: loading a new path is a legit external sync, not a render loop.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(path); }, [path, load]);
 
   // Esc closes the overlay.
@@ -94,8 +109,12 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
       );
       setVersion(res.version);
       setEditing(false);
+      setShowDiff(false);
       // Reflect the saved content as the new baseline.
       setData((prev) => (prev && prev.type === 'text' ? { ...prev, content: draft, version: res.version, size: res.size } : prev));
+      // Edit-and-continue: a save is the strongest "operate on this next" signal,
+      // so auto-attach the freshly-saved version to the next chat turn.
+      onAttach?.({ path, version: res.version });
     } catch (e) {
       const msg = (e as Error).message;
       // The 409 message from the server mentions the file changing.
@@ -104,7 +123,13 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
     } finally {
       setSaving(false);
     }
-  }, [sessionId, path, draft, version]);
+  }, [sessionId, path, draft, version, onAttach]);
+
+  // Attach the current file (without editing) to the next chat turn, then close.
+  const attach = useCallback(() => {
+    if (version) onAttach?.({ path, version });
+    onClose();
+  }, [onAttach, path, version, onClose]);
 
   const dirty = data?.type === 'text' && editing && draft !== data.content;
 
@@ -127,6 +152,16 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
           {dirty && <span className="text-[10px] text-warning">● unsaved</span>}
 
           <div className="ml-auto flex items-center gap-1">
+            {onAttach && data && data.type !== 'directory' && version && !editing && (
+              <button
+                type="button"
+                onClick={attach}
+                title="Attach to chat — the agent's next reply will see this file's current contents"
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
+              >
+                <Paperclip className="h-3.5 w-3.5" /> Attach to chat
+              </button>
+            )}
             {data?.type === 'text' && !editing && (
               <button
                 type="button"
@@ -140,7 +175,16 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
               <>
                 <button
                   type="button"
-                  onClick={() => { setEditing(false); setDraft(data.content); setConflict(false); }}
+                  onClick={() => setShowDiff((v) => !v)}
+                  disabled={!dirty}
+                  title={dirty ? 'Toggle a diff of your unsaved changes' : 'No unsaved changes to diff'}
+                  className={`flex items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-40 ${showDiff ? 'bg-surface-container-high text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}
+                >
+                  <FileDiff className="h-3.5 w-3.5" /> {showDiff ? 'Editor' : 'Diff'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setEditing(false); setShowDiff(false); setDraft(data.content); setConflict(false); }}
                   className="rounded px-2 py-1 text-xs text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
                 >
                   Cancel
@@ -200,17 +244,24 @@ export default function FileViewer({ sessionId, path: initialPath, onClose }: Fi
           )}
 
           {!loading && !error && data?.type === 'text' && (
-            <CodeEditor
-              value={editing ? draft : data.content}
-              onChange={editing ? setDraft : undefined}
-              editable={editing}
-              filename={path}
-              height="60vh"
-            />
+            editing && showDiff ? (
+              <DiffView patch={computeLineDiff(data.content, draft).patch} className="min-h-[60vh] p-2" />
+            ) : (
+              <CodeEditor
+                value={editing ? draft : data.content}
+                onChange={editing ? setDraft : undefined}
+                editable={editing}
+                filename={path}
+                height="60vh"
+              />
+            )
           )}
 
           {!loading && !error && data?.type === 'image' && (
             <div className="flex items-center justify-center bg-[#0d1117] p-4">
+              {/* Source is an in-memory data: URL from the session file API, not a
+                  remote asset — next/image would force `unoptimized` and add no value. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={data.dataUrl} alt={displayName(path)} className="max-h-[60vh] object-contain" />
             </div>
           )}

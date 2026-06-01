@@ -57,7 +57,7 @@ export type ToolResultPreview =
    * the scope guard from the design: stream a preview + a ref, never the whole
    * file through the event bus.
    */
-  | { kind: 'file'; path: string; version?: number; bytes?: number }
+  | { kind: 'file'; path: string; version?: string; bytes?: number }
   /** Nothing meaningful to show (void result, ack). */
   | { kind: 'empty' };
 
@@ -77,3 +77,44 @@ export interface ToolActivityRender {
 export const WORK_STREAM_PREVIEW_CAP = 2000;
 /** Cap for the number of list items surfaced in a `list` result preview. */
 export const WORK_STREAM_LIST_CAP = 20;
+
+/**
+ * Reserved key a tool may attach to its result object to carry **UI-only**
+ * data for the work-stream renderer (e.g. a precomputed file diff). This is
+ * stripped from the result before it is serialized into the model's message —
+ * the model already has the inputs it acted on, so a diff would be redundant
+ * context and wasted tokens. The renderer reads it via `readWorkStreamMeta`;
+ * `tool-executor` removes it via `stripWorkStreamMeta` on the model path.
+ */
+export const WORK_STREAM_META_KEY = '__workStream';
+
+export interface ToolResultWorkStreamMeta {
+  /** A precomputed line diff for the work stream / file view. UI-only. */
+  diff?: { patch: string; added: number; removed: number };
+}
+
+/** Read the UI-only work-stream metadata a tool attached to its result, if any. */
+export function readWorkStreamMeta(result: unknown): ToolResultWorkStreamMeta | null {
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    const meta = (result as Record<string, unknown>)[WORK_STREAM_META_KEY];
+    if (meta && typeof meta === 'object' && !Array.isArray(meta)) return meta as ToolResultWorkStreamMeta;
+  }
+  return null;
+}
+
+/**
+ * Return a model-safe view of a tool result with the UI-only work-stream
+ * metadata removed. Non-object results pass through unchanged.
+ */
+export function stripWorkStreamMeta(result: unknown): unknown {
+  if (
+    result &&
+    typeof result === 'object' &&
+    !Array.isArray(result) &&
+    WORK_STREAM_META_KEY in (result as Record<string, unknown>)
+  ) {
+    const { [WORK_STREAM_META_KEY]: _uiOnly, ...rest } = result as Record<string, unknown>;
+    return rest;
+  }
+  return result;
+}

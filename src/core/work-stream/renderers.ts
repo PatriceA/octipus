@@ -16,6 +16,7 @@
  */
 
 import {
+  readWorkStreamMeta,
   type ToolActivityRender,
   type ToolResultPreview,
   WORK_STREAM_LIST_CAP,
@@ -99,10 +100,23 @@ function fileWriteRenderer(verb: string): Renderer {
     };
     if (hasResult) {
       const rec = asRecord(result);
-      const bytes = rec && typeof rec.bytesWritten === 'number' ? rec.bytesWritten : undefined;
-      const resolved = rec && typeof rec.path === 'string' ? rec.path : path;
-      render.result = { kind: 'file', path: resolved, bytes };
-      if (bytes != null) render.title = `${verb} ${name} (${bytes} byte${bytes === 1 ? '' : 's'})`;
+      // The diff is UI-only metadata the tool attached out-of-band (stripped
+      // before the model sees the result) — read it from there, not the body.
+      const diff = readWorkStreamMeta(result)?.diff;
+      if (diff && typeof diff.patch === 'string') {
+        const added = typeof diff.added === 'number' ? diff.added : 0;
+        const removed = typeof diff.removed === 'number' ? diff.removed : 0;
+        render.result = { kind: 'diff', patch: cap(diff.patch).text, added, removed };
+        // "Edited" once there was prior content to change; the base verb
+        // (Wrote/Appended to) otherwise — matches the design's "Edited app.ts (+12 −3)".
+        const editVerb = removed > 0 ? 'Edited' : verb;
+        render.title = `${editVerb} ${name} (+${added} −${removed})`;
+      } else {
+        const bytes = rec && typeof rec.bytesWritten === 'number' ? rec.bytesWritten : undefined;
+        const resolved = rec && typeof rec.path === 'string' ? rec.path : path;
+        render.result = { kind: 'file', path: resolved, bytes };
+        if (bytes != null) render.title = `${verb} ${name} (${bytes} byte${bytes === 1 ? '' : 's'})`;
+      }
     }
     return render;
   };

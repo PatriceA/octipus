@@ -29,6 +29,38 @@ describe('renderToolActivity — filesystem', () => {
     expect(done.result).toEqual({ kind: 'file', path: '/work/notes/poem.md', bytes: 5 });
   });
 
+  it('renders write_file with a diff as an "Edited (+a −r)" diff preview', () => {
+    const done = renderToolActivity(
+      'filesystem__write_file',
+      { path: 'notes/poem.md', content: 'roses are red\nviolets are green' },
+      {
+        success: true,
+        path: '/work/notes/poem.md',
+        bytesWritten: 31,
+        __workStream: { diff: { patch: ' roses are red\n-violets are blue\n+violets are green', added: 1, removed: 1 } },
+      },
+      true,
+    );
+    expect(done.title).toBe('Edited poem.md (+1 −1)');
+    expect(done.result?.kind).toBe('diff');
+    if (done.result?.kind === 'diff') {
+      expect(done.result.added).toBe(1);
+      expect(done.result.removed).toBe(1);
+      expect(done.result.patch).toContain('+violets are green');
+    }
+  });
+
+  it('keeps the base verb when a write only adds lines (new file)', () => {
+    const done = renderToolActivity(
+      'filesystem__write_file',
+      { path: 'new.md', content: 'a\nb' },
+      { success: true, path: '/work/new.md', bytesWritten: 3, __workStream: { diff: { patch: '+a\n+b', added: 2, removed: 0 } } },
+      true,
+    );
+    expect(done.title).toBe('Wrote new.md (+2 −0)');
+    expect(done.result?.kind).toBe('diff');
+  });
+
   it('renders list_directory as a capped item list', () => {
     const entries = Array.from({ length: 30 }, (_, i) => ({ name: `f${i}.txt`, isDirectory: false }));
     entries.push({ name: 'src', isDirectory: true } as never);

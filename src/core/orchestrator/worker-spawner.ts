@@ -54,6 +54,12 @@ export async function handleExpertMessage(
   deps: WorkerSpawnerDeps,
   guardFlags: string[] = [],
   workspaceId: string | null = null,
+  /**
+   * Pre-rendered edit-and-continue context (current contents of files the user
+   * attached to this turn), appended to the expert's system prompt so a
+   * preset-selected turn still operates on the live file — design Thread 2.
+   */
+  attachedFilesBlock = '',
 ): Promise<{ response: string; sessionId: string; classification: import('./types').MessageClassification; metadata?: import('./types').ResponseMetadata }> {
   const { getDb } = await import('@/db/postgres');
   const db = getDb();
@@ -131,6 +137,11 @@ export async function handleExpertMessage(
 
     if (guardFlags.length > 0) {
       expertPrompt += buildSecurityReminder(guardFlags);
+    }
+
+    // Edit-and-continue: live contents of files attached to this turn.
+    if (attachedFilesBlock) {
+      expertPrompt += attachedFilesBlock;
     }
 
     // Domain knowledge from skills

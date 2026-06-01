@@ -16,6 +16,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import {
+  buildAttachedFilesContext,
+  MAX_ATTACHED_FILE_CONTEXT_BYTES,
   MAX_FILE_BYTES,
   readSessionFile,
   SessionFileError,
@@ -146,5 +148,76 @@ describe('writeSessionFile', () => {
 
   test('rejects traversal on write', async () => {
     await expect(writeSessionFile(fs, '../escape.txt', 'x')).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('buildAttachedFilesContext (edit-and-continue)', () => {
+  test('empty refs → empty string', async () => {
+    expect(await buildAttachedFilesContext(fs, [])).toBe('');
+  });
+
+  test('inlines a text file with its current version and contents', async () => {
+    await writeFile(join(root, 'poem.md'), 'roses are red', 'utf-8');
+    const read = await readSessionFile(fs, 'poem.md');
+    if (read.type !== 'text') throw new Error('expected text');
+    const block = await buildAttachedFilesContext(fs, [{ path: 'poem.md', version: read.version }]);
+    expect(block).toContain('roses are red');
+    expect(block).toContain(`version ${read.version}`);
+    expect(block).toContain('--- poem.md');
+    // Self-separating like renderMemoriesBlock so it concatenates onto a prompt.
+    expect(block.startsWith('\n\n')).toBe(true);
+    // A matching version is NOT flagged stale.
+    expect(block).not.toContain('changed since');
+  });
+
+  test('reflects the LIVE contents, not the version the ref carried', async () => {
+    await writeFile(join(root, 'live.md'), 'first', 'utf-8');
+    const v1 = await readSessionFile(fs, 'live.md');
+    if (v1.type !== 'text') throw new Error('expected text');
+    // The file changes out-of-band after the ref was captured.
+    await writeFile(join(root, 'live.md'), 'second — edited', 'utf-8');
+    const block = await buildAttachedFilesContext(fs, [{ path: 'live.md', version: v1.version }]);
+    expect(block).toContain('second — edited');
+    expect(block).not.toContain('first');
+    // Stale version is surfaced to the agent, not hidden.
+    expect(block).toContain('changed since the user last viewed it');
+  });
+
+  test('surfaces a read failure instead of dropping the file (fail-loud)', async () => {
+    const block = await buildAttachedFilesContext(fs, [{ path: 'missing.md' }]);
+    expect(block).toContain('missing.md');
+    expect(block).toContain('could not be read');
+  });
+
+  test('truncates a file over the context cap', async () => {
+    const big = 'x'.repeat(MAX_ATTACHED_FILE_CONTEXT_BYTES + 500);
+    await writeFile(join(root, 'big.txt'), big, 'utf-8');
+    const block = await buildAttachedFilesContext(fs, [{ path: 'big.txt' }]);
+    expect(block).toContain('(truncated');
+    expect(block.length).toBeLessThan(big.length);
+  });
+
+  test('describes a directory / binary / image rather than inlining bytes', async () => {
+    await mkdir(join(root, 'adir'), { recursive: true });
+    await writeFile(join(root, 'b.dat'), Buffer.from([1, 0, 2]));
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    await writeFile(join(root, 'p.png'), png);
+    const block = await buildAttachedFilesContext(fs, [
+      { path: 'adir' },
+      { path: 'b.dat' },
+      { path: 'p.png' },
+    ]);
+    expect(block).toContain('adir is a directory');
+    expect(block).toContain('b.dat is a binary file');
+    expect(block).toContain('p.png is an image');
+  });
+
+  test('rejects traversal in an attached ref (containment inherited)', async () => {
+    const block = await buildAttachedFilesContext(fs, [{ path: '../../../etc/passwd' }]);
+    // WorkspaceFS rejects the path → surfaced as a could-not-read note, never inlined.
+    expect(block).toContain('could not be read');
   });
 });

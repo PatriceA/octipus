@@ -23,6 +23,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
+import DiffView from '@/components/chat/diff-view';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -150,6 +151,10 @@ function getRoleBadgeColor(role: string): string {
 // ---------------------------------------------------------------------------
 
 function ElapsedTimer({ startTime, active = true }: { startTime: number; active?: boolean }) {
+  // Stopwatch seed — intentionally time-based and re-synced every 100ms by the
+  // interval below; an inactive (completed) timer must still show its frozen
+  // elapsed, so the initial value has to read the clock.
+  // eslint-disable-next-line react-hooks/purity
   const [elapsed, setElapsed] = useState(Date.now() - startTime);
 
   useEffect(() => {
@@ -436,9 +441,15 @@ function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPrevi
       );
     case 'diff':
       return (
-        <pre className="mt-1 max-h-40 overflow-auto rounded bg-[#0d1117] border border-white/10 px-2 py-1 text-[11px] font-mono whitespace-pre">
-          {result.patch}
-        </pre>
+        <div className="mt-1">
+          {(result.added > 0 || result.removed > 0) && (
+            <div className="mb-0.5 flex gap-2 px-1 font-mono text-[10px]">
+              <span className="text-green-400">+{result.added}</span>
+              <span className="text-red-400">−{result.removed}</span>
+            </div>
+          )}
+          <DiffView patch={result.patch} className="max-h-40 py-1" />
+        </div>
       );
     case 'file': {
       const label = (
@@ -465,6 +476,9 @@ function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPrevi
     }
     case 'image':
       return (
+        // Dynamic tool-result image (data: URL or artifact ref) — next/image
+        // would force `unoptimized`/domain config here for no benefit.
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={result.ref}
           alt="tool result"

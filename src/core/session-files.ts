@@ -25,6 +25,26 @@ import { type WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 /** Hard ceiling for an in-chat read/write. 1 MiB is plenty for a doc/code file. */
 export const MAX_FILE_BYTES = 1024 * 1024;
 
+/**
+ * Tighter cap for a file we inline into the *model's* context on an
+ * edit-and-continue turn. The on-disk read cap above is 1 MiB; injecting that
+ * into every prompt would blow the context window, so we cap far smaller — a
+ * doc/code file the user is editing in chat sits comfortably under this.
+ */
+export const MAX_ATTACHED_FILE_CONTEXT_BYTES = 64 * 1024;
+
+/**
+ * A reference to a session-scoped file the user attached to a chat turn so the
+ * agent operates on the *current* contents — `.octipus/end-user-ux-design.md`
+ * Thread 2 edit-and-continue — rather than a stale copy pasted into the
+ * transcript. `version` is the version the UI last saw; a mismatch means the
+ * file changed out-of-band, which we surface to the agent rather than hide.
+ */
+export interface AttachedFileRef {
+  path: string;
+  version?: string;
+}
+
 /** Typed error the routes map to an HTTP status. */
 export class SessionFileError extends Error {
   readonly status: number;
@@ -217,4 +237,66 @@ export async function writeSessionFile(
 /** Pretty display name for a path — the last segment. */
 export function fileDisplayName(path: string): string {
   return basename(path.replace(/[/\\]+$/, ''));
+}
+
+/**
+ * Re-read each attached file and render one context block of their *current*
+ * contents for injection into the agent's system context. This is the server
+ * half of edit-and-continue: the user edits `poem.md` in the Files tab, says
+ * "make it rhyme", and the next turn sees the live file here — no copy-paste.
+ *
+ * Returns a self-separating block (leading blank lines, like
+ * `renderMemoriesBlock`) so it concatenates straight onto a system prompt, or
+ * `''` when there is nothing to attach.
+ *
+ * Read failures are surfaced, not swallowed (DESIGN.md fail-loud): a file that
+ * can't be read becomes a visible note in the block so the agent can tell the
+ * user, rather than silently dropping the attachment.
+ */
+export async function buildAttachedFilesContext(
+  fs: WorkspaceFS,
+  refs: AttachedFileRef[],
+): Promise<string> {
+  if (refs.length === 0) return '';
+  const blocks: string[] = [];
+  for (const ref of refs) {
+    const name = fileDisplayName(ref.path);
+    let res: ReadFileResult;
+    try {
+      res = await readSessionFile(fs, ref.path);
+    } catch (err) {
+      const reason = err instanceof SessionFileError ? err.message : (err as Error).message;
+      blocks.push(`--- ${name} (could not be read: ${reason}) ---`);
+      continue;
+    }
+    switch (res.type) {
+      case 'text': {
+        const overCap = Buffer.byteLength(res.content, 'utf-8') > MAX_ATTACHED_FILE_CONTEXT_BYTES;
+        const body = overCap
+          ? `${res.content.slice(0, MAX_ATTACHED_FILE_CONTEXT_BYTES)}\n…(truncated — open the file to see the rest)`
+          : res.content;
+        const stale =
+          ref.version && ref.version !== res.version ? ' — note: this changed since the user last viewed it' : '';
+        blocks.push(`--- ${name} (version ${res.version}${stale}) ---\n${body}\n--- end ${name} ---`);
+        break;
+      }
+      case 'directory':
+        blocks.push(`--- ${name} is a directory (${res.entries.length} entr${res.entries.length === 1 ? 'y' : 'ies'}) ---`);
+        break;
+      case 'image':
+        blocks.push(`--- ${name} is an image (${res.mimeType}); it is shown in the file view ---`);
+        break;
+      case 'too-large':
+        blocks.push(`--- ${name} is too large to inline (${res.size} bytes) ---`);
+        break;
+      case 'binary':
+        blocks.push(`--- ${name} is a binary file — open it in the file view ---`);
+        break;
+    }
+  }
+  const header =
+    'The user has attached these workspace files to this message. Treat the contents below as ' +
+    'the current, authoritative version and operate on them directly — do not rely on any earlier ' +
+    'copy from the conversation. When you change one, write it back to the same path.';
+  return `\n\n${header}\n\n${blocks.join('\n\n')}\n`;
 }

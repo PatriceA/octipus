@@ -9,8 +9,10 @@ import { taskFingerprint } from '@/core/swarm/spawner';
 import type { AgentWorker } from '@/core/agent-worker';
 import { type AgentNode, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext } from '@/core/types';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { SessionContext } from '@/db/schema/sessions';
@@ -92,6 +94,12 @@ export class OrchestratorService {
     message: string,
     channel?: string,
     expertId?: string,
+    /**
+     * Session files the user attached to this turn (edit-and-continue). Their
+     * *current* contents are re-read here and injected into the turn's context
+     * so the agent operates on the live file, not a stale transcript copy.
+     */
+    attachedFiles: AttachedFileRef[] = [],
   ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
@@ -310,9 +318,24 @@ export class OrchestratorService {
         return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification };
       }
 
+      // Edit-and-continue (design Thread 2): re-read any files the user
+      // attached to this turn and inject their CURRENT contents so the agent
+      // operates on the live file, not a stale copy from the transcript. Built
+      // BEFORE the expert bypass so a preset-selected turn gets it too. The
+      // block is self-separating, the same way `renderMemoriesBlock` is.
+      let attachedFilesBlock = '';
+      if (attachedFiles.length > 0) {
+        try {
+          const fs = WorkspaceFS.forAgent({ userId });
+          attachedFilesBlock = await buildAttachedFilesContext(fs, attachedFiles);
+        } catch (err) {
+          coreLogger.warn({ err, sessionId }, 'attached-file context build failed — proceeding without it');
+        }
+      }
+
       // Expert bypass
       if (expertId) {
-        const expertResult = await handleExpertMessage(expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags, workspaceId);
+        const expertResult = await handleExpertMessage(expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags, workspaceId, attachedFilesBlock);
         const outputCheck = guardOutput(expertResult.response, inputGuard.flags);
         if (outputCheck.action === 'replace') {
           coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced expert response');
@@ -353,6 +376,11 @@ export class OrchestratorService {
       } catch (err) {
         coreLogger.warn({ err }, 'memory.retrieveForContext failed — proceeding without memories');
       }
+
+      // Combine long-term memory with the attached-file block built above
+      // (before the expert bypass). Both are self-separating, so the casual and
+      // orchestrator paths get the live file contents in their system context.
+      const turnContext = memoryBlock + attachedFilesBlock;
       const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
         // Cadence gate. `off` short-circuits before any work; the
@@ -407,7 +435,7 @@ export class OrchestratorService {
 
         const { response, metadata } = await directResponse(
           message, resolvedSessionId, userId, this.modelSelector, classification.complexity, inputGuard.flags,
-          memoryBlock,
+          turnContext,
         );
 
         const outputCheck = guardOutput(response, inputGuard.flags);
@@ -443,7 +471,7 @@ export class OrchestratorService {
       const startTime = Date.now();
       const { response, agentId, sources } = await this.runOrchestrator(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
-        memoryBlock,
+        turnContext,
         workspaceId,
       );
 

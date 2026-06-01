@@ -118,6 +118,18 @@ export const AuthMessageSchema = z.object({
   clientVersion: z.string().optional(),
 });
 
+/**
+ * A reference to a session-scoped workspace file the user attached to a turn,
+ * so the agent operates on the file's current contents (edit-and-continue,
+ * `.octipus/end-user-ux-design.md` Thread 2) instead of a copy pasted into the
+ * transcript. `version` is the version the UI last saw — a mismatch is surfaced
+ * to the agent, not silently ignored.
+ */
+export const FileRefSchema = z.object({
+  path: z.string().min(1).max(4096),
+  version: z.string().max(128).optional(),
+});
+
 export const ChatSendSchema = z.object({
   type: z.literal('chat.send'),
   sessionId: z.string().uuid(),
@@ -129,6 +141,8 @@ export const ChatSendSchema = z.object({
     mimeType: z.string(),
     data: z.string(),
   })).optional(),
+  /** Session files to inline (current version) into this turn's context. */
+  fileRefs: z.array(FileRefSchema).max(10).optional(),
 });
 
 export const CommandSchema = z.object({
