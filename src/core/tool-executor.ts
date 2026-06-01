@@ -1,4 +1,5 @@
 import { isCancellationError } from '@/core/swarm/errors';
+import { renderToolActivity } from '@/core/work-stream/renderers';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getPermissionManager } from '@/security/permissions';
@@ -189,17 +190,26 @@ export class ToolExecutor {
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
     this.emitFn('action', {
       role: this.context.role,
-      toolCalls: toolCalls.map(tc => ({
-        id: tc.id,
-        name: tc.name,
-        argsSummary: Object.entries(tc.arguments)
-          .map(([k, v]) => {
-            const s = typeof v === 'string' ? v : JSON.stringify(v);
-            return `${k}: ${s.length > 60 ? s.slice(0, 57) + '...' : s}`;
-          })
-          .join(', ')
-          .slice(0, 120),
-      })),
+      toolCalls: toolCalls.map(tc => {
+        // Thread 1 (rich work stream): a per-tool renderer turns the call into
+        // a human one-liner + a structured, capped input preview. `argsSummary`
+        // stays for backward-compat (TUI + REST `/agents/:id/events` replay
+        // don't yet read the structured shape).
+        const activity = renderToolActivity(tc.name, tc.arguments);
+        return {
+          id: tc.id,
+          name: tc.name,
+          argsSummary: Object.entries(tc.arguments)
+            .map(([k, v]) => {
+              const s = typeof v === 'string' ? v : JSON.stringify(v);
+              return `${k}: ${s.length > 60 ? s.slice(0, 57) + '...' : s}`;
+            })
+            .join(', ')
+            .slice(0, 120),
+          title: activity.title,
+          input: activity.input,
+        };
+      }),
     });
 
     const permissionManager = getPermissionManager();
@@ -244,15 +254,21 @@ export class ToolExecutor {
             tool: toolCall.name, toolId, durationMs: toolExecMs,
           }, 'Tool executed');
 
-          this.emitFn('action', {
-            type: 'tool_call_complete',
-            toolCallId: toolCall.id,
-            name: toolCall.name,
-            role: this.context.role,
-            status: 'ok',
-            durationMs: toolExecMs,
-            resultPreview: previewToolResult(result),
-          });
+          {
+            const activity = renderToolActivity(toolCall.name, toolCall.arguments, result, true);
+            this.emitFn('action', {
+              type: 'tool_call_complete',
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              role: this.context.role,
+              status: 'ok',
+              durationMs: toolExecMs,
+              resultPreview: previewToolResult(result),
+              title: activity.title,
+              input: activity.input,
+              result: activity.result,
+            });
+          }
 
           results.push({ toolCallId: toolCall.id, result });
 
@@ -287,14 +303,19 @@ export class ToolExecutor {
           if (tool.final) {
             throw error;
           }
-          this.emitFn('action', {
-            type: 'tool_call_complete',
-            toolCallId: toolCall.id,
-            name: toolCall.name,
-            role: this.context.role,
-            status: isCancellationError(error) ? 'cancelled' : 'error',
-            error: (error as Error).message,
-          });
+          {
+            const activity = renderToolActivity(toolCall.name, toolCall.arguments);
+            this.emitFn('action', {
+              type: 'tool_call_complete',
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              role: this.context.role,
+              status: isCancellationError(error) ? 'cancelled' : 'error',
+              error: (error as Error).message,
+              title: activity.title,
+              input: activity.input,
+            });
+          }
           results.push({ toolCallId: toolCall.id, result: null, error: (error as Error).message });
         }
         continue;
@@ -410,6 +431,8 @@ export class ToolExecutor {
         // Phase 5: per-tool completion event so the UI can flip a row
         // from "running" to "done" as soon as the tool returns, instead
         // of waiting for the bulk `observation` emit at end-of-batch.
+        // Thread 1: carry the rendered title + structured result preview.
+        const completedActivity = renderToolActivity(toolCall.name, toolCall.arguments, result, true);
         this.emitFn('action', {
           type: 'tool_call_complete',
           toolCallId: toolCall.id,
@@ -418,6 +441,9 @@ export class ToolExecutor {
           status: 'ok',
           durationMs: toolExecMs,
           resultPreview: previewToolResult(result),
+          title: completedActivity.title,
+          input: completedActivity.input,
+          result: completedActivity.result,
         });
 
         results.push({ toolCallId: toolCall.id, result });
@@ -489,6 +515,7 @@ export class ToolExecutor {
 
         // Phase 5: surface per-tool failure too, so the UI can mark the
         // row failed before the batch finishes.
+        const failedActivity = renderToolActivity(toolCall.name, toolCall.arguments);
         this.emitFn('action', {
           type: 'tool_call_complete',
           toolCallId: toolCall.id,
@@ -496,6 +523,8 @@ export class ToolExecutor {
           role: this.context.role,
           status: cancelled ? 'cancelled' : 'error',
           error: (error as Error).message,
+          title: failedActivity.title,
+          input: failedActivity.input,
         });
 
         results.push({

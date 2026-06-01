@@ -14,6 +14,7 @@ import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
+import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -26,6 +27,10 @@ interface ToolCallInfo {
   durationMs?: number;
   resultPreview?: string;
   error?: string;
+  /** Rich work-stream fields (Thread 1). */
+  title?: string;
+  input?: ToolInputPreview;
+  result?: ToolResultPreview;
 }
 
 export interface FileChange {
@@ -928,6 +933,8 @@ export default function ChatPage() {
           id: tc.id || Date.now().toString(),
           name: tc.name,
           argsSummary: tc.argsSummary,
+          title: tc.title,
+          input: tc.input,
         }));
         // File-change entries come from the dedicated `file_change` event
         // emitted by `tool-executor.ts` after a successful filesystem write.
@@ -1024,6 +1031,9 @@ export default function ChatPage() {
         // don't need to look it up in trackedAgents (which loses races
         // when several events fire faster than React's setState batches).
         const toolName = typeof d.name === 'string' ? d.name : '';
+        // Human title from the work-stream renderer ("Wrote poem.md") — falls
+        // back to the raw tool name so narration still reads sensibly.
+        const toolLabel = typeof d.title === 'string' && d.title ? d.title : `\`${toolName}\``;
         const status = String(d.status ?? 'ok');
         const dur = typeof d.durationMs === 'number'
           ? ` · ${(d.durationMs / 1000).toFixed(d.durationMs >= 1000 ? 1 : 2)}s`
@@ -1038,6 +1048,9 @@ export default function ChatPage() {
             durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
             resultPreview: typeof d.resultPreview === 'string' ? d.resultPreview : undefined,
             error: typeof d.error === 'string' ? d.error : undefined,
+            title: typeof d.title === 'string' ? d.title : undefined,
+            input: d.input as ToolInputPreview | undefined,
+            result: d.result as ToolResultPreview | undefined,
           };
           if (!existing) {
             // Agent record not yet hydrated — stash the completion on a
@@ -1079,11 +1092,11 @@ export default function ChatPage() {
         });
         if (toolName) {
           if (status === 'error' && err) {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` failed: ${err}`);
+            pushTransientNarration(sessionId, `${completionRole} arm · ${toolLabel} failed: ${err}`);
           } else if (status === 'cancelled') {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\` cancelled`);
+            pushTransientNarration(sessionId, `${completionRole} arm · ${toolLabel} cancelled`);
           } else {
-            pushTransientNarration(sessionId, `${completionRole} arm · \`${toolName}\`${dur}`);
+            pushTransientNarration(sessionId, `${completionRole} arm · ${toolLabel}${dur}`);
           }
         }
       }
