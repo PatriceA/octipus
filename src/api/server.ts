@@ -43,6 +43,7 @@ import { mcpRoutes } from './routes/mcp';
 import { memoryRoutes } from './routes/memory';
 import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
+import { readerRoutes } from './routes/reader';
 import { notificationRoutes } from './routes/notifications';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
@@ -326,6 +327,7 @@ export function createServer() {
         .use(sessionRoutes)
         .use(modelRoutes)
         .use(hookRoutes)
+        .use(readerRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)
