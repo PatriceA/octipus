@@ -6,6 +6,7 @@ import { AddModelModal } from '@/components/models/add-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';
 import { EditModelModal } from '@/components/models/edit-model-modal';
 import { ModelCard } from '@/components/models/model-card';
+import { RecommendedModelsPanel } from '@/components/models/recommended-models-panel';
 import { api } from '@/lib/api';
 import type { CLITool, Model } from '@/lib/types/models';
 
@@ -145,6 +146,8 @@ export default function ModelsPage() {
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>
       )}
+
+      <RecommendedModelsPanel onInstalled={fetchModels} />
 
       <CLIStatusPanel
         tools={cliTools}

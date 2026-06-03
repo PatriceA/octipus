@@ -31,6 +31,7 @@
  *   OCTIPUS_SETUP_API_KEY=…
  *   OCTIPUS_SETUP_MODEL=gpt-4o-mini
  *   OCTIPUS_SETUP_INSTALL_CAPS=browser,mcp       (comma-separated)
+ *   OCTIPUS_SETUP_RECOMMEND=1                     (scan HW + pull a recommended local model)
  *
  * Remote mode (--remote <url>) skips local .env + backend boot and
  * runs the admin/provider/capability steps against the remote API.
@@ -544,6 +545,94 @@ async function main() {
  * we run this phase against plain stdout (the TUI was stopped before
  * we spawned the backend so its logs don't tear up the screen).
  */
+/** hwfit response shapes (subset; full types live in src/capabilities/hwfit). */
+interface RecommendResp {
+  hardware?: { gpus: { name: string }[]; totalVramMB: number; ramMB: number; source: string[] };
+  scored?: Array<{ entry: { id: string; topics: string[]; vramMB: number }; fits: boolean; recommended: boolean }>;
+  error?: string;
+}
+interface InstallJobResp {
+  status: 'pulling' | 'registering' | 'done' | 'error';
+  percent: number;
+  modelName?: string;
+  error?: string;
+}
+
+/**
+ * Scan hardware and pull a recommended local model. Fully automatic and only
+ * acts when OCTIPUS_SETUP_RECOMMEND=1 (good for Docker/CI first-boot) — it picks
+ * the top recommended chat/general model that fits and binds it. In any other
+ * mode it just points the user at the web "Recommended" panel (the interactive
+ * post-backend phase runs on plain stdout without the TUI).
+ */
+async function maybeRecommendModel(api: ApiClient): Promise<void> {
+  if (process.env.OCTIPUS_SETUP_RECOMMEND !== '1') {
+    process.stdout.write(
+      '\x1b[90m· Tip: open the web Models page for "Recommended for your hardware" to install a local model.\x1b[0m\n',
+    );
+    return;
+  }
+
+  process.stdout.write('Scanning hardware for a recommended local model…\n');
+  let rec: RecommendResp;
+  try {
+    rec = await api.post<RecommendResp>('/api/models/recommend', {});
+  } catch (err) {
+    process.stdout.write(`\x1b[33m! Hardware scan failed: ${(err as Error).message}\x1b[0m\n`);
+    return;
+  }
+  if (rec.error || !rec.scored?.length) {
+    process.stdout.write(`\x1b[33m! No recommendation available${rec.error ? `: ${rec.error}` : ''}.\x1b[0m\n`);
+    return;
+  }
+
+  // Prefer a recommended chat/general model that fits; fall back to any fitting recommendation.
+  const pick =
+    rec.scored.find((s) => s.recommended && s.fits && s.entry.topics.some((t) => t === 'chat' || t === 'general')) ??
+    rec.scored.find((s) => s.recommended && s.fits) ??
+    rec.scored.find((s) => s.fits);
+  if (!pick) {
+    process.stdout.write('\x1b[33m! No model fits the detected hardware; skipping.\x1b[0m\n');
+    return;
+  }
+
+  process.stdout.write(`Pulling ${pick.entry.id} (binding: ${pick.entry.topics.join(', ')})…\n`);
+  let job: { jobId?: string; error?: string };
+  try {
+    job = await api.post<{ jobId?: string; error?: string }>('/api/models/install', {
+      id: pick.entry.id,
+      bindTopics: pick.entry.topics,
+    });
+  } catch (err) {
+    process.stdout.write(`\x1b[33m! Install failed to start: ${(err as Error).message}\x1b[0m\n`);
+    return;
+  }
+  if (!job.jobId) {
+    process.stdout.write(`\x1b[33m! Install failed to start${job.error ? `: ${job.error}` : ''}.\x1b[0m\n`);
+    return;
+  }
+
+  // Poll until done — pulls can take minutes on first boot.
+  for (let i = 0; i < 1800; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let status: InstallJobResp;
+    try {
+      status = await api.get<InstallJobResp>(`/api/models/install/${job.jobId}`);
+    } catch {
+      continue;
+    }
+    if (status.status === 'done') {
+      process.stdout.write(`\x1b[32m✓ Installed ${status.modelName} and bound to ${pick.entry.topics.join(', ')}\x1b[0m\n`);
+      return;
+    }
+    if (status.status === 'error') {
+      process.stdout.write(`\x1b[33m! Install failed: ${status.error}\x1b[0m\n`);
+      return;
+    }
+  }
+  process.stdout.write('\x1b[33m! Install still running after 30 min; check the Models page.\x1b[0m\n');
+}
+
 async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<void> {
   const api = new ApiClient(baseUrl);
 
@@ -587,6 +676,9 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
       process.stdout.write(`\x1b[33m! Provider settings partially applied: ${(err as Error).message}\x1b[0m\n`);
     }
   }
+
+  // hwfit: optionally scan hardware and pull a recommended local model.
+  await maybeRecommendModel(api);
 
   // Capabilities.
   type CapRow = { toolId: string; available: boolean; reason: string | null };
