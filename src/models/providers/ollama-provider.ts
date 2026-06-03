@@ -36,6 +36,53 @@ function looksLikeOpenRouterSlug(name: string): boolean {
   return name.includes('/') && !name.startsWith('cli/');
 }
 
+/** A single progress update from a streamed `ollama pull`. */
+export interface PullProgress {
+  /** Ollama status string, e.g. 'pulling manifest', 'downloading …', 'success'. */
+  status: string;
+  /** Total bytes for the current layer, when reported. */
+  total?: number;
+  /** Bytes downloaded so far for the current layer, when reported. */
+  completed?: number;
+  /** Derived 0–100 percentage for the current layer (total & completed present). */
+  percent?: number;
+}
+
+/**
+ * Parse one NDJSON line from `POST /api/pull`. Returns a PullProgress, an
+ * `{ error }` object when Ollama reports a failure, or null for blank/unparsable
+ * lines. Pure + exported for unit testing against captured stream output.
+ */
+export function parsePullLine(line: string): PullProgress | { error: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  let obj: { status?: string; error?: string; total?: number; completed?: number };
+  try {
+    obj = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof obj.error === 'string') return { error: obj.error };
+  if (typeof obj.status !== 'string') return null;
+  const progress: PullProgress = { status: obj.status };
+  if (typeof obj.total === 'number') progress.total = obj.total;
+  if (typeof obj.completed === 'number') progress.completed = obj.completed;
+  if (progress.total && progress.total > 0 && typeof progress.completed === 'number') {
+    progress.percent = Math.min(100, Math.round((progress.completed / progress.total) * 100));
+  }
+  return progress;
+}
+
+/** Apply a parsed pull line: throw on error (fail loud), else report progress. */
+function handlePullLine(line: string, model: string, onProgress?: (p: PullProgress) => void): void {
+  const parsed = parsePullLine(line);
+  if (!parsed) return;
+  if ('error' in parsed) {
+    throw new Error(`Ollama pull failed for "${model}": ${parsed.error}`);
+  }
+  onProgress?.(parsed);
+}
+
 /**
  * Ollama provider -- connects directly to a local Ollama server via its
  * OpenAI-compatible API at {endpoint}/v1.
@@ -427,6 +474,46 @@ export class OllamaProvider implements ModelProvider {
     } catch (error) {
       return { healthy: false, error: (error as Error).message };
     }
+  }
+
+  /**
+   * Pull (download) a model into the local Ollama server via POST /api/pull.
+   * Streams NDJSON progress; invokes onProgress per line. Fails loud — throws
+   * on transport errors or any error line from Ollama (DESIGN.md rule #1).
+   */
+  async pull(model: string, onProgress?: (p: PullProgress) => void): Promise<void> {
+    const url = `${this.endpoint}/api/pull`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: model, stream: true }),
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`Ollama pull failed for "${model}": HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const drain = (chunk: string, flush: boolean) => {
+      buffer += chunk;
+      let nl = buffer.indexOf('\n');
+      while (nl !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        handlePullLine(line, model, onProgress);
+        nl = buffer.indexOf('\n');
+      }
+      if (flush && buffer.trim()) handlePullLine(buffer, model, onProgress);
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      drain(decoder.decode(value, { stream: true }), false);
+    }
+    drain(decoder.decode(), true);
   }
 
   // -- Private helpers --

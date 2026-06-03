@@ -701,6 +701,98 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     { detail: { tags: ['models'] } }
   )
 
+  // hwfit: recommend local models for the detected hardware (read-only).
+  // Scans the host, fetches live registry sizes, and scores the curated catalog.
+  .post(
+    '/recommend',
+    async ({ user }) => {
+      if (!user) return { error: 'Not authenticated' };
+      const { probeHardware } = await import('@/setup/probes');
+      const { resolveSizes, scoreCatalog } = await import('@/capabilities/hwfit');
+      const hardware = await probeHardware();
+      const sized = await resolveSizes();
+      const scored = scoreCatalog(hardware, sized);
+      return { hardware, scored };
+    },
+    { detail: { tags: ['models'] } }
+  )
+
+  // hwfit: pull a recommended model into Ollama, register it, and bind topics.
+  // Admin-gated; only catalog ids may be pulled (no arbitrary model strings).
+  .post(
+    '/install',
+    async ({ user, body, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+      const { getCatalogEntry } = await import('@/capabilities/hwfit');
+      const { startInstall } = await import('@/capabilities/hwfit/install');
+      const { OllamaProvider } = await import('@/models/providers/ollama-provider');
+
+      const entry = getCatalogEntry(body.id);
+      if (!entry) {
+        set.status = 400;
+        return { error: `Unknown catalog model "${body.id}"` };
+      }
+
+      const registry = getModelRegistry();
+      if (await registry.getModel(entry.id)) {
+        set.status = 409;
+        return { error: `Model "${entry.id}" is already registered` };
+      }
+
+      const provider = getProviderRouter().getProviderByName('ollama');
+      if (!(provider instanceof OllamaProvider)) {
+        set.status = 500;
+        return { error: 'Ollama provider unavailable' };
+      }
+
+      // Bind only to topics the model actually serves; default to all of them.
+      const requested = body.bindTopics ?? [];
+      const bindTopics = (requested.length ? entry.topics.filter((t) => requested.includes(t)) : entry.topics);
+      if (bindTopics.length === 0) {
+        set.status = 400;
+        return { error: `None of the requested topics are served by "${entry.id}"` };
+      }
+
+      const job = startInstall(entry, bindTopics, {
+        pull: (id, onProgress) => provider.pull(id, onProgress),
+        register: async (e) => {
+          await registry.registerModel(e);
+        },
+        isFirstModel: async () => (await registry.getDefaultModel()) === null,
+      });
+      return { jobId: job.id, status: job.status, bindTopics };
+    },
+    {
+      body: t.Object({
+        id: t.String(),
+        bindTopics: t.Optional(t.Array(t.String())),
+      }),
+      detail: { tags: ['models'] },
+    }
+  )
+
+  // hwfit: poll the progress of an install job started by POST /install.
+  .get(
+    '/install/:jobId',
+    async ({ user, params, set }) => {
+      if (!user) return { error: 'Not authenticated' };
+      const { getInstallJob } = await import('@/capabilities/hwfit/install');
+      const job = getInstallJob(params.jobId);
+      if (!job) {
+        set.status = 404;
+        return { error: 'Install job not found' };
+      }
+      return job;
+    },
+    {
+      params: t.Object({ jobId: t.String() }),
+      detail: { tags: ['models'] },
+    }
+  )
+
   // List available DeepSeek models — live-fetched from the DeepSeek API
   // and merged with the static catalog so we keep price / context metadata
   // for known IDs while surfacing any new ones the account has access to.
