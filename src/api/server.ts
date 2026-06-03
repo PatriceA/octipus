@@ -43,6 +43,7 @@ import { mcpRoutes } from './routes/mcp';
 import { memoryRoutes } from './routes/memory';
 import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
+import { readerRoutes } from './routes/reader';
 import { notificationRoutes } from './routes/notifications';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
@@ -51,6 +52,7 @@ import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
 import { pluginRoutes } from './routes/plugins';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
+import { researchRoutes } from './routes/research';
 import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
 import { capabilitiesRoutes } from './routes/capabilities';
@@ -328,6 +330,7 @@ export function createServer() {
         .use(modelRoutes)
         .use(hookRoutes)
         .use(taskRoutes)
+        .use(readerRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)
@@ -345,6 +348,7 @@ export function createServer() {
         .use(skillRoutes)
         .use(artifactRoutes)
         .use(recurringTaskRoutes)
+        .use(researchRoutes)
         .use(evalRoutes)
         .use(evaluationRoutes)
         .use(documentRoutes)
