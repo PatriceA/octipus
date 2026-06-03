@@ -14,6 +14,7 @@ import {
   KeyRound,
   LayoutDashboard,
   MessageSquare,
+  Newspaper,
   PanelLeft,
   PanelLeftClose,
   Settings,
@@ -45,6 +46,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'dashboard', href: '/', icon: LayoutDashboard },
       { name: 'chat', href: '/chat', icon: MessageSquare },
+      { name: 'reader', href: '/reader', icon: Newspaper },
       { name: 'documents', href: '/documents', icon: FileText },
       { name: 'profiles', href: '/profiles', icon: Users },
       { name: 'persona', href: '/persona', icon: Fingerprint },
