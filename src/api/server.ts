@@ -30,6 +30,7 @@ import { channelBindingRoutes } from './routes/channel-bindings';
 import { chatRoutes } from './routes/chat';
 import { deviceRoutes } from './routes/devices';
 import { documentRoutes } from './routes/documents';
+import { emailRoutes } from './routes/email';
 import { evalRoutes } from './routes/eval';
 import { evaluationRoutes } from './routes/evaluations';
 import { expertRoutes } from './routes/experts';
@@ -331,6 +332,7 @@ export function createServer() {
         .use(hookRoutes)
         .use(taskRoutes)
         .use(readerRoutes)
+        .use(emailRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)
