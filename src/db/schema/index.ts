@@ -40,6 +40,7 @@ export * from './skill-topic-assignments';
 export * from './skills';
 export * from './swarm-nodes';
 export * from './task-state';
+export * from './tasks';
 export * from './trajectory-runs';
 export * from './user-quotas';
 export * from './users';

@@ -47,6 +47,7 @@ import { type Notification, notifications } from '../schema/notifications';
 import { type PipelineTemplate, pipelineTemplates } from '../schema/pipeline-templates';
 import { type Pipeline, pipelines } from '../schema/pipelines';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
+import { type NewTask, type Task, tasks } from '../schema/tasks';
 import { type TrajectoryRunRecord, trajectoryRuns } from '../schema/trajectory-runs';
 
 /**
@@ -674,6 +675,93 @@ export class ScopedPipelineRepo {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Tasks (personal todos — feature #6)
+// ─────────────────────────────────────────────────────────────────────
+
+export interface TaskListFilter {
+  /** Restrict to a status ('open' | 'done' | 'archived'). */
+  status?: string;
+  /** Only tasks due on/before this instant (for "what's due today"). */
+  dueBefore?: Date;
+  limit?: number;
+}
+
+export class ScopedTaskRepo {
+  constructor(private readonly principal: Principal) {
+    requireAuth(principal);
+  }
+
+  private get db() { return getDb(); }
+
+  /** Returns the task only if the principal owns it (or is an admin). */
+  async findById(id: string): Promise<Task | null> {
+    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    const row = await this.db
+      .select()
+      .from(tasks)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
+    return row[0] ?? null;
+  }
+
+  /** List the principal's own tasks, newest-first, optionally filtered. */
+  async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
+    const filters: (SQL | undefined)[] = [eq(tasks.userId, this.principal.userId)];
+    if (filter.status) filters.push(eq(tasks.status, filter.status));
+    if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    return this.db
+      .select()
+      .from(tasks)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .orderBy(asc(tasks.status), desc(tasks.priority), asc(tasks.dueAt), desc(tasks.createdAt))
+      .limit(filter.limit ?? 200);
+  }
+
+  /** Create a task pinned to the principal. Ignores any user_id in `data`. */
+  async create(data: Omit<NewTask, 'userId'>): Promise<Task> {
+    const result = await this.db
+      .insert(tasks)
+      .values({
+        ...data,
+        userId: this.principal.userId,
+        workspaceId: data.workspaceId ?? this.principal.workspaceId ?? null,
+      })
+      .returning();
+    return result[0];
+  }
+
+  /** Update only if owned. `completedAt` is managed by the route/tool. */
+  async update(id: string, patch: Partial<NewTask>): Promise<Task | null> {
+    const { userId: _drop, ...safe } = patch;
+    void _drop;
+    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    const result = await this.db
+      .update(tasks)
+      .set({ ...safe, updatedAt: new Date() })
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .returning();
+    return result[0] ?? null;
+  }
+
+  /** Delete only if owned. Returns false on miss / cross-tenant. */
+  async delete(id: string): Promise<boolean> {
+    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    const result = await this.db
+      .delete(tasks)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .returning();
+    return result.length > 0;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Bundle factory
 // ─────────────────────────────────────────────────────────────────────
 
@@ -686,6 +774,7 @@ export interface ScopedRepos {
   trajectories: ScopedTrajectoryRepo;
   hooks: ScopedHookRepo;
   pipelines: ScopedPipelineRepo;
+  tasks: ScopedTaskRepo;
 }
 
 /**
@@ -706,5 +795,6 @@ export function scopedRepos(principal: Principal): ScopedRepos {
     trajectories: new ScopedTrajectoryRepo(principal),
     hooks: new ScopedHookRepo(principal),
     pipelines: new ScopedPipelineRepo(principal),
+    tasks: new ScopedTaskRepo(principal),
   };
 }
