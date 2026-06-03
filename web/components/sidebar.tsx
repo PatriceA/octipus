@@ -17,6 +17,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   Settings,
+  Telescope,
   Users,
   Webhook,
   Wrench,
@@ -54,6 +55,7 @@ const navGroups: NavGroup[] = [
     label: 'ai & automation',
     items: [
       { name: 'agents', href: '/agents', icon: Bot },
+      { name: 'research', href: '/research', icon: Telescope },
       { name: 'models', href: '/models', icon: Cpu },
       { name: 'pipelines', href: '/pipelines', icon: GitBranch },
       { name: 'tools', href: '/tools', icon: Wrench },
