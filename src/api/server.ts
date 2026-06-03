@@ -61,6 +61,7 @@ import { skillProposalRoutes } from './routes/skill-proposals';
 import { skillTopicAssignmentRoutes } from './routes/skill-topic-assignments';
 import { skillRoutes } from './routes/skills';
 import { swarmRoutes } from './routes/swarm';
+import { taskRoutes } from './routes/tasks';
 import { teamsWebhookRoutes } from './routes/teams-webhook';
 import { toolRoutes } from './routes/tools';
 import { trajectoryRoutes } from './routes/trajectories';
@@ -328,6 +329,7 @@ export function createServer() {
         .use(sessionRoutes)
         .use(modelRoutes)
         .use(hookRoutes)
+        .use(taskRoutes)
         .use(readerRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)
