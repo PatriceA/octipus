@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "note": "Curated set of well-known, pullable Ollama tags for the hwfit recommender (editorial — which models are worth recommending). Real weights size is fetched live from the Ollama registry manifest at recommend-time; vramHintMB is only an offline fallback estimate. Keep ids to real Ollama library tags.",
+  "models": [
+    { "id": "llama3.2:1b-instruct-q4_K_M", "family": "llama3.2", "params": 1000000000, "quant": "q4_K_M", "vramHintMB": 1400, "topics": ["chat", "general"], "contextWindow": 131072, "notes": "Tiny; runs almost anywhere, CPU-friendly." },
+    { "id": "llama3.2:3b-instruct-q4_K_M", "family": "llama3.2", "params": 3000000000, "quant": "q4_K_M", "vramHintMB": 2600, "topics": ["chat", "general"], "contextWindow": 131072, "notes": "Good small general chat." },
+    { "id": "gemma2:2b-instruct-q4_K_M", "family": "gemma2", "params": 2000000000, "quant": "q4_K_M", "vramHintMB": 1900, "topics": ["chat", "general"], "contextWindow": 8192, "notes": "Compact general chat." },
+    { "id": "qwen2.5:7b-instruct-q4_K_M", "family": "qwen2.5", "params": 7000000000, "quant": "q4_K_M", "vramHintMB": 5100, "topics": ["chat", "general", "research"], "contextWindow": 32768 },
+    { "id": "llama3.1:8b-instruct-q4_K_M", "family": "llama3.1", "params": 8000000000, "quant": "q4_K_M", "vramHintMB": 5600, "topics": ["chat", "general", "research"], "contextWindow": 131072, "notes": "Strong all-round 8B." },
+    { "id": "llama3.1:8b-instruct-q8_0", "family": "llama3.1", "params": 8000000000, "quant": "q8_0", "vramHintMB": 9200, "topics": ["chat", "general", "research"], "contextWindow": 131072, "notes": "Higher-fidelity 8B for >=12GB GPUs." },
+    { "id": "gemma2:9b-instruct-q4_K_M", "family": "gemma2", "params": 9000000000, "quant": "q4_K_M", "vramHintMB": 6500, "topics": ["chat", "general"], "contextWindow": 8192 },
+    { "id": "qwen2.5:14b-instruct-q4_K_M", "family": "qwen2.5", "params": 14000000000, "quant": "q4_K_M", "vramHintMB": 9500, "topics": ["chat", "general", "research"], "contextWindow": 32768 },
+    { "id": "qwen2.5:32b-instruct-q4_K_M", "family": "qwen2.5", "params": 32000000000, "quant": "q4_K_M", "vramHintMB": 20500, "topics": ["chat", "general", "research"], "contextWindow": 32768, "notes": "Needs a 24GB+ GPU." },
+    { "id": "llama3.3:70b-instruct-q4_K_M", "family": "llama3.3", "params": 70000000000, "quant": "q4_K_M", "vramHintMB": 43000, "topics": ["chat", "general", "research"], "contextWindow": 131072, "notes": "Workstation/multi-GPU class." },
+
+    { "id": "qwen2.5-coder:1.5b-instruct-q4_K_M", "family": "qwen2.5-coder", "params": 1500000000, "quant": "q4_K_M", "vramHintMB": 1500, "topics": ["coding"], "contextWindow": 32768, "notes": "Tiny code-completion model." },
+    { "id": "qwen2.5-coder:7b-instruct-q4_K_M", "family": "qwen2.5-coder", "params": 7000000000, "quant": "q4_K_M", "vramHintMB": 5100, "topics": ["coding"], "contextWindow": 32768, "notes": "Strong small coding model." },
+    { "id": "qwen2.5-coder:14b-instruct-q4_K_M", "family": "qwen2.5-coder", "params": 14000000000, "quant": "q4_K_M", "vramHintMB": 9500, "topics": ["coding"], "contextWindow": 32768 },
+    { "id": "qwen2.5-coder:32b-instruct-q4_K_M", "family": "qwen2.5-coder", "params": 32000000000, "quant": "q4_K_M", "vramHintMB": 20500, "topics": ["coding"], "contextWindow": 32768, "notes": "Best local coder; needs 24GB+." },
+    { "id": "deepseek-coder-v2:16b-lite-instruct-q4_K_M", "family": "deepseek-coder-v2", "params": 16000000000, "quant": "q4_K_M", "vramHintMB": 10500, "topics": ["coding"], "contextWindow": 131072, "notes": "MoE; strong code at ~12GB." },
+
+    { "id": "moondream:1.8b-v2-q4_0", "family": "moondream", "params": 1800000000, "quant": "q4_0", "vramHintMB": 1800, "topics": ["vision"], "contextWindow": 2048, "notes": "Tiny vision model." },
+    { "id": "llava:7b-v1.6-mistral-q4_K_M", "family": "llava", "params": 7000000000, "quant": "q4_K_M", "vramHintMB": 5300, "topics": ["vision"], "contextWindow": 32768, "notes": "General vision/chat." },
+    { "id": "llama3.2-vision:11b-instruct-q4_K_M", "family": "llama3.2-vision", "params": 11000000000, "quant": "q4_K_M", "vramHintMB": 9000, "topics": ["vision"], "contextWindow": 131072, "notes": "Capable vision; ~12GB GPU." },
+
+    { "id": "all-minilm:l6-v2", "family": "all-minilm", "params": 23000000, "quant": "fp16", "vramHintMB": 120, "topics": ["embedding"], "contextWindow": 512, "notes": "Tiny, fast embeddings." },
+    { "id": "nomic-embed-text:v1.5", "family": "nomic-embed-text", "params": 137000000, "quant": "fp16", "vramHintMB": 350, "topics": ["embedding"], "contextWindow": 8192, "notes": "Good general embeddings." },
+    { "id": "mxbai-embed-large:335m", "family": "mxbai-embed-large", "params": 335000000, "quant": "fp16", "vramHintMB": 700, "topics": ["embedding"], "contextWindow": 512, "notes": "Higher-quality embeddings." }
+  ]
+}

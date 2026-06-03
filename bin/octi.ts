@@ -37,6 +37,7 @@ Commands:
   setup [--remote <url>]   Run the setup wizard (single entry point — TUI/non-TTY/remote)
   doctor [--json]          Environment health checks
   capabilities [install]   List or install optional tools (browser, mcp, …)
+  models recommend         Recommend local models for this hardware (--install <id> to pull & bind)
   tui                      Launch terminal chat
   edit                     Launch the TUI editor
   start [--dev]            Start backend + web UI (delegates to bash dispatcher)
@@ -301,6 +302,10 @@ async function main(): Promise<void> {
     case 'capabilities':
     case 'caps':
       await runCapabilities(rest);
+      break;
+
+    case 'models':
+      await delegateBun('scripts/models-recommend.ts', rest);
       break;
 
     case 'start':
