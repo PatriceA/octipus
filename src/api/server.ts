@@ -52,6 +52,7 @@ import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
 import { pluginRoutes } from './routes/plugins';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
+import { researchRoutes } from './routes/research';
 import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
 import { capabilitiesRoutes } from './routes/capabilities';
@@ -345,6 +346,7 @@ export function createServer() {
         .use(skillRoutes)
         .use(artifactRoutes)
         .use(recurringTaskRoutes)
+        .use(researchRoutes)
         .use(evalRoutes)
         .use(evaluationRoutes)
         .use(documentRoutes)
