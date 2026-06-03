@@ -8,7 +8,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { platform } from 'node:os';
+import { arch, cpus, platform, totalmem } from 'node:os';
 
 export interface ProbeResult {
   ok: boolean;
@@ -144,6 +144,114 @@ export async function probePostgres(host = 'localhost', port = 5432): Promise<Se
 export async function probeRedis(host = 'localhost', port = 6379): Promise<ServiceProbe> {
   const r = await tcpReachable(host, port, 1500);
   return { service: 'redis', ...r };
+}
+
+// ── Hardware probe ───────────────────────────────────────────────────
+// Best-effort host hardware detection for the `hwfit` model-recommendation
+// flow. Shells out to read-only tools that may be absent and degrades
+// gracefully (CPU-only) — never throws.
+
+export type GpuVendor = 'nvidia' | 'amd' | 'apple' | 'unknown';
+
+export interface DetectedGpu {
+  vendor: GpuVendor;
+  name: string;
+  /** Usable VRAM in MB. For Apple unified memory this is a RAM-derived budget. */
+  vramMB: number;
+}
+
+export type HardwareSource = 'nvidia-smi' | 'rocm-smi' | 'sysfs' | 'os' | 'apple-metal';
+
+export interface HardwareProfile {
+  gpus: DetectedGpu[];
+  /** Sum of usable GPU VRAM across all detected GPUs. 0 ⇒ CPU-only. */
+  totalVramMB: number;
+  ramMB: number;
+  cpu: { cores: number; arch: string };
+  platform: NodeJS.Platform;
+  /** Provenance of the data, so the UI can say "via nvidia-smi" vs "estimated". */
+  source: HardwareSource[];
+}
+
+const MB_PER_BYTE = 1 / (1024 * 1024);
+
+/**
+ * Run a command and capture stdout, or null on non-zero exit / spawn failure.
+ * Read-only by contract — callers only pass query commands.
+ */
+async function runCapture(cmd: string[], timeoutMs = 4000): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'ignore' });
+    const timer = setTimeout(() => proc.kill(), timeoutMs);
+    const exit = await proc.exited;
+    clearTimeout(timer);
+    if (exit !== 0) return null;
+    return await new Response(proc.stdout).text();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`
+ * output. Each line: "NVIDIA GeForce RTX 3060, 12288". `memory.total` is MiB.
+ * Pure + exported for unit testing.
+ */
+export function parseNvidiaSmi(stdout: string): DetectedGpu[] {
+  const gpus: DetectedGpu[] = [];
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const lastComma = trimmed.lastIndexOf(',');
+    if (lastComma === -1) continue;
+    const name = trimmed.slice(0, lastComma).trim();
+    const vramMB = Number.parseInt(trimmed.slice(lastComma + 1).trim(), 10);
+    if (!name || !Number.isFinite(vramMB) || vramMB <= 0) continue;
+    gpus.push({ vendor: 'nvidia', name, vramMB });
+  }
+  return gpus;
+}
+
+/**
+ * Detect host hardware for model fit-scoring. Never throws; returns a
+ * CPU-only profile when no accelerator is found or detection tools are absent.
+ */
+export async function probeHardware(): Promise<HardwareProfile> {
+  const plat = platform();
+  const ramMB = Math.floor(totalmem() * MB_PER_BYTE);
+  const cpu = { cores: cpus().length, arch: arch() };
+  const source: HardwareSource[] = ['os'];
+  const gpus: DetectedGpu[] = [];
+
+  // Apple Silicon: unified memory. Treat a fraction of RAM as a usable GPU budget.
+  if (plat === 'darwin' && cpu.arch === 'arm64') {
+    gpus.push({ vendor: 'apple', name: 'Apple Silicon (unified memory)', vramMB: Math.floor(ramMB * 0.75) });
+    source.push('apple-metal');
+  } else {
+    // NVIDIA — the common discrete-GPU case.
+    if (await commandExists('nvidia-smi')) {
+      const out = await runCapture([
+        'nvidia-smi',
+        '--query-gpu=name,memory.total',
+        '--format=csv,noheader,nounits',
+      ]);
+      if (out) {
+        const detected = parseNvidiaSmi(out);
+        if (detected.length > 0) {
+          gpus.push(...detected);
+          source.push('nvidia-smi');
+        }
+      }
+    }
+    // AMD/ROCm — presence only; reliable VRAM parsing is deferred (CPU-only budget).
+    if (gpus.length === 0 && (await commandExists('rocm-smi'))) {
+      gpus.push({ vendor: 'amd', name: 'AMD GPU (ROCm)', vramMB: 0 });
+      source.push('rocm-smi');
+    }
+  }
+
+  const totalVramMB = gpus.reduce((sum, g) => sum + g.vramMB, 0);
+  return { gpus, totalVramMB, ramMB, cpu, platform: plat, source };
 }
 
 /** Run all common service probes in parallel — used by setup auto-detect. */
