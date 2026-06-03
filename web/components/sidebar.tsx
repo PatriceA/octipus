@@ -13,6 +13,7 @@ import {
   GitBranch,
   KeyRound,
   LayoutDashboard,
+  Mail,
   MessageSquare,
   PanelLeft,
   PanelLeftClose,
@@ -45,6 +46,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'dashboard', href: '/', icon: LayoutDashboard },
       { name: 'chat', href: '/chat', icon: MessageSquare },
+      { name: 'email', href: '/email', icon: Mail },
       { name: 'documents', href: '/documents', icon: FileText },
       { name: 'profiles', href: '/profiles', icon: Users },
       { name: 'persona', href: '/persona', icon: Fingerprint },
