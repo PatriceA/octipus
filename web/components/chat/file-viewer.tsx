@@ -12,7 +12,7 @@ import {
   Save,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { computeLineDiff } from '../../../src/shared/diff';
 import CodeEditor from '@/components/chat/code-editor';
 import DiffView from '@/components/chat/diff-view';
@@ -44,13 +44,19 @@ interface FileViewerProps {
    * stale transcript copy.
    */
   onAttach?: (ref: { path: string; version: string }) => void;
+  /**
+   * Bumped whenever the agent writes the open file (e.g. a count of file-change
+   * events for this path) so the panel can live-refresh to show the agent's
+   * work. Ignored while the user is mid-edit so a reload can't clobber a draft.
+   */
+  reloadSignal?: number;
 }
 
 function displayName(p: string): string {
   return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
 }
 
-export default function FileViewer({ sessionId, path: initialPath, onClose, onAttach }: FileViewerProps) {
+export default function FileViewer({ sessionId, path: initialPath, onClose, onAttach, reloadSignal = 0 }: FileViewerProps) {
   const [path, setPath] = useState(initialPath);
   const [data, setData] = useState<FileResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,6 +69,8 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
   const [conflict, setConflict] = useState(false);
   // While editing: show a diff of unsaved changes vs the loaded baseline.
   const [showDiff, setShowDiff] = useState(false);
+  // Brief flash after the agent writes the open file (live-work indicator).
+  const [justUpdated, setJustUpdated] = useState(false);
 
   const load = useCallback(async (p: string) => {
     setLoading(true);
@@ -91,12 +99,29 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(path); }, [path, load]);
 
-  // Esc closes the overlay.
+  // Esc closes the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Live work: when the agent writes the open file (reloadSignal bumps), refresh
+  // to show it — unless the user is mid-edit, where a reload would clobber their
+  // draft. Briefly flashes an "updated" badge. The initial signal is skipped.
+  const prevSignal = useRef(reloadSignal);
+  useEffect(() => {
+    if (reloadSignal === prevSignal.current) return;
+    prevSignal.current = reloadSignal;
+    if (editing) return; // don't stomp an in-progress edit
+    /* eslint-disable react-hooks/set-state-in-effect -- reacting to an external agent-write signal; the refresh is a deliberate sync, not a render loop */
+    load(path);
+    setJustUpdated(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    const t = setTimeout(() => setJustUpdated(false), 1600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- react only to new agent-write signals
+  }, [reloadSignal]);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -134,11 +159,7 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
   const dirty = data?.type === 'text' && editing && draft !== data.content;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div
-        className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg border border-outline-variant/30 bg-surface-container shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className="flex h-full min-h-0 flex-col bg-surface-container">
         {/* Header */}
         <div className="flex items-center gap-2 border-b border-outline-variant/20 px-3 py-2">
           {data?.type === 'directory' ? (
@@ -150,6 +171,11 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
             {displayName(path)}
           </span>
           {dirty && <span className="text-[10px] text-warning">● unsaved</span>}
+          {justUpdated && !editing && (
+            <span className="flex items-center gap-1 text-[10px] text-primary" aria-live="polite">
+              <span className="h-1.5 w-1.5 rounded-full bg-primary motion-safe:animate-pulse" /> updated
+            </span>
+          )}
 
           <div className="ml-auto flex items-center gap-1">
             {onAttach && data && data.type !== 'directory' && version && !editing && (
@@ -203,15 +229,17 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
               type="button"
               onClick={() => load(path)}
               title="Reload"
-              className="rounded p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
+              aria-label="Reload file"
+              className="cursor-pointer rounded p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               onClick={onClose}
-              title="Close"
-              className="rounded p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
+              title="Close panel"
+              aria-label="Close file panel"
+              className="cursor-pointer rounded p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface"
             >
               <X className="h-4 w-4" />
             </button>
@@ -230,7 +258,7 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
         )}
 
         {/* Body */}
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           {loading && (
             <div className="flex items-center justify-center gap-2 py-12 text-sm text-on-surface-variant">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -244,17 +272,19 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
           )}
 
           {!loading && !error && data?.type === 'text' && (
-            editing && showDiff ? (
-              <DiffView patch={computeLineDiff(data.content, draft).patch} className="min-h-[60vh] p-2" />
-            ) : (
-              <CodeEditor
-                value={editing ? draft : data.content}
-                onChange={editing ? setDraft : undefined}
-                editable={editing}
-                filename={path}
-                height="60vh"
-              />
-            )
+            <div className="flex min-h-0 flex-1 flex-col">
+              {editing && showDiff ? (
+                <DiffView patch={computeLineDiff(data.content, draft).patch} className="min-h-0 flex-1 p-2" />
+              ) : (
+                <CodeEditor
+                  value={editing ? draft : data.content}
+                  onChange={editing ? setDraft : undefined}
+                  editable={editing}
+                  filename={path}
+                  height="100%"
+                />
+              )}
+            </div>
           )}
 
           {!loading && !error && data?.type === 'image' && (
@@ -302,7 +332,6 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
             </div>
           )}
         </div>
-      </div>
     </div>
   );
 }

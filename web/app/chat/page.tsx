@@ -126,6 +126,22 @@ export default function ChatPage() {
   // the classifier/orchestrator decide; 'chat' forces inline; 'file' forces a
   // file deliverable. Sticky across messages until the user changes it.
   const [outputMode, setOutputMode] = useState<'auto' | 'chat' | 'file'>('auto');
+  // When the file panel opens, auto-collapse the right sidebar to make room
+  // (FHD assumption) and restore its previous state on close. The user can
+  // still toggle the sidebar manually while a file is open.
+  const fileOpenRef = useRef<string | null>(null);
+  const sidebarRestoreRef = useRef(true);
+  useEffect(() => {
+    const wasOpen = fileOpenRef.current;
+    if (!wasOpen && openFilePath) {
+      sidebarRestoreRef.current = showSidePanel;
+      setShowSidePanel(false);
+    } else if (wasOpen && !openFilePath) {
+      setShowSidePanel(sidebarRestoreRef.current);
+    }
+    fileOpenRef.current = openFilePath;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run on file open/close only; capture the sidebar state at open time
+  }, [openFilePath]);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
   // Append-only queue of swarm events from the WS stream. We used to hold the
@@ -1442,16 +1458,6 @@ export default function ChatPage() {
         onCreate={handleCreateSession}
       />
 
-      {/* In-chat file view (Thread 2) */}
-      {openFilePath && activeSessionId && (
-        <FileViewer
-          sessionId={activeSessionId}
-          path={openFilePath}
-          onClose={() => setOpenFilePath(null)}
-          onAttach={attachFile}
-        />
-      )}
-
       {/* Left panel — Session list */}
       <div className="w-64 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
         <SessionList
@@ -1535,6 +1541,22 @@ export default function ChatPage() {
           />
         </div>
       </div>
+
+      {/* In-chat file view — split-pane beside the chat (Thread 2). Opens as a
+          third column so the user can watch the agent work in the file while
+          chatting; the right sidebar auto-collapses to make room. reloadSignal
+          bumps when the agent writes this path, so the panel live-refreshes. */}
+      {openFilePath && activeSessionId && (
+        <div className="flex min-h-0 min-w-[24rem] flex-1 flex-col border-l border-outline-variant/10">
+          <FileViewer
+            sessionId={activeSessionId}
+            path={openFilePath}
+            onClose={() => setOpenFilePath(null)}
+            onAttach={attachFile}
+            reloadSignal={(activeState?.fileChanges ?? []).filter((fc) => fc.path.replace(/\\/g, '/') === openFilePath.replace(/\\/g, '/')).length}
+          />
+        </div>
+      )}
 
       {/* Right panel — single SidePanel containing: Connection & Model →
           Session Stats → Swarm Tree. Agent Activity was removed; SwarmTree
