@@ -21,6 +21,7 @@ export { SchedulingTool, schedulingTool } from './scheduling';
 export { ShellTool, shellTool } from './shell';
 export { LocalShellOperations } from './shell/local-operations';
 export type { ShellExecResult, ShellOperations } from './shell/operations';
+export { TasksTool, tasksTool } from './tasks';
 export { VisualTool, visualTool } from './visual';
 export { VoiceCallTool } from './voice';
 export { WebSearchTool, websearchTool } from './websearch';
