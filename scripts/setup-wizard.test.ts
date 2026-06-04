@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { PassThrough, Writable } from 'node:stream';
-import { type BootstrapConfig, buildEnv, readlinePrompt } from './setup-wizard';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type BootstrapConfig, buildEnv, readExistingSecrets, readlinePrompt } from './setup-wizard';
 
 /**
  * The interactive flow (pi-tui, backend boot, API calls) needs a PTY
@@ -87,6 +90,40 @@ describe('setup-wizard — buildEnv', () => {
     expect(env).not.toMatch(/^PORT=/m);
     expect(env).not.toMatch(/^HOST=/m);
     expect(env).not.toMatch(/^CORS_ORIGINS=/m);
+  });
+});
+
+/**
+ * Rerun safety: a second `bun run setup` must reuse the existing MASTER_KEY,
+ * not regenerate it — a fresh key orphans everything the vault has encrypted.
+ * readExistingSecrets is the parse half; buildEnv round-trips back to it.
+ */
+describe('setup-wizard — readExistingSecrets (rerun safety)', () => {
+  function tmpEnv(contents: string): string {
+    const path = join(mkdtempSync(join(tmpdir(), 'octi-setup-')), '.env');
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  test('returns null when the file does not exist', () => {
+    expect(readExistingSecrets(join(tmpdir(), 'octi-nope-does-not-exist', '.env'))).toBeNull();
+  });
+
+  test('parses all three secrets from a real generated .env', () => {
+    const path = tmpEnv(buildEnv(BASE, KEYS));
+    expect(readExistingSecrets(path)).toEqual(KEYS);
+  });
+
+  test('returns null if any secret is missing (force fresh generation)', () => {
+    const path = tmpEnv('MASTER_KEY=abc\nJWT_SECRET=def\n'); // no SESSION_SECRET
+    expect(readExistingSecrets(path)).toBeNull();
+  });
+
+  test('tolerates comments, blank lines, and surrounding whitespace', () => {
+    const path = tmpEnv(
+      ['# header', '', '  MASTER_KEY = m1 ', 'JWT_SECRET=j1', 'SESSION_SECRET=s1', ''].join('\n'),
+    );
+    expect(readExistingSecrets(path)).toEqual({ masterKey: 'm1', jwtSecret: 'j1', sessionSecret: 's1' });
   });
 });
 
