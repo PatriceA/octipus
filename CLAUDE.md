@@ -67,7 +67,7 @@ docs/             feature & architecture docs
 
 | Task             | Command                          |
 | ---------------- | -------------------------------- |
-| Install          | `bun install && cd web && bun install && cd ..` |
+| Install          | `bun install && cd web && bun install && cd ../mcp-server && bun install && cd ..` |
 | Dev (backend)    | `bun run dev`                    |
 | Start full stack | `bin/octi start` (stop: `bin/octi stop`) |
 | Type check       | `bun run typecheck`              |

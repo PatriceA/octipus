@@ -449,17 +449,21 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
 
 // ── Post-backend wizard (admin, provider, default model, caps) ─────
 
-async function pickAdmin(ctx: WizardCtx | null): Promise<{ username: string; email: string; password: string }> {
+async function pickAdmin(ctx: WizardCtx | null): Promise<{ username: string; email?: string; password: string }> {
+  // Email is optional on /api/auth/register via t.Optional — which only
+  // accepts the key being ABSENT. An empty string is "present" and fails the
+  // format:email check (422), so collapse blank input to undefined and let
+  // JSON.stringify drop it from the body entirely.
   if (NON_INTERACTIVE) {
     const username = process.env.OCTIPUS_SETUP_ADMIN_USER;
     const password = process.env.OCTIPUS_SETUP_ADMIN_PASS;
     if (!username || !password) throw new Error('OCTIPUS_SETUP_ADMIN_USER and OCTIPUS_SETUP_ADMIN_PASS required in non-interactive mode');
-    return { username, email: process.env.OCTIPUS_SETUP_ADMIN_EMAIL || '', password };
+    return { username, email: process.env.OCTIPUS_SETUP_ADMIN_EMAIL || undefined, password };
   }
   const username = await textStep(ctx, 'Admin account — username', 'You\'ll log in as this user (≥3 chars)', 'admin');
   const email = await textStep(ctx, 'Admin account — email (optional)', 'Leave blank to skip', '');
   const password = await textStep(ctx, 'Admin account — password', 'Min 8 chars, ≥1 upper, ≥1 lower, ≥1 digit', '', true);
-  return { username, email, password };
+  return { username, email: email.trim() || undefined, password };
 }
 
 async function pickProvider(ctx: WizardCtx | null): Promise<{ providerId: ProviderId; apiKey: string; model: string; baseUrl: string }> {
