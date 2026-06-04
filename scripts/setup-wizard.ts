@@ -38,7 +38,7 @@
  * Used by Docker: container boots itself, host runs setup against it.
  */
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -221,6 +221,29 @@ export interface BootstrapConfig {
   bootstrapModel: string;
   bootstrapApiKey: string;
   bootstrapBaseUrl: string;
+}
+
+/**
+ * Read MASTER_KEY / JWT_SECRET / SESSION_SECRET back out of an existing .env so
+ * a rerun reuses them. Regenerating MASTER_KEY would orphan everything the vault
+ * has already encrypted (AES-256-GCM), so on rerun we keep the originals and only
+ * re-do the non-secret config. Returns null if the file is missing or any of the
+ * three keys is absent (treat as a fresh install — generate new ones).
+ */
+export function readExistingSecrets(
+  path = '.env',
+): { masterKey: string; jwtSecret: string; sessionSecret: string } | null {
+  if (!existsSync(path)) return null;
+  const env: Record<string, string> = {};
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (m) env[m[1]] = m[2].trim();
+  }
+  const masterKey = env.MASTER_KEY;
+  const jwtSecret = env.JWT_SECRET;
+  const sessionSecret = env.SESSION_SECRET;
+  if (!masterKey || !jwtSecret || !sessionSecret) return null;
+  return { masterKey, jwtSecret, sessionSecret };
 }
 
 export function buildEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwtSecret: string; sessionSecret: string }): string {
@@ -540,9 +563,19 @@ async function main() {
     return;
   }
 
-  if (existsSync('.env')) {
-    process.stderr.write('.env already exists. Delete or back it up first.\n');
+  // Rerun-safe: if .env already exists, keep its secrets. Regenerating
+  // MASTER_KEY would make everything the vault has encrypted unrecoverable, so
+  // we reuse the originals and only re-run the non-secret config below.
+  const existingSecrets = readExistingSecrets('.env');
+  if (existsSync('.env') && !existingSecrets) {
+    process.stderr.write(
+      '.env exists but is missing MASTER_KEY/JWT_SECRET/SESSION_SECRET. ' +
+        'Back it up and delete it before rerunning so fresh secrets can be generated.\n',
+    );
     process.exit(1);
+  }
+  if (existingSecrets) {
+    process.stdout.write('\x1b[2m(reusing existing secrets from .env)\x1b[0m\n');
   }
 
   // Pre-backend phase: TUI or non-interactive.
@@ -571,6 +604,10 @@ async function main() {
     }
     ctx = null; // TUI is stopped now; post-backend phase uses plain stdout
   }
+
+  // Preserve the original secrets on a rerun — runPreBackend always generates
+  // fresh ones, but reusing the existing MASTER_KEY keeps the vault decryptable.
+  if (existingSecrets) cfg.secrets = existingSecrets;
 
   // Write .env.
   const env = buildEnv(cfg, cfg.secrets);
