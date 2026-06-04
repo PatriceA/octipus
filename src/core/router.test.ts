@@ -116,8 +116,9 @@ describe('Router', () => {
     test('recognizes all research keywords', () => {
       for (const keyword of researchKeywords) {
         const result = router.classifyTopic(`Please ${keyword} this`);
-        // May be analysis or overlap with other topics
-        expect(['research', 'coding', 'chat', 'design']).toContain(result.topic);
+        // May be analysis or overlap with other topics ('architecture' now
+        // routes to its own dedicated topic after the architecture expert wiring).
+        expect(['research', 'coding', 'chat', 'design', 'architecture']).toContain(result.topic);
       }
     });
 
