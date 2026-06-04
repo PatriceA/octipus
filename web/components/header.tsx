@@ -37,13 +37,16 @@ const SEARCH_TYPE_META: Record<SearchResult['type'], { label: string; icon: type
 export function Header() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [user, setUser] = useState<{ username: string; isAdmin: boolean } | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const { logout: authLogout } = useAuth();
+  // Single source of truth for identity: the live auth context (backed by
+  // /auth/me), NOT a separate localStorage copy. The old localStorage read
+  // showed "guest" whenever the session came from a persisted cookie rather
+  // than an in-tab login(), since only login() wrote 'assistant-user'.
+  const { user, logout: authLogout } = useAuth();
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -53,15 +56,6 @@ export function Header() {
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    const storedUser = localStorage.getItem('assistant-user');
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch {}
-    }
-  }, []);
 
   const fetchNotifications = useCallback(async () => {
     try {
