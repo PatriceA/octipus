@@ -139,7 +139,7 @@ esac
 # ─── Run setup wizard ──────────────────────────────────────────────────────
 echo ""
 say "Launching the setup wizard..."
-echo "${DIM}(storage, secrets, admin account, provider, default model, capabilities)${NC}"
+printf "${DIM}%s${NC}\n" "(storage, secrets, admin account, provider, default model, capabilities)"
 echo ""
 # Prefer the linked `octi` binary so the wizard runs through the same
 # code path users will hit later. Fall back to the script directly if

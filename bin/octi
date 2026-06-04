@@ -881,6 +881,14 @@ cmd_open() {
   log_info "Opening http://localhost:$WEB_PORT"
 }
 
+cmd_setup() {
+  # Interactive first-run wizard: storage, secrets, admin account, provider,
+  # default model, capabilities. Runs through the same code path as
+  # `bun run setup`. Invoked by scripts/install.sh and re-runnable any time.
+  cd "$PROJECT_DIR"
+  exec bun run scripts/setup-wizard.ts "$@"
+}
+
 cmd_tui() {
   if ! curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
     log_error "Backend is not running on port $API_PORT"
@@ -925,6 +933,7 @@ cmd_help() {
   echo -e "  ${BOLD}Usage:${NC} octi <command> [options]"
   echo ""
   echo -e "  ${BOLD}Commands:${NC}"
+  echo -e "    setup            Run the first-run / re-config wizard"
   echo -e "    start [options]  Start backend + web UI (or TUI)"
   echo -e "    stop             Stop all Octipus processes"
   echo -e "    restart [options] Restart everything"
@@ -1124,6 +1133,7 @@ main() {
   shift || true
 
   case "$command" in
+    setup)   cmd_setup "$@" ;;
     start)   cmd_start "$@" ;;
     stop)    cmd_stop ;;
     restart) cmd_restart "$@" ;;
