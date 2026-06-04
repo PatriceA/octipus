@@ -1,5 +1,6 @@
 import pino from 'pino';
 import pinoPretty from 'pino-pretty';
+import { redactLogObject } from './log-redact';
 import { ringBufferStream } from './log-stream';
 
 const logLevel = process.env.LOG_LEVEL || 'info';
@@ -27,6 +28,12 @@ export const logger = pino(
     level: logLevel,
     base: { service: 'octipus' },
     timestamp: pino.stdTimeFunctions.isoTime,
+    // Deep-redact credential-shaped fields before serialization. Runs once and
+    // applies to every stream, including the ring buffer behind the admin log
+    // dashboard. See log-redact.ts.
+    formatters: {
+      log: redactLogObject,
+    },
   },
   streams,
 );
