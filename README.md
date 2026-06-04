@@ -152,6 +152,7 @@ Full feature breakdown: see the [documentation index](#documentation) below.
 git clone https://github.com/PatriceA/octipus.git
 cd octipus && bun install
 cd web && bun install && cd ..
+cd mcp-server && bun install && cd ..   # standalone MCP server (not a root workspace)
 bun run setup        # the single wizard (same as `octi setup`)
 octi start           # backend + web UI
 ```

@@ -516,7 +516,14 @@ cmd_start() {
   # Build MCP server and register with CLI tools
   if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
     log_step "Building MCP server..."
-    cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
+    cd "$PROJECT_DIR/mcp-server"
+    # Fresh clones never installed mcp-server deps (it's not a root workspace),
+    # so tsc would fail with missing @types/node + SDK. Install on first build.
+    if [[ ! -d node_modules ]]; then
+      log_step "Installing MCP server deps (first run)..."
+      bun install --silent 2>/dev/null || npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
+    fi
+    npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
 
     regen_mcp_config
@@ -688,7 +695,14 @@ cmd_restart() {
   # Build MCP server and register with CLI tools
   if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
     log_step "Building MCP server..."
-    cd "$PROJECT_DIR/mcp-server" && npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
+    cd "$PROJECT_DIR/mcp-server"
+    # Fresh clones never installed mcp-server deps (it's not a root workspace),
+    # so tsc would fail with missing @types/node + SDK. Install on first build.
+    if [[ ! -d node_modules ]]; then
+      log_step "Installing MCP server deps (first run)..."
+      bun install --silent 2>/dev/null || npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
+    fi
+    npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
 
     regen_mcp_config
