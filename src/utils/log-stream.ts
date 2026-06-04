@@ -24,6 +24,15 @@ type LogRecord = {
 const buffer: LogRecord[] = [];
 const errorTimestamps: number[] = [];
 
+// Cap distinct error messages tracked so a flood of unique messages can't grow
+// unbounded. Once full we stop adding new keys but keep counting known ones.
+const MAX_ERROR_KEYS = 200;
+const topErrors = new Map<string, { count: number; lastSeen: number }>();
+// Per-tool and per-provider rollups for the ops dashboard. Bounded naturally by
+// the number of distinct tools / providers.
+const toolStats = new Map<string, { calls: number; errors: number; totalMs: number }>();
+const providerStats = new Map<string, { calls: number; errors: number }>();
+
 export const logEvents = new EventEmitter();
 logEvents.setMaxListeners(0);
 
@@ -62,9 +71,36 @@ function ingest(line: string): void {
   if (typeof rec.component === 'string') {
     counters.byComponent[rec.component] = (counters.byComponent[rec.component] ?? 0) + 1;
   }
-  if (level === 'error' || level === 'fatal') {
+  const isError = level === 'error' || level === 'fatal';
+  if (isError) {
     errorTimestamps.push(Date.now());
+    const key = typeof rec.msg === 'string' && rec.msg ? rec.msg : '(no message)';
+    const existing = topErrors.get(key);
+    if (existing) {
+      existing.count++;
+      existing.lastSeen = Date.now();
+    } else if (topErrors.size < MAX_ERROR_KEYS) {
+      topErrors.set(key, { count: 1, lastSeen: Date.now() });
+    }
   }
+
+  // Per-tool rollup (tool-executor logs { tool, durationMs }).
+  if (typeof rec.tool === 'string') {
+    const s = toolStats.get(rec.tool) ?? { calls: 0, errors: 0, totalMs: 0 };
+    s.calls++;
+    if (isError) s.errors++;
+    if (typeof rec.durationMs === 'number') s.totalMs += rec.durationMs;
+    toolStats.set(rec.tool, s);
+  }
+
+  // Per-provider rollup (model providers log { provider }).
+  if (typeof rec.provider === 'string') {
+    const s = providerStats.get(rec.provider) ?? { calls: 0, errors: 0 };
+    s.calls++;
+    if (isError) s.errors++;
+    providerStats.set(rec.provider, s);
+  }
+
   logEvents.emit('log', rec);
 }
 
@@ -87,6 +123,30 @@ export function getStats() {
     errorTimestamps.shift();
   }
   const uptimeSec = Math.max(1, Math.floor((now - counters.startedAt) / 1000));
+  const topErrorList = [...topErrors.entries()]
+    .map(([msg, v]) => ({ msg, count: v.count, lastSeen: v.lastSeen }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const tools = [...toolStats.entries()]
+    .map(([tool, s]) => ({
+      tool,
+      calls: s.calls,
+      errors: s.errors,
+      errorRate: s.calls ? s.errors / s.calls : 0,
+      avgMs: s.calls ? Math.round(s.totalMs / s.calls) : 0,
+    }))
+    .sort((a, b) => b.calls - a.calls);
+
+  const providers = [...providerStats.entries()]
+    .map(([provider, s]) => ({
+      provider,
+      calls: s.calls,
+      errors: s.errors,
+      errorRate: s.calls ? s.errors / s.calls : 0,
+    }))
+    .sort((a, b) => b.calls - a.calls);
+
   return {
     total: counters.total,
     byLevel: counters.byLevel,
@@ -95,5 +155,8 @@ export function getStats() {
     bufferSize: buffer.length,
     uptimeSec,
     logsPerSecond: counters.total / uptimeSec,
+    topErrors: topErrorList,
+    tools,
+    providers,
   };
 }

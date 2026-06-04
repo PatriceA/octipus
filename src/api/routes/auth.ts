@@ -8,7 +8,7 @@ import { getTOTPAuth } from '@/security/auth/totp';
 import { isAuthenticated } from '@/security/principal';
 import { getRateLimiter } from '@/security/rate-limiter';
 import { hashPassword, verifyPassword } from '@/utils/crypto';
-import { apiLogger } from '@/utils/logger';
+import { apiLogger, securityLogger } from '@/utils/logger';
 
 export const authRoutes = new Elysia({ prefix: '/auth' })
   .use(apiContext)
@@ -18,10 +18,15 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     async ({ body, request, set }) => {
       const { username, password, totpCode } = body;
       const rateLimiter = getRateLimiter();
+      const clientIp = request.headers.get('x-forwarded-for') || undefined;
 
       // Check account lockout before anything else
       const lockoutCheck = await rateLimiter.checkLoginAttempts(username);
       if (!lockoutCheck.allowed) {
+        securityLogger.warn(
+          { username, clientIp, channel: 'web' },
+          'Login blocked — account locked out',
+        );
         set.status = 423;
         return {
           error: 'Account temporarily locked due to too many failed login attempts.',
@@ -33,11 +38,19 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       if (!user || !user.passwordHash) {
         // Record failed attempt even for non-existent users to prevent enumeration timing attacks
         await rateLimiter.recordFailedLogin(username);
+        securityLogger.warn(
+          { username, clientIp, channel: 'web', reason: 'unknown_user' },
+          'Login failed',
+        );
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
 
       if (!user.isActive) {
+        securityLogger.warn(
+          { userId: user.id, username, clientIp, channel: 'web', reason: 'account_disabled' },
+          'Login failed',
+        );
         set.status = 401;
         return { error: 'Account is disabled' };
       }
@@ -45,6 +58,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const validPassword = await verifyPassword(password, user.passwordHash);
       if (!validPassword) {
         await rateLimiter.recordFailedLogin(username);
+        securityLogger.warn(
+          { userId: user.id, username, clientIp, channel: 'web', reason: 'bad_password' },
+          'Login failed',
+        );
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
@@ -60,6 +77,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         const validTOTP = await totpAuth.verify(user.id, totpCode);
         if (!validTOTP) {
           await rateLimiter.recordFailedLogin(username);
+          securityLogger.warn(
+            { userId: user.id, username, clientIp, channel: 'web', reason: 'bad_totp' },
+            'Login failed',
+          );
           set.status = 401;
           return { error: 'Invalid TOTP code' };
         }
@@ -69,7 +90,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       await rateLimiter.clearLoginAttempts(username);
 
       const sessionManager = getSessionManager();
-      const ipAddress = request.headers.get('x-forwarded-for') || undefined;
+      const ipAddress = clientIp;
       const userAgent = request.headers.get('user-agent') || undefined;
 
       const { token, session } = await sessionManager.create(user.id, {
@@ -78,6 +99,11 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       });
 
       set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+
+      securityLogger.info(
+        { userId: user.id, username, clientIp, channel: 'web' },
+        'Login successful',
+      );
 
       // Token lives only in the HttpOnly cookie — do not echo it in the
       // response body where same-origin scripts could read it.
@@ -109,9 +135,14 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     async ({ body, request, set }) => {
       const { username, password, totpCode, deviceName } = body;
       const rateLimiter = getRateLimiter();
+      const clientIp = request.headers.get('x-forwarded-for') || undefined;
 
       const lockoutCheck = await rateLimiter.checkLoginAttempts(username);
       if (!lockoutCheck.allowed) {
+        securityLogger.warn(
+          { username, clientIp, channel: 'mobile' },
+          'Login blocked — account locked out',
+        );
         set.status = 423;
         return {
           error: 'Account temporarily locked due to too many failed login attempts.',
@@ -122,11 +153,19 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const user = await userRepository.findByUsername(username);
       if (!user || !user.passwordHash) {
         await rateLimiter.recordFailedLogin(username);
+        securityLogger.warn(
+          { username, clientIp, channel: 'mobile', reason: 'unknown_user' },
+          'Login failed',
+        );
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
 
       if (!user.isActive) {
+        securityLogger.warn(
+          { userId: user.id, username, clientIp, channel: 'mobile', reason: 'account_disabled' },
+          'Login failed',
+        );
         set.status = 401;
         return { error: 'Account is disabled' };
       }
@@ -134,6 +173,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const validPassword = await verifyPassword(password, user.passwordHash);
       if (!validPassword) {
         await rateLimiter.recordFailedLogin(username);
+        securityLogger.warn(
+          { userId: user.id, username, clientIp, channel: 'mobile', reason: 'bad_password' },
+          'Login failed',
+        );
         set.status = 401;
         return { error: 'Invalid credentials' };
       }
@@ -147,6 +190,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         const validTOTP = await totpAuth.verify(user.id, totpCode);
         if (!validTOTP) {
           await rateLimiter.recordFailedLogin(username);
+          securityLogger.warn(
+            { userId: user.id, username, clientIp, channel: 'mobile', reason: 'bad_totp' },
+            'Login failed',
+          );
           set.status = 401;
           return { error: 'Invalid TOTP code' };
         }
@@ -155,7 +202,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       await rateLimiter.clearLoginAttempts(username);
 
       const sessionManager = getSessionManager();
-      const ipAddress = request.headers.get('x-forwarded-for') || undefined;
+      const ipAddress = clientIp;
       const ua = deviceName || request.headers.get('user-agent') || 'Mobile App';
 
       const { token, session } = await sessionManager.create(user.id, {
@@ -163,7 +210,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         userAgent: `Mobile: ${ua}`,
       });
 
-      apiLogger.info({ userId: user.id, deviceName }, 'Mobile login successful');
+      securityLogger.info(
+        { userId: user.id, username, clientIp, deviceName, channel: 'mobile' },
+        'Login successful',
+      );
 
       return {
         token,

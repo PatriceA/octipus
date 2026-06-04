@@ -103,7 +103,8 @@
   aside h2 { font-size: 12px; color: var(--muted); margin: 0 0 8px; text-transform: uppercase; letter-spacing: .5px; }
   .breakdown { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
   .bar { display: grid; grid-template-columns: 80px 1fr 40px; gap: 8px; align-items: center; font-size: 12px; }
-  .bar .label { color: var(--muted); }
+  .bar .label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #topErrors .bar { grid-template-columns: 1fr 48px 36px; }
   .bar .track { background: var(--panel-2); height: 8px; border-radius: 4px; overflow: hidden; }
   .bar .fill { height: 100%; background: var(--accent); }
   .bar .fill.err { background: var(--err); }
@@ -111,6 +112,9 @@
   .bar .fill.info { background: var(--ok); }
   .bar .fill.debug { background: var(--debug); }
   .bar .n { text-align: right; color: var(--fg); }
+  .bar.metric { grid-template-columns: 70px 1fr 36px auto; }
+  .bar .meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .breakdown .empty { color: var(--muted); font-size: 12px; font-style: italic; }
 
   footer { padding: 6px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; background: var(--panel); }
 </style>
@@ -158,6 +162,12 @@
     <div class="breakdown" id="byLevel"></div>
     <h2>By Component</h2>
     <div class="breakdown" id="byComp"></div>
+    <h2>Top Errors</h2>
+    <div class="breakdown" id="topErrors"></div>
+    <h2>Tools</h2>
+    <div class="breakdown" id="toolStats"></div>
+    <h2>Providers</h2>
+    <div class="breakdown" id="providerStats"></div>
     <h2>Streams</h2>
     <div id="streams" style="font-size:12px;color:var(--muted);line-height:1.6">
       <div><span id="sseDot" class="dot conn-bad"></span>SSE <code>/api/logs/stream</code></div>
@@ -249,9 +259,26 @@
     const el = document.createElement('div');
     el.className = 'bar';
     el.innerHTML =
-      `<span class="label">${escapeHtml(label)}</span>` +
+      `<span class="label" title="${escapeHtml(label)}">${escapeHtml(label)}</span>` +
       `<span class="track"><span class="fill ${cls || ''}" style="width:${pct}%"></span></span>` +
       `<span class="n">${n}</span>`;
+    container.appendChild(el);
+  }
+
+  // Like bar(), but appends a meta column (latency / error rate). Bar turns red
+  // when the row has any errors so failing tools/providers stand out.
+  function metricRow(container, label, calls, max, extra, errors, errorRate) {
+    const pct = max > 0 ? Math.max(2, Math.round((calls / max) * 100)) : 0;
+    const cls = errors > 0 ? 'err' : '';
+    const errTxt = errors ? `${errors} err (${(errorRate * 100).toFixed(0)}%)` : '';
+    const meta = [extra, errTxt].filter(Boolean).join(' · ');
+    const el = document.createElement('div');
+    el.className = 'bar metric';
+    el.innerHTML =
+      `<span class="label" title="${escapeHtml(label)}">${escapeHtml(label)}</span>` +
+      `<span class="track"><span class="fill ${cls}" style="width:${pct}%"></span></span>` +
+      `<span class="n">${calls}</span>` +
+      `<span class="meta">${escapeHtml(meta)}</span>`;
     container.appendChild(el);
   }
 
@@ -287,6 +314,29 @@
       const entries = Object.entries(s.byComponent || {}).sort((a,b)=>b[1]-a[1]).slice(0,15);
       const cMax = Math.max(1, ...entries.map(e=>e[1]));
       for (const [c, n] of entries) bar(byComp, c, n, cMax);
+
+      // Top error messages by count
+      const te = $('topErrors'); te.innerHTML = '';
+      const errs = s.topErrors || [];
+      if (!errs.length) te.innerHTML = '<div class="empty">none</div>';
+      const eMax = Math.max(1, ...errs.map(e=>e.count));
+      for (const e of errs) bar(te, e.msg, e.count, eMax, 'err');
+
+      // Per-tool: calls bar + avg latency + error rate
+      const ts = $('toolStats'); ts.innerHTML = '';
+      const tools = s.tools || [];
+      if (!tools.length) ts.innerHTML = '<div class="empty">none</div>';
+      const tMax = Math.max(1, ...tools.map(t=>t.calls));
+      for (const t of tools.slice(0,15)) {
+        metricRow(ts, t.tool, t.calls, tMax, `${t.avgMs}ms`, t.errors, t.errorRate);
+      }
+
+      // Per-provider: calls bar + error rate
+      const ps = $('providerStats'); ps.innerHTML = '';
+      const provs = s.providers || [];
+      if (!provs.length) ps.innerHTML = '<div class="empty">none</div>';
+      const pMax = Math.max(1, ...provs.map(p=>p.calls));
+      for (const p of provs) metricRow(ps, p.provider, p.calls, pMax, '', p.errors, p.errorRate);
     } catch (e) {
       $('statDot').className = 'dot conn-bad';
     }
