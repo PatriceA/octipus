@@ -1027,8 +1027,16 @@ cmd_uninstall() {
     log_step "Remove CLI link: $bin_link"
   fi
   if [[ "$purge" == true ]]; then
-    log_step "Remove EVERYTHING under $STATE_DIR (app, data, vault, secrets)"
-    log_warn "PURGE: your database, vault secrets and chat history will be ${BOLD}permanently deleted${NC}."
+    log_step "Remove EVERYTHING under $STATE_DIR (app, vault, secrets)"
+    if [[ "$STORAGE_MODE" == "external" ]]; then
+      log_warn "PURGE removes Octipus's local state + secrets, but your ${BOLD}EXTERNAL database is NOT touched${NC}."
+      log_warn "Octipus did not create that database (DATABASE_URL) and will not drop it — your users and data stay."
+      log_hint "To wipe the data too, drop it yourself, e.g.:"
+      log_hint "  psql \"\$DATABASE_URL\" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'"
+    else
+      log_step "Remove embedded database at $data_dir"
+      log_warn "PURGE: your database, vault secrets and chat history will be ${BOLD}permanently deleted${NC}."
+    fi
   else
     log_step "Remove app checkout: $PROJECT_DIR"
     log_step "Keep your data: $data_dir"
@@ -1114,6 +1122,11 @@ cmd_uninstall() {
   print_banner
   if [[ "$purge" == true ]]; then
     log_info "Octipus fully removed. Goodbye. 🐙"
+    if [[ "$STORAGE_MODE" == "external" ]]; then
+      echo ""
+      log_warn "Reminder: your EXTERNAL database was left intact — Octipus never drops a DB it didn't create."
+      log_hint "Wipe it yourself if you want it gone: psql \"\$DATABASE_URL\" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'"
+    fi
   else
     log_info "Octipus uninstalled — your data is preserved:"
     log_hint "data:    $data_dir"
