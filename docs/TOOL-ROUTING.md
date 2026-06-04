@@ -6,7 +6,7 @@
 The orchestrator classifies incoming messages using keyword heuristics (src/core/orchestrator/classifier.ts):
 
 1. **Casual patterns** — greetings, thanks, yes/no → direct response (no worker spawned)
-2. **Task keywords** — matched against 12 categories with scoring:
+2. **Task keywords** — matched against 13 categories with scoring:
    - Multi-word keywords get 1.5x weight (more specific)
    - Single-word keywords use word boundary matching
    - Score >= 1.5 → high confidence routing
@@ -17,23 +17,25 @@ The orchestrator classifies incoming messages using keyword heuristics (src/core
 
 | Category | Role | Tools Available | Trigger Keywords (examples) |
 |----------|------|----------------|----------------------------|
-| development | coding | filesystem, shell, git, knowledge, mcp | "implement", "write code", "fix bug", "refactor", "typescript", "react", "git commit" |
-| research | research | browser, browser-ext, websearch, knowledge, filesystem, profiles, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
+| coding | coding | filesystem, shell, git, knowledge, task_state, mcp | "implement", "write code", "fix bug", "refactor", "typescript", "react", "git commit" |
+| research | research | browser, browser-ext, websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
 | devops | devops | shell, docker, git, filesystem, mcp | "docker", "kubernetes", "deploy", "CI/CD", "nginx", "terraform" |
-| security | security | shell, filesystem, browser, browser-ext, websearch, knowledge, mcp | "vulnerability", "audit", "OWASP", "threat model", "security review" |
-| data | data | shell, filesystem, knowledge, mcp | "database schema", "SQL query", "migration", "ETL", "data pipeline" |
-| writing | writing | filesystem, browser, websearch, knowledge, messaging | "documentation", "write docs", "readme", "technical writing", "changelog" |
+| security | security | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "vulnerability", "audit", "OWASP", "threat model", "security review" |
+| data | data | shell, filesystem, knowledge, task_state, artifacts, artifacts_toolbox, mcp | "database schema", "SQL query", "migration", "ETL", "data pipeline" |
+| writing | writing | filesystem, browser, websearch, knowledge, task_state, messaging | "documentation", "write docs", "readme", "technical writing", "changelog" |
 | design | design | browser, filesystem | "UI design", "UX", "wireframe", "mockup", "accessibility" |
 | finance | finance | browser, websearch, filesystem | "budget", "financial analysis", "ROI", "cost analysis" |
 | communication | communication | google-workspace, microsoft365, messaging, scheduling, profiles, email-processor, voice | "email", "gmail", "calendar", "phone call", "call me", "outlook" |
 | automation | automation | shell, docker, filesystem, scheduling, mcp | "schedule", "cron", "recurring task", "remind me", "automate" |
-| general | general | filesystem, browser-ext, websearch, messaging, knowledge, scheduling, profiles, email-processor, mcp | "browser", "screenshot", "telegram", "send message", "knowledge base" |
+| architecture | architecture | filesystem, shell, knowledge, task_state, websearch, mcp | "architecture", "system design", "requirements", "technical specification", "design document" |
+| qa | qa | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | "run tests", "test suite", "validate", "verify", "validation" |
+| general | general | filesystem, browser-ext, websearch, messaging, knowledge, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, mcp | "browser", "screenshot", "telegram", "send message", "knowledge base" |
 
 ### Prompt Examples → Routing
 
 ```
 "Fix the login bug in auth.ts"
-  → development → coding role → filesystem, shell, git tools
+  → coding role → filesystem, shell, git tools
 
 "Search the web for React state management best practices"
   → research → research role → browser, websearch tools
@@ -126,9 +128,10 @@ The orchestrator:
 ## Model Selection
 
 When a worker is spawned, the model is selected based on:
-1. **Topic-based routing** — each role has a `defaultTopic` that maps to a model
-2. **Tool support validation** — model must support tool calling if tools are needed
-3. **Fallback** — if no topic-specific model, uses the default model
-4. **Voice topic** — voice calls use a dedicated fast model for low latency
+1. **Topic-based routing** — each role has a `defaultTopic` that maps to a model via `ModelRegistry.getModelForTopic(topic)`
+2. **Tool support validation** — if the topic-bound model lacks tool support, the spawner swaps to a local Ollama tool-capable model
+3. **Fail-loud** — if no topic-specific model is bound, the spawner throws with a message directing the user to the Models page (no default model fallback for workers)
+4. **Expert preference fallback** — expert's `modelPreference` (if set) is used only when no topic binding exists
+5. **Voice topic** — voice calls use a dedicated fast model for low latency
 
 Configure per-topic model routing in Settings → Models or via the API.

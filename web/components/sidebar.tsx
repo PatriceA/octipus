@@ -49,7 +49,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'dashboard', href: '/', icon: LayoutDashboard },
       { name: 'chat', href: '/chat', icon: MessageSquare },
-      { name: 'tasks', href: '/tasks', icon: ListTodo },
+      { name: 'to-do', href: '/tasks', icon: ListTodo },
       { name: 'email', href: '/email', icon: Mail },
       { name: 'reader', href: '/reader', icon: Newspaper },
       { name: 'documents', href: '/documents', icon: FileText },

@@ -106,8 +106,8 @@ export default function TasksPage() {
           <ListTodo className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Tasks</h1>
-          <p className="text-on-surface-variant">Your personal todo list. Agents can add, complete, and surface tasks here.</p>
+          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">To-Do</h1>
+          <p className="text-on-surface-variant">Your to-do list. Agents can add, complete, and surface to-do items here.</p>
         </div>
       </div>
 

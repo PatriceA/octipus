@@ -5,7 +5,7 @@ Channel adapters bridge external messaging platforms to Octipus via the Gateway 
 ## Architecture
 
 ```
-External Platform (e.g., Discord)
+External Platform (e.g., Slack, Teams, custom platform)
     │
     ▼
 GatewayAdapter (your code)
@@ -22,25 +22,25 @@ GatewayAdapter (your code)
 ### 1. Extend GatewayAdapter
 
 ```typescript
-// src/channels/adapters/discord-adapter.ts
+// src/channels/adapters/my-platform-adapter.ts
 import { GatewayAdapter } from '../adapter-base';
 import type { GatewayToAdapter } from '../adapter-base';
 import type { ChannelType } from '@/core/types';
 
-export class DiscordGatewayAdapter extends GatewayAdapter {
-  readonly channelType: ChannelType = 'discord';
-  readonly name = 'Discord';
+export class MyPlatformGatewayAdapter extends GatewayAdapter {
+  readonly channelType: ChannelType = 'my-platform';
+  readonly name = 'My Platform';
 
   private client: any = null;
 
   async start(): Promise<void> {
     // Initialize your platform SDK
-    this.client = new DiscordClient(process.env.DISCORD_TOKEN);
+    this.client = new MyPlatformClient(process.env.MY_PLATFORM_TOKEN);
 
     // Bridge: platform messages → gateway
     this.client.on('message', (msg) => {
       this.emitMessage({
-        channel: 'discord',
+        channel: 'my-platform',
         channelId: msg.channelId,
         userId: msg.author.id,
         userName: msg.author.username,
@@ -82,11 +82,11 @@ export class DiscordGatewayAdapter extends GatewayAdapter {
 Add your adapter to the channel initialization in `src/channels/index.ts`:
 
 ```typescript
-import { DiscordGatewayAdapter } from './adapters/discord-adapter';
+import { MyPlatformGatewayAdapter } from './adapters/my-platform-adapter';
 
 // In initializeChannels():
-if (config.discord?.enabled) {
-  const adapter = new DiscordGatewayAdapter();
+if (config.myPlatform?.enabled) {
+  const adapter = new MyPlatformGatewayAdapter();
   adapterRegistry.register(adapter);
 }
 ```
@@ -96,7 +96,7 @@ if (config.discord?.enabled) {
 Add your channel type to `src/core/types.ts`:
 
 ```typescript
-export type ChannelType = 'telegram' | 'slack' | 'teams' | 'whatsapp' | 'webchat' | 'discord';
+export type ChannelType = 'telegram' | 'slack' | 'teams' | 'whatsapp' | 'webchat' | 'my-platform';
 ```
 
 ## Adapter Protocol
@@ -106,7 +106,7 @@ export type ChannelType = 'telegram' | 'slack' | 'teams' | 'whatsapp' | 'webchat
 **`channel.message`** — When a user sends a message on the platform:
 ```typescript
 this.emitMessage({
-  channel: 'discord',        // Your channel type
+  channel: 'my-platform',    // Your channel type
   channelId: '123456',       // Platform-specific chat/channel ID
   userId: 'user789',         // Platform user ID
   userName: 'Alice',         // Display name (optional)
@@ -156,14 +156,14 @@ async handleTyping(payload) {
 Mock the gateway send callback in tests:
 
 ```typescript
-import { DiscordGatewayAdapter } from './discord-adapter';
+import { MyPlatformGatewayAdapter } from './my-platform-adapter';
 
-const adapter = new DiscordGatewayAdapter();
+const adapter = new MyPlatformGatewayAdapter();
 const sent: any[] = [];
 adapter.setGatewaySend((type, payload) => sent.push({ type, payload }));
 
 // Simulate platform message
-adapter.emitMessage({ channel: 'discord', channelId: '1', userId: 'u1', content: 'test' });
+adapter.emitMessage({ channel: 'my-platform', channelId: '1', userId: 'u1', content: 'test' });
 
 expect(sent).toHaveLength(1);
 expect(sent[0].type).toBe('channel.message');

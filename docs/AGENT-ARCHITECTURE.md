@@ -45,6 +45,18 @@ Depth-0 root of the swarm. Classifies incoming messages and either responds dire
 
 **Location:** `src/core/orchestrator/service.ts`, role prompt at `src/core/orchestrator/roles/orchestrator/prompt.md`
 
+#### Message Classification (Two-Layer Architecture)
+
+The orchestrator uses two layers of classification with different vocabularies:
+
+**Layer A — src/core/router.ts** (legacy, 15 topics):
+coding, research, architecture, chat, embedding, design, devops, security, data, ai, qa, finance, automation, pm, writing (+ 'general' fallback).
+
+**Layer B — src/core/orchestrator/classifier.ts** (live, 13 categories):
+coding, research, devops, security, qa, data, writing, architecture, design, finance, communication, automation, general.
+
+Layer B is the active classification path (injected into orchestrator context at service.ts:704). Every category name is a valid worker role, so the classifier topic feeds straight into `spawn_child` with no remapping. `TOPIC_TO_ROLE_ALIAS` (swarm-tool.ts) still catches natural-language synonyms the orchestrator LLM may use (e.g. `development`→`coding`, `database`→`data`). Divergences from Layer A: Layer B has distinct 'communication' category and lacks 'chat'/'embedding'/'ai'/'pm' (handled via LLM fallback).
+
 ### Swarm (3-Level Hierarchy)
 
 Delegation runs through a fixed 3-level tree: **Orchestrator → Agent → Subagent**. Depth is structural, not configurable.
@@ -188,11 +200,12 @@ When the orchestrator (or an Agent) calls `spawn_child` with a `role` and no exp
 
 Children resolve their model strictly (no parent-model inheritance, no hardcoded defaults):
 
-1. Expert `modelPreference` — if the matched expert has an explicit preference, use it.
-2. `ModelRegistry.getModelForTopic(role)` — otherwise, use the model bound to the child's topic.
-3. Fail loud — if neither resolves, `SwarmSpawner.resolveChildModelAndExpert` throws with a message pointing the user at the Models page. No default-model fallback.
+1. `ModelRegistry.getModelForTopic(topic)` — primary lookup; returns null if topic is unbound.
+2. If topic model lacks tools, swap to a local Ollama tool-capable model (via `ModelSelector.ensureToolSupport()`).
+3. Expert `modelPreference` — if the matched expert has an explicit preference *and no topic binding exists*, use it.
+4. Fail loud — if all above resolve to null, `SwarmSpawner.resolveChildModelAndExpert` throws with a message pointing the user at the Models page. No default-model fallback for workers.
 
-Children **inherit topic bindings, not the parent's model**. If a research Agent spawns a security Subagent, the Subagent resolves the model bound to `security`, not the parent's research model. `ModelRegistry.getModelForTopic()` is the single authoritative entry point. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models the same way (or throw if unbound).
+Children **inherit topic bindings, not the parent's model**. If a research Agent spawns a security Subagent, the Subagent resolves the model bound to `security`, not the parent's research model. `ModelRegistry.getModelForTopic()` is the single authoritative entry point. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models the same way (or throw if unbound). Default fallback applies *only* to the orchestrator via `selectForOrchestration()`.
 
 ## How They Relate
 
@@ -210,22 +223,23 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 
 | Role | Tools | Default Skills | Use Case |
 |------|-------|---------------|----------|
-| orchestrator | meta-tools only | — | Routes tasks to specialists |
-| coding | filesystem, shell, git, knowledge | architecture, data-structures, db-design, api-design | Code implementation |
-| review | filesystem, git, knowledge | architecture, testing, security, performance | Code review |
-| research | browser, browser-ext, websearch, knowledge, filesystem | technical-writing | Investigation |
+| orchestrator | profiles | — | Routes tasks to specialists |
+| coding | filesystem, shell, git, knowledge, task_state, mcp | architecture, data-structures, db-design, api-design | Code implementation |
+| review | filesystem, shell, git, knowledge, task_state, visual | architecture, testing, security, performance | Code review |
+| research | browser, browser-ext, websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | technical-writing | Investigation |
 | design | browser, filesystem | design-principles, design-frameworks | UI/UX |
-| devops | shell, docker, git, filesystem | devops, containers, cloud, networking | Infrastructure |
-| security | shell, filesystem, browser, browser-ext, websearch, knowledge | security, networking, cloud | Security analysis |
-| data | shell, filesystem, knowledge | db-design, data-engineering, performance | Data/DB work |
-| ai | shell, filesystem, browser, browser-ext, websearch, knowledge | ai-engineering, ML, data-structures | AI/ML tasks |
-| qa | browser, browser-ext, shell, docker | test-automation, performance | Testing |
+| devops | shell, docker, git, filesystem, mcp | devops, containers, cloud, networking | Infrastructure |
+| security | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | security, networking, cloud | Security analysis |
+| data | shell, filesystem, knowledge, task_state, artifacts, artifacts_toolbox, mcp | db-design, data-engineering, performance | Data/DB work |
+| ai | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | ai-engineering, ML, data-structures | AI/ML tasks |
+| qa | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | test-automation, performance | Testing |
 | finance | browser, websearch, filesystem | financial-analysis | Financial work |
-| automation | shell, docker, filesystem | automation-patterns, devops | Workflows |
+| automation | shell, docker, filesystem, scheduling, mcp | automation-patterns, devops | Workflows |
 | pm | filesystem, messaging | project-management, technical-writing | Project mgmt |
-| writing | filesystem, browser, websearch, knowledge | technical-writing, api-design | Documentation |
-| communication | google-workspace, microsoft365, messaging | — | Email/calendar |
-| general | filesystem, shell, messaging, knowledge, browser-ext | — | Fallback |
+| writing | filesystem, browser, websearch, knowledge, task_state, messaging | technical-writing, api-design | Documentation |
+| communication | google-workspace, microsoft365, messaging, scheduling, profiles, email-processor, voice | — | Email/calendar |
+| architecture | filesystem, shell, knowledge, task_state, websearch, mcp | — | System design |
+| general | filesystem, browser-ext, websearch, messaging, knowledge, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, mcp | — | Fallback |
 
 ## Thinking Token Management
 
@@ -303,15 +317,19 @@ Reasoning models (Qwen3, DeepSeek, o-series) benefit from thinking tokens but co
 ## Adding New Components
 
 ### New Tool
-1. Create `src/tools/<name>/index.ts` extending `BaseTool`
-2. Register in `src/tools/index.ts`
+Tools auto-discover via `discovery.ts` from `src/tools/` folders. No manual registration needed; each tool extends `BaseTool` with a unique `toolId`.
 
 ### New Skill
 Create via the API (`POST /api/skills`) or add to `SYSTEM_SKILLS` in `src/db/seed-skills.ts` for system skills.
 
 ### New Expert
-1. Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`
-2. If new role needed, add to `AgentRole` type and `ROLE_CONFIGS`
+Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts` with role, skills, prompt, rules, and metrics.
+
+### New Role
+1. Create folder `src/core/orchestrator/roles/<name>/`
+2. Add `config.ts` with `RoleMeta` (role, toolIds, defaultTopic)
+3. Add `prompt.md` (role system prompt)
+4. Roles auto-discover from folders; no manual registration needed
 
 ## Knowledge Base (RAG)
 

@@ -11,7 +11,7 @@ export type TrajectoryOutcome = 'success' | 'failure' | 'partial' | 'cancelled';
 export type TrajectoryStepKind = 'llm_call' | 'tool_call' | 'spawn' | 'response';
 
 export interface TrajectoryClassification {
-  /** Task topic from classifier (e.g. "development", "research"). Absent for casual messages. */
+  /** Task topic from classifier (e.g. "coding", "research"). Absent for casual messages. */
   topic?: string;
   /** Expert chosen for this run, if any (expertId). */
   expert?: string;

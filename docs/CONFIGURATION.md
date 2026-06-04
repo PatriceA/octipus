@@ -7,7 +7,6 @@ Create a `.env` file or use `bun run setup` to generate one interactively.
 | Service | Default Port | Env Var |
 |---------|-------------|---------|
 | Backend API | 3005 | `API_PORT` |
-| WebChat | 3006 | `WEBCHAT_PORT` |
 | Web UI | 3007 | `WEB_PORT` |
 
 ## Environment Variables
@@ -56,7 +55,6 @@ WHATSAPP_ACCESS_TOKEN=                 # Meta Cloud API token
 WHATSAPP_PHONE_NUMBER_ID=             # From Meta dashboard
 WHATSAPP_VERIFY_TOKEN=                 # Webhook verify token
 WHATSAPP_APP_SECRET=                   # Meta App Secret
-WEBCHAT_PORT=3006
 
 # ─── Agent Limits ────────────────────────────────────────────
 AGENT_MAX_TOKEN_BUDGET=100000         # Per-agent token limit (0 = unlimited)
@@ -132,8 +130,8 @@ docker compose up -d ollama litellm searxng
 
 | Service | Port | Image | Required |
 |---------|------|-------|----------|
-| PostgreSQL | 5432 | `pgvector/pgvector:pg15` | Yes |
-| Valkey | 6380 | `valkey/valkey:7.2-alpine` | Yes |
+| PostgreSQL | 5432 | `pgvector/pgvector:pg16` | Yes |
+| Valkey | 6379 | `valkey/valkey:7.2-alpine` | Yes |
 | Ollama | 11434 | `ollama/ollama:rocm` | No |
 | LiteLLM | 4000 | `ghcr.io/berriai/litellm:main-latest` | No |
 | SearXNG | 8888 | `searxng/searxng:latest` | No |

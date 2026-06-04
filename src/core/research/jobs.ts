@@ -4,6 +4,7 @@
  * pattern as the hwfit installer).
  */
 import { coreLogger } from '@/utils/logger';
+import { persistReport } from './persist';
 import { defaultResearchDeps, type ResearchDeps, runResearch } from './service';
 import type { ReportDoc, ResearchDepth } from './types';
 
@@ -18,6 +19,8 @@ export interface ResearchJob {
   stage: string;
   detail?: string;
   report?: ReportDoc;
+  /** Document id of the saved report, once persisted + indexed into the KB. */
+  documentId?: string;
   error?: string;
   startedAt: number;
 }
@@ -67,6 +70,10 @@ export function startResearch(
         job.detail = detail;
       });
       job.report = report;
+      // Always emit a document and add it to the knowledge base so the report
+      // can be referenced later. Fail-soft: a persistence hiccup still returns
+      // the report to the client.
+      job.documentId = (await persistReport(report, userId)) ?? undefined;
       job.stage = 'done';
       job.status = 'done';
     } catch (err) {

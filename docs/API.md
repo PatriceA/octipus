@@ -162,6 +162,87 @@ Per-user orchestrator persona — name, tone, narration volume, free-form self-f
 | POST | `/api/chat` | Send a chat message (optional `expertId` for expert routing) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
+## Reader
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/reader` | Fetch and extract article/page content |
+| GET | `/api/reader/:id` | Get reader result |
+
+## Research
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/research` | Start a deep research job |
+| GET | `/api/research/jobs/:jobId` | Get research job status and results |
+
+## Tasks
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/tasks` | List user's tasks |
+| POST | `/api/tasks` | Create a task |
+| PATCH | `/api/tasks/:id` | Update task |
+| DELETE | `/api/tasks/:id` | Delete task |
+| POST | `/api/tasks/:id/complete` | Mark task complete |
+
+## Recurring Tasks
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/recurring-tasks` | List recurring tasks |
+| POST | `/api/recurring-tasks` | Create recurring task |
+| PATCH | `/api/recurring-tasks/:id` | Update recurring task |
+| DELETE | `/api/recurring-tasks/:id` | Delete recurring task |
+
+## Email
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/email/send` | Send an email (gated) |
+| GET | `/api/email/triage` | Get email triage results |
+
+## Capabilities
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/capabilities/hwfit` | Get hardware-fit model recommendations |
+
+## Vault
+
+Already listed above under [Vault](#vault).
+
+## SAML & SSO
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/saml/metadata` | Retrieve SAML metadata |
+| POST | `/api/saml/acs` | SAML assertion consumer service |
+
+## SCIM (System for Cross-domain Identity Management)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/scim/2.0/Users` | List users |
+| POST | `/api/scim/2.0/Users` | Create user |
+| GET | `/api/scim/2.0/Users/:id` | Get user |
+| PUT | `/api/scim/2.0/Users/:id` | Update user |
+| DELETE | `/api/scim/2.0/Users/:id` | Delete user |
+| GET | `/api/scim/2.0/Groups` | List groups |
+
+## Organizations & Admin
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/orgs` | List organizations (admin) |
+| POST | `/api/orgs` | Create organization (admin) |
+| GET | `/api/orgs/:id` | Get org details |
+| PATCH | `/api/orgs/:id` | Update org |
+| DELETE | `/api/orgs/:id` | Delete org |
+| GET | `/api/admin/audit` | Audit log (admin) |
+| GET | `/api/admin/quotas` | Usage quotas (admin) |
+| GET | `/api/admin/users` | List all users (admin) |
+
 ## Swarm
 
 | Method | Endpoint | Description |
@@ -219,6 +300,151 @@ Per-user orchestrator persona — name, tone, narration volume, free-form self-f
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/voice/transcribe` | Transcribe audio (base64) to text |
+
+## Skill Topic Assignments
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/skill-topic-assignments` | List skill-topic bindings |
+| POST | `/api/skill-topic-assignments` | Create assignment |
+| DELETE | `/api/skill-topic-assignments/:id` | Delete assignment |
+
+## Metrics
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/metrics` | System metrics (uptime, requests, etc.) |
+
+## Logs
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/logs` | List logs (paginated) |
+
+## Memory
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/memory` | Get memory state |
+| POST | `/api/memory/index` | Index memory |
+| DELETE | `/api/memory/:id` | Delete memory entry |
+
+## Search
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/search` | Global search across all knowledge |
+
+## Workspace
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/workspace` | Get workspace info |
+| PATCH | `/api/workspace` | Update workspace |
+
+## Settings
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/settings` | Get all settings |
+| PATCH | `/api/settings` | Update settings |
+
+## Channel Bindings
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/channel-bindings` | List channel bindings |
+| POST | `/api/channel-bindings` | Create binding |
+| DELETE | `/api/channel-bindings/:id` | Delete binding |
+
+## Devices
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/devices` | List devices |
+| POST | `/api/devices` | Register device |
+| DELETE | `/api/devices/:id` | Unregister device |
+
+## API Tokens
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/api-tokens` | List API tokens |
+| POST | `/api/api-tokens` | Create token |
+| DELETE | `/api/api-tokens/:id` | Revoke token |
+| POST | `/api/api-tokens/:id/rotate` | Rotate token |
+
+## OAuth
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/oauth/providers` | List available OAuth providers |
+| POST | `/api/oauth/connect` | Initiate OAuth flow |
+| GET | `/api/oauth/callback` | OAuth callback handler |
+| DELETE | `/api/oauth/:provider` | Disconnect OAuth provider |
+
+## Connectors
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/connectors` | List available connectors |
+| GET | `/api/connectors/:id` | Get connector details |
+
+## Plugins
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/plugins` | List plugins |
+| POST | `/api/plugins` | Install plugin |
+| DELETE | `/api/plugins/:id` | Uninstall plugin |
+
+## Webhooks (Outgoing)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/webhooks` | List outgoing webhooks |
+| POST | `/api/webhooks` | Create webhook |
+| PATCH | `/api/webhooks/:id` | Update webhook |
+| DELETE | `/api/webhooks/:id` | Delete webhook |
+| POST | `/api/webhooks/:id/test` | Test webhook delivery |
+
+## Webhook Incoming
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/hooks/incoming/:hookId` | Receive inbound webhook (no auth) |
+
+## Teams Webhook (Channel Integration)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/webhooks/teams` | Microsoft Teams webhook receiver |
+
+## WhatsApp Webhook (Channel Integration)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/webhooks/whatsapp` | WhatsApp Cloud API webhook receiver |
+
+## Evaluations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/evaluations` | List evaluations |
+| POST | `/api/evaluations` | Run evaluation |
+| GET | `/api/evaluations/:id` | Get evaluation results |
+
+## Eval
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/eval` | Execute eval scenario |
+
+## Artifact Pages
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/artifact-pages/:id` | Get artifact page info |
 
 ## Gateway WebSocket
 

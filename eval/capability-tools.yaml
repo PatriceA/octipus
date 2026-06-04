@@ -47,7 +47,7 @@ tests:
     tags: [tools, shell, quality-standard]
 
   - id: tool-git-status
-    description: Git query routes to development
+    description: Git query routes to coding
     input: "Show me the current git status and any uncommitted changes"
     assertions:
       - type: classification
@@ -64,13 +64,13 @@ tests:
     tags: [tools, filesystem, quality-standard]
 
   - id: tool-write-file
-    description: File writing routes to development
+    description: File writing routes to coding
     input: "Create a new file called hello.py with a simple Hello World program"
     assertions:
       - type: classification
         value: task
       - type: routes_to_role
-        value: development
+        value: coding
     tags: [tools, filesystem, quality-standard]
 
   # ── Knowledge Base ──

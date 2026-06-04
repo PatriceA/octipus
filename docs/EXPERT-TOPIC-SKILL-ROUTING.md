@@ -19,7 +19,7 @@ Role (determines tools + system prompt)
 Model Registry: getModelForTopic(topic)
   1. Check topicRoles[topic] = 'primary'
   2. Fall back to legacy topics array
-  3. Fall back to default model
+  3. Returns null if topic unbound (fail-loud)
   ↓
 Agent spawned with: role tools + topic model + expert prompt + skills
 ```
@@ -28,22 +28,22 @@ Agent spawned with: role tools + topic model + expert prompt + skills
 
 | Role / Topic | Tools | Use Case |
 |---|---|---|
-| `general` | filesystem, browser-ext, websearch, messaging, knowledge, scheduling, profiles, email-processor, mcp | Multi-purpose, browsing, messaging |
-| `coding` | filesystem, shell, git, knowledge, mcp | Code generation, debugging, git |
-| `research` | browser, browser-ext, websearch, knowledge, filesystem, profiles, mcp | Web search, investigation |
-| `architecture` | filesystem, shell, knowledge, websearch, mcp | System design, requirements, specs |
-| `review` | filesystem, shell, git, knowledge | Code review, linting, testing (read-only) |
-| `qa` | browser, browser-ext, shell, docker, filesystem, knowledge | Test suites, UI testing, bug reports |
+| `general` | filesystem, browser-ext, websearch, messaging, knowledge, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, mcp | Multi-purpose, browsing, messaging |
+| `coding` | filesystem, shell, git, knowledge, task_state, mcp | Code generation, debugging, git |
+| `research` | browser, browser-ext, websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | Web search, investigation |
+| `architecture` | filesystem, shell, knowledge, websearch, task_state, mcp | System design, requirements, specs |
+| `review` | filesystem, shell, git, knowledge, task_state, visual | Code review, linting, testing (read-only) |
+| `qa` | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | Test suites, UI testing, bug reports |
 | `communication` | google-workspace, microsoft365, messaging, scheduling, profiles, email-processor, voice | Email, calendar, phone calls |
 | `design` | browser, filesystem | UI/UX design, mockups |
 | `devops` | shell, docker, git, filesystem, mcp | CI/CD, Docker, infrastructure |
-| `security` | shell, filesystem, browser, browser-ext, websearch, knowledge, mcp | Vulnerability analysis, hardening |
-| `data` | shell, filesystem, knowledge, mcp | Databases, data pipelines, SQL |
-| `ai` | shell, filesystem, browser, browser-ext, websearch, knowledge, mcp | ML/AI, RAG, model training |
+| `security` | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | Vulnerability analysis, hardening |
+| `data` | shell, filesystem, knowledge, task_state, artifacts, artifacts_toolbox, mcp | Databases, data pipelines, SQL |
+| `ai` | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | ML/AI, RAG, model training |
 | `finance` | browser, websearch, filesystem | Financial analysis, market data |
 | `automation` | shell, docker, filesystem, scheduling, mcp | Cron tasks, hooks, workflows |
 | `pm` | filesystem, messaging | Project planning, tracking |
-| `writing` | filesystem, browser, websearch, knowledge, messaging | Documentation, technical writing |
+| `writing` | filesystem, browser, websearch, knowledge, task_state, messaging | Documentation, technical writing |
 
 Special topics (no role equivalent — used for model capability routing only):
 | Topic | Purpose |
@@ -68,7 +68,8 @@ Experts are pre-configured personas that add structure on top of roles. Each exp
 
 | Expert | Role/Topic | Skills |
 |---|---|---|
-| Coder | `coding` | software-architecture, data-structures, database-design, api-design, plugin-development |
+| Coder | `coding` | software-architecture, data-structures, api-design, performance-engineering, plugin-development |
+| Architect | `architecture` | software-architecture, api-design, database-design |
 | Reviewer | `review` | software-architecture, test-automation, security-practices, performance-engineering |
 | Researcher | `research` | technical-writing |
 | UI/UX Designer | `design` | design-principles, design-frameworks |
@@ -106,7 +107,7 @@ Skills are domain knowledge documents (markdown with principles, best practices,
 
 | Skill | Used By |
 |---|---|
-| software-architecture | Coder, Reviewer |
+| software-architecture | Coder, Architect, Reviewer |
 | data-structures | Coder, AI Engineer |
 | test-automation | Reviewer, QA Engineer |
 | design-principles | UI/UX Designer |
@@ -118,11 +119,11 @@ Skills are domain knowledge documents (markdown with principles, best practices,
 | financial-analysis | Financial Analyst |
 | ai-engineering | AI Engineer |
 | automation-patterns | Automation Engineer |
-| database-design | Data Engineer, Coder |
-| api-design | Coder, Technical Writer |
+| database-design | Data Engineer, Architect |
+| api-design | Coder, Architect, Technical Writer |
 | project-management | Project Manager |
 | technical-writing | Researcher, Project Manager, Technical Writer |
-| performance-engineering | Data Engineer, Reviewer, QA Engineer |
+| performance-engineering | Coder, Data Engineer, Reviewer, QA Engineer |
 | data-engineering | Data Engineer |
 | machine-learning | AI Engineer |
 | plugin-development | Coder |
@@ -154,7 +155,7 @@ To assign a model to a topic, use the **Models** page in the web UI:
 2. Select the topic(s) this model should handle
 3. The model will be used when agents with that role/topic are spawned
 
-**Fail-loud, no default fallback.** `ModelRegistry.getModelForTopic(role)` is the single authoritative entry point. If a topic has no model bound, the swarm spawner throws — there is no silent "default model" fallback. Same rule applies to the `embedding` / `vision` / `ocr` topics: the knowledge base self-check (`/api/knowledge/readiness`) surfaces a 503 if no embedding model is bound.
+**Fail-loud, no default fallback.** `ModelRegistry.getModelForTopic(topic)` is the single authoritative entry point. If a topic has no model bound, the spawner returns null and throws with a message directing the user to the Models page — there is no silent "default model" fallback. Same rule applies to the `embedding` / `vision` / `ocr` topics: the knowledge base self-check (`/api/knowledge/readiness`) surfaces a 503 if no embedding model is bound. (Default fallback applies *only* to the orchestrator, which can be selected via `selectForOrchestration()`; worker agents refuse the fallback.)
 
 ## Swarm Children Inherit Topic Bindings
 

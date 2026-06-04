@@ -9,7 +9,7 @@ tests:
       - type: classification
         value: task
       - type: routes_to_role
-        value: development
+        value: coding
       - type: confidence_above
         value: 0.5
     tags: [routing, coding]

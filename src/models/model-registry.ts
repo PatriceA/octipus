@@ -1,5 +1,4 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { RedisCache } from '@/db/redis';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
@@ -314,167 +313,12 @@ export class ModelRegistry {
     return false;
   }
 
-  /**
-   * Initialize default models from config
+  /* Removed `initializeDefaultModels()` — it hardcoded model names
+   * (gpt-4o, claude-3-5-sonnet-20241022, …), which violates the "no hardcoded
+   * models" rule and would rot as models age. It was also dead code (no
+   * callers). Fresh installs get their first model from `bootstrap-model.ts`
+   * (user-chosen BOOTSTRAP_* env) and provider discovery / hwfit recommendations.
    */
-  async initializeDefaultModels(): Promise<void> {
-    const config = getConfig();
-
-    const defaultModels: NewModelConfigEntry[] = [
-      {
-        name: 'gpt-4o',
-        provider: 'openai',
-        modelId: 'gpt-4o',
-        maxTokens: 4096,
-        contextWindow: 128000,
-        supportsVision: true,
-        supportsTools: true,
-        supportsStreaming: true,
-        defaultTemperature: 0.7,
-        topics: ['coding', 'research', 'general'],
-        priority: 100,
-        costPerInputToken: 2.5, // per 1M tokens
-        costPerOutputToken: 10,
-        isEnabled: true,
-        isDefault: true,
-      },
-      {
-        name: 'gpt-4o-mini',
-        provider: 'openai',
-        modelId: 'gpt-4o-mini',
-        maxTokens: 4096,
-        contextWindow: 128000,
-        supportsVision: true,
-        supportsTools: true,
-        supportsStreaming: true,
-        defaultTemperature: 0.7,
-        topics: ['chat', 'simple'],
-        priority: 50,
-        costPerInputToken: 0.15,
-        costPerOutputToken: 0.6,
-        isEnabled: true,
-        isDefault: false,
-      },
-      {
-        name: 'claude-3-5-sonnet',
-        provider: 'anthropic',
-        modelId: 'claude-3-5-sonnet-20241022',
-        maxTokens: 8192,
-        contextWindow: 200000,
-        supportsVision: true,
-        supportsTools: true,
-        supportsStreaming: true,
-        defaultTemperature: 0.7,
-        topics: ['coding', 'research'],
-        priority: 90,
-        costPerInputToken: 3,
-        costPerOutputToken: 15,
-        isEnabled: true,
-        isDefault: false,
-      },
-      {
-        name: 'llama3.2',
-        provider: 'ollama',
-        modelId: 'llama3.2',
-        endpoint: config.ollama.url || '',
-        maxTokens: 4096,
-        contextWindow: 128000,
-        supportsVision: false,
-        supportsTools: true,
-        supportsStreaming: true,
-        defaultTemperature: 0.7,
-        topics: ['local', 'chat'],
-        priority: 30,
-        costPerInputToken: 0,
-        costPerOutputToken: 0,
-        isEnabled: true,
-        isDefault: false,
-      },
-      {
-        name: 'text-embedding-3-small',
-        provider: 'openai',
-        modelId: 'text-embedding-3-small',
-        maxTokens: 8191,
-        contextWindow: 8191,
-        supportsVision: false,
-        supportsTools: false,
-        supportsStreaming: false,
-        topics: ['embedding'],
-        priority: 100,
-        costPerInputToken: 0.02,
-        costPerOutputToken: 0,
-        isEnabled: true,
-        isDefault: false,
-      },
-      // CLI models — billing is governed by the user's subscription / provider
-      // pricing for the underlying CLI (Claude Code, etc.). Do not assume free.
-      {
-        name: 'cli/claude-code',
-        provider: 'cli',
-        modelId: 'cli/claude-code',
-        maxTokens: 16384,
-        contextWindow: 200000,
-        supportsVision: false,
-        supportsTools: false,
-        supportsStreaming: false,
-        topics: ['coding', 'research'],
-        priority: 80,
-        costPerInputToken: 0,
-        costPerOutputToken: 0,
-        isEnabled: config.cliModels?.enabled !== false,
-        isDefault: false,
-        metadata: { description: 'Claude Code CLI (subscription)' },
-      },
-      {
-        name: 'cli/gemini-cli',
-        provider: 'cli',
-        modelId: 'cli/gemini-cli',
-        maxTokens: 8192,
-        contextWindow: 1000000,
-        supportsVision: false,
-        supportsTools: false,
-        supportsStreaming: false,
-        topics: ['coding', 'research', 'general'],
-        priority: 75,
-        costPerInputToken: 0,
-        costPerOutputToken: 0,
-        isEnabled: config.cliModels?.enabled !== false,
-        isDefault: false,
-        metadata: { description: 'Gemini CLI (subscription)' },
-      },
-      {
-        name: 'cli/codex-cli',
-        provider: 'cli',
-        modelId: 'cli/codex-cli',
-        maxTokens: 4096,
-        contextWindow: 128000,
-        supportsVision: false,
-        supportsTools: false,
-        supportsStreaming: false,
-        topics: ['coding'],
-        priority: 70,
-        costPerInputToken: 0,
-        costPerOutputToken: 0,
-        isEnabled: false, // Disabled by default since codex may not be installed
-        isDefault: false,
-        metadata: { description: 'Codex CLI (subscription)' },
-      },
-    ];
-
-    for (const model of defaultModels) {
-      // Check existence regardless of isEnabled status
-      const existing = await this.db
-        .select({ name: modelConfig.name })
-        .from(modelConfig)
-        .where(eq(modelConfig.name, model.name))
-        .limit(1);
-      if (existing.length === 0) {
-        await this.registerModel(model);
-      }
-    }
-
-    modelLogger.info({ count: defaultModels.length }, 'Default models initialized');
-  }
 
   /**
    * Invalidate cache for a model

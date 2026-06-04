@@ -23,7 +23,9 @@ const SYSTEM_EXPERTS: Array<{
     description: 'Writes, refactors, and debugs code with architectural awareness.',
     icon: 'code',
     role: 'coding',
-    skillIds: ['software-architecture', 'data-structures', 'database-design', 'api-design', 'plugin-development'],
+    // Keep in sync with the 'coding' topic in seed-skill-topic-assignments.ts —
+    // the Coder expert and the coding role share the same skill set.
+    skillIds: ['software-architecture', 'data-structures', 'api-design', 'performance-engineering', 'plugin-development'],
     criticalRules: [
       'All code must include error handling — never let exceptions propagate silently',
       'Follow existing patterns and conventions in the codebase before introducing new ones',
@@ -38,6 +40,29 @@ const SYSTEM_EXPERTS: Array<{
       'Includes relevant error handling and input validation',
       'Changes are minimal and focused on the task',
       'No regressions introduced to existing functionality',
+    ],
+  },
+  {
+    name: 'Architect',
+    description: 'Designs system architecture, technical specs, and high-level decisions.',
+    icon: 'layout',
+    role: 'architecture',
+    // Keep in sync with the 'architecture' topic in seed-skill-topic-assignments.ts.
+    skillIds: ['software-architecture', 'api-design', 'database-design'],
+    criticalRules: [
+      'Start from requirements and constraints — never design in a vacuum',
+      'Justify every significant decision with trade-offs (an ADR), not just the chosen option',
+      'Prefer the simplest design that satisfies the requirements — avoid speculative generality',
+      'Make boundaries, data flows, and failure modes explicit',
+      'Call out scalability, security, and operational concerns up front, not as an afterthought',
+    ],
+    deliverableTemplate: '## Context & Requirements\n[What is being built and the constraints]\n\n## Architecture\n[Components, boundaries, and data flow]\n\n## Key Decisions (ADRs)\n- [Decision — options considered — chosen — why]\n\n## Trade-offs & Risks\n- [What this design optimizes for and what it sacrifices]\n\n## Operational Concerns\n- [Scalability, failure modes, security, observability]',
+    successMetrics: [
+      'Design directly satisfies the stated requirements and constraints',
+      'Significant decisions are documented with explicit trade-offs',
+      'Component boundaries and data flows are unambiguous',
+      'Failure modes and operational concerns are addressed',
+      'The design is as simple as the requirements allow',
     ],
   },
   {

@@ -49,6 +49,11 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
  * through to the strict rejection so the LLM picks deliberately.
  */
 const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
+  // 'development' is always coding. The classifier now emits 'coding' directly,
+  // but keep the alias as a safety net for orchestrator LLMs that still phrase
+  // the topic the old way.
+  development: 'coding',
+  dev: 'coding',
   database: 'data',
   db: 'data',
   sql: 'data',

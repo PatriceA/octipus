@@ -12,15 +12,15 @@ Feature comparison with [competitor](https://docs.competitor.ai/) as of March 20
 
 | Capability | competitor | Octipus | Notes |
 |---|---|---|---|
-| Multi-agent orchestration | Yes | Yes | Orchestrator + specialist roles |
+| Multi-agent orchestration | Yes | Yes | Orchestrator + 16 specialist roles |
 | Sub-agent spawning | Yes (depth/concurrency limits) | Yes (3-level swarm) | Orchestrator → Agent → Subagent via `spawn_child`; hard depth cap 2 |
 | Parallel fan-out | Yes | Yes | `spawn_child` with `parallelGroup`, `Promise.all` execution |
 | Pipeline (sequential) | Yes | Yes | `create_pipeline` with handoff context (Orchestrator-only) |
 | Budget cascade (tokens/wall/fan-out) | Partial | Yes | Per-node hard caps, pool-shared tokens, pausedMs wall clock |
 | Cycle / duplicate protection | — | Yes | Per-session fingerprint `SwarmCallGraph` |
 | Cascade cancel | Partial | Yes | AbortSignal tree + DB walk in `AgentManager.stop({cascade})` |
-| Role-based routing | Yes | Yes | 16 specialist roles |
-| Topic → model routing | Partial | Yes | `ModelRegistry.getModelForTopic()` authoritative; fail-loud on unbound topics |
+| Role-based routing | Yes | Yes | 16 worker roles + orchestrator |
+| Topic → model routing | Partial | Yes | `ModelRegistry.getModelForTopic()` authoritative; fail-loud on unbound topics; swaps to Ollama if needed for tool support |
 | Expert system / personas | Yes | Yes | DB-backed presets with tools + skills |
 
 ## Channels

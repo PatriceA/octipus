@@ -39,10 +39,10 @@ describe('orchestrator integration — routing surface', () => {
     expect(c.topic).toBe('communication');
   });
 
-  test('coding request routes to development topic', () => {
+  test('coding request routes to coding topic', () => {
     const c = classifyMessage('please write a typescript function that validates emails');
     expect(c.type).toBe('task');
-    expect(c.topic).toBe('development');
+    expect(c.topic).toBe('coding');
   });
 
   test('approval reply classifies as approval', () => {

@@ -116,7 +116,7 @@ Sliding window rate limiter per connection per action type:
 
 ## Commands
 
-9 built-in commands available via the gateway protocol:
+Built-in commands available via the gateway protocol:
 
 | Command | Aliases | Description |
 |---------|---------|-------------|

@@ -108,10 +108,12 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 - **Error classification** — single canonical taxonomy (`FailoverReason`, `RecoveryAction`, `ClassifiedError`). All 8 model providers migrated off ad-hoc string matching.
 - **Anti-thrashing session compaction** — LLM summarization with stall detection, ≥15% savings gate, hard-ceiling safety valve.
 - **Trajectory learning** — JSONL audit log of every agent run, daily rolling, opt-out via env. Foundation for offline eval and fine-tuning.
-- **Skill auto-extension (detector)** — pattern fingerprinting → `skill_proposals` queue, never auto-promotes; review UI surfaces high-frequency patterns.
+- **Skill auto-extension** — pattern fingerprinting → `skill_proposals` queue with curator lifecycle (usage tracking, archive after 90d); review UI surfaces high-frequency patterns; never auto-promotes.
 - **MCP circuit breaker** — closed/open/half-open with exponential backoff, admin reset, UI badge.
-- **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail with a clear error.
+- **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail at spawn time with a clear error.
 - **Orchestrator persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
+- **Orchestrator detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
+- **Enrichment features** — Reader (fetch + extract web content), Deep Research (cited report saved to Documents + indexed into the knowledge base; live job tracking in-memory), To-Do list (recurring via scheduler), Email triage (batch classification), Hardware-aware onboarding (curated Ollama catalog + LIVE registry sizing).
 - **26 E2E test modules** + 1900+ unit tests + red-team plugins (prompt injection, role confusion, tool misuse, data leakage, off-topic drift).
 
 ## Technologies and ideas worth a look
@@ -131,10 +133,11 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 | Area | What's there |
 |---|---|
 | **Agents** | 3-level Swarm, 16 roles, 15 expert personas, 20 domain skills |
-| **Models** | Ollama, OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Voyage, LiteLLM, CLI (Claude Code / Gemini CLI / Codex CLI) |
+| **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude / Gemini / Codex) |
 | **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, MCP — 59+ across 19 groups |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR |
+| **Enrichment** | Reader (fetch + extract), Deep Research (cited report → Documents + knowledge base), To-Do list, Email triage, Hardware-aware onboarding |
 | **Automation** | Hooks, webhooks, cron tasks, plugin system |
 | **Eval** | Provider conformance suite, 8 quality evaluators, red-team plugins (5 attacks, 49 cases) |
 | **Security** | WebAuthn passkeys, TOTP 2FA, JWT sessions, encrypted vault, audit log |
@@ -185,9 +188,10 @@ Open directions (later): federation between Octipus instances, local-first sync 
 |---|---|
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | Tools, skills, experts, agents, swarm |
 | **[Tool & Expert Routing](docs/TOOL-ROUTING.md)** | What triggers which tool, role, expert |
-| **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat |
+| **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat, Voice, MCP |
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands across all channels |
 | **[API Reference](docs/API.md)** | Complete REST API |
+| **[Enrichment Features](docs/ENRICHMENT.md)** | Reader, Deep Research, Tasks, Email triage, Hardware-aware onboarding |
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |
 | **[Configuration Precedence](docs/CONFIGURATION-PRECEDENCE.md)** | `.env`-bootstrap vs DB-runtime split |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control |

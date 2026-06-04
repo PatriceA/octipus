@@ -55,11 +55,11 @@ tests:
       - type: classification
         value: task
       - type: routes_to_role
-        value: development
+        value: coding
     tags: [routing, coding, quality-standard]
 
   - id: cap-shell-command
-    description: Shell command request routes to general or development
+    description: Shell command request routes to general or coding
     input: "Run df -h to check disk space and tell me if any partition is above 80% usage"
     assertions:
       - type: classification
@@ -67,13 +67,13 @@ tests:
     tags: [routing, coding, quality-standard]
 
   - id: cap-git-operations
-    description: Git operations route to development
+    description: Git operations route to coding
     input: "Fix the bug in auth.ts and commit the changes with a descriptive message"
     assertions:
       - type: classification
         value: task
       - type: routes_to_role
-        value: development
+        value: coding
     tags: [routing, coding, quality-standard]
 
   # ── Communication ──

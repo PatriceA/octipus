@@ -20,6 +20,7 @@ interface Job {
   stage: string;
   detail?: string;
   report?: ReportDoc;
+  documentId?: string;
   error?: string;
 }
 
@@ -149,6 +150,13 @@ export default function ResearchPage() {
             <p className="text-sm text-on-surface-variant mt-1">
               {report.depth} · {report.sources.length} sources · {new Date(report.generatedAt).toLocaleString()}
             </p>
+            {job?.documentId && (
+              <p className="text-sm mt-2">
+                <a href="/documents" className="text-primary hover:underline">
+                  Saved to Documents &amp; added to the knowledge base →
+                </a>
+              </p>
+            )}
           </header>
 
           {report.sections.map((sec, i) => (

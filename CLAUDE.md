@@ -93,13 +93,15 @@ think you need to break one, open an issue first.
    `try { … } catch { /* swallow */ }`. If you must catch, log the reason.
 2. **No hardcoded models.** Never write `model: 'gpt-4o'` in source. Bind to
    a topic and resolve via `ModelRegistry.getModelForTopic(role)`. Unbound
-   topic ⇒ throw at spawn time.
+   topic ⇒ throw at spawn time (fail-loud). Default fallback applies ONLY
+   to the orchestrator, never to worker topics.
 3. **One job per role.** A role branching on flags to do five things is five
    roles. Tool allowlists are minimal — no wildcards.
 4. **Typed contracts at handoffs.** Every role has an input shape and a
    typed deliverable. Pipeline stages: stage N output = stage N+1 input.
 5. **Channels are adapters.** New per-channel logic that can't go through
-   the gateway is wrong — fix the gateway.
+   the gateway is wrong — fix the gateway. Available channels: Telegram,
+   Slack, Teams, WhatsApp, WebChat, TUI, Voice, MCP. NO Discord.
 6. **Don't edit the `SECURITY_PREAMBLE`** without an issue and an argument.
 7. **No duplicated types** between `src/` and `web/`. Import shared
    definitions; don't copy-paste.
@@ -127,11 +129,11 @@ think you need to break one, open an issue first.
 ## Adding things (cheat sheet)
 
 - **Role** → `src/core/orchestrator/roles/<name>/{config.ts,prompt.md,tools.ts}`.
-  Auto-discovered. Add classifier keywords in
-  `src/core/orchestrator/classifier.ts` if it has a distinct topic.
+  Auto-discovered via folder scan; no manual registration. Add classifier keywords
+  in `src/core/orchestrator/classifier.ts` if it has a distinct topic.
 - **Skill** → `src/core/skills/<name>/{skill.json,knowledge.md}`. Auto-loaded.
-- **Tool (built-in)** → `src/tools/<name>/index.ts` extending `BaseTool`,
-  register in `src/tools/index.ts`.
+- **Tool (built-in)** → `src/tools/<name>/index.ts` extending `BaseTool`.
+  Auto-discovered via `discovery.ts`; no need to register in `src/tools/index.ts`.
 - **MCP tool** → `mcp-server/src/tools/<group>/<tool>.ts` with Zod schema +
   handler + `register` call. Inventory auto-discovers.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no

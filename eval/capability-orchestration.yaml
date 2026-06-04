@@ -13,7 +13,7 @@ tests:
       - type: classification
         value: task
       - type: routes_to_role
-        value: development
+        value: coding
     tags: [orchestration, single-worker, quality-standard]
 
   # ── Team Spawning ──

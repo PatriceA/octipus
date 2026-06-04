@@ -8,16 +8,6 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
-Three infrastructure investments unblocked by the May-17 memory-system
-cleanup arc (PR #27 + #28). Each is a "build new capability"
-project — distinct from the cleanup it follows.
-
-The UX + personality revamp planned 2026-05-20 from
-[`docs/plans/ux-personality-revamp.md`](docs/plans/ux-personality-revamp.md)
-landed in full on the same branch (five slices) — see **Done →
-2026-05-20 batch (d) — UX + personality revamp** below. Nothing
-deferred from that plan remains in-flight.
-
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
   (772 lines) and `src/models/providers/index.ts` are at 0% coverage
   because they front network IO; meaningful unit tests need a mock
@@ -134,6 +124,24 @@ deferred from that plan remains in-flight.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-06-03 batch — Enrichment wave-2 complete
+
+All five enrichment features delivered end-to-end (tool/service + API route + web page), 5 PRs (#47-#51):
+
+- **Reader** — `src/core/reader/` (fetch/extract/actions), route `routes/reader.ts`, web `web/app/reader`. Extracts content from links with structured actions.
+- **Deep Research** — `src/core/research/` (jobs/gather/synthesis/render/service), route `routes/research.ts`, web `web/app/research`. Jobs held in-memory map (`research/jobs.ts`) — NOT persisted, won't survive restart.
+- **Tasks/Todos** — agent tool `src/tools/tasks/` (personal todos), route `routes/tasks.ts`, web `web/app/tasks`. Recurring via `routes/recurring-tasks.ts` + scheduler.
+- **Email triage** — `src/tools/email-processor/` (batch AI classification), core `src/core/email/`, route `routes/email.ts`, web `web/app/email`. Supports Gmail/Outlook.
+- **Hardware-aware onboarding (hwfit)** — `src/capabilities/hwfit/` (curated Ollama catalog, LIVE registry manifest sizing), driven by `src/capabilities/service.ts`, route `routes/capabilities.ts`, web `web/app/setup`. Fully tested, integrated with installer.
+
+Plus infrastructure improvements:
+- **Orchestrator detach** (May-24 land continued) — parent can detach children and call `collect_children` later; enables live narration while swarm runs.
+- **Persona system presets** — six shipped personas (`octipus`, `terse-engineer`, `mentor`, `nautilus`, `concierge`, `verbose-academic`) with tone + narration customization.
+- **Skill curator lifecycle** — usage tracking, auto-archive >90d, flag >30d unused.
+- **Evaluations/red-team** — `src/models/evaluation/`, `web/app/eval` with compare + red-team views shipped.
+- **SSO/SCIM/SAML** — `routes/saml.ts`, `routes/scim.ts`, `routes/orgs.ts`, `routes/admin.ts` fully wired; org-scoped models/skills.
+- **Vault/secrets** — `routes/vault.ts`, `web/app/secrets` with per-tool ACL, workspace scoping.
 
 ### 2026-05-24 — Orchestrator freedom + Hermes skill curator
 

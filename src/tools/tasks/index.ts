@@ -11,10 +11,12 @@ import { BaseTool, createParameterSchema } from '../base-tool';
  * cross-tenant path. Writes default to ASK; listing is ALLOW.
  */
 export class TasksTool extends BaseTool {
+  // id stays 'tasks' (route /tasks, role allowlists) — only the user-facing
+  // name is the "To-Do List" concept.
   readonly id = 'tasks';
-  readonly name = 'Personal Tasks';
+  readonly name = 'To-Do List';
   readonly version = '1.0.0';
-  readonly description = 'Manage the user\'s personal todo list — create, list, update, and complete tasks.';
+  readonly description = 'Manage the user\'s to-do list — create, list, update, and complete to-do items.';
 
   getManifest(): ToolManifest {
     return {

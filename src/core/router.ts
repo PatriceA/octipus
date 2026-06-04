@@ -17,7 +17,12 @@ const TOPIC_KEYWORDS: Record<string, string[]> = {
   ],
   research: [
     'analyze', 'review', 'explain', 'understand', 'compare', 'evaluate',
-    'pros', 'cons', 'architecture', 'pattern', 'best practice',
+    'pros', 'cons', 'pattern', 'best practice',
+  ],
+  architecture: [
+    'architecture', 'system design', 'design the system', 'technical specification',
+    'component diagram', 'data flow', 'api contract', 'adr', 'architecture decision',
+    'microservices', 'monolith', 'event-driven', 'design document',
   ],
   chat: [
     'hello', 'hi', 'hey', 'thanks', 'help', 'how are', 'what is',
@@ -194,7 +199,8 @@ export class Router {
             role: 'system',
             content: `You are a message classifier. Classify the user's message into one of these topics:
 - coding: Programming, debugging, implementation
-- research: Code review, architecture, comparisons, analysis
+- research: Code review, comparisons, analysis
+- architecture: System design, technical specs, architecture decisions
 - chat: General conversation, simple questions
 - embedding: Vector/semantic search
 - design: UI/UX, layout, styling

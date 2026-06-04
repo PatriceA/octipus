@@ -42,10 +42,10 @@ describe('classifyMessage — existing behavior unchanged', () => {
     expect(classifyMessage('Hey, how are you?').type).toBe('casual');
   });
 
-  test('coding request is still a task routed to development', () => {
+  test('coding request is still a task routed to coding', () => {
     expect(classifyMessage('Implement a REST API endpoint for user registration')).toMatchObject({
       type: 'task',
-      topic: 'development',
+      topic: 'coding',
     });
   });
 

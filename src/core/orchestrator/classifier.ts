@@ -23,7 +23,10 @@ const CASUAL_PATTERNS = [
 ];
 
 const TASK_KEYWORDS: Record<string, string[]> = {
-  development: [
+  // Topic name must equal the worker role id ('coding'). The classifier feeds
+  // this string straight into the orchestrator's spawn_child role hint, so a
+  // non-role topic (the old 'development') would be rejected and waste a turn.
+  coding: [
     'implement', 'write code', 'develop', 'program',
     'refactor', 'fix bug', 'fix the bug', 'debug', 'add feature',
     'api endpoint', 'frontend', 'backend', 'component',

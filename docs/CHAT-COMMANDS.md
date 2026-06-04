@@ -14,33 +14,47 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/experts [name]` | Alias for `/expert` |
 | `/stop` | Stop all running agents in the session |
 | `/clear` | Clear conversation context and start fresh |
+| `/model [name]` | Switch to a specific model for the session |
 | `/models` | List available models |
 | `/plan` | Start an interactive project planning questionnaire |
 | `/cost` | Show token usage and cost for the session |
-| `/cancel` | Abort a multi-step command (e.g., active `/plan`) |
+| `/cancel` | Abort a multi-step command (e.g., active `/plan`); works during any command |
+| `/eval` | Run evaluation scenarios or compare models |
 
-### Persona (Orchestrator Identity)
+### Persona (Web UI only)
 
-| Command | Description |
-|---------|-------------|
-| `/persona` | Show the active persona (name, tone, narration, self-facts) |
-| `/persona name <X>` | Rename the orchestrator (default: `Octipus`) |
-| `/persona tone <X>` | Set tone: `dry`, `playful`, `neutral`, `professional`, `terse`, `verbose` |
-| `/persona narration <X>` | Set live swarm narration volume: `off`, `minimal`, `chatty` |
-| `/persona say <fact>` | Append a free-form self-fact ("always summarize in bullets") |
-| `/persona use <preset_id>` | Switch preset (keeps custom name; see Personas below) |
-| `/persona reset` | Restore Octipus default |
-| `/persona personas` | List available preset personas |
+Persona controls (name, tone, narration, self-facts, presets) are accessible via the **web UI** at `/persona` and do not have chat command equivalents. Once set, your chosen persona applies across all channels.
+
+**Available persona controls** (in `/persona` page):
+
+| Control | Options | Description |
+|---------|---------|-------------|
+| Name | Text | Rename the orchestrator (default: `Octipus`) |
+| Tone | `dry`, `playful`, `neutral`, `professional`, `terse`, `verbose` | Personality of the orchestrator's responses |
+| Narration | `off`, `minimal`, `chatty` | Volume of live swarm narration during agent execution |
+| Facts | Free-form text | Add custom self-facts ("always use bullets"; persists across sessions) |
+| Preset | Dropdown | Switch preset persona (keeps custom name) |
+| Reset | Button | Restore Octipus default |
+
+Six presets ship by default: `octopus` (default, dry octopus-machine), `terse-engineer`, `mentor`, `nautilus` (maritime), `concierge`, `verbose-academic`. Each is a YAML file under `personas/` you can edit or copy as a new preset.
+
+Full spec in [`docs/plans/ux-personality-revamp.md`](plans/ux-personality-revamp.md).
 
 ### TUI / Gateway Commands (Additional)
 
-| Command | Description |
-|---------|-------------|
-| `/cost` | Show cumulative token usage and cost |
-| `/diff` | Show `git diff --stat` for workspace changes |
-| `/version` | Show Octipus version and Bun version |
-| `/compact` | Compact session context (summarize old messages) |
-| `/exit` | Exit the TUI |
+These commands are available in the TUI and gateway clients (not web/channel clients).
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is orchestrator version) |
+| `/expert` | `/e` | Switch expert or list available experts (gateway version) |
+| `/status` | `/s` | Show session status, agents, and active expert (gateway version) |
+| `/cost` | — | Show cumulative token usage and cost |
+| `/compact` | — | Compact session context (summarize old messages); optional: `/compact <focus instructions>` |
+| `/clear` | `/cls`, `/reset` | Reset orchestrator context and clear TUI display |
+| `/diff` | — | Show `git diff --stat` for workspace changes |
+| `/help` | `/h`, `/?` | List available commands |
+| `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `.octipus/extensions/` (local trust only) |
 
 ### Channel-Specific
 
@@ -64,27 +78,6 @@ Switch between pre-built expert personas from any channel:
 When an expert is active, all your messages bypass the orchestrator's classifier and go directly to that expert's agent with its specialized system prompt, domain knowledge (skills), critical rules, and deliverable template.
 
 Expert selection persists across messages in the session. Use `/expert reset` to return to automatic classification.
-
----
-
-## Personas (Orchestrator Identity)
-
-The orchestrator's identity is a per-user setting, distinct from experts. By default it's **Octipus** — an octopus-machine that refers to itself in the third person, uses "we" for the swarm, and gives short dry replies. You can rename it, change tone, control how chatty its live swarm narration is, and add free-form facts that survive across sessions and channels.
-
-```
-/persona                       → Show current
-/persona name Adam             → Rename
-/persona tone playful          → Switch tone
-/persona narration chatty      → More live swarm narration
-/persona say always use bullets  → Add a self-fact
-/persona personas              → List presets
-/persona use mentor            → Switch preset (keeps the custom name)
-/persona reset                 → Back to Octipus default
-```
-
-Six presets ship by default — `octipus` (default, dry octopus-machine), `terse-engineer`, `mentor`, `nautilus` (maritime), `concierge`, `verbose-academic`. Each is a YAML file under `personas/` you can edit or copy as a new preset.
-
-The persona applies across **every channel** (TUI, web, Telegram, Slack, …) — it's per-user, not per-channel. The web UI surface for the same controls is at `/persona`. Full spec in [`docs/plans/ux-personality-revamp.md`](plans/ux-personality-revamp.md).
 
 ---
 
@@ -133,21 +126,21 @@ Commands go through the **orchestrator command registry** (`src/core/commands/`)
 
 ```
 User sends "/expert Technical Writer"
-    │
-    ▼
-Channel receives message → starts with "/"
-    │
-    ▼
-Orchestrator handleCommand() → looks up "expert" in registry
-    │
-    ▼
-Expert command handler → finds expert in DB → stores in session context
-    │
-    ▼
+    |
+    v
+Channel receives message -> starts with "/"
+    |
+    v
+Orchestrator handleCommand() -> looks up "expert" in registry
+    |
+    v
+Expert command handler -> finds expert in DB -> stores in session context
+    |
+    v
 Response: "Switched to expert: Technical Writer"
 ```
 
-The TUI has an additional set of commands via the **gateway command registry** (`src/core/gateway/commands.ts`) which include `/cost`, `/diff`, `/version`, and other local operations.
+The TUI has an additional set of commands via the **gateway command registry** (`src/core/gateway/commands.ts`) which include `/cost`, `/diff`, `/compact`, and other local operations.
 
 ---
 
