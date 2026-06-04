@@ -390,22 +390,29 @@ diagnose_backend_failure() {
     issues=$((issues + 1))
   fi
 
-  # Check PostgreSQL
-  if ! check_service "localhost" "5432"; then
-    log_error "PostgreSQL is not reachable on port 5432"
-    log_hint "Run: cd ~/docker-services && docker compose up -d db"
-    issues=$((issues + 1))
-  else
-    log_info "PostgreSQL is reachable"
-  fi
+  # External-storage checks only. In embedded mode the backend uses PGlite +
+  # in-memory cache, so Postgres/Valkey/DATABASE_URL are irrelevant — reporting
+  # them (with machine-specific hints) just sends users chasing phantoms.
+  if [[ "$STORAGE_MODE" == "external" ]]; then
+    # Check PostgreSQL
+    if ! check_service "localhost" "5432"; then
+      log_error "PostgreSQL is not reachable on port 5432"
+      log_hint "Start your Postgres service (e.g. docker compose up -d db)"
+      issues=$((issues + 1))
+    else
+      log_info "PostgreSQL is reachable"
+    fi
 
-  # Check Valkey
-  if ! check_service "localhost" "6380"; then
-    log_error "Valkey is not reachable on port 6380"
-    log_hint "Run: cd ~/docker-services && docker compose up -d valkey"
-    issues=$((issues + 1))
+    # Check Valkey
+    if ! check_service "localhost" "6380"; then
+      log_error "Valkey is not reachable on port 6380"
+      log_hint "Start your Valkey/Redis service (e.g. docker compose up -d valkey)"
+      issues=$((issues + 1))
+    else
+      log_info "Valkey is reachable"
+    fi
   else
-    log_info "Valkey is reachable"
+    log_info "Embedded mode — skipping Postgres/Valkey checks"
   fi
 
   # Check .env
@@ -415,9 +422,9 @@ diagnose_backend_failure() {
     issues=$((issues + 1))
   else
     log_info ".env file exists"
-    # Check required vars
-    if ! grep -q "DATABASE_URL=" "$PROJECT_DIR/.env" 2>/dev/null; then
-      log_error "DATABASE_URL not set in .env"
+    # DATABASE_URL is only required in external mode.
+    if [[ "$STORAGE_MODE" == "external" ]] && ! grep -q "DATABASE_URL=" "$PROJECT_DIR/.env" 2>/dev/null; then
+      log_error "DATABASE_URL not set in .env (required for external storage mode)"
       issues=$((issues + 1))
     fi
     if ! grep -q "MASTER_KEY=" "$PROJECT_DIR/.env" 2>/dev/null; then
@@ -433,12 +440,14 @@ diagnose_backend_failure() {
     issues=$((issues + 1))
   fi
 
-  # Show last few log lines
+  # Show recent log lines. 5 was too few — a multi-line error/object (e.g. a
+  # config validation dump) pushes the actual "Error:" line out of view, so the
+  # tail showed only a trailing "}". 30 lines captures the whole message.
   if [[ -f "$LOG_FILE" ]]; then
     echo ""
-    log_step "Last log entries:"
+    log_step "Last log entries (full log: octi logs):"
     echo -e "  ${DIM}"
-    tail -5 "$LOG_FILE" 2>/dev/null | sed 's/^/    /'
+    tail -30 "$LOG_FILE" 2>/dev/null | sed 's/^/    /'
     echo -e "  ${NC}"
   fi
 
