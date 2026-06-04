@@ -318,55 +318,67 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
 
 // ── API helpers (cookie-aware) ─────────────────────────────────────
 
+/**
+ * Carries the HTTP status and raw body of a failed API call so callers can
+ * map it to a friendly message instead of parsing a stringified Error.
+ */
+export class ApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly status: number,
+    readonly bodyText: string,
+  ) {
+    super(`${method} ${path} → ${status}: ${bodyText}`);
+    this.name = 'ApiError';
+  }
+
+  /** Best-effort human message: the `{ error }` field of a JSON body, else raw text. */
+  get serverMessage(): string {
+    try {
+      const parsed = JSON.parse(this.bodyText) as { error?: unknown };
+      if (typeof parsed.error === 'string') return parsed.error;
+    } catch {
+      /* body wasn't JSON — fall through to raw text */
+    }
+    return this.bodyText;
+  }
+}
+
 class ApiClient {
   private cookie: string | null = null;
 
   constructor(private baseUrl: string) {}
 
-  async post<T>(path: string, body: unknown): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (this.cookie) headers['Cookie'] = this.cookie;
     const res = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
+      method,
       headers,
-      body: JSON.stringify(body),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     const setCookie = res.headers.get('set-cookie');
     if (setCookie) this.cookie = setCookie.split(';')[0];
-    if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(method, path, res.status, await res.text());
     return (await res.json()) as T;
   }
 
-  async patch<T>(path: string, body: unknown): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.cookie) headers['Cookie'] = this.cookie;
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`PATCH ${path} → ${res.status}: ${await res.text()}`);
-    return (await res.json()) as T;
+  post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('POST', path, body);
   }
 
-  async put<T>(path: string, body: unknown): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.cookie) headers['Cookie'] = this.cookie;
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`PUT ${path} → ${res.status}: ${await res.text()}`);
-    return (await res.json()) as T;
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('PATCH', path, body);
   }
 
-  async get<T>(path: string): Promise<T> {
-    const headers: Record<string, string> = {};
-    if (this.cookie) headers['Cookie'] = this.cookie;
-    const res = await fetch(`${this.baseUrl}${path}`, { headers });
-    if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${await res.text()}`);
-    return (await res.json()) as T;
+  put<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('PUT', path, body);
+  }
+
+  get<T>(path: string): Promise<T> {
+    return this.request<T>('GET', path);
   }
 }
 
@@ -730,13 +742,51 @@ async function maybeRecommendModel(api: ApiClient): Promise<void> {
   process.stdout.write('\x1b[33m! Install still running after 30 min; check the Models page.\x1b[0m\n');
 }
 
+/**
+ * Turn a failed POST /api/auth/register into an actionable message. The raw
+ * 422 the backend returns ("Invalid request data") is opaque — map the common
+ * status codes to the field the user can actually fix.
+ */
+export function adminRegisterHint(err: unknown, admin: { username: string; email?: string }): string {
+  if (!(err instanceof ApiError)) {
+    return `Admin registration failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  let hint: string;
+  switch (err.status) {
+    case 422:
+      // Schema validation: username (3–50 chars) or email format. We already
+      // omit a blank email, so a 422 here means a malformed value was entered.
+      hint = admin.email
+        ? `"${admin.email}" is not a valid email address (leave it blank to skip), and the username must be 3–50 characters`
+        : 'the username must be 3–50 characters';
+      break;
+    case 400:
+      // Password complexity — the backend's message is already specific.
+      hint = err.serverMessage;
+      break;
+    case 409:
+      hint = 'that username or email is already registered — pick another or log in instead';
+      break;
+    case 429:
+      hint = 'too many registration attempts — wait a few minutes, then rerun setup';
+      break;
+    default:
+      hint = err.serverMessage;
+  }
+  return `Admin registration failed (HTTP ${err.status}): ${hint}`;
+}
+
 async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<void> {
   const api = new ApiClient(baseUrl);
 
   // Admin account.
   const admin = await pickAdmin(null);
   process.stdout.write(`Registering admin "${admin.username}"…\n`);
-  await api.post('/api/auth/register', admin);
+  try {
+    await api.post('/api/auth/register', admin);
+  } catch (err) {
+    throw new Error(adminRegisterHint(err, admin));
+  }
   process.stdout.write('\x1b[32m✓ Admin registered (first-user admin grant applied)\x1b[0m\n');
 
   // Provider + key.
