@@ -40,8 +40,10 @@ interface ParsedRule {
  * Parse a rule pattern like "shell(git:*)" into structured form.
  */
 function parseRule(pattern: string, decision: RuleDecision): ParsedRule | null {
-  // Format: toolId(matcher) or just toolId (matches any)
-  const match = pattern.match(/^([^(]+?)(?:\(([^)]*)\))?$/);
+  // Format: toolId(matcher) or just toolId (matches any). The matcher captures
+  // greedily up to the LAST ')', so a command containing parens — e.g. the fork
+  // bomb `:(){ :|:&};:` — is representable as `shell(:(){ :|:&};:)`.
+  const match = pattern.match(/^([^(]+?)(?:\((.*)\))?$/);
   if (!match) {
     securityLogger.warn({ pattern }, 'Invalid permission rule pattern');
     return null;

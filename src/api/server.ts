@@ -129,7 +129,14 @@ export function createServer() {
     })
     // Error handling
     .onError(({ error, code }) => {
-      apiLogger.error({ error, code }, 'Request error');
+      // Routine client-side conditions (unknown route, bad input) are normal
+      // request flow, not server errors — log them at debug so real 5xx errors
+      // stand out. Everything else stays at error level.
+      if (code === 'NOT_FOUND' || code === 'VALIDATION') {
+        apiLogger.debug({ code }, 'Request rejected');
+      } else {
+        apiLogger.error({ error, code }, 'Request error');
+      }
 
       if (code === 'VALIDATION') {
         return { error: 'Invalid request data' };
