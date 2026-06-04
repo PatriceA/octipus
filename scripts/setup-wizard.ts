@@ -855,6 +855,33 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     } catch (err) {
       process.stdout.write(`\x1b[33m! Provider settings partially applied: ${(err as Error).message}\x1b[0m\n`);
     }
+
+    // Register the chosen model in the registry and mark it the default.
+    // Settings alone don't create a model_config row, and the orchestrator
+    // resolves chat via getDefaultModel() (isDefault + isEnabled) — so without
+    // this the selected model is "not registered" and chat has no engine, for
+    // EVERY provider. The API key is already in the vault (the settings batch
+    // routed <provider>.apiKey → <provider>_api_key, where providers look it
+    // up), so the row needs no apiKeyRef; ollama/litellm carry their endpoint.
+    const modelName = `${def.id} ${provider.model}`;
+    try {
+      const res = await api.post<{ error?: string }>('/api/models', {
+        name: modelName,
+        provider: def.id,
+        modelId: provider.model,
+        ...(provider.baseUrl ? { endpoint: provider.baseUrl } : {}),
+        topics: ['general'],
+      });
+      // POST returns 200 with {error} on duplicate — a rerun is fine, we still
+      // (re)assert it as the default below.
+      if (res?.error && !/already exists/i.test(res.error)) {
+        process.stdout.write(`\x1b[33m! Model register warning: ${res.error}\x1b[0m\n`);
+      }
+      await api.post(`/api/models/${encodeURIComponent(modelName)}/default`, {});
+      process.stdout.write(`\x1b[32m✓ Registered "${modelName}" as the default model\x1b[0m\n`);
+    } catch (err) {
+      process.stdout.write(`\x1b[33m! Could not register the model — set it in the Models page: ${(err as Error).message}\x1b[0m\n`);
+    }
   }
 
   // hwfit: optionally scan hardware and pull a recommended local model.
