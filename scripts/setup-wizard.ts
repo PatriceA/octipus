@@ -525,6 +525,12 @@ async function pickProvider(ctx: WizardCtx | null): Promise<{ providerId: Provid
   if (def.id === 'litellm') {
     baseUrl = await textStep(ctx, 'LiteLLM proxy URL', 'http(s)://host:port', 'http://localhost:4000');
     apiKey = await textStep(ctx, 'LiteLLM API key (optional)', 'Leave blank if open', '', true);
+  } else if (def.id === 'ollama') {
+    // Capture the Ollama URL so it gets persisted (ollama.url) — otherwise the
+    // model is seeded but chat has no endpoint to reach and fails with
+    // "can't reach Ollama" even though detection found it.
+    const detected = process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434';
+    baseUrl = await textStep(ctx, 'Ollama URL', 'Where Ollama is running', detected);
   } else if (def.requiresApiKey) {
     apiKey = await textStep(ctx, `${def.label} API key`, 'Stored in the vault, never plaintext after setup', '', true);
   }
@@ -827,7 +833,9 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     };
     if (def.id === 'ollama') {
       batch['ollama.defaultModel'] = provider.model;
-      if (provider.baseUrl) batch['ollama.url'] = provider.baseUrl;
+      // Always persist the URL — without it chat can't reach Ollama. Fall back
+      // to the standard local endpoint if the user left it blank.
+      batch['ollama.url'] = provider.baseUrl || 'http://localhost:11434';
     } else if (def.id === 'litellm') {
       if (provider.baseUrl) batch['litellm.proxyUrl'] = provider.baseUrl;
       if (provider.apiKey) batch['litellm.apiKey'] = provider.apiKey;
@@ -853,14 +861,24 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
   await maybeRecommendModel(api);
 
   // Capabilities.
-  type CapRow = { toolId: string; available: boolean; reason: string | null };
+  type CapRow = { toolId: string; available: boolean; reason: string | null; installerKind?: string };
   let caps: CapRow[] = [];
   try {
     caps = await api.get<CapRow[]>('/api/capabilities');
   } catch (err) {
     process.stdout.write(`\x1b[33m! Could not list capabilities: ${(err as Error).message}\x1b[0m\n`);
   }
-  const missing = caps.filter((c) => !c.available).map((c) => c.toolId);
+  // Only offer capabilities that actually have an installer (installerKind
+  // 'bun-exec'). The rest (email-processor, gitlab, google-workspace, …) are
+  // configured later via credentials/OAuth in the UI — POSTing /install for
+  // them just 409s with "No installer registered".
+  const missing = caps.filter((c) => !c.available && c.installerKind === 'bun-exec').map((c) => c.toolId);
+  const configurable = caps.filter((c) => !c.available && c.installerKind !== 'bun-exec').map((c) => c.toolId);
+  if (configurable.length > 0) {
+    process.stdout.write(
+      `\x1b[2m${configurable.length} capabilities are configured later in the UI (no installer): ${configurable.join(', ')}\x1b[0m\n`,
+    );
+  }
   const picks = await pickCapabilities(null, missing);
   for (const cap of picks) {
     process.stdout.write(`Installing capability "${cap}"…\n`);
