@@ -3,7 +3,14 @@ import { PassThrough, Writable } from 'node:stream';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type BootstrapConfig, buildEnv, readExistingSecrets, readlinePrompt } from './setup-wizard';
+import {
+  adminRegisterHint,
+  ApiError,
+  type BootstrapConfig,
+  buildEnv,
+  readExistingSecrets,
+  readlinePrompt,
+} from './setup-wizard';
 
 /**
  * The interactive flow (pi-tui, backend boot, API calls) needs a PTY
@@ -124,6 +131,55 @@ describe('setup-wizard — readExistingSecrets (rerun safety)', () => {
       ['# header', '', '  MASTER_KEY = m1 ', 'JWT_SECRET=j1', 'SESSION_SECRET=s1', ''].join('\n'),
     );
     expect(readExistingSecrets(path)).toEqual({ masterKey: 'm1', jwtSecret: 'j1', sessionSecret: 's1' });
+  });
+});
+
+/**
+ * Admin registration is the step that opaquely failed with a raw 422 in the
+ * field. adminRegisterHint maps each status to the field the user can fix.
+ */
+describe('setup-wizard — adminRegisterHint', () => {
+  const e = (status: number, body: string) => new ApiError('POST', '/api/auth/register', status, body);
+
+  test('422 with an email blames the email format (and mentions blank-to-skip)', () => {
+    const msg = adminRegisterHint(e(422, '{"error":"Invalid request data"}'), { username: 'mo', email: 'not-an-email' });
+    expect(msg).toContain('HTTP 422');
+    expect(msg).toContain('not-an-email');
+    expect(msg).toMatch(/valid email|leave it blank/i);
+  });
+
+  test('422 without an email blames the username length', () => {
+    const msg = adminRegisterHint(e(422, '{"error":"Invalid request data"}'), { username: 'mo' });
+    expect(msg).toContain('HTTP 422');
+    expect(msg).toMatch(/3.?50 characters/);
+    expect(msg).not.toMatch(/email/i);
+  });
+
+  test('400 surfaces the backend password-complexity message verbatim', () => {
+    const msg = adminRegisterHint(e(400, '{"error":"Password must contain at least one uppercase letter"}'), {
+      username: 'mauricio',
+    });
+    expect(msg).toContain('Password must contain at least one uppercase letter');
+  });
+
+  test('409 explains the conflict', () => {
+    const msg = adminRegisterHint(e(409, '{"error":"Username already exists"}'), { username: 'mauricio' });
+    expect(msg).toMatch(/already registered/i);
+  });
+
+  test('429 tells the user to wait and rerun', () => {
+    const msg = adminRegisterHint(e(429, '{"error":"Too many"}'), { username: 'mauricio' });
+    expect(msg).toMatch(/wait .* rerun setup/i);
+  });
+
+  test('non-ApiError falls back to its message', () => {
+    const msg = adminRegisterHint(new Error('connection refused'), { username: 'mauricio' });
+    expect(msg).toContain('connection refused');
+  });
+
+  test('ApiError.serverMessage extracts {error} from JSON, else raw text', () => {
+    expect(e(422, '{"error":"nope"}').serverMessage).toBe('nope');
+    expect(e(500, 'plain text crash').serverMessage).toBe('plain text crash');
   });
 });
 
