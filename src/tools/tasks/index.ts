@@ -67,7 +67,7 @@ export class TasksTool extends BaseTool {
         notes: { type: 'string', description: 'Optional details' },
         priority: { type: 'number', description: 'Priority 0 (none) to 3 (high)' },
         dueAt: { type: 'string', description: 'Due date/time, ISO 8601' },
-        source: { type: 'string', description: 'Provenance: agent|reader|research|email', default: 'agent' },
+        source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
       }),
       async (args, context) => {
         const principal = this.principalFor(context);
@@ -75,8 +75,8 @@ export class TasksTool extends BaseTool {
           title: args.title as string,
           notes: (args.notes as string | undefined) ?? null,
           priority: clampPriority(args.priority),
-          dueAt: args.dueAt ? new Date(args.dueAt as string) : null,
-          source: (args.source as string | undefined) ?? 'agent',
+          dueAt: parseDueAt(args.dueAt),
+          source: normalizeSource(args.source),
           sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
         });
         return { created: true, task: summarize(task) };
@@ -106,7 +106,7 @@ export class TasksTool extends BaseTool {
           notes: args.notes as string | undefined,
           status,
           priority: args.priority !== undefined ? clampPriority(args.priority) : undefined,
-          dueAt: args.dueAt ? new Date(args.dueAt as string) : undefined,
+          dueAt: args.dueAt ? parseDueAt(args.dueAt) : undefined,
           ...completionPatch(status, Boolean(existing.completedAt)),
         });
         return { updated: true, task: task ? summarize(task) : null };
@@ -122,9 +122,13 @@ export class TasksTool extends BaseTool {
       }),
       async (args, context) => {
         const principal = this.principalFor(context);
-        const task = await scopedRepos(principal).tasks.update(args.id as string, {
+        const repo = scopedRepos(principal).tasks;
+        const existing = await repo.findById(args.id as string);
+        if (!existing) return { error: 'Task not found' };
+        // Idempotent: keep the original completedAt if already done.
+        const task = await repo.update(args.id as string, {
           status: 'done',
-          completedAt: new Date(),
+          ...completionPatch('done', Boolean(existing.completedAt)),
         });
         if (!task) return { error: 'Task not found' };
         return { completed: true, task: summarize(task) };
@@ -154,6 +158,19 @@ function clampPriority(p: unknown): number {
   const n = typeof p === 'number' ? p : Number.parseInt(String(p ?? 0), 10);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(3, Math.trunc(n)));
+}
+
+const TASK_SOURCES = new Set(['user', 'agent', 'reader', 'research', 'email']);
+/** Constrain the LLM-supplied source to the canonical set. */
+function normalizeSource(s: unknown): string {
+  return typeof s === 'string' && TASK_SOURCES.has(s) ? s : 'agent';
+}
+
+/** Parse an optional ISO due-date; returns null on absent/garbage rather than NaN. */
+function parseDueAt(v: unknown): Date | null {
+  if (!v) return null;
+  const d = new Date(v as string);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function completionPatch(nextStatus: string | undefined, wasCompleted: boolean): { completedAt?: Date | null } {

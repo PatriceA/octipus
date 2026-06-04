@@ -12,7 +12,7 @@ import { users } from './users';
  */
 export const tasks = pgTable('tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   /**
    * Phase 4 — optional workspace scope. NULL = user-level (visible to every
    * workspace the user owns). FK in the migration uses ON DELETE SET NULL.

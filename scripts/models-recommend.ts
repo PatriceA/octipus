@@ -81,7 +81,7 @@ async function install(id: string, topicFilter: string[]): Promise<number> {
 
     const provider = new OllamaProvider();
     const job: InstallJob = {
-      id: 'cli', modelId: entry.id, bindTopics, status: 'pulling', percent: 0, statusText: 'starting', startedAt: Date.now(),
+      id: 'cli', ownerId: 'cli', modelId: entry.id, bindTopics, status: 'pulling', percent: 0, statusText: 'starting', startedAt: Date.now(),
     };
 
     process.stdout.write(`Pulling ${entry.id}…\n`);

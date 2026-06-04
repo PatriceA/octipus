@@ -63,6 +63,11 @@ export function resolveReport(input: ResolveInput): ReportDoc {
     sections.push({ heading: (raw.heading ?? '').trim() || 'Findings', markdown, citations: valid });
   }
 
+  // Fail loud rather than emit an empty report (no body, only a bibliography).
+  if (sections.length === 0) {
+    throw new Error('Synthesis produced no usable sections — refusing to emit an empty report.');
+  }
+
   // Keep only sources at least one surviving section cites.
   const cited = new Set(sections.flatMap((s) => s.citations));
   const sources = input.sources.filter((s) => cited.has(s.id));

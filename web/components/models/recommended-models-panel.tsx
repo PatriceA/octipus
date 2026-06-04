@@ -103,7 +103,12 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
   // Poll install progress until the job finishes. (A WS progress stream can
   // replace this later; polling keeps the panel self-contained.)
   const pollJob = (jobId: string, modelId: string) => {
+    const deadline = Date.now() + 35 * 60_000; // stop polling after ~35 min
     const tick = async () => {
+      if (Date.now() > deadline) {
+        setJobs((j) => ({ ...j, [modelId]: errorJob(modelId, 'Install timed out — check the server.') }));
+        return;
+      }
       try {
         const job = await api.get<InstallJob>(`/models/install/${jobId}`);
         setJobs((j) => ({ ...j, [modelId]: job }));

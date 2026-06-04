@@ -705,8 +705,13 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Scans the host, fetches live registry sizes, and scores the curated catalog.
   .post(
     '/recommend',
-    async ({ user }) => {
-      if (!user) return { error: 'Not authenticated' };
+    async ({ user, set }) => {
+      // Admin-gated: the scan reveals the SERVER's hardware (GPU/VRAM/RAM), not
+      // the caller's — not for arbitrary tenants to enumerate.
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
       const { probeHardware } = await import('@/setup/probes');
       const { resolveSizes, scoreCatalog } = await import('@/capabilities/hwfit');
       const hardware = await probeHardware();
@@ -756,7 +761,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         return { error: `None of the requested topics are served by "${entry.id}"` };
       }
 
-      const job = startInstall(entry, bindTopics, {
+      const job = startInstall(entry, bindTopics, user.id, {
         pull: (id, onProgress) => provider.pull(id, onProgress),
         register: async (e) => {
           await registry.registerModel(e);
@@ -778,10 +783,14 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   .get(
     '/install/:jobId',
     async ({ user, params, set }) => {
-      if (!user) return { error: 'Not authenticated' };
+      if (!user) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
       const { getInstallJob } = await import('@/capabilities/hwfit/install');
       const job = getInstallJob(params.jobId);
-      if (!job) {
+      // Scope to the owner (or an admin) — cross-tenant ids look like "not found".
+      if (!job || (job.ownerId !== user.id && !user.isAdmin)) {
         set.status = 404;
         return { error: 'Install job not found' };
       }

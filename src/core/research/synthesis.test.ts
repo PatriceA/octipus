@@ -94,4 +94,18 @@ describe('renderReportHtml', () => {
     expect(html).toContain('Is &lt;b&gt;X&lt;/b&gt; true?');
     expect(html).not.toContain('<b>X</b>');
   });
+
+  test('neutralizes a javascript: source URL in the bibliography', () => {
+    const bad = buildSource('javascript:alert(1)', 'Evil Source', 'c', '2026-06-03T00:00:00Z');
+    const report = resolveReport({
+      question: 'Q?',
+      depth: 'quick',
+      generatedAt: '2026-06-03T00:00:00Z',
+      sources: [bad],
+      rawSections: [{ heading: 'A', markdown: 'claim', citations: [bad.id] }],
+    });
+    const html = renderReportHtml(report);
+    expect(html).not.toContain('javascript:');
+    expect(html).toContain('href="#"'); // dangerous scheme replaced
+  });
 });

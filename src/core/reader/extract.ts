@@ -17,7 +17,9 @@ import type { ReaderDoc } from './types';
 /** Tags whose subtree is page chrome / unsafe — removed before extraction. */
 const STRIP_TAGS = new Set([
   'script', 'style', 'noscript', 'nav', 'header', 'footer', 'aside', 'form',
-  'iframe', 'svg', 'button', 'input', 'select', 'textarea', 'template',
+  'iframe', 'svg', 'math', 'button', 'input', 'select', 'textarea', 'template',
+  // Media/embeds — no place in a reader view and historically XSS-adjacent.
+  'object', 'embed', 'video', 'audio', 'source', 'track', 'param', 'picture',
 ]);
 
 /** Tags we keep in the reader output. Everything else is unwrapped to its text. */
@@ -39,13 +41,43 @@ const CHROME_RE = /(^|[\s_-])(nav|menu|footer|header|sidebar|comment|share|socia
 const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escapeAttr = (s: string) => escapeText(s).replace(/"/g, '&quot;');
 
-/** Allow only http(s), protocol-relative, or root/relative URLs. */
+/** True for a private/loopback/link-local IP *literal* host (pure check). */
+function isPrivateHostLiteral(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  if (h === 'localhost') return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  }
+  if (h === '::1' || /^fe80:/.test(h) || /^f[cd][0-9a-f]{2}:/.test(h)) return true; // IPv6 loopback/link-local/ULA
+  return false;
+}
+
+/**
+ * Allow only http(s) and relative/anchor URLs, rejecting private-IP hosts.
+ * Parses with the WHATWG URL API (against a base) so percent-encoded scheme
+ * tricks (`javascript%3a…`) and protocol-relative private hosts can't slip the
+ * regex; the ORIGINAL string is returned so relative links stay relative.
+ */
 function safeUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const v = raw.trim();
-  if (/^(https?:)?\/\//i.test(v) || v.startsWith('/') || v.startsWith('#')) return v;
-  if (/^[\w./?=&%+-]+$/.test(v) && !v.includes(':')) return v; // bare relative path
-  return undefined; // drops javascript:, data:, etc.
+  if (!v) return undefined;
+  let u: URL;
+  try {
+    u = new URL(v, 'https://reader.invalid/');
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined; // drops javascript:, data:, vbscript:, …
+  if (isPrivateHostLiteral(u.hostname)) return undefined; // drops http://169.254.169.254 etc.
+  return v;
 }
 
 function attr(el: Element, name: string): string | undefined {
@@ -133,7 +165,7 @@ export function extractReaderDoc(html: string, url: string): ReaderDoc {
   const semantic = [
     ...getElementsByTagName('article', doc, true),
     ...getElementsByTagName('main', doc, true),
-    ...doc.children.flatMap(() => getElementsByTagName('*', doc, true).filter((e) => attr(e, 'role') === 'main')),
+    ...getElementsByTagName('*', doc, true).filter((e) => attr(e, 'role') === 'main'),
   ];
   let main: Element | undefined = semantic.sort((a, b) => scoreNode(b) - scoreNode(a))[0];
   if (!main || scoreNode(main) < 200) {
@@ -142,7 +174,10 @@ export function extractReaderDoc(html: string, url: string): ReaderDoc {
       ...getElementsByTagName('div', doc, true),
     ];
     const best = candidates.sort((a, b) => scoreNode(b) - scoreNode(a))[0];
-    if (best && scoreNode(best) > scoreNode(main ?? best) - 1) main = best;
+    // Only promote a div/section candidate if it's a meaningfully better pick
+    // than the semantic one (or there was none) — avoids selecting an empty
+    // wrapper when the page has little text.
+    if (best && scoreNode(best) > (main ? scoreNode(main) : 0)) main = best;
   }
   if (!main) main = getElementsByTagName('body', doc, true)[0];
 

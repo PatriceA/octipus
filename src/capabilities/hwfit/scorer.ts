@@ -15,8 +15,10 @@ const CPU_VRAM_CAP_MB = 6000;
 
 /**
  * Compute the usable model-weights budget (MB) for a host.
- * - GPU present (NVIDIA/AMD/Apple-unified): VRAM * headroom.
- * - CPU-only: a capped fraction of system RAM, since CPU inference is slow.
+ * - GPU with known VRAM (NVIDIA via nvidia-smi, Apple unified): VRAM * headroom.
+ * - CPU-only, OR a GPU whose VRAM we couldn't detect (e.g. AMD/ROCm, reported
+ *   as totalVramMB 0): a capped fraction of system RAM, since we can't size to
+ *   the GPU and CPU inference is slow. AMD VRAM parsing is a known follow-up.
  */
 export function computeBudgetMB(hw: HardwareProfile): number {
   if (hw.totalVramMB > 0) {

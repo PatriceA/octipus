@@ -61,7 +61,10 @@ export function parseManifestSizeMB(manifest: unknown): number | null {
  * failure (caller falls back to the hint) — never throws.
  */
 async function fetchSizeMB(id: string, registry: string): Promise<number | null> {
-  const cached = sizeCache.get(id);
+  // Key by registry too, so a custom-registry lookup can't be served a default-
+  // registry entry (and vice-versa).
+  const key = `${registry}:${id}`;
+  const cached = sizeCache.get(key);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.mb;
 
   const { name, tag } = parseModelId(id);
@@ -77,7 +80,7 @@ async function fetchSizeMB(id: string, registry: string): Promise<number | null>
     }
     const mb = parseManifestSizeMB(await res.json());
     if (mb === null) return null;
-    sizeCache.set(id, { mb, at: Date.now() });
+    sizeCache.set(key, { mb, at: Date.now() });
     return mb;
   } catch (err) {
     modelLogger.debug({ id, err: (err as Error).message }, 'hwfit: manifest fetch failed, using hint');
@@ -93,7 +96,9 @@ export async function resolveSizes(
   catalog: readonly ModelCatalogEntry[] = MODEL_CATALOG,
   opts?: { registry?: string },
 ): Promise<SizedModel[]> {
-  const registry = opts?.registry ?? DEFAULT_REGISTRY;
+  // Only an https origin may be used as a registry — guards the SSRF surface if
+  // a caller ever wires this to user input.
+  const registry = opts?.registry && /^https:\/\//i.test(opts.registry) ? opts.registry : DEFAULT_REGISTRY;
   return Promise.all(
     catalog.map(async (entry): Promise<SizedModel> => {
       const live = await fetchSizeMB(entry.id, registry);

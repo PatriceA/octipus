@@ -2,7 +2,7 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getResearchJob, startResearch } from '@/core/research/jobs';
 import type { ResearchDepth } from '@/core/research/types';
-import { isAuthenticated } from '@/security/principal';
+import { isAdmin, isAuthenticated } from '@/security/principal';
 
 const DEPTHS: ResearchDepth[] = ['quick', 'standard', 'deep'];
 
@@ -18,7 +18,10 @@ export const researchRoutes = new Elysia({ prefix: '/research' })
   .post(
     '/',
     async ({ user, principal, body, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
       const question = body.question.trim();
       if (!question) {
         set.status = 400;
@@ -30,7 +33,7 @@ export const researchRoutes = new Elysia({ prefix: '/research' })
     },
     {
       body: t.Object({
-        question: t.String({ minLength: 1 }),
+        question: t.String({ minLength: 1, maxLength: 2000 }),
         depth: t.Optional(t.String()),
       }),
       detail: { tags: ['research'] },
@@ -41,9 +44,13 @@ export const researchRoutes = new Elysia({ prefix: '/research' })
   .get(
     '/:jobId',
     async ({ user, principal, params, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
       const job = getResearchJob(params.jobId);
-      if (!job) {
+      // Scope by owner: cross-tenant ids are indistinguishable from missing.
+      if (!job || (job.userId !== user.id && !isAdmin(principal))) {
         set.status = 404;
         return { error: 'Research job not found' };
       }

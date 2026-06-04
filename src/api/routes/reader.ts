@@ -19,7 +19,10 @@ export const readerRoutes = new Elysia({ prefix: '/reader' })
   .post(
     '/',
     async ({ user, principal, body, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
       try {
         return await fetchReaderDoc(body.url);
       } catch (err) {
@@ -28,7 +31,7 @@ export const readerRoutes = new Elysia({ prefix: '/reader' })
       }
     },
     {
-      body: t.Object({ url: t.String({ minLength: 1 }) }),
+      body: t.Object({ url: t.String({ minLength: 1, maxLength: 2048 }) }),
       detail: { tags: ['reader'] },
     }
   )
@@ -37,7 +40,10 @@ export const readerRoutes = new Elysia({ prefix: '/reader' })
   .post(
     '/action',
     async ({ user, principal, body, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
       if (!ACTIONS.includes(body.action as ReaderActionKind)) {
         set.status = 400;
         return { error: `Unknown action "${body.action}"` };
@@ -62,10 +68,10 @@ export const readerRoutes = new Elysia({ prefix: '/reader' })
     },
     {
       body: t.Object({
-        url: t.Optional(t.String()),
-        text: t.Optional(t.String()),
+        url: t.Optional(t.String({ maxLength: 2048 })),
+        text: t.Optional(t.String({ maxLength: 100_000 })),
         action: t.String(),
-        argument: t.Optional(t.String()),
+        argument: t.Optional(t.String({ maxLength: 500 })),
       }),
       detail: { tags: ['reader'] },
     }
