@@ -26,6 +26,16 @@ export interface ModelHealth {
   error?: string;
 }
 
+/**
+ * Shape of the LiteLLM proxy `/health` response. Each endpoint's `model` is
+ * the underlying `litellm_params.model` (e.g. `deepseek/deepseek-chat`), so we
+ * match it against our registry `modelId` by substring.
+ */
+interface LiteLLMHealthResponse {
+  healthy_endpoints?: Array<{ model?: string }>;
+  unhealthy_endpoints?: Array<{ model?: string; error?: string }>;
+}
+
 export class HealthChecker {
   private cache = new RedisCache(HEALTH_CACHE_TTL);
   private checkInterval: ReturnType<typeof setInterval> | null = null;
@@ -78,6 +88,15 @@ export class HealthChecker {
     provider: string,
     models: { name: string; modelId: string; topics?: string[] | null }[]
   ): Promise<ProviderHealth> {
+    // LiteLLM-routed models are NOT probed with per-model completions. The
+    // proxy's own `/health` endpoint reports every configured route in a single
+    // call, so issuing a real "Hi" completion per model every 60s just burned
+    // upstream tokens / rate limit (the same reason direct providers are
+    // skipped). Status comes from `/health` + the `litellm` circuit breaker.
+    if (provider === 'litellm') {
+      return this.checkLiteLLMRoutes(models);
+    }
+
     const modelResults: ModelHealth[] = [];
     let overallLatency = 0;
     let healthyCount = 0;
@@ -115,6 +134,102 @@ export class HealthChecker {
     };
 
     modelLogger.debug({ provider, status, modelsChecked: modelResults.length }, 'Provider health check completed');
+
+    return result;
+  }
+
+  /**
+   * Fetch the LiteLLM proxy's `/health` once (cached for HEALTH_CACHE_TTL) —
+   * a single call that reports the status of every configured route. Returns
+   * null when the proxy is unreachable or errors.
+   *
+   * NOTE: by default LiteLLM probes upstreams live on each `/health` call. For
+   * accurate, token-free results, configure the proxy with
+   * `background_health_checks: true` so it serves cached status instead.
+   */
+  private async fetchLiteLLMModelHealth(): Promise<LiteLLMHealthResponse | null> {
+    const cached = await this.cache.get<LiteLLMHealthResponse>('health:litellm:routes');
+    if (cached) return cached;
+
+    const config = getConfig();
+    try {
+      const headers: Record<string, string> = {};
+      if (config.litellm.apiKey) {
+        headers['Authorization'] = `Bearer ${config.litellm.apiKey}`;
+      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(`${config.litellm.proxyUrl}/health`, {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) return null;
+
+      const data = (await response.json()) as LiteLLMHealthResponse;
+      await this.cache.set('health:litellm:routes', data);
+      return data;
+    } catch (err) {
+      modelLogger.debug({ err }, 'LiteLLM /health fetch failed');
+      return null;
+    }
+  }
+
+  /**
+   * Build provider health for LiteLLM-routed models WITHOUT issuing any
+   * completions. Status is derived from the proxy `/health` endpoint and the
+   * `litellm` circuit breaker (real-traffic failure signal).
+   */
+  private async checkLiteLLMRoutes(
+    models: { name: string; modelId: string; topics?: string[] | null }[]
+  ): Promise<ProviderHealth> {
+    const health = await this.fetchLiteLLMModelHealth();
+    const breakerOpen = getCircuitBreakerRegistry()
+      .getAllStatuses()
+      .some((cb) => cb.provider === 'litellm' && cb.state === 'open');
+
+    const matches = (endpointModel: string | undefined, modelId: string) =>
+      !!endpointModel && (endpointModel === modelId || endpointModel.includes(modelId));
+
+    const modelResults: ModelHealth[] = models.map((model) => {
+      // Real-traffic failures trump anything the synthetic probe could tell us.
+      if (breakerOpen) {
+        return { name: model.modelId, status: 'unhealthy', error: 'litellm circuit breaker open' };
+      }
+      // Proxy unreachable — can't confirm the route; report degraded rather
+      // than lie healthy.
+      if (!health) {
+        return { name: model.modelId, status: 'degraded', error: 'litellm /health unavailable' };
+      }
+      const unhealthy = health.unhealthy_endpoints?.find((e) => matches(e.model, model.modelId));
+      if (unhealthy) {
+        return { name: model.modelId, status: 'unhealthy', error: unhealthy.error || 'route reported unhealthy' };
+      }
+      return { name: model.modelId, status: 'healthy' };
+    });
+
+    const healthyCount = modelResults.filter((m) => m.status === 'healthy').length;
+    let status: ProviderHealth['status'];
+    if (healthyCount === modelResults.length) {
+      status = 'healthy';
+    } else if (healthyCount > 0) {
+      status = 'degraded';
+    } else {
+      status = 'unhealthy';
+    }
+
+    const result: ProviderHealth = {
+      provider: 'litellm',
+      status,
+      models: modelResults,
+      lastChecked: new Date(),
+    };
+
+    modelLogger.debug(
+      { provider: 'litellm', status, modelsChecked: modelResults.length },
+      'LiteLLM route health resolved via /health (no per-model completion)'
+    );
 
     return result;
   }
