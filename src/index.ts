@@ -40,12 +40,24 @@ async function main() {
     const gateway = getGateway();
     await gateway.start();
 
-    // Seed system data (migrations already ran inside gateway.start())
-    await seedPresetTemplates();
-    await seedSkills();
-    await seedExperts();
-    await seedSkillTopicAssignments();
-    await seedRoles();
+    // Seed system data (migrations already ran inside gateway.start()).
+    // Each seed is isolated: a failure — e.g. a constraint conflict from a
+    // partially-written embedded DB after a hard kill — is logged loudly but
+    // must NOT abort the whole backend. A missing preset/skill degrades one
+    // feature; it does not justify bricking startup and leaving the user with
+    // an install that crash-loops on every boot.
+    const seedStep = async (step: string, fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (err) {
+        logger.error({ err, step }, `System-data seed "${step}" failed — continuing boot (feature may be degraded)`);
+      }
+    };
+    await seedStep('preset-templates', seedPresetTemplates);
+    await seedStep('skills', seedSkills);
+    await seedStep('experts', seedExperts);
+    await seedStep('skill-topic-assignments', seedSkillTopicAssignments);
+    await seedStep('roles', seedRoles);
     await loadRolesFromDb();
     logger.info('System data seeded');
 
