@@ -41,6 +41,8 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { createInterface } from 'node:readline';
+import { Writable, type Readable } from 'node:stream';
 import {
   Container,
   Input,
@@ -95,12 +97,63 @@ function mountStep(ctx: WizardCtx, title: string, components: { render(width: nu
   ctx.tui.requestRender();
 }
 
-function selectStep<T extends string>(
-  ctx: WizardCtx,
+/**
+ * Plain-stdout prompt for the post-backend phase, where the pi-tui context
+ * has been torn down (see `main`: `ctx = null`). Exported for tests.
+ *
+ * When `mask` is set, typed characters are NOT echoed: we route readline's
+ * output through a gate that drops writes once the prompt has been shown, so
+ * secrets (admin password, provider/API keys) never reach the screen or
+ * scrollback. The gate works at the stream level rather than poking
+ * readline internals, so it behaves the same under Bun and Node.
+ */
+export function readlinePrompt(
+  query: string,
+  opts: { mask?: boolean; input?: Readable; output?: Writable } = {},
+): Promise<string> {
+  const input = opts.input ?? process.stdin;
+  const output = opts.output ?? process.stdout;
+  let muted = false;
+  const gate = new Writable({
+    write(chunk, _enc, cb) {
+      if (!muted) output.write(chunk);
+      cb();
+    },
+  });
+  const rl = createInterface({ input, output: gate, terminal: true });
+  return new Promise((resolveValue) => {
+    rl.question(query, (answer) => {
+      // The Enter keystroke was swallowed while muted — restore the cursor.
+      if (opts.mask) output.write('\n');
+      rl.close();
+      resolveValue(answer);
+    });
+    // rl.question has now flushed the prompt through the gate; from here on,
+    // suppress the per-keystroke echo for masked input.
+    if (opts.mask) muted = true;
+  });
+}
+
+async function selectStep<T extends string>(
+  ctx: WizardCtx | null,
   title: string,
   items: Array<{ value: T; label: string; description?: string }>,
   defaultValue?: T,
 ): Promise<T> {
+  if (!ctx) {
+    process.stdout.write(`\n\x1b[1;36m? \x1b[0m\x1b[1m${title}\x1b[0m\n`);
+    items.forEach((item, i) => {
+      process.stdout.write(`  ${i + 1}) ${item.label}${item.description ? ` \x1b[90m— ${item.description}\x1b[0m` : ''}\n`);
+    });
+    const defIdx = Math.max(0, defaultValue ? items.findIndex((i) => i.value === defaultValue) : 0);
+    const answer = await readlinePrompt(`  \x1b[36mSelection [${defIdx + 1}]:\x1b[0m `);
+    const idx = parseInt(answer, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= items.length) {
+      return (defaultValue ?? items[0].value) as T;
+    }
+    return items[idx].value as T;
+  }
+
   return new Promise((resolveValue) => {
     const list = new SelectList(items as SelectItem[], 12, SELECT_THEME);
     if (defaultValue) {
@@ -115,7 +168,13 @@ function selectStep<T extends string>(
   });
 }
 
-function textStep(ctx: WizardCtx, title: string, prompt: string, defaultValue = '', mask = false): Promise<string> {
+async function textStep(ctx: WizardCtx | null, title: string, prompt: string, defaultValue = '', mask = false): Promise<string> {
+  if (!ctx) {
+    const query = `\n\x1b[1;36m? \x1b[0m\x1b[1m${title}\x1b[0m\n  \x1b[90m${prompt}\x1b[0m\n  \x1b[36m›\x1b[0m `;
+    const answer = await readlinePrompt(query, { mask });
+    return answer || defaultValue;
+  }
+
   return new Promise((resolveValue) => {
     const input = new Input();
     input.setValue(defaultValue);
@@ -374,7 +433,6 @@ async function pickAdmin(ctx: WizardCtx | null): Promise<{ username: string; ema
     if (!username || !password) throw new Error('OCTIPUS_SETUP_ADMIN_USER and OCTIPUS_SETUP_ADMIN_PASS required in non-interactive mode');
     return { username, email: process.env.OCTIPUS_SETUP_ADMIN_EMAIL || '', password };
   }
-  if (!ctx) throw new Error('TTY required for admin step');
   const username = await textStep(ctx, 'Admin account — username', 'You\'ll log in as this user (≥3 chars)', 'admin');
   const email = await textStep(ctx, 'Admin account — email (optional)', 'Leave blank to skip', '');
   const password = await textStep(ctx, 'Admin account — password', 'Min 8 chars, ≥1 upper, ≥1 lower, ≥1 digit', '', true);
@@ -392,7 +450,6 @@ async function pickProvider(ctx: WizardCtx | null): Promise<{ providerId: Provid
       baseUrl: process.env.OCTIPUS_SETUP_BASE_URL || '',
     };
   }
-  if (!ctx) throw new Error('TTY required for provider step');
 
   // Run live detection so the wizard shows what's already up.
   const probes = await Promise.all(
@@ -442,7 +499,6 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
     if (env === 'all') return missing;
     return env.split(',').map((s) => s.trim()).filter((s) => missing.includes(s));
   }
-  if (!ctx) return [];
   // pi-tui doesn't have a multiselect out of the box; we ask once with
   // "all" / "none" / "let me pick one at a time" branching for simplicity.
   const mode = await selectStep<'all' | 'none' | 'pick'>(

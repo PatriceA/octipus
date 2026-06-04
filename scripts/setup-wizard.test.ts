@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { type BootstrapConfig, buildEnv } from './setup-wizard';
+import { PassThrough, Writable } from 'node:stream';
+import { type BootstrapConfig, buildEnv, readlinePrompt } from './setup-wizard';
 
 /**
  * The interactive flow (pi-tui, backend boot, API calls) needs a PTY
@@ -86,5 +87,51 @@ describe('setup-wizard — buildEnv', () => {
     expect(env).not.toMatch(/^PORT=/m);
     expect(env).not.toMatch(/^HOST=/m);
     expect(env).not.toMatch(/^CORS_ORIGINS=/m);
+  });
+});
+
+/**
+ * The post-backend phase runs on plain stdout (the pi-tui context is torn
+ * down before the backend boots), so prompts fall back to `readlinePrompt`.
+ * These cover the path the TTY-error fix newly enables — in particular that
+ * masked fields (admin password, provider/API keys) never echo their input.
+ */
+describe('setup-wizard — readlinePrompt fallback', () => {
+  async function prompt(text: string, mask: boolean) {
+    const input = new PassThrough();
+    let captured = '';
+    const output = new Writable({
+      write(chunk, _enc, cb) {
+        captured += chunk.toString();
+        cb();
+      },
+    });
+    const pending = readlinePrompt('PROMPT> ', { mask, input, output });
+    for (const ch of text) input.write(ch);
+    input.write('\r');
+    const answer = await pending;
+    return { answer, captured };
+  }
+
+  test('returns the typed answer', async () => {
+    const { answer } = await prompt('embedded', false);
+    expect(answer).toBe('embedded');
+  });
+
+  test('unmasked input is echoed to the terminal', async () => {
+    const { answer, captured } = await prompt('hunter2', false);
+    expect(answer).toBe('hunter2');
+    expect(captured).toContain('hunter2');
+  });
+
+  test('masked input is NOT echoed (no secret on screen/scrollback)', async () => {
+    const secret = 'S3cret-Passw0rd';
+    const { answer, captured } = await prompt(secret, true);
+    // Value still captured correctly...
+    expect(answer).toBe(secret);
+    // ...but never written to the output stream.
+    expect(captured).not.toContain(secret);
+    // The prompt itself is still shown before muting kicks in.
+    expect(captured).toContain('PROMPT>');
   });
 });
