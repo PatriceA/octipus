@@ -292,6 +292,19 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
     env: { ...process.env },
   });
 
+  // Drain BOTH pipes continuously from the start. The backend logs to stdout
+  // (pino), so a boot crash leaves its real error there, not on stderr — and
+  // an undrained pipe can fill its buffer and block the backend mid-boot,
+  // masking the failure as a 60s timeout. We accumulate both and surface them.
+  let captured = '';
+  const drain = async (stream: ReadableStream<Uint8Array> | undefined) => {
+    if (!stream) return;
+    const decoder = new TextDecoder();
+    for await (const chunk of stream) captured += decoder.decode(chunk, { stream: true });
+  };
+  const draining = Promise.all([drain(proc.stdout), drain(proc.stderr)]);
+  const tail = () => captured.trim().slice(-2000) || '(no output captured)';
+
   // Wait for /api/health (max 60s — first boot runs migrations + seeds).
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -307,13 +320,14 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
       };
     }
     if (proc.exitCode !== null) {
-      const stderr = await new Response(proc.stderr).text();
-      throw new Error(`backend exited before becoming healthy: ${stderr.slice(-1000)}`);
+      await draining.catch(() => {});
+      throw new Error(`backend exited before becoming healthy:\n${tail()}`);
     }
     await new Promise((r) => setTimeout(r, 500));
   }
   proc.kill();
-  throw new Error('backend did not become healthy within 60s');
+  await draining.catch(() => {});
+  throw new Error(`backend did not become healthy within 60s:\n${tail()}`);
 }
 
 // ── API helpers (cookie-aware) ─────────────────────────────────────
