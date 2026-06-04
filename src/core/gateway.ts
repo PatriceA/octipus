@@ -47,7 +47,7 @@ export class Gateway {
       const storageMode = config.storageMode || 'external';
       coreLogger.info({ storageMode }, 'Configuration loaded');
 
-      // Initialize storage provider (Redis or in-memory)
+      // Initialize storage provider (Valkey or in-memory)
       initializeStorage({
         mode: storageMode,
         redis: storageMode === 'external' ? config.redis : undefined,

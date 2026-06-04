@@ -43,11 +43,11 @@ async function backupDatabase(outputPath: string): Promise<void> {
 }
 
 async function backupRedis(outputPath: string): Promise<void> {
-  console.log('📦 Backing up Redis...');
+  console.log('📦 Backing up Valkey...');
 
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
-    console.log('⚠️  REDIS_URL not set, skipping Redis backup');
+    console.log('⚠️  REDIS_URL not set, skipping Valkey backup');
     return;
   }
 
@@ -70,9 +70,9 @@ async function backupRedis(outputPath: string): Promise<void> {
     await Bun.$`redis-cli -h ${host} -p ${port} CONFIG GET dir`.text();
     // In production, this would copy the actual RDB file
 
-    console.log(`✅ Redis backup initiated`);
+    console.log(`✅ Valkey backup initiated`);
   } catch (error) {
-    console.error('❌ Redis backup failed:', error);
+    console.error('❌ Valkey backup failed:', error);
   }
 }
 

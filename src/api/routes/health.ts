@@ -192,7 +192,8 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     };
   })
 
-  // Redis health
+  // Valkey (Redis-compatible) health. Route + JSON key stay `redis` — it's a
+  // stable API contract the web dashboard and external monitoring read.
   .get('/redis', async () => {
     const result = await checkRedisHealth();
 

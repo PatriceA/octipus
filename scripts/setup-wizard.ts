@@ -414,14 +414,14 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
       'registers your admin account, wires a model provider, and',
       'installs optional capabilities (browser, MCP server, …).',
       '',
-      `Detected: ollama=${services.ollama.ok ? '✓' : '·'}  postgres=${services.postgres.ok ? '✓' : '·'}  redis=${services.redis.ok ? '✓' : '·'}  litellm=${services.litellm.ok ? '✓' : '·'}`,
+      `Detected: ollama=${services.ollama.ok ? '✓' : '·'}  postgres=${services.postgres.ok ? '✓' : '·'}  valkey=${services.redis.ok ? '✓' : '·'}  litellm=${services.litellm.ok ? '✓' : '·'}`,
     ]);
     storageMode = await selectStep<'embedded' | 'external'>(
       ctx,
       'Storage mode',
       [
         { value: 'embedded', label: 'Embedded — PGlite + in-memory cache', description: 'Zero external deps. Best for personal use / getting started.' },
-        { value: 'external', label: 'External — PostgreSQL + Redis', description: 'Full production setup. Requires both running.' },
+        { value: 'external', label: 'External — PostgreSQL + Valkey', description: 'Full production setup. Requires both running (Valkey or any Redis-compatible server).' },
       ],
       services.postgres.ok && services.redis.ok ? 'external' : 'embedded',
     );
@@ -439,7 +439,7 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
       redisUrl = process.env.OCTIPUS_SETUP_REDIS_URL || 'redis://localhost:6379';
     } else if (ctx) {
       databaseUrl = await textStep(ctx, 'Database URL', 'PostgreSQL connection string', 'postgresql://octipus:octipus@localhost:5432/octipus');
-      redisUrl = await textStep(ctx, 'Redis URL', 'Valkey/Redis connection string', 'redis://localhost:6379');
+      redisUrl = await textStep(ctx, 'Valkey URL', 'Valkey (or Redis-compatible) connection string', 'redis://localhost:6379');
     }
   } else if (ctx && !NON_INTERACTIVE) {
     dataDir = await textStep(ctx, 'Data directory', 'Where to store the embedded database', dataDir);

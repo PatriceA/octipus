@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// Storage mode: 'embedded' (PGlite + in-memory) or 'external' (PostgreSQL + Redis)
+// Storage mode: 'embedded' (PGlite + in-memory) or 'external' (PostgreSQL + Valkey)
 export const storageModeSchema = z.enum(['embedded', 'external']).default('external');
 
 // Database configuration schema
@@ -12,7 +12,7 @@ export const databaseConfigSchema = z.object({
   connectionTimeout: z.number().min(0).default(10000),
 });
 
-// Redis configuration schema
+// Valkey (Redis-compatible) configuration schema
 export const redisConfigSchema = z.object({
   url: z.string().default('redis://localhost:6379'),
   keyPrefix: z.string().default('octipus:'),

@@ -27,9 +27,9 @@ export function initializeStorage(config: StorageConfig): StorageProvider {
     provider = new MemoryStorageProvider();
     dbLogger.info('Storage initialized: embedded (in-memory)');
   } else {
-    if (!config.redis) throw new Error('Redis config required for external storage mode');
+    if (!config.redis) throw new Error('Valkey/Redis config required for external storage mode');
     provider = new RedisStorageProvider(config.redis);
-    dbLogger.info('Storage initialized: external (Redis)');
+    dbLogger.info('Storage initialized: external (Valkey)');
   }
 
   return provider;
