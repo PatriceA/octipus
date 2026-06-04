@@ -1,5 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { clearSessionCookie, sessionCookie } from '@/api/session-cookie';
 import { redeemLinkCode } from '@/channels/linking';
 import { userRepository } from '@/db/repositories/user-repository';
 import { getPasskeyAuth } from '@/security/auth/passkey';
@@ -98,7 +99,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         userAgent,
       });
 
-      set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+      set.headers['Set-Cookie'] = sessionCookie(token, request);
 
       securityLogger.info(
         { userId: user.id, username, clientIp, channel: 'web' },
@@ -249,7 +250,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
           const sessionManager = getSessionManager();
           await sessionManager.revoke(cookieToken);
         }
-        set.headers['Set-Cookie'] = 'session_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
+        set.headers['Set-Cookie'] = clearSessionCookie(request);
         return { success: true };
       }
 
@@ -257,7 +258,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const sessionManager = getSessionManager();
       await sessionManager.revoke(token);
 
-      set.headers['Set-Cookie'] = 'session_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0';
+      set.headers['Set-Cookie'] = clearSessionCookie(request);
 
       return { success: true };
     },
@@ -414,7 +415,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
         userAgent,
       });
 
-      set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+      set.headers['Set-Cookie'] = sessionCookie(token, request);
 
       // Token sits in the HttpOnly cookie only.
       return {
@@ -525,7 +526,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       const user = await userRepository.findById(body.userId);
 
-      set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+      set.headers['Set-Cookie'] = sessionCookie(token, request);
 
       // Token sits in the HttpOnly cookie only.
       return {

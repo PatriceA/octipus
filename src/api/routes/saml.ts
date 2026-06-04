@@ -31,6 +31,7 @@
 import { eq } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { sessionCookie } from '@/api/session-cookie';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { organizations, orgMembers } from '@/db/schema/organizations';
@@ -260,7 +261,7 @@ export const samlRoutes = new Elysia({ prefix: '/saml' })
         const relay = samlBody.RelayState;
         const safeRelay = relay && relay.startsWith('/') && !relay.startsWith('//') ? relay : '/';
 
-        set.headers['Set-Cookie'] = `session_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+        set.headers['Set-Cookie'] = sessionCookie(token, request);
         set.status = 302;
         set.headers.location = safeRelay;
         return '';
