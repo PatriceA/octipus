@@ -447,11 +447,16 @@ export class OrchestratorService {
         // Role label is 'octipus' (the persona itself answering casually), NOT a specialist
         // expert — the direct-response path doesn't pick an expert. UI badges treat this as
         // identity, not as a routing decision.
+        // Stable id reused by the matching worker_completed below — the web
+        // correlates the two by workerId. Without it the completion can't find
+        // the spawned line, so it falls back to creating a second, 0ms
+        // "octipus" entry (the spawned line meanwhile never closes).
+        const directWorkerId = `direct-${Date.now()}`;
         this.emit({
           type: 'worker_spawned',
           sessionId: resolvedSessionId,
           userId,
-          data: { role: 'octipus', workerId: `direct-${Date.now()}`, model: 'direct' },
+          data: { role: 'octipus', workerId: directWorkerId, model: 'direct' },
           timestamp: new Date(),
         });
 
@@ -466,12 +471,14 @@ export class OrchestratorService {
           coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced casual response');
         }
 
-        // Emit worker_completed so channel feedback shows ✅
+        // Emit worker_completed so channel feedback shows ✅. Carries the same
+        // workerId (and the measured latency) so the UI closes the single
+        // spawned line instead of rendering a duplicate 0ms entry.
         this.emit({
           type: 'worker_completed',
           sessionId: resolvedSessionId,
           userId,
-          data: { role: 'octipus', result: finalResponse },
+          data: { role: 'octipus', workerId: directWorkerId, model: 'direct', durationMs: metadata.latencyMs, result: finalResponse },
           timestamp: new Date(),
         });
 
