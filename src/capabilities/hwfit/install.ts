@@ -16,6 +16,8 @@ export type InstallStatus = 'pulling' | 'registering' | 'done' | 'error';
 
 export interface InstallJob {
   id: string;
+  /** Owner — only this user (or an admin) may poll the job. */
+  ownerId: string;
   modelId: string;
   bindTopics: CatalogTopic[];
   status: InstallStatus;
@@ -89,8 +91,17 @@ export async function runInstall(job: InstallJob, entry: ModelCatalogEntry, deps
     modelLogger.info({ model: model.name, topics: job.bindTopics, isDefault: isFirst }, 'hwfit: model installed and bound');
   } catch (err) {
     job.status = 'error';
-    job.error = (err as Error).message;
+    job.error = err instanceof Error ? err.message : String(err);
     modelLogger.error({ modelId: entry.id, err: job.error }, 'hwfit: install failed');
+  }
+}
+
+/** Keep finished jobs long enough to poll, then evict so the Map can't grow. */
+const JOB_TTL_MS = 30 * 60_000;
+function pruneJobs(): void {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, j] of jobs) {
+    if (j.startedAt < cutoff) jobs.delete(id);
   }
 }
 
@@ -98,9 +109,11 @@ export async function runInstall(job: InstallJob, entry: ModelCatalogEntry, deps
  * Start a background install and return the tracked job immediately. The caller
  * polls getInstallJob(id) for progress.
  */
-export function startInstall(entry: ModelCatalogEntry, bindTopics: CatalogTopic[], deps: InstallDeps): InstallJob {
+export function startInstall(entry: ModelCatalogEntry, bindTopics: CatalogTopic[], ownerId: string, deps: InstallDeps): InstallJob {
+  pruneJobs();
   const job: InstallJob = {
     id: globalThis.crypto.randomUUID(),
+    ownerId,
     modelId: entry.id,
     bindTopics,
     status: 'pulling',

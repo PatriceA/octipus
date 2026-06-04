@@ -62,7 +62,13 @@ export default function ResearchPage() {
   };
 
   const poll = (jobId: string) => {
+    const deadline = Date.now() + 10 * 60_000; // research is bounded; stop after ~10 min
     const tick = async () => {
+      if (Date.now() > deadline) {
+        setError('Research timed out.');
+        setJob((j) => (j ? { ...j, status: 'error' } : j));
+        return;
+      }
       try {
         const j = await api.get<Job>(`/research/${jobId}`);
         setJob(j);

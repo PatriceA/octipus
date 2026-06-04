@@ -9,6 +9,9 @@ import type { ReportDoc } from './types';
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/** Escape a URL for an href, neutralizing non-http(s) schemes (javascript:, data:). */
+const safeHref = (url: string) => (/^https?:\/\//i.test(url.trim()) ? esc(url) : '#');
+
 /** Minimal markdown → escaped HTML: paragraphs, bullet lists, bold/italic. */
 function renderMarkdown(md: string): string {
   const blocks = md.split(/\n{2,}/);
@@ -47,7 +50,7 @@ export function renderReportHtml(report: ReportDoc): string {
     .join('\n');
 
   const sources = report.sources
-    .map((s, i) => `<li id="src-${i + 1}"><a href="${esc(s.url)}" rel="noopener noreferrer">${esc(s.title)}</a> <span class="src-meta">— retrieved ${esc(s.retrievedAt)}</span></li>`)
+    .map((s, i) => `<li id="src-${i + 1}"><a href="${safeHref(s.url)}" rel="noopener noreferrer">${esc(s.title)}</a> <span class="src-meta">— retrieved ${esc(s.retrievedAt)}</span></li>`)
     .join('\n');
 
   return [

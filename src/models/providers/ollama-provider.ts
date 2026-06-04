@@ -62,6 +62,8 @@ export function parsePullLine(line: string): PullProgress | { error: string } | 
   } catch {
     return null;
   }
+  // A non-object JSON value (null, number, string) has no fields to read.
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return null;
   if (typeof obj.error === 'string') return { error: obj.error };
   if (typeof obj.status !== 'string') return null;
   const progress: PullProgress = { status: obj.status };
@@ -483,10 +485,13 @@ export class OllamaProvider implements ModelProvider {
    */
   async pull(model: string, onProgress?: (p: PullProgress) => void): Promise<void> {
     const url = `${this.endpoint}/api/pull`;
+    // A model pull can legitimately take many minutes, but a hung server must
+    // not block the job forever — bound it.
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: model, stream: true }),
+      signal: AbortSignal.timeout(30 * 60_000),
     });
     if (!res.ok || !res.body) {
       throw new Error(`Ollama pull failed for "${model}": HTTP ${res.status}`);
@@ -508,12 +513,18 @@ export class OllamaProvider implements ModelProvider {
       if (flush && buffer.trim()) handlePullLine(buffer, model, onProgress);
     };
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      drain(decoder.decode(value, { stream: true }), false);
+    // Always release the stream lock — handlePullLine throws on an Ollama error
+    // line, which must not leak the reader/connection.
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        drain(decoder.decode(value, { stream: true }), false);
+      }
+      drain(decoder.decode(), true);
+    } finally {
+      reader.cancel().catch(() => {});
     }
-    drain(decoder.decode(), true);
   }
 
   // -- Private helpers --

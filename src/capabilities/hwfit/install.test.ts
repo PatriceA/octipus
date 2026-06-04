@@ -19,6 +19,7 @@ const VISION_ENTRY: ModelCatalogEntry = { ...ENTRY, id: 'llava:7b', topics: ['vi
 function makeJob(bindTopics: ModelCatalogEntry['topics']): InstallJob {
   return {
     id: 'job-1',
+    ownerId: 'user-1',
     modelId: ENTRY.id,
     bindTopics,
     status: 'pulling',

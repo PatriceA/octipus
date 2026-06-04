@@ -60,6 +60,36 @@ describe('extractReaderDoc', () => {
     expect(doc.contentHtml).toContain('bad');
   });
 
+  test('drops dangerous + private-network URLs, keeps http(s)/relative', () => {
+    const html = `<article><p>x</p>
+      <a href="javascript:alert(1)">a</a>
+      <a href="data:text/html,nope">b</a>
+      <a href="http://169.254.169.254/latest/meta-data/">d</a>
+      <a href="http://10.0.0.1/admin">e</a>
+      <a href="//127.0.0.1/x">f</a>
+      <a href="https://safe.example/ok">g</a>
+      <a href="/relative/path">h</a>
+      <img src="javascript:alert(2)" alt="i">
+      <img src="https://cdn.example/p.png" alt="j"></article>`;
+    const d = extractReaderDoc(html, 'https://t.test');
+    expect(d.contentHtml).not.toMatch(/javascript:/i);
+    expect(d.contentHtml).not.toContain('data:text/html');
+    expect(d.contentHtml).not.toContain('169.254.169.254');
+    expect(d.contentHtml).not.toContain('10.0.0.1');
+    expect(d.contentHtml).not.toContain('127.0.0.1');
+    expect(d.contentHtml).toContain('href="https://safe.example/ok"');
+    expect(d.contentHtml).toContain('href="/relative/path"');
+    expect(d.contentHtml).toContain('src="https://cdn.example/p.png"');
+  });
+
+  test('strips media/embed subtrees entirely', () => {
+    const html = `<article><p>keep this</p><object data="x.swf">objdata</object><video><source src="x.mp4"></video><embed src="y"></article>`;
+    const d = extractReaderDoc(html, 'https://t.test');
+    expect(d.contentHtml).toContain('keep this');
+    expect(d.contentHtml).not.toMatch(/<object|<video|<source|<embed/i);
+    expect(d.textContent).not.toContain('objdata');
+  });
+
   test('computes word count and read time', () => {
     expect(doc.wordCount).toBeGreaterThan(20);
     expect(doc.estReadMinutes).toBeGreaterThanOrEqual(1);

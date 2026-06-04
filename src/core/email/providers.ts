@@ -5,6 +5,7 @@
  * mirroring the gmail/m365 tools (which keep their token logic private).
  */
 import { getOAuthManager } from '@/security/oauth';
+import { coreLogger } from '@/utils/logger';
 import type { EmailProvider } from './types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -35,8 +36,11 @@ async function call(token: string, base: string, method: string, path: string, b
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
-    const err = await res.text().catch(() => '');
-    throw new Error(`Mail API error (${res.status}): ${err.slice(0, 200)}`);
+    // Log the upstream detail server-side; return a generic message so provider
+    // internals / identifiers aren't echoed to the client.
+    const detail = await res.text().catch(() => '');
+    coreLogger.warn({ status: res.status, detail: detail.slice(0, 300) }, 'email: mail API error');
+    throw new Error(`Mail provider returned an error (HTTP ${res.status}).`);
   }
   if (res.status === 204) return { success: true };
   return res.json();

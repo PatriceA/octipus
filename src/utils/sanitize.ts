@@ -101,7 +101,7 @@ export function assertPublicAddress(ip: string | null | undefined): { ok: boolea
  * rebinding). For https, SNI + Host are kept as the original hostname so TLS
  * cert validation is unchanged. Throws on a blocked URL.
  */
-export async function fetchGuarded(url: string, init: RequestInit = {}): Promise<Response> {
+export async function fetchGuarded(url: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
   const validation = await validateExternalUrl(url);
   if (!validation.valid) {
     throw new Error(`URL blocked (SSRF guard): ${validation.reason}`);
@@ -109,33 +109,51 @@ export async function fetchGuarded(url: string, init: RequestInit = {}): Promise
 
   const parsed = new URL(url);
   const addresses = validation.addresses ?? [];
+
+  // Redirects must NOT be followed by the underlying fetch — the guard only
+  // validated THIS hop. Force `redirect: 'manual'` and re-run the guard on each
+  // redirect target so an open redirect to a private IP (e.g. cloud metadata)
+  // can't bypass the check. A caller asking for 'follow' (or the default) gets
+  // safe, re-validated following; 'manual'/'error' is honored as-is.
+  const wantsFollow = init.redirect !== 'manual' && init.redirect !== 'error';
+  const guardedInit: RequestInit = { ...init, redirect: 'manual' };
+
+  let res: Response;
   // IP-literal URLs have no resolved addresses — they were vetted directly and
   // carry the address in the URL, so there is nothing to re-resolve.
   if (addresses.length === 0) {
-    return fetch(url, init);
+    res = await fetch(url, guardedInit);
+  } else {
+    const pinnedIp = addresses[0];
+    const host = parsed.hostname;
+    // Bracket IPv6 literals in the URL authority.
+    const ipAuthority = pinnedIp.includes(':') ? `[${pinnedIp}]` : pinnedIp;
+    const pinnedUrl = new URL(url);
+    pinnedUrl.hostname = ipAuthority;
+
+    const headers = new Headers(guardedInit.headers);
+    if (!headers.has('host')) headers.set('host', parsed.host);
+
+    const pinnedInit: RequestInit & { tls?: { serverName: string } } = {
+      ...guardedInit,
+      headers,
+    };
+    if (parsed.protocol === 'https:') {
+      // Keep correct SNI + cert hostname verification against the real host while
+      // the socket goes to the vetted IP (Bun-specific tls option).
+      pinnedInit.tls = { serverName: host };
+    }
+    res = await fetch(pinnedUrl.toString(), pinnedInit);
   }
 
-  const pinnedIp = addresses[0];
-  const host = parsed.hostname;
-  // Bracket IPv6 literals in the URL authority.
-  const ipAuthority = pinnedIp.includes(':') ? `[${pinnedIp}]` : pinnedIp;
-  const pinnedUrl = new URL(url);
-  pinnedUrl.hostname = ipAuthority;
-
-  const headers = new Headers(init.headers);
-  if (!headers.has('host')) headers.set('host', parsed.host);
-
-  const pinnedInit: RequestInit & { tls?: { serverName: string } } = {
-    ...init,
-    headers,
-  };
-  if (parsed.protocol === 'https:') {
-    // Keep correct SNI + cert hostname verification against the real host while
-    // the socket goes to the vetted IP (Bun-specific tls option).
-    pinnedInit.tls = { serverName: host };
+  if (wantsFollow && res.status >= 300 && res.status < 400) {
+    const location = res.headers.get('location');
+    if (location && maxRedirects > 0) {
+      const next = new URL(location, url).toString(); // resolve relative redirects
+      return fetchGuarded(next, init, maxRedirects - 1);
+    }
   }
-
-  return fetch(pinnedUrl.toString(), pinnedInit);
+  return res;
 }
 
 /** True for a clean dotted-quad IPv4 or a hex-grouped IPv6 literal. */

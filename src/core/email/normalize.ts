@@ -96,6 +96,13 @@ function graphAddress(a?: { name?: string; address?: string }): EmailAddress {
   return { name: a?.name || undefined, email: a?.address ?? '' };
 }
 
+/** Parse an ISO-ish date safely; returns '' rather than throwing on garbage. */
+function safeIso(value: string | undefined): string {
+  if (!value) return '';
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? new Date(t).toISOString() : '';
+}
+
 export function normalizeM365(msg: GraphMessage): InboxItem {
   return {
     id: msg.id,
@@ -104,7 +111,7 @@ export function normalizeM365(msg: GraphMessage): InboxItem {
     from: graphAddress(msg.from?.emailAddress),
     subject: msg.subject ?? '(no subject)',
     snippet: msg.bodyPreview ?? '',
-    receivedAt: msg.receivedDateTime ? new Date(msg.receivedDateTime).toISOString() : '',
+    receivedAt: safeIso(msg.receivedDateTime),
     unread: msg.isRead === false,
   };
 }

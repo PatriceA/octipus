@@ -24,7 +24,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .get(
     '/inbox',
     async ({ user, principal, query, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const limit = Math.min(Math.max(Number(query?.limit) || 20, 1), 50);
         return await getInbox(user.id, limit);
@@ -40,7 +40,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .get(
     '/message/:id',
     async ({ user, principal, params, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await detectProvider(user.id);
         if (!provider) {
@@ -60,7 +60,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .post(
     '/message/:id/summarize',
     async ({ user, principal, params, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await detectProvider(user.id);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
@@ -78,7 +78,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .post(
     '/message/:id/draft',
     async ({ user, principal, params, body, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await detectProvider(user.id);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
@@ -96,7 +96,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .post(
     '/message/:id/archive',
     async ({ user, principal, params, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const provider = await detectProvider(user.id);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
@@ -113,8 +113,10 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .post(
     '/send',
     async ({ user, principal, body, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
-      if (!body.confirm) {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      // Strict identity check — defeats any truthy/coerced value; only a real
+      // boolean true passes the gate. A draft is never sent without it.
+      if (body.confirm !== true) {
         set.status = 409;
         return { error: 'Sending requires explicit confirmation', requiresConfirmation: true };
       }
@@ -129,9 +131,9 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
     },
     {
       body: t.Object({
-        to: t.String({ minLength: 1 }),
-        subject: t.String(),
-        body: t.String({ minLength: 1 }),
+        to: t.String({ minLength: 1, maxLength: 320 }),
+        subject: t.String({ maxLength: 998 }),
+        body: t.String({ minLength: 1, maxLength: 100_000 }),
         confirm: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['email'] },
@@ -142,7 +144,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   .post(
     '/triage',
     async ({ user, principal, set }) => {
-      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const { items } = await getInbox(user.id, 30);
         return { triage: await triageInbox(user.id, items) };

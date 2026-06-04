@@ -16,7 +16,7 @@ function fakeDeps(over: Partial<ResearchDeps> = {}): ResearchDeps {
         return '["query one", "query two"]';
       }
       // Synthesis: cite the first source id that appears in the prompt, plus a bogus one.
-      const id = user.match(/\[(s[0-9a-f]{8})\]/)?.[1] ?? 'sUNKNOWN';
+      const id = user.match(/id="(s[0-9a-f]{8})"/)?.[1] ?? 'sUNKNOWN';
       return JSON.stringify({
         sections: [
           { heading: 'Answer', markdown: 'The key finding.', citations: [id, 'sBADBEEF'] },

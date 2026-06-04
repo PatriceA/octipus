@@ -9,6 +9,8 @@ import type { ReportDoc, ResearchDepth } from './types';
 
 export interface ResearchJob {
   id: string;
+  /** Owner — only this user (or an admin) may poll the job. */
+  userId: string;
   question: string;
   depth: ResearchDepth;
   status: 'running' | 'done' | 'error';
@@ -21,6 +23,16 @@ export interface ResearchJob {
 }
 
 const jobs = new Map<string, ResearchJob>();
+/** Keep finished jobs around long enough for the client to poll the result. */
+const JOB_TTL_MS = 30 * 60_000;
+
+/** Drop jobs older than the TTL so the Map can't grow unbounded. */
+function pruneJobs(): void {
+  const cutoff = Date.now() - JOB_TTL_MS;
+  for (const [id, j] of jobs) {
+    if (j.startedAt < cutoff) jobs.delete(id);
+  }
+}
 
 export function getResearchJob(id: string): ResearchJob | undefined {
   return jobs.get(id);
@@ -36,8 +48,10 @@ export function startResearch(
   userId: string,
   deps: ResearchDeps = defaultResearchDeps(userId),
 ): ResearchJob {
+  pruneJobs();
   const job: ResearchJob = {
     id: globalThis.crypto.randomUUID(),
+    userId,
     question,
     depth,
     status: 'running',
