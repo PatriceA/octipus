@@ -793,15 +793,26 @@ export function adminRegisterHint(err: unknown, admin: { username: string; email
 async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<void> {
   const api = new ApiClient(baseUrl);
 
-  // Admin account.
-  const admin = await pickAdmin(null);
-  process.stdout.write(`Registering admin "${admin.username}"…\n`);
-  try {
-    await api.post('/api/auth/register', admin);
-  } catch (err) {
-    throw new Error(adminRegisterHint(err, admin));
+  // Admin account. Retry in-place on retryable errors (validation 422 / taken
+  // username 409) instead of aborting the whole wizard — a weak password or a
+  // taken name shouldn't force the user to restart setup from scratch. In
+  // non-interactive mode there's nothing to re-prompt, so fail fast as before.
+  for (;;) {
+    const admin = await pickAdmin(null);
+    process.stdout.write(`Registering admin "${admin.username}"…\n`);
+    try {
+      await api.post('/api/auth/register', admin);
+      process.stdout.write('\x1b[32m✓ Admin registered (first-user admin grant applied)\x1b[0m\n');
+      break;
+    } catch (err) {
+      const retryable = err instanceof ApiError && (err.status === 422 || err.status === 409);
+      if (retryable && !NON_INTERACTIVE) {
+        process.stdout.write(`\x1b[33m! ${adminRegisterHint(err, admin)}\x1b[0m\n  Let's try that step again.\n\n`);
+        continue;
+      }
+      throw err instanceof ApiError ? new Error(adminRegisterHint(err, admin)) : err;
+    }
   }
-  process.stdout.write('\x1b[32m✓ Admin registered (first-user admin grant applied)\x1b[0m\n');
 
   // Provider + key.
   const provider = await pickProvider(null);
