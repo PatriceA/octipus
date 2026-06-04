@@ -89,6 +89,17 @@ fi
 cd "$INSTALL_DIR"
 ok "Repository ready at $INSTALL_DIR"
 
+# ─── Restore secrets from a prior `octi uninstall` ──────────────────────────
+# A non-purge uninstall keeps your data and stashes the old .env (which holds
+# MASTER_KEY) so the vault stays decryptable. Restore it into the fresh clone
+# unless one already exists.
+BACKUP_ENV="$HOME/.octipus/.env.uninstall-backup"
+if [ -f "$BACKUP_ENV" ] && [ ! -f "$INSTALL_DIR/.env" ]; then
+  cp "$BACKUP_ENV" "$INSTALL_DIR/.env"
+  chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
+  ok "Restored secrets from previous install ($BACKUP_ENV)"
+fi
+
 # ─── Install deps ──────────────────────────────────────────────────────────
 say "Installing backend dependencies..."
 bun install --silent

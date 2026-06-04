@@ -911,6 +911,7 @@ cmd_help() {
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
+  echo -e "    uninstall        Remove Octipus (keeps data; --purge wipes everything)"
   echo -e "    help             Show this help message"
   echo ""
   echo -e "  ${BOLD}Options:${NC}"
@@ -922,6 +923,175 @@ cmd_help() {
   echo -e "    API_PORT         Backend API port (default: 3005)"
   echo -e "    WEB_PORT         Web UI port (default: 3007)"
   echo ""
+}
+
+cmd_uninstall_help() {
+  print_banner
+  echo -e "  ${BOLD}octi uninstall${NC} — remove Octipus from this machine."
+  echo ""
+  echo -e "  By default your data is ${BOLD}kept${NC} (database, vault, history) so a"
+  echo -e "  later re-install picks up where you left off. Use --purge to wipe it."
+  echo ""
+  echo -e "  ${BOLD}Usage:${NC} octi uninstall [--purge] [--yes] [--dry-run]"
+  echo ""
+  echo -e "  ${BOLD}Options:${NC}"
+  echo -e "    --purge        Also delete all data + secrets ($STATE_DIR) and Docker volumes"
+  echo -e "    --yes, -y      Skip the confirmation prompt (for scripts/CI)"
+  echo -e "    --dry-run, -n  Print what would be removed, change nothing"
+  echo ""
+  echo -e "  Per-project '.octipus/' folders inside your own repos are never touched."
+  echo ""
+}
+
+cmd_uninstall() {
+  local purge=false assume_yes=false dry_run=false
+  for arg in "$@"; do
+    case "$arg" in
+      --purge)       purge=true ;;
+      --yes|-y)      assume_yes=true ;;
+      --dry-run|-n)  dry_run=true ;;
+      -h|--help)     cmd_uninstall_help; return 0 ;;
+      *)             log_warn "uninstall: ignoring unknown option '$arg'" ;;
+    esac
+  done
+
+  init_state_dir
+  print_banner
+
+  # ── Resolve the install footprint ──────────────────────────────────────────
+  local bin_dir="${OCTIPUS_BIN_DIR:-$HOME/.local/bin}"
+  local bin_link="$bin_dir/octi"
+
+  # Data dir: env override > .env DATA_DIR > default. '~' expanded against $HOME.
+  local data_dir="$STATE_DIR/data"
+  if [[ -f "$PROJECT_DIR/.env" ]]; then
+    local _dd
+    _dd=$(grep -E '^DATA_DIR=' "$PROJECT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)
+    [[ -n "$_dd" ]] && data_dir="${_dd/#\~/$HOME}"
+  fi
+  [[ -n "${DATA_DIR:-}" ]] && data_dir="${DATA_DIR/#\~/$HOME}"
+
+  # Docker deployment? Detect by our well-known container/volume names.
+  local has_docker=false
+  if command -v docker >/dev/null 2>&1 && [[ -f "$PROJECT_DIR/docker-compose.yml" ]]; then
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^octipus-' \
+       || docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qE 'octipus-'; then
+      has_docker=true
+    fi
+  fi
+
+  # ── Show the plan ──────────────────────────────────────────────────────────
+  echo -e "  ${BOLD}This will remove Octipus from your system.${NC}"
+  echo ""
+  log_step "Stop running backend / web / TUI processes"
+  if [[ "$has_docker" == true ]]; then
+    if [[ "$purge" == true ]]; then
+      log_step "Docker: compose down ${BOLD}-v${NC} (containers + volumes deleted)"
+    else
+      log_step "Docker: compose down (containers only — named volumes kept)"
+    fi
+  fi
+  if [[ -L "$bin_link" || -f "$bin_link" ]]; then
+    log_step "Remove CLI link: $bin_link"
+  fi
+  if [[ "$purge" == true ]]; then
+    log_step "Remove EVERYTHING under $STATE_DIR (app, data, vault, secrets)"
+    log_warn "PURGE: your database, vault secrets and chat history will be ${BOLD}permanently deleted${NC}."
+  else
+    log_step "Remove app checkout: $PROJECT_DIR"
+    log_step "Keep your data: $data_dir"
+    log_step "Back up secrets → $STATE_DIR/.env.uninstall-backup"
+    log_hint "Re-install later to reuse the same data. Pass --purge to wipe it all."
+  fi
+  echo ""
+
+  if [[ "$dry_run" == true ]]; then
+    log_info "Dry run — nothing was changed."
+    return 0
+  fi
+
+  # ── Confirm ────────────────────────────────────────────────────────────────
+  if [[ "$assume_yes" != true ]]; then
+    local word="uninstall"
+    [[ "$purge" == true ]] && word="purge"
+    printf "  Type '%s' to confirm: " "$word"
+    local reply=""
+    read -r reply || true
+    if [[ "$reply" != "$word" ]]; then
+      echo ""
+      log_warn "Aborted — nothing was changed."
+      return 1
+    fi
+    echo ""
+  fi
+
+  # ── Execute ────────────────────────────────────────────────────────────────
+  log_step "Stopping processes..."
+  kill_all_octipus
+  log_info "Processes stopped"
+
+  if [[ "$has_docker" == true ]]; then
+    log_step "Tearing down Docker..."
+    if [[ "$purge" == true ]]; then
+      (cd "$PROJECT_DIR" && docker compose down -v --remove-orphans) >/dev/null 2>&1 \
+        || log_warn "docker compose down failed — remove 'octipus-*' containers/volumes manually."
+    else
+      (cd "$PROJECT_DIR" && docker compose down --remove-orphans) >/dev/null 2>&1 \
+        || log_warn "docker compose down failed — remove 'octipus-*' containers manually."
+    fi
+    log_info "Docker torn down"
+  fi
+
+  # Preserve secrets so the kept data stays decryptable (MASTER_KEY lives in .env).
+  if [[ "$purge" != true && -f "$PROJECT_DIR/.env" ]]; then
+    if cp -f "$PROJECT_DIR/.env" "$STATE_DIR/.env.uninstall-backup" 2>/dev/null; then
+      chmod 600 "$STATE_DIR/.env.uninstall-backup" 2>/dev/null || true
+      log_info "Secrets backed up to $STATE_DIR/.env.uninstall-backup"
+    else
+      log_warn "Could not back up .env — kept data may be unreadable without its MASTER_KEY."
+    fi
+  fi
+
+  # Remove the PATH link — but only if it actually points at an Octipus install,
+  # so we never clobber an unrelated 'octi' the user put there.
+  if [[ -L "$bin_link" ]]; then
+    local target
+    target=$(readlink "$bin_link" 2>/dev/null || true)
+    case "$target" in
+      *"/.octipus/"*|"$PROJECT_DIR"/*) rm -f "$bin_link" && log_info "Removed $bin_link" ;;
+      *) log_warn "Left $bin_link (points to $target — not this install)." ;;
+    esac
+  elif [[ -f "$bin_link" ]]; then
+    rm -f "$bin_link" && log_info "Removed $bin_link"
+  fi
+
+  if [[ "$purge" == true ]]; then
+    rm -rf "$STATE_DIR" && log_info "Removed $STATE_DIR (all data + secrets)"
+  else
+    # Drop only the app checkout when it's the installer path; keep data/backup.
+    if [[ "$PROJECT_DIR" == "$STATE_DIR/app" ]]; then
+      rm -rf "$PROJECT_DIR" && log_info "Removed app checkout $PROJECT_DIR"
+    else
+      log_warn "App checkout at $PROJECT_DIR looks like a dev clone — left in place."
+      log_hint "Delete it yourself if you want it gone."
+    fi
+    rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB" "$LOG_FILE" "$WEB_LOG_FILE" 2>/dev/null || true
+  fi
+
+  echo ""
+  print_banner
+  if [[ "$purge" == true ]]; then
+    log_info "Octipus fully removed. Goodbye. 🐙"
+  else
+    log_info "Octipus uninstalled — your data is preserved:"
+    log_hint "data:    $data_dir"
+    log_hint "secrets: $STATE_DIR/.env.uninstall-backup"
+    echo ""
+    log_step "Reinstall any time:"
+    log_hint "curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash"
+  fi
+  echo ""
+  log_hint "Per-project '.octipus/' folders in your own repos were left untouched."
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -940,6 +1110,7 @@ main() {
     doctor)  cmd_doctor "$@" ;;
     logs)    cmd_logs "$@" ;;
     open)    cmd_open ;;
+    uninstall) cmd_uninstall "$@" ;;
     help|--help|-h) cmd_help ;;
     *)
       log_error "Unknown command: $command"

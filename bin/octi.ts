@@ -47,6 +47,7 @@ Commands:
   logs [--web]             Tail backend logs
   open                     Open the web UI in a browser
   persona [show]           Print the resolved persona (use the web UI to edit)
+  uninstall [--purge]      Remove Octipus (keeps data unless --purge; --dry-run to preview)
   version                  Print version
   help                     Print this banner
 `;
@@ -314,6 +315,7 @@ async function main(): Promise<void> {
     case 'status':
     case 'logs':
     case 'open':
+    case 'uninstall':
       await delegateBash([cmd, ...rest]);
       break;
 
