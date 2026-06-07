@@ -6,11 +6,12 @@ import { getSwarmSpawner, type SwarmSpawner } from './spawner';
 import type { AgentNode, ChildResult, PendingChild, SpawnChildParams } from './types';
 
 /**
- * Hooks passed in by the worker that owns this tool so detach-mode can
+ * Hooks passed in by the worker that owns this tool so spawn_child can
  * register pending children, enforce the cap, and let `collect_children`
- * pick up results later. If omitted, the tool treats every call as
- * `mode: 'await'` regardless of what the LLM passes in — safe default
- * for older call-sites that haven't wired the worker in.
+ * pick up results later. spawn_child always detaches when these hooks are
+ * present and the depth has a detach budget; if omitted (or the budget is 0),
+ * it falls back to a blocking await — safe default for legacy call-sites and
+ * leaf depths that can't detach.
  */
 export interface SpawnChildHooks {
   /** Called when a detach-mode spawn is accepted. */
@@ -173,7 +174,7 @@ export function createSpawnChildTool(
     // return. Multiple `spawn_child` calls per turn are allowed.
     final: false,
     description:
-      'Delegate a sub-topic to a better-fit specialist agent. The child runs autonomously with a restricted tool set and budget, then returns a structured result you must synthesize. Default mode="await" blocks until the child returns; mode="detach" returns immediately so you can keep working, narrate to the user, or spawn more siblings — you must later call `collect_children` (or the framework auto-collects before your final answer). Detach when the child output is a datapoint, not a dependency, or when you want to run multiple siblings in parallel without blocking on each one.',
+      'Delegate a sub-topic to a better-fit specialist agent. The child runs autonomously with a restricted tool set and budget. The call returns IMMEDIATELY with a pending handle — the child runs in the background so you can spawn more siblings, narrate to the user, or stay responsive. Call `collect_children` to pick up results (or the framework auto-collects before your final answer). Spawn multiple in one turn for parallel work.',
     previewParam: 'subtopic',
     parameters: {
       type: 'object',
@@ -229,14 +230,6 @@ export function createSpawnChildTool(
           items: { type: 'string' },
           description: 'Optional hard constraints the child must respect (e.g. "read-only").',
         },
-        mode: {
-          type: 'string',
-          enum: ['await', 'detach'],
-          description:
-            "'await' (default): block until the child returns, synthesize inline. " +
-            "'detach': return { nodeId, status: 'pending' } immediately and keep working — available at every depth that has a detach budget (orchestrator can detach agents; agents can detach subagents). " +
-            'Call `collect_children` before your final answer, or the framework force-awaits.',
-        },
       },
       required: ['topic', 'subtopic', 'taskBrief', 'expectedOutput'],
     },
@@ -246,61 +239,56 @@ export function createSpawnChildTool(
         return `spawn_child: ${validated.error}`;
       }
       const params = validated.params;
-      const mode: 'await' | 'detach' = params.mode ?? 'await';
 
-      // ── Detach path ─────────────────────────────────────────────────
-      // Available at any depth whose level config provides a detach
-      // budget (orchestrator → agent and agent → subagent today). Depth 2
-      // has maxPendingDetached=0 and so will be rejected by the cap check
-      // below — no need for a separate depth guard. Hooks carry the
-      // pending map + cap — if not wired, downgrade to await so old
-      // call-sites don't silently drop children.
-      if (mode === 'detach') {
-        if (!hooks) {
-          coreLogger.warn({ parentNodeId: parent.id }, 'spawn_child detach requested but worker did not wire hooks — falling back to await');
-        } else {
-          const cap = hooks.maxPendingDetached();
-          if (cap <= 0) {
-            return `spawn_child: detach-mode disabled (maxPendingDetached=${cap}). Re-call with mode='await'.`;
-          }
-          if (hooks.pendingCount() >= cap) {
-            return `spawn_child: already at max pending detached (${cap}). Call collect_children to pick up results before spawning more.`;
-          }
-          const childHandle = randomUUID();
-          const promise = (async () => {
-            try {
-              return await spawner.spawnChild(parent, params, context);
-            } catch (err) {
-              coreLogger.error(
-                { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
-                'Detached spawn_child execution threw',
-              );
-              return {
-                nodeId: childHandle,
-                kind: 'subagent' as const,
-                status: 'tool_error' as const,
-                output: null,
-                usedTokens: 0,
-                durationMs: 0,
-                spawnedChildren: [],
-                notes: (err as Error).message || 'spawn failed',
-              };
-            }
-          })();
-          hooks.registerPending({
-            childId: childHandle,
-            startedAt: Date.now(),
-            taskBrief: params.taskBrief,
-            topic: params.topic,
-            subtopic: params.subtopic,
-            promise,
-          });
-          return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Detached subagent started. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
+      // ── Always-detach ───────────────────────────────────────────────
+      // Every spawn returns a pending handle immediately so the parent stays
+      // free between iterations — to spawn siblings, narrate, or absorb a
+      // mid-run user message. The parent picks results up with
+      // `collect_children` (or the framework auto-collects before the final
+      // answer). Falls back to a blocking await only when detach isn't
+      // possible: no hooks wired (legacy call-sites / CLI workers) or this
+      // depth has no detach budget (depth-2 subagents: maxPendingDetached=0).
+      const cap = hooks?.maxPendingDetached() ?? 0;
+      if (hooks && cap > 0) {
+        if (hooks.pendingCount() >= cap) {
+          return `spawn_child: already at max pending detached (${cap}). Call collect_children to pick up results before spawning more.`;
         }
+        params.mode = 'detach';
+        const childHandle = randomUUID();
+        const promise = (async () => {
+          try {
+            return await spawner.spawnChild(parent, params, context);
+          } catch (err) {
+            coreLogger.error(
+              { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
+              'Detached spawn_child execution threw',
+            );
+            return {
+              nodeId: childHandle,
+              kind: 'subagent' as const,
+              status: 'tool_error' as const,
+              output: null,
+              usedTokens: 0,
+              durationMs: 0,
+              spawnedChildren: [],
+              notes: (err as Error).message || 'spawn failed',
+            };
+          }
+        })();
+        hooks.registerPending({
+          childId: childHandle,
+          startedAt: Date.now(),
+          taskBrief: params.taskBrief,
+          topic: params.topic,
+          subtopic: params.subtopic,
+          promise,
+        });
+        return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Subagent started in the background. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
       }
 
-      // ── Await path (default) ────────────────────────────────────────
+      // ── Await fallback (no detach budget / no hooks) ─────────────────
       try {
+        params.mode = 'await';
         const result = await spawner.spawnChild(parent, params, context);
         return formatChildResult(result);
       } catch (err) {
@@ -373,10 +361,9 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   const maxTokensNum =
     typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 2000;
 
-  const modeRaw = typeof args.mode === 'string' ? args.mode : undefined;
-  const mode: 'await' | 'detach' | undefined =
-    modeRaw === 'detach' ? 'detach' : modeRaw === 'await' ? 'await' : undefined;
-
+  // `mode` is no longer LLM-controlled — spawn_child always detaches when the
+  // depth has a detach budget, else awaits. The execute path sets params.mode
+  // to reflect what actually happened (for spawn_node bookkeeping).
   const params: SpawnChildParams = {
     expertId: typeof args.expertId === 'string' ? args.expertId : undefined,
     role,
@@ -392,7 +379,6 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     constraints: Array.isArray(args.constraints)
       ? (args.constraints.filter((c) => typeof c === 'string') as string[])
       : undefined,
-    mode,
   };
 
   return { params };
