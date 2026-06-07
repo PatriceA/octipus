@@ -34,6 +34,8 @@ interface ScoredModel {
   fitMargin: number;
   recommended: boolean;
   note?: string;
+  orchestratorMode?: 'full' | 'lite' | 'router';
+  orchestratorModeNote?: string;
 }
 interface RecommendResponse {
   hardware?: HardwareProfile;
@@ -201,7 +203,13 @@ function ModelRow({
   job?: InstallJob;
   onInstall: () => void;
 }) {
-  const { entry, fits, recommended, note } = scored;
+  const { entry, fits, recommended, note, orchestratorMode, orchestratorModeNote } = scored;
+  const modeBadge =
+    orchestratorMode === 'full'
+      ? 'bg-primary/10 text-primary'
+      : orchestratorMode === 'lite'
+        ? 'bg-tertiary/10 text-tertiary'
+        : 'bg-surface-container-high text-on-surface-variant';
   const budgetRef = hardware?.totalVramMB || entry.vramMB;
   const barPct = Math.min(100, Math.round((entry.vramMB / Math.max(budgetRef, 1)) * 100));
   const installed = job?.status === 'done';
@@ -221,6 +229,11 @@ function ModelRow({
               {t}
             </span>
           ))}
+          {orchestratorMode && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${modeBadge}`} title={orchestratorModeNote}>
+              {orchestratorMode} mode
+            </span>
+          )}
         </div>
         <div className="mt-1.5 flex items-center gap-2">
           <div className="h-1.5 w-28 rounded-full bg-surface-container-high overflow-hidden">
@@ -236,6 +249,9 @@ function ModelRow({
           )}
         </div>
         {(note || job?.error) && <p className="mt-1 text-xs text-error">{job?.error ?? note}</p>}
+        {recommended && orchestratorModeNote && (
+          <p className="mt-1 text-xs text-on-surface-variant">As default: {orchestratorModeNote}.</p>
+        )}
       </div>
 
       <div className="shrink-0">

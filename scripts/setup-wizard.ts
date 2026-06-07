@@ -677,7 +677,13 @@ async function main() {
 /** hwfit response shapes (subset; full types live in src/capabilities/hwfit). */
 interface RecommendResp {
   hardware?: { gpus: { name: string }[]; totalVramMB: number; ramMB: number; source: string[] };
-  scored?: Array<{ entry: { id: string; topics: string[]; vramMB: number }; fits: boolean; recommended: boolean }>;
+  scored?: Array<{
+    entry: { id: string; topics: string[]; vramMB: number };
+    fits: boolean;
+    recommended: boolean;
+    orchestratorMode?: 'full' | 'lite' | 'router';
+    orchestratorModeNote?: string;
+  }>;
   error?: string;
 }
 interface InstallJobResp {
@@ -723,6 +729,13 @@ async function maybeRecommendModel(api: ApiClient): Promise<void> {
   if (!pick) {
     process.stdout.write('\x1b[33m! No model fits the detected hardware; skipping.\x1b[0m\n');
     return;
+  }
+
+  if (pick.orchestratorModeNote) {
+    // Tell the user what this model means for how Octipus will run. Mode stays
+    // on 'auto' (re-derived live), so swapping the default model later changes
+    // this automatically — we only inform here.
+    process.stdout.write(`\x1b[90m· As the default, this model runs the orchestrator in ${pick.orchestratorModeNote}.\x1b[0m\n`);
   }
 
   process.stdout.write(`Pulling ${pick.entry.id} (binding: ${pick.entry.topics.join(', ')})…\n`);

@@ -43,7 +43,7 @@ describe('paramCountToMode', () => {
     [24_000_000_000, 'full'],
     [32_000_000_000, 'full'],
     [70_000_000_000, 'full'],
-  ])('%d params → %s', (params, mode) => {
+  ] as const)('%d params → %s', (params, mode) => {
     expect(paramCountToMode(params, THRESHOLDS)).toBe(mode);
   });
 });
