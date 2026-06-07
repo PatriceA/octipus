@@ -125,7 +125,48 @@ export function createSpawnChildTool(
   parent: AgentNode,
   spawner: SwarmSpawner = getSwarmSpawner(),
   hooks?: SpawnChildHooks,
+  opts?: { lite?: boolean },
 ): ToolHandler {
+  // Lite schema for small models: just `role` + `taskBrief`. topic/subtopic/
+  // expectedOutput are synthesized by the validator. A flatter schema means
+  // far fewer malformed tool calls from ≤14B models.
+  if (opts?.lite) {
+    return {
+      name: 'spawn_child',
+      final: false,
+      description:
+        'Delegate the task to a specialist agent. Pick the role that best fits and write a one- or two-sentence taskBrief. The child does the work and returns a result you relay to the user.',
+      previewParam: 'taskBrief',
+      parameters: {
+        type: 'object',
+        properties: {
+          role: {
+            type: 'string',
+            enum: CHILD_ROLES_ENUM,
+            description: 'Specialist role for the child.',
+          },
+          taskBrief: {
+            type: 'string',
+            maxLength: 4000,
+            description: 'What the child should do.',
+          },
+        },
+        required: ['role', 'taskBrief'],
+      },
+      execute: async (args, context) => {
+        const validated = validateSpawnChildArgs(args);
+        if ('error' in validated) return `spawn_child: ${validated.error}`;
+        try {
+          const result = await spawner.spawnChild(parent, validated.params, context);
+          return formatChildResult(result);
+        } catch (err) {
+          coreLogger.error({ err, parentNodeId: parent.id }, 'lite spawn_child execution threw');
+          return `spawn_child failed: ${(err as Error).message || 'spawn failed'}`;
+        }
+      },
+    };
+  }
+
   return {
     name: 'spawn_child',
     // Not `final` — the parent is expected to synthesize after children
@@ -281,11 +322,31 @@ export type ValidatedSpawn =
   | { error: string };
 
 export function validateSpawnChildArgs(args: Record<string, unknown>): ValidatedSpawn {
-  const topic = typeof args.topic === 'string' ? args.topic.trim() : '';
-  const subtopic = typeof args.subtopic === 'string' ? args.subtopic.trim() : '';
+  let topic = typeof args.topic === 'string' ? args.topic.trim() : '';
+  let subtopic = typeof args.subtopic === 'string' ? args.subtopic.trim() : '';
   const taskBrief = typeof args.taskBrief === 'string' ? args.taskBrief : '';
-  if (!topic) return { error: 'missing required field `topic`' };
-  if (!subtopic) return { error: 'missing required field `subtopic`' };
+
+  // Resolve the specialist role FIRST. Resolution order (shared with router
+  // mode via resolveRoleFromTopic):
+  //   1. explicit `role` arg if valid
+  //   2. `topic` itself if it's a role enum
+  //   3. TOPIC_TO_ROLE_ALIAS synonym lookup ('database' → 'data', …)
+  //   4. reject — silent defaulting to 'general' routes specialist work wrong.
+  // In lite mode the LLM passes only `role` + `taskBrief`; topic/subtopic then
+  // default from the role so the downstream topic-path invariants still hold.
+  const roleRaw = typeof args.role === 'string' ? args.role : undefined;
+  const role = resolveRoleFromTopic(roleRaw, topic);
+  if (!role) {
+    return {
+      error:
+        `missing or invalid 'role' (got '${roleRaw ?? 'undefined'}', topic '${topic}'). ` +
+        `Must be one of: ${CHILD_ROLES_ENUM.join(', ')}. ` +
+        `Pick the specialist role that fits the subtopic — don't fall back to 'general' unless the task is genuinely generic.`,
+    };
+  }
+  if (!topic) topic = role;
+  if (!subtopic) subtopic = topic;
+
   if (!taskBrief.trim()) return { error: 'missing required field `taskBrief`' };
   if (taskBrief.length > 4000) {
     return { error: 'taskBrief exceeds 4000-char limit' };
@@ -311,25 +372,6 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   const maxTokens = eo.maxTokens;
   const maxTokensNum =
     typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 2000;
-
-  // Role is required to route the child to the right model. Resolution order:
-  //   1. explicit `role` arg if valid
-  //   2. `topic` itself if it happens to be a role enum
-  //   3. `TOPIC_TO_ROLE_ALIAS` lookup — auto-maps common synonyms like
-  //      'database' → 'data', 'frontend' → 'coding'. Avoids burning a
-  //      whole orchestrator turn on a topic the LLM phrased naturally.
-  //   4. reject — silent defaulting to 'general' would route specialist
-  //      work to the wrong model.
-  const roleRaw = typeof args.role === 'string' ? args.role : undefined;
-  const role = resolveRoleFromTopic(roleRaw, topic);
-  if (!role) {
-    return {
-      error:
-        `missing or invalid 'role' (got '${roleRaw ?? 'undefined'}', topic '${topic}'). ` +
-        `Must be one of: ${CHILD_ROLES_ENUM.join(', ')}. ` +
-        `Pick the specialist role that fits the subtopic — don't fall back to 'general' unless the task is genuinely generic.`,
-    };
-  }
 
   const modeRaw = typeof args.mode === 'string' ? args.mode : undefined;
   const mode: 'await' | 'detach' | undefined =

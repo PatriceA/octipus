@@ -7,6 +7,9 @@
  * node-folder pattern, inspired by https://github.com/WeaveMindAI/weft.
  */
 
+import { readFileSync } from 'fs';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { getCapabilityService } from '@/capabilities/service';
 import type { ToolHandler } from '@/core/agent-worker';
 import { getMCPBridge } from '@/mcp/bridge';
@@ -62,6 +65,20 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
     ...config,
     systemPromptTemplate: SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + config.systemPromptTemplate,
   };
+}
+
+/**
+ * Lite orchestrator system prompt for small models (~10–24B). A drastically
+ * shorter router-style prompt + the (unchanged, sacred) SECURITY_PREAMBLE and
+ * OUTPUT_FORMATTING_RULES. Read once and cached.
+ */
+let liteOrchestratorPromptCache: string | null = null;
+export function getLiteOrchestratorPrompt(): string {
+  if (liteOrchestratorPromptCache) return liteOrchestratorPromptCache;
+  const here = dirname(fileURLToPath(import.meta.url));
+  const body = readFileSync(resolve(here, 'roles/orchestrator/prompt.lite.md'), 'utf-8');
+  liteOrchestratorPromptCache = SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + body;
+  return liteOrchestratorPromptCache;
 }
 
 /**

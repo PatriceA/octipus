@@ -65,6 +65,21 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
     expect(parentNode.allowedToolIds.has('collect_children')).toBe(true);
   });
 
+  test('lite mode: only spawn_child + remember_this, flat schema, no collect/pipeline', () => {
+    const parentNode = makeOrchestratorNode();
+    const refs = makeRefs();
+    const tools = createMetaTools(
+      {} as unknown as Parameters<typeof createMetaTools>[0],
+      { parentNode, swarmRefs: refs, lite: true },
+    );
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual(['remember_this', 'spawn_child']);
+    // Flat lite schema: role + taskBrief only.
+    const spawn = tools.find((t) => t.name === 'spawn_child');
+    expect(spawn?.parameters.required).toEqual(['role', 'taskBrief']);
+    expect(parentNode.allowedToolIds.has('collect_children')).toBe(false);
+  });
+
   test('detach hook indirection: tool reads ref lazily so post-spawn wiring works', () => {
     const parentNode = makeOrchestratorNode();
     const refs = makeRefs();

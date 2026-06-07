@@ -38,7 +38,7 @@ export interface WorkerSwarmParent {
 
 type EmitFn = (event: OrchestratorEvent) => void;
 
-interface WorkerSpawnerDeps {
+export interface WorkerSpawnerDeps {
   modelSelector: ModelSelector;
   emit: EmitFn;
   setLastWorkerResult: (result: string | null) => void;
