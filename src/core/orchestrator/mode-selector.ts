@@ -40,9 +40,8 @@ export function paramCountToMode(params: number, thresholds: ModeThresholds): Or
  * (`qwen2.5:32b-instruct-q4_K_M` → 32e9, `llama3.2:1b` → 1e9). Returns
  * undefined when no size can be determined.
  *
- * Note: for MoE tags like `mixtral:8x7b` this picks up the `7b` (per-expert)
- * size, not the total — acceptable since such tags aren't in the catalog and
- * the caller treats unknown/odd sizes conservatively.
+ * MoE tags like `mixtral:8x7b` are expanded to the aggregate (8 × 7B = 56B),
+ * not the per-expert size, so a capable MoE model isn't mistaken for a tiny one.
  */
 export function deriveParamCount(modelId: string, metadata?: ModelMetadata | null): number | undefined {
   if (metadata?.paramCount && Number.isFinite(metadata.paramCount) && metadata.paramCount > 0) {
@@ -50,6 +49,14 @@ export function deriveParamCount(modelId: string, metadata?: ModelMetadata | nul
   }
   // Prefer the size token after the ':' tag separator; fall back to anywhere.
   const tag = modelId.includes(':') ? modelId.slice(modelId.indexOf(':') + 1) : modelId;
+
+  // MoE first: 'NxMb' (e.g. '8x7b') ≈ N experts × M params each.
+  const moe = tag.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/i) ?? modelId.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/i);
+  if (moe) {
+    const total = Number.parseInt(moe[1], 10) * Number.parseFloat(moe[2]);
+    if (Number.isFinite(total) && total > 0) return Math.round(total * 1_000_000_000);
+  }
+
   const match = tag.match(/(\d+(?:\.\d+)?)\s*b\b/i) ?? modelId.match(/(\d+(?:\.\d+)?)\s*b\b/i);
   if (!match) return undefined;
   const billions = Number.parseFloat(match[1]);

@@ -48,15 +48,31 @@ async function trySteerRunningOrchestrator(sessionId: string, content: string): 
     );
   if (!target) return false;
 
+  // Guard the injected content exactly as handleMessage guards a normal turn —
+  // a steer must not be a hole around the input guard. On block, return false so
+  // the caller falls through to the normal path, which surfaces the block.
+  const { guardInput } = await import('@/core/orchestrator/input-guard');
+  if (guardInput(content).action === 'block') {
+    coreLogger.warn({ sessionId }, 'Input guard blocked a steering message — routing through normal path');
+    return false;
+  }
+
   (target as unknown as { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void }).steer({
     role: 'user',
     content,
     timestamp: new Date(),
   });
 
+  // Race guard: if the orchestrator finished between the status check and the
+  // steer, its steering queue will never drain. Don't persist an orphaned user
+  // message — fall back to a normal turn (the dead queue copy is harmless).
+  if (target.getStatus() !== 'running') return false;
+
   try {
     const { messageRepository } = await import('@/db/repositories/message-repository');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
     await messageRepository.create({ sessionId, role: 'user', content });
+    await sessionRepository.incrementMessageCount(sessionId);
   } catch (err) {
     coreLogger.error({ err, sessionId }, 'failed to persist steered user message');
   }
