@@ -65,6 +65,10 @@ export const defaultConfig: Partial<Config> = {
   },
   orchestrator: {
     enabled: true,
+    mode: 'auto',
+    liteMaxIterations: 3,
+    routerSmallModelMaxParams: 10_000_000_000,
+    liteModelMaxParams: 24_000_000_000,
     piiFilterEnabled: true,
     maxPipelineStages: 10,
     approvalTimeoutMs: 3600000,

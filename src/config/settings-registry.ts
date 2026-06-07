@@ -318,6 +318,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'ORCHESTRATOR_MODEL',
   },
   {
+    key: 'orchestrator.mode',
+    category: 'orchestrator',
+    valueType: 'string',
+    defaultValue: 'auto',
+    description:
+      'Orchestrator mode: auto (pick by model size, re-derived live), full (swarm), lite (single-step delegation), router (no orchestrator LLM)',
+    isSecret: false,
+    envVar: 'ORCHESTRATOR_MODE',
+  },
+  {
     key: 'orchestrator.piiFilterEnabled',
     category: 'orchestrator',
     valueType: 'boolean',

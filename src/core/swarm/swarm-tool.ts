@@ -90,6 +90,28 @@ const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
   workflow: 'automation',
 };
 
+/** The set of valid specialist roles, exported for router/lite reuse. */
+export const SPAWN_CHILD_ROLES: readonly AgentRole[] = CHILD_ROLES_ENUM;
+
+/**
+ * Resolve a specialist role from an explicit role arg and/or a topic, using the
+ * same ladder `spawn_child` validation uses:
+ *   1. explicit `role` if it's a valid role
+ *   2. `topic` itself if it happens to be a role
+ *   3. `TOPIC_TO_ROLE_ALIAS` lookup on the role arg, then the topic
+ * Returns undefined when nothing matches (caller decides how to handle).
+ *
+ * Shared by `validateSpawnChildArgs` and the router-mode turn so deterministic
+ * routing and LLM-driven spawning never diverge.
+ */
+export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string): AgentRole | undefined {
+  if (roleRaw && CHILD_ROLES_ENUM.includes(roleRaw as AgentRole)) return roleRaw as AgentRole;
+  if (CHILD_ROLES_ENUM.includes(topic as AgentRole)) return topic as AgentRole;
+  if (roleRaw && TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()];
+  if (TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()];
+  return undefined;
+}
+
 /**
  * Factory: produce a `spawn_child` tool handler bound to a specific parent
  * node (usually the current Orchestrator). The returned handler is what the
@@ -299,16 +321,8 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   //   4. reject — silent defaulting to 'general' would route specialist
   //      work to the wrong model.
   const roleRaw = typeof args.role === 'string' ? args.role : undefined;
-  let role: AgentRole | undefined;
-  if (roleRaw && CHILD_ROLES_ENUM.includes(roleRaw as AgentRole)) {
-    role = roleRaw as AgentRole;
-  } else if (CHILD_ROLES_ENUM.includes(topic as AgentRole)) {
-    role = topic as AgentRole;
-  } else if (roleRaw && TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()]) {
-    role = TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()];
-  } else if (TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()]) {
-    role = TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()];
-  } else {
+  const role = resolveRoleFromTopic(roleRaw, topic);
+  if (!role) {
     return {
       error:
         `missing or invalid 'role' (got '${roleRaw ?? 'undefined'}', topic '${topic}'). ` +
