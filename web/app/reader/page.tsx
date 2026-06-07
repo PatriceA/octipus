@@ -139,7 +139,6 @@ export default function ReaderPage() {
             {/* Server-sanitized allowlist HTML (see src/core/reader/extract.ts). */}
             <div
               className="reader-content mt-6 prose-reader text-on-surface leading-relaxed space-y-4"
-              // biome-ignore lint/security/noDangerouslySetInnerHtml: content is sanitized server-side to an allowlist
               dangerouslySetInnerHTML={{ __html: doc.contentHtml }}
             />
           </article>
