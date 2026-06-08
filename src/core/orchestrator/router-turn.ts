@@ -1,8 +1,10 @@
+import { randomUUID } from 'crypto';
 import { resolveRoleFromTopic, SPAWN_CHILD_ROLES } from '@/core/swarm/swarm-tool';
 import type { AgentContext } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { coreLogger } from '@/utils/logger';
+import { buildOutputDirective } from './output-directive';
 import { getRoleConfig } from './roles';
 import type { MessageClassification } from './types';
 import { spawnWorker, type WorkerSpawnerDeps } from './worker-spawner';
@@ -12,6 +14,8 @@ export interface RouterTurnOptions {
   /** Memory block + attached-file context, forwarded to the worker as input. */
   extraSystemContext: string;
   guardFlags: string[];
+  /** Chat/work split (Thread 3): inline vs file deliverable directive. */
+  outputDirective: { mode: 'inline' | 'file'; forced: boolean };
 }
 
 /**
@@ -23,6 +27,15 @@ export interface RouterTurnOptions {
  *
  * Returns the same `{ response, agentId, sources }` contract as the full
  * orchestrator so `handleMessage` can persist + post-process identically.
+ *
+ * Known degraded-tier limitations (intentional — router targets ≤~10B models):
+ *   - No swarm-tree root node: the single specialist surfaces via
+ *     worker_spawned/worker_completed events, but there's no orchestrator node
+ *     in the swarm sidebar (there is no orchestrator).
+ *   - No mid-run steering: the running agent is the specialist (not role
+ *     'orchestrator'), so a concurrent user message starts a fresh turn rather
+ *     than steering the in-flight one. Acceptable for the small-model tier.
+ *   - One specialist per turn; no parallel swarms, pipelines, or LLM synthesis.
  */
 export async function runRouterTurn(
   sessionId: string,
@@ -45,12 +58,14 @@ export async function runRouterTurn(
 
   if (classification.type === 'ambiguous' || !role) {
     coreLogger.info({ sessionId, topic, type: classification.type }, 'Router: clarifying (no confident role)');
-    return { response: buildClarifyReply(), agentId: `router-clarify-${sessionId}`, sources: ['router(clarify)'] };
+    // Real UUID so downstream consumers (trajectory, API, UI) that treat
+    // agentId as an id don't choke on a synthetic string.
+    return { response: buildClarifyReply(), agentId: randomUUID(), sources: ['router(clarify)'] };
   }
 
   const roleConfig = getRoleConfig(role);
   const context: AgentContext = {
-    id: `router-${sessionId}-${role}`,
+    id: randomUUID(),
     sessionId,
     userId,
     workspaceId: opts.workspaceId,
@@ -65,10 +80,16 @@ export async function runRouterTurn(
 
   coreLogger.info({ sessionId, role, topic }, 'Router: spawning single specialist worker');
 
+  // Carry the inline-vs-file deliverable directive (Thread 3) so file-mode
+  // requests still produce a file in router mode, matching the full/lite path.
+  const workerInput = [opts.extraSystemContext, buildOutputDirective(opts.outputDirective.mode, opts.outputDirective.forced)]
+    .filter(Boolean)
+    .join('\n\n');
+
   // `spawnWorker` emits worker_spawned/worker_completed itself and, with no
   // swarmParent, skips all swarm-tree bookkeeping — exactly the single-agent
   // shape we want. The memory/attached-files block rides in as worker input.
-  const result = await spawnWorker(role, message, opts.extraSystemContext, context, deps);
+  const result = await spawnWorker(role, message, workerInput, context, deps);
   const response = coerceWorkerResult(result);
 
   const sources = [`router`, `role(${role})`];

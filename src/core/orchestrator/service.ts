@@ -584,8 +584,8 @@ export class OrchestratorService {
     // Resolve the orchestrator mode for THIS turn. 'auto' (default) re-derives
     // from the current default model's size every turn, so swapping to a
     // smaller model switches the orchestrator to lite/router with no restart.
-    // PR1 wires the resolution + telemetry; the router/lite branches land in
-    // the follow-up PR, so behavior here is still 'full' for every mode.
+    // router short-circuits below to a deterministic single-worker turn; lite
+    // shrinks the prompt/tools/iterations further down; full is unchanged.
     const orchCfg = getConfig().orchestrator;
     const modelMeta = await getModelRegistry().getModelByModelId(modelName);
     const orchestratorMode = resolveOrchestratorMode(
@@ -605,6 +605,7 @@ export class OrchestratorService {
         workspaceId,
         extraSystemContext,
         guardFlags,
+        outputDirective,
       });
     }
 

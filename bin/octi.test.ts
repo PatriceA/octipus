@@ -133,13 +133,13 @@ describe('octi uninstall (bash dispatcher)', () => {
     expect(r.plain).toContain('Back up secrets');
     expect(r.plain).toContain('Dry run — nothing was changed.');
     // The keep path must never advertise destroying data.
-    expect(r.plain).not.toContain('permanently deleted');
+    expect(r.plain).not.toContain('Remove EVERYTHING');
   });
 
-  test('--purge --dry-run warns about permanent deletion', async () => {
+  test('--purge --dry-run warns it will remove everything', async () => {
     const r = await runBash(['uninstall', '--purge', '--dry-run']);
     expect(r.code).toBe(0);
-    expect(r.plain).toContain('permanently deleted');
+    expect(r.plain).toContain('Remove EVERYTHING');
     expect(r.plain).toContain('-v');
     expect(r.plain).toContain('Dry run — nothing was changed.');
   });

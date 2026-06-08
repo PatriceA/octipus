@@ -47,6 +47,24 @@ describe('Protocol', () => {
       expect(result.ok).toBe(false);
     });
 
+    test('parses chat.steer (mid-run steering)', () => {
+      const result = parseClientMessage(JSON.stringify({
+        type: 'chat.steer',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: 'actually, focus on the auth module first',
+      }));
+      expect(result.ok).toBe(true);
+    });
+
+    test('rejects chat.steer with empty content', () => {
+      const result = parseClientMessage(JSON.stringify({
+        type: 'chat.steer',
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        content: '',
+      }));
+      expect(result.ok).toBe(false);
+    });
+
     test('parses chat.send with attachments', () => {
       const result = parseClientMessage(JSON.stringify({
         type: 'chat.send',

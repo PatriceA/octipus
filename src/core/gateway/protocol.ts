@@ -204,6 +204,21 @@ export const ChatInterjectSchema = z.object({
   content: z.string().min(1).max(20_000),
 });
 
+/**
+ * `chat.steer` — inject a user message into the SAME running orchestrator turn
+ * so it changes course mid-flight, instead of spawning a concurrent turn.
+ *
+ * Distinct from `chat.interject` (a parallel side-question that does NOT touch
+ * the running turn): a steer enters the live orchestrator's context at the next
+ * iteration boundary via its steering queue. If no orchestrator is currently
+ * running for the session, the handler treats it like a normal `chat.send`.
+ */
+export const ChatSteerSchema = z.object({
+  type: z.literal('chat.steer'),
+  sessionId: z.string().uuid(),
+  content: z.string().min(1).max(20_000),
+});
+
 export const PingSchema = z.object({
   type: z.literal('ping'),
 });
@@ -213,6 +228,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   AuthMessageSchema,
   ChatSendSchema,
   ChatInterjectSchema,
+  ChatSteerSchema,
   CommandSchema,
   SubscribeSchema,
   UnsubscribeSchema,

@@ -24,6 +24,57 @@ async function resolveUserId(userId: string): Promise<string> {
 }
 
 /**
+ * Inject a user message into a running orchestrator turn for this session, if
+ * one exists, so it changes course mid-flight instead of racing a concurrent
+ * turn. Returns true when a live orchestrator absorbed the message.
+ *
+ * This is the per-session lock the steering design calls for: one live
+ * orchestrator per session; while it runs, further user messages steer it. The
+ * orchestrator drains its steering queue at the next iteration boundary, and
+ * because spawning is always-detach it is genuinely free between iterations to
+ * react. The injected message is persisted so the transcript stays complete
+ * (the steering queue itself does not persist).
+ */
+type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void };
+
+/** Exported for unit tests. */
+export async function trySteerRunningOrchestrator(sessionId: string, content: string): Promise<boolean> {
+  const { getAgentManager } = await import('@/core/agent-manager');
+  const mgr = getAgentManager();
+  const target = mgr
+    .getBySession(sessionId)
+    .filter((a) => a.getStatus() === 'running' && a.getContext().role === 'orchestrator')
+    .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
+  if (!target) return false;
+
+  // Guard the injected content exactly as handleMessage guards a normal turn —
+  // a steer must not be a hole around the input guard. On block, return false so
+  // the caller falls through to the normal path, which surfaces the block.
+  const { guardInput } = await import('@/core/orchestrator/input-guard');
+  if (guardInput(content).action === 'block') {
+    coreLogger.warn({ sessionId }, 'Input guard blocked a steering message — routing through normal path');
+    return false;
+  }
+
+  target.steer({ role: 'user', content, timestamp: new Date() });
+
+  // Race guard: if the orchestrator finished between the status check and the
+  // steer, its steering queue will never drain. Don't persist an orphaned user
+  // message — fall back to a normal turn (the dead queue copy is harmless).
+  if (target.getStatus() !== 'running') return false;
+
+  try {
+    const { messageRepository } = await import('@/db/repositories/message-repository');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    await messageRepository.create({ sessionId, role: 'user', content });
+    await sessionRepository.incrementMessageCount(sessionId);
+  } catch (err) {
+    coreLogger.error({ err, sessionId }, 'failed to persist steered user message');
+  }
+  return true;
+}
+
+/**
  * Wire the gateway hub's message handler to route authenticated messages
  * to the appropriate backend services (orchestrator, permissions, agents).
  */
@@ -36,6 +87,10 @@ export function wireMessageHandler(hub: GatewayHub): void {
 
       case 'chat.interject':
         await handleChatInterject(hub, connectionId, context, message);
+        break;
+
+      case 'chat.steer':
+        await handleChatSteer(hub, connectionId, context, message);
         break;
 
       case 'command':
@@ -77,6 +132,20 @@ async function handleChatSend(
     // Resolve the principal up front — we need userId both for the optional
     // session pre-create below AND for the orchestrator call.
     const userId = await resolveUserId(context.userId);
+
+    // If an orchestrator turn is already running for this session, steer it
+    // with this message instead of spawning a concurrent turn. Keeps one live
+    // orchestrator per session; the user can redirect work mid-flight.
+    if (await trySteerRunningOrchestrator(message.sessionId, message.content)) {
+      hub.publishEvent({
+        type: 'chat.message',
+        source: `steer:${connectionId}`,
+        userId,
+        sessionId: message.sessionId,
+        payload: { role: 'user', content: message.content, injected: true },
+      });
+      return;
+    }
 
     // Set project context on the session if provided (enables dev mode).
     //
@@ -337,6 +406,48 @@ async function handleApprovalRespond(
     hub.connectionManager.sendToConnection(connectionId, {
       type: 'error',
       code: 'APPROVAL_ERROR',
+      message: (err as Error).message,
+    });
+  }
+}
+
+/**
+ * Explicit mid-run steer. Injects into the running orchestrator turn; if none
+ * is running for the session, falls back to treating it as a normal chat.send
+ * so a steer is always safe to fire.
+ */
+async function handleChatSteer(
+  hub: GatewayHub,
+  connectionId: string,
+  context: ConnectionContext,
+  message: Extract<ClientMessage, { type: 'chat.steer' }>,
+): Promise<void> {
+  try {
+    context.sessionId = message.sessionId;
+    const userId = await resolveUserId(context.userId);
+
+    if (await trySteerRunningOrchestrator(message.sessionId, message.content)) {
+      hub.publishEvent({
+        type: 'chat.message',
+        source: `steer:${connectionId}`,
+        userId,
+        sessionId: message.sessionId,
+        payload: { role: 'user', content: message.content, injected: true },
+      });
+      return;
+    }
+
+    // Nothing running — behave like a normal send.
+    await handleChatSend(hub, connectionId, context, {
+      type: 'chat.send',
+      sessionId: message.sessionId,
+      content: message.content,
+    });
+  } catch (err) {
+    coreLogger.error({ err, sessionId: message.sessionId }, 'chat.steer failed');
+    hub.connectionManager.sendToConnection(connectionId, {
+      type: 'error',
+      code: 'STEER_ERROR',
       message: (err as Error).message,
     });
   }

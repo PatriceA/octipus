@@ -22,6 +22,12 @@ describe('deriveParamCount', () => {
     expect(deriveParamCount(modelId)).toBe(expected);
   });
 
+  test('expands MoE tags to the aggregate, not per-expert', () => {
+    // 8 × 7B = 56B → must not be mistaken for a 7B (router) model.
+    expect(deriveParamCount('mixtral:8x7b-instruct-v0.1-q4_K_M')).toBe(56_000_000_000);
+    expect(paramCountToMode(deriveParamCount('mixtral:8x7b') as number, THRESHOLDS)).toBe('full');
+  });
+
   test('prefers explicit metadata.paramCount over the tag', () => {
     expect(deriveParamCount('weird-name', { paramCount: 13_000_000_000 })).toBe(13_000_000_000);
   });
