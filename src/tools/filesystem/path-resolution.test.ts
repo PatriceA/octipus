@@ -121,6 +121,27 @@ describe('multiuser ON — nested per-user root', () => {
     ).resolves.toBeDefined();
   });
 
+  test('fresh per-user workspace: list_directory(".") materializes the root and returns empty (no ENOENT)', async () => {
+    // Deliberately do NOT pre-create perUserRoot — nothing seeds it at session
+    // setup, so this used to throw ENOENT. workspaceFor now ensureRootSync()s.
+    expect(existsSync(perUserRoot())).toBe(false);
+    const tool = await makeTool();
+    const res = (await tool.handler('list_directory').execute({ path: '.' }, ctx())) as {
+      path: string;
+      entries: unknown[];
+    };
+    expect(res.path).toBe(perUserRoot());
+    expect(res.entries).toEqual([]);
+    expect(existsSync(perUserRoot())).toBe(true);
+  });
+
+  test('fresh per-user workspace: read_file of a missing file still ENOENTs (only the root is created)', async () => {
+    const tool = await makeTool();
+    await expect(
+      tool.handler('read_file').execute({ path: 'nope.md' }, ctx()),
+    ).rejects.toThrow(/ENOENT|no such file/i);
+  });
+
   test('write_file lands under the per-user root and the file exists', async () => {
     const tool = await makeTool();
     const res = (await tool.handler('write_file').execute(
