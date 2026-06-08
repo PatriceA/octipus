@@ -714,9 +714,24 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
       const { probeHardware } = await import('@/setup/probes');
       const { resolveSizes, scoreCatalog } = await import('@/capabilities/hwfit');
+      const { describeModeForParams } = await import('@/core/orchestrator/mode-selector');
       const hardware = await probeHardware();
       const sized = await resolveSizes();
       const scored = scoreCatalog(hardware, sized);
+
+      // Annotate each model with the orchestrator mode it would imply as the
+      // default, so the UI can tell the user what the model means for how
+      // Octipus runs (router/lite/full). Thresholds come from config.
+      const orch = getConfig().orchestrator;
+      const thresholds = {
+        routerSmallModelMaxParams: orch.routerSmallModelMaxParams,
+        liteModelMaxParams: orch.liteModelMaxParams,
+      };
+      for (const s of scored) {
+        const { mode, note } = describeModeForParams(s.entry.params, thresholds);
+        s.orchestratorMode = mode;
+        s.orchestratorModeNote = note;
+      }
       return { hardware, scored };
     },
     { detail: { tags: ['models'] } }

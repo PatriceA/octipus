@@ -57,6 +57,31 @@ export function deriveParamCount(modelId: string, metadata?: ModelMetadata | nul
   return Math.round(billions * 1_000_000_000);
 }
 
+/** Plain-language explanation of what a mode means for the end user. */
+export function describeMode(mode: OrchestratorMode): string {
+  switch (mode) {
+    case 'router':
+      return 'router mode — routes each request to a single specialist; no multi-agent swarms or follow-up planning';
+    case 'lite':
+      return 'lite mode — a lightweight orchestrator that delegates one step at a time; no parallel swarms or pipelines';
+    case 'full':
+      return 'full mode — the complete orchestrator with parallel swarms, pipelines, and multi-step planning';
+  }
+}
+
+/**
+ * Annotate what orchestrator mode a model implies if used as the default,
+ * from its known parameter count. Used by the hardware-scan / recommend UI so
+ * the user sees what each model means for how Octipus will run.
+ */
+export function describeModeForParams(
+  params: number,
+  thresholds: ModeThresholds,
+): { mode: OrchestratorMode; note: string } {
+  const mode = paramCountToMode(params, thresholds);
+  return { mode, note: describeMode(mode) };
+}
+
 /**
  * Resolve the orchestrator mode for a turn. An explicit config mode pins that
  * value; 'auto' derives it live from the model's parameter count so swapping

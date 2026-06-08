@@ -59,4 +59,12 @@ export interface ScoredModel {
   recommended: boolean;
   /** Honest caveat shown to the user (e.g. when nothing fits and we fall back). */
   note?: string;
+  /**
+   * Which orchestrator mode this model implies if used as the default, derived
+   * from its param count. Attached by the recommend route (needs config
+   * thresholds), so optional on the pure scorer output.
+   */
+  orchestratorMode?: 'full' | 'lite' | 'router';
+  /** Plain-language explanation of what `orchestratorMode` means for the user. */
+  orchestratorModeNote?: string;
 }
