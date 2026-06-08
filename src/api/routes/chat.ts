@@ -2,6 +2,7 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getOrchestratorService } from '@/core/orchestrator';
 import { scopedRepos } from '@/db/repositories/scoped';
+import { devModeAllowed } from '@/security/devmode';
 import { isAuthenticated } from '@/security/principal';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
@@ -35,6 +36,15 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
 
       const repos = scopedRepos(principal);
 
+      // devMode/projectPath point the agent at an arbitrary host path — only
+      // honor them for a single-user install or an admin (see devModeAllowed).
+      // A non-admin request on a shared instance has them dropped, not errored,
+      // so a stray devMode flag doesn't break the chat turn.
+      const allowDev = devModeAllowed(!!user.isAdmin);
+      if ((body.devMode || body.projectPath) && !allowDev) {
+        apiLogger.warn({ userId: user.id }, 'Ignoring devMode/projectPath from non-admin under multiuser');
+      }
+
       // Auto-create a session if none provided
       if (!sessionId) {
         const session = await repos.sessions.create({
@@ -42,9 +52,9 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           channelId: `chat-${generateId().slice(0, 8)}`,
           title: message.slice(0, 100),
           context: {
-            devMode: body.devMode,
-            projectPath: body.projectPath,
-            projectName: body.projectPath ? body.projectPath.split('/').pop() : undefined,
+            devMode: allowDev ? body.devMode : undefined,
+            projectPath: allowDev ? body.projectPath : undefined,
+            projectName: allowDev && body.projectPath ? body.projectPath.split('/').pop() : undefined,
           },
         });
         sessionId = session.id;

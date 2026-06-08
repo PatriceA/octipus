@@ -41,7 +41,16 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
   }, { detail: { tags: ['workspace'] } })
 
   .put('/', async ({ user, body, set }) => {
-    if (!user) return { error: 'Authentication required' };
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    // Changing the global workspace root is an operator action — a non-admin
+    // must not be able to repoint or expand it on a shared instance.
+    if (!user.isAdmin) {
+      set.status = 403;
+      return { error: 'Admin privileges required' };
+    }
     const config = getConfig();
     const userHome = homedir();
 
@@ -119,6 +128,14 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
+    // `existsSync`/`statSync` on a caller-supplied absolute path is a host
+    // filesystem existence oracle (probe /root/.ssh, other users' homes).
+    // Restrict to admins — it only exists to support the admin workspace
+    // config UI.
+    if (!user.isAdmin) {
+      set.status = 403;
+      return { error: 'Admin privileges required' };
+    }
     const resolved = resolve(body.path);
     const exists = existsSync(resolved);
     let isDirectory = false;
@@ -167,6 +184,12 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     if (!user) {
       set.status = 401;
       return { error: 'Authentication required' };
+    }
+    // Creates a directory (and optionally `git init`s it) under the global
+    // workspace root — an operator action, not per-user data.
+    if (!user.isAdmin) {
+      set.status = 403;
+      return { error: 'Admin privileges required' };
     }
     const config = getConfig();
     const rootPath = resolve(config.workspace.rootPath);
