@@ -16,6 +16,7 @@ import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
 import { seedSkills } from '@/db/seed-skills';
 import { getHookManager } from '@/hooks/manager';
 import { getMCPBridge } from '@/mcp/bridge';
+import { resetLiteLLMClient } from '@/models/litellm-client';
 import { initializeVault } from '@/security/vault';
 import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
@@ -83,6 +84,16 @@ async function main() {
     // Load runtime config from DB settings (replaces env-based config)
     await loadRuntimeConfig();
     logger.info('Runtime configuration loaded');
+
+    // Invalidate config-derived singletons built DURING earlier startup (e.g.
+    // the gateway KB self-check exercises the embedding provider, which lazily
+    // constructs the LiteLLMClient). Those captured the pre-load default config
+    // — crucially an EMPTY litellm.apiKey, since vault secrets are only resolved
+    // here in loadRuntimeConfig(). Without this reset the orchestrator keeps
+    // using the 'sk-litellm' placeholder for the whole process and every
+    // completion 401s ("Invalid proxy server token"). Hot-reload only fires on
+    // CHANGE events, so the initial load needs an explicit reset.
+    resetLiteLLMClient();
 
     // Initialize permission rule engine (deny→allow→ask patterns)
     const { initPermissionRules } = await import('@/security/permission-rules');

@@ -96,6 +96,22 @@ export class LiteLLMClient {
   constructor() {
     const config = getConfig();
 
+    // 'sk-litellm' is a placeholder for keyless proxies (the OpenAI SDK requires
+    // a non-empty apiKey). If the proxy DOES enforce a master key, this
+    // placeholder 401s with a confusing "Invalid proxy server token" — so warn
+    // loudly when we fall back, rather than fail silently. A configured key
+    // lives in the vault (litellm_api_key) and is resolved into config by
+    // loadRuntimeConfig(); if it's missing here, config wasn't fully loaded
+    // before this client was built (see the reset in src/index.ts).
+    if (!config.litellm.apiKey) {
+      modelLogger.warn(
+        { proxyUrl: config.litellm.proxyUrl },
+        'LiteLLM apiKey not set in config — using placeholder "sk-litellm". ' +
+          'Completions will 401 if the proxy enforces a master key. ' +
+          'Check the litellm_api_key vault secret and config load order.',
+      );
+    }
+
     this.client = new OpenAI({
       baseURL: config.litellm.proxyUrl,
       apiKey: config.litellm.apiKey || 'sk-litellm',

@@ -846,4 +846,41 @@ describe('LiteLLMClient — singleton', () => {
     const c = getLiteLLMClient();
     expect(c).not.toBe(a);
   });
+
+  // Regression: the client must use the apiKey resolved AT CONSTRUCTION time,
+  // and reset must rebuild it so a key that lands after the first build (e.g.
+  // a vault secret resolved by loadRuntimeConfig, after the gateway self-check
+  // already built the client) is actually picked up. Without the reset wired
+  // into startup, the orchestrator kept the empty-default 'sk-litellm'
+  // placeholder for the whole process and every completion 401'd.
+  test('reset rebuilds the client with the apiKey resolved after first build', () => {
+    const cfg = realConfig as { getConfig: () => unknown; refreshConfigKey: (k: string, v: unknown) => void };
+    cfg.getConfig(); // ensure cachedConfig exists so refreshConfigKey applies
+
+    cfg.refreshConfigKey('litellm.apiKey', 'sk-early');
+    resetLiteLLMClient();
+    getLiteLLMClient();
+    expect(openaiConstructorCalls.at(-1)?.apiKey).toBe('sk-early');
+
+    // Key arrives later (vault resolved post-boot). A cached client is stale:
+    // no new OpenAI construction, so the old key is still in force.
+    const before = openaiConstructorCalls.length;
+    cfg.refreshConfigKey('litellm.apiKey', 'sk-real-vault-key');
+    getLiteLLMClient();
+    expect(openaiConstructorCalls.length).toBe(before); // still cached
+
+    // The fix: reset → next get rebuilds with the now-resolved key.
+    resetLiteLLMClient();
+    getLiteLLMClient();
+    expect(openaiConstructorCalls.at(-1)?.apiKey).toBe('sk-real-vault-key');
+  });
+
+  test('falls back to the sk-litellm placeholder when no apiKey is configured', () => {
+    const cfg = realConfig as { getConfig: () => unknown; refreshConfigKey: (k: string, v: unknown) => void };
+    cfg.getConfig();
+    cfg.refreshConfigKey('litellm.apiKey', '');
+    resetLiteLLMClient();
+    getLiteLLMClient();
+    expect(openaiConstructorCalls.at(-1)?.apiKey).toBe('sk-litellm');
+  });
 });
