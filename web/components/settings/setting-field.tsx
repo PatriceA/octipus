@@ -14,6 +14,13 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
+export interface SettingConstraints {
+  min?: number;
+  max?: number;
+  integer?: boolean;
+  enumValues?: string[];
+}
+
 export interface SettingItem {
   key: string;
   value: unknown;
@@ -22,6 +29,32 @@ export interface SettingItem {
   defaultValue: unknown;
   isSecret: boolean;
   category: string;
+  /** Real boot-schema limits (from the API), so the UI can't claim invalid values are valid. */
+  constraints?: SettingConstraints;
+}
+
+/** Human hint for a field's constraints, e.g. "Allowed: 1–25" or "Options: a, b". */
+function constraintHint(c?: SettingConstraints): string | null {
+  if (!c) return null;
+  if (c.enumValues?.length) return `Options: ${c.enumValues.join(', ')}`;
+  if (c.min !== undefined && c.max !== undefined) return `Allowed: ${c.min}–${c.max}${c.integer ? ' (whole number)' : ''}`;
+  if (c.min !== undefined) return `Minimum: ${c.min}`;
+  if (c.max !== undefined) return `Maximum: ${c.max}`;
+  return null;
+}
+
+/** Client-side range check mirroring the server's boot-schema validation. */
+function validateConstraints(value: unknown, valueType: string, c?: SettingConstraints): string {
+  if (!c) return '';
+  if (c.enumValues?.length && typeof value === 'string' && value && !c.enumValues.includes(value)) {
+    return `Must be one of: ${c.enumValues.join(', ')}`;
+  }
+  if (valueType === 'number' && typeof value === 'number' && Number.isFinite(value)) {
+    if (c.min !== undefined && value < c.min) return `Must be ≥ ${c.min}`;
+    if (c.max !== undefined && value > c.max) return `Must be ≤ ${c.max}`;
+    if (c.integer && !Number.isInteger(value)) return 'Must be a whole number';
+  }
+  return '';
 }
 
 /** Hook for saving/resetting settings via API */
@@ -80,9 +113,11 @@ export function SettingField({
 }) {
   const [showSecret, setShowSecret] = useState(false);
   const shortKey = setting.key.split('.').pop() || setting.key;
+  const hint = constraintHint(setting.constraints);
+  const validationError = validateConstraints(value, setting.valueType, setting.constraints);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') onSave();
+    if (e.key === 'Enter' && !validationError) onSave();
   };
 
   const inputClasses = 'w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
@@ -98,9 +133,25 @@ export function SettingField({
             </span>
           )}
         </div>
-        <p className="text-xs text-on-surface-variant mb-2">{setting.description}</p>
+        <p className="text-xs text-on-surface-variant mb-2">
+          {setting.description}
+          {hint && <span className="ml-1.5 text-on-surface-variant/70">· {hint}</span>}
+        </p>
 
-        {setting.valueType === 'boolean' ? (
+        {setting.constraints?.enumValues?.length ? (
+          <select
+            value={String(value ?? '')}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className={inputClasses}
+          >
+            {setting.constraints.enumValues.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        ) : setting.valueType === 'boolean' ? (
           <button
             onClick={() => { onChange(!(value as boolean)); setTimeout(onSave, 0); }}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
@@ -134,6 +185,9 @@ export function SettingField({
           <input
             type="number"
             value={String(value ?? '')}
+            min={setting.constraints?.min}
+            max={setting.constraints?.max}
+            step={setting.constraints?.integer ? 1 : undefined}
             onChange={(e) => onChange(Number(e.target.value))}
             onKeyDown={handleKeyDown}
             className={inputClasses}
@@ -156,13 +210,16 @@ export function SettingField({
             className={inputClasses}
           />
         )}
+        {validationError && (
+          <p className="mt-1 text-xs text-error">{validationError}</p>
+        )}
       </div>
 
       <div className="flex items-center gap-1 pt-7 shrink-0">
         {setting.valueType !== 'boolean' && (
           <button
             onClick={onSave}
-            disabled={isSaving}
+            disabled={isSaving || !!validationError}
             className="p-1.5 text-on-surface-variant hover:text-primary disabled:opacity-50"
             title="Save"
           >

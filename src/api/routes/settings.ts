@@ -2,6 +2,7 @@ import { Elysia, t } from 'elysia';
 import { existsSync, statSync } from 'fs';
 import { resolve } from 'path';
 import { apiContext } from '@/api/context';
+import { getFieldConstraints } from '@/config/schema-introspect';
 import {
   getCategories,
   getSettingDefinition,
@@ -34,6 +35,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
         defaultValue: unknown;
         isSecret: boolean;
         category: string;
+        constraints?: ReturnType<typeof getFieldConstraints>;
       }>> = {};
 
       for (const category of categories) {
@@ -64,6 +66,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
             defaultValue: def.defaultValue,
             isSecret: def.isSecret,
             category: def.category,
+            constraints: getFieldConstraints(def.key) ?? undefined,
           });
         }
       }
@@ -106,6 +109,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
           description: def.description,
           defaultValue: def.defaultValue,
           isSecret: def.isSecret,
+          constraints: getFieldConstraints(def.key) ?? undefined,
         });
       }
 
@@ -130,6 +134,9 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
           defaultValue: def.defaultValue,
           description: def.description,
           isSecret: def.isSecret,
+          // Real boot-schema constraints (min/max/enum) so the UI can show
+          // accurate limits and reject out-of-range input up front.
+          constraints: getFieldConstraints(def.key) ?? undefined,
         })),
         categories: getCategories(),
       };

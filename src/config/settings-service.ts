@@ -3,6 +3,7 @@ import { getDb } from '@/db/postgres';
 import { RedisCache, RedisPubSub } from '@/db/redis';
 import { type SettingEntry, settings } from '@/db/schema/settings';
 import { logger } from '@/utils/logger';
+import { validateSettingValue } from './schema-introspect';
 import { getSettingDefinition, SETTINGS_REGISTRY, type SettingValueType } from './settings-registry';
 
 const PUBSUB_CHANNEL = 'settings:changed';
@@ -163,6 +164,15 @@ export class SettingsService {
     const def = getSettingDefinition(key);
     if (def) {
       this.validateType(value, def.valueType);
+      // Validate against the SAME boot schema (ranges, enums, …) so a value the
+      // UI accepts can never break the next restart's config validation. Secret
+      // values live in the vault and aren't range-constrained, so skip them.
+      if (!def.isSecret) {
+        const check = validateSettingValue(key, value);
+        if (!check.ok) {
+          throw new Error(`Invalid value for ${key}: ${check.message}`);
+        }
+      }
     }
 
     const oldValue = await this.get(key);
