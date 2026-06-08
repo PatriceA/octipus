@@ -12,26 +12,29 @@ interface ProviderCardsProps {
 
 export function ProviderCards({ statuses, onStatusChange }: ProviderCardsProps) {
   return (
-    <div>
-      <h2 className="text-base font-extrabold tracking-tighter text-on-surface mb-1">
-        Provider API Keys
-      </h2>
-      <p className="text-sm text-on-surface-variant mb-4">
-        Store API keys for direct provider access (bypasses LiteLLM).
-      </p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {PROVIDER_KEY_GROUPS[0].keys.map((key) => (
-          <ProviderCard
-            key={key.vaultName}
-            label={key.label}
-            vaultName={key.vaultName}
-            testProvider={key.testProvider}
-            placeholder={key.placeholder}
-            isSaved={!!statuses[key.vaultName]}
-            onStatusChange={onStatusChange}
-          />
-        ))}
-      </div>
+    <div className="space-y-6">
+      {PROVIDER_KEY_GROUPS.map((group) => (
+        <div key={group.title}>
+          <h2 className="text-base font-extrabold tracking-tighter text-on-surface mb-1">
+            {group.title}
+          </h2>
+          <p className="text-sm text-on-surface-variant mb-4">{group.description}</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {group.keys.map((key) => (
+              <ProviderCard
+                key={key.vaultName}
+                label={key.label}
+                vaultName={key.vaultName}
+                settingsKey={key.settingsKey}
+                testProvider={key.testProvider}
+                placeholder={key.placeholder}
+                isSaved={!!statuses[key.vaultName]}
+                onStatusChange={onStatusChange}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -39,6 +42,7 @@ export function ProviderCards({ statuses, onStatusChange }: ProviderCardsProps) 
 function ProviderCard({
   label,
   vaultName,
+  settingsKey,
   testProvider,
   placeholder,
   isSaved,
@@ -46,6 +50,7 @@ function ProviderCard({
 }: {
   label: string;
   vaultName: string;
+  settingsKey?: string;
   testProvider?: string;
   placeholder?: string;
   isSaved: boolean;
@@ -67,14 +72,20 @@ function ProviderCard({
     if (!value) return;
     setSaving(true);
     try {
-      await api.post('/vault', {
-        name: vaultName,
-        value,
-        credentialType: 'api_key',
-        description: `${label} API Key`,
-        tags: ['provider'],
-        systemLevel: true,
-      });
+      if (settingsKey) {
+        // Config-cached secret: go through the settings endpoint so it's stored
+        // system-scoped AND hot-reloaded (a raw vault write would stay stale).
+        await api.put(`/settings/${settingsKey}`, { value });
+      } else {
+        await api.post('/vault', {
+          name: vaultName,
+          value,
+          credentialType: 'api_key',
+          description: `${label} API Key`,
+          tags: ['provider'],
+          systemLevel: true,
+        });
+      }
       setValue('');
       onStatusChange();
       setFeedback({ type: 'success', message: 'Saved' });

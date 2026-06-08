@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, RotateCcw, Search, Trash2, } from 'lucide-react';
+import { AlertTriangle, Plus, RotateCcw, Search, Trash2, } from 'lucide-react';
 import { useState, } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api';
@@ -8,6 +8,7 @@ import {
   CREDENTIAL_TYPE_COLORS,
   type Credential,
   type CredentialType,
+  SYSTEM_SCOPED_SECRET_NAMES,
 } from '@/lib/vault-config';
 
 interface VaultTableProps {
@@ -248,6 +249,8 @@ function AddSecretForm({
   const [tags, setTags] = useState('');
   const [scope, setScope] = useState<'user' | 'workspace'>('user');
 
+  const isSystemSecret = SYSTEM_SCOPED_SECRET_NAMES.has(name.trim());
+
   return (
     <div className="space-y-3">
       <div>
@@ -260,6 +263,18 @@ function AddSecretForm({
           placeholder="my_api_key"
         />
       </div>
+
+      {isSystemSecret && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <p className="text-xs leading-relaxed">
+            <span className="font-bold">{name.trim()}</span> is a system-wide secret.
+            Saving it here as a user{workspaceAvailable ? '/workspace' : ''} secret has
+            <span className="font-bold"> no effect</span> — the backend only reads it at
+            system scope. Use the dedicated card in the section above instead.
+          </p>
+        </div>
+      )}
       <div>
         <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Value</label>
         <input

@@ -850,7 +850,11 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
       // to the standard local endpoint if the user left it blank.
       batch['ollama.url'] = provider.baseUrl || 'http://localhost:11434';
     } else if (def.id === 'litellm') {
-      if (provider.baseUrl) batch['litellm.proxyUrl'] = provider.baseUrl;
+      // Always persist the proxy URL — without it the LiteLLM provider never
+      // registers (providers/index.ts gates on config.litellm.proxyUrl) and
+      // chat has no engine. Mirrors the Ollama fallback above. Matters in
+      // non-interactive setup where baseUrl can arrive blank.
+      batch['litellm.proxyUrl'] = provider.baseUrl || 'http://localhost:4000';
       if (provider.apiKey) batch['litellm.apiKey'] = provider.apiKey;
     } else if (def.requiresApiKey && provider.apiKey) {
       // Direct providers — there's a vaultKey on the def, but the

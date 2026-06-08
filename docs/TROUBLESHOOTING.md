@@ -85,6 +85,13 @@ docker compose logs litellm
 curl http://localhost:4000/health
 ```
 
+## LiteLLM 401 / "unreachable" when adding a model
+
+The proxy enforces a master key but Octipus has none set **at system scope**.
+Set it via **Secrets → LiteLLM Proxy → LiteLLM Master Key** (do *not* use the
+generic Add-Secret table — that stores at user scope, which the backend never
+reads). Full guide: **[LiteLLM Proxy](./LITELLM.md)**.
+
 ## Port Conflicts
 
 ```bash

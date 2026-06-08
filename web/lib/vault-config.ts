@@ -3,6 +3,14 @@ export interface VaultKeyEntry {
   vaultName: string;
   testProvider?: string;
   placeholder?: string;
+  /**
+   * When set, the key is saved through the settings endpoint
+   * (`PUT /api/settings/<settingsKey>`) instead of a raw vault write.
+   * Required for secrets whose value is cached in the runtime config at boot
+   * (e.g. `litellm.apiKey`) — the settings path stores them system-scoped AND
+   * triggers hot-reload, so a raw vault write would stay stale until restart.
+   */
+  settingsKey?: string;
 }
 
 export interface VaultKeyGroup {
@@ -32,7 +40,7 @@ export type CredentialType = 'api_key' | 'oauth_token' | 'password' | 'ssh_key' 
 export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
   {
     title: 'LLM Provider API Keys',
-    description: 'Store API keys for direct provider access (bypasses LiteLLM).',
+    description: 'Direct provider access (bypasses LiteLLM). Stored system-wide — shared by the whole instance.',
     keys: [
       { label: 'OpenAI', vaultName: 'openai_api_key', testProvider: 'openai', placeholder: 'sk-...' },
       { label: 'Anthropic', vaultName: 'anthropic_api_key', testProvider: 'anthropic', placeholder: 'sk-ant-...' },
@@ -42,6 +50,18 @@ export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
       { label: 'OpenRouter', vaultName: 'openrouter_api_key', testProvider: 'openrouter', placeholder: 'sk-or-...' },
       { label: 'Voyage AI (Embeddings)', vaultName: 'voyage_api_key', testProvider: 'voyage', placeholder: 'pa-...' },
       { label: 'Custom Provider', vaultName: 'custom_api_key', placeholder: 'API key for custom OpenAI-compatible providers' },
+    ],
+  },
+  {
+    title: 'LiteLLM Proxy',
+    description: 'Master key for your LiteLLM proxy. Set the proxy URL under Settings → Configuration → LiteLLM. Stored system-wide and applied without a restart.',
+    keys: [
+      {
+        label: 'LiteLLM Master Key',
+        vaultName: 'litellm_api_key',
+        settingsKey: 'litellm.apiKey',
+        placeholder: 'sk-... (proxy master_key)',
+      },
     ],
   },
 ];
@@ -70,6 +90,16 @@ export const ALL_VAULT_KEYS = [
   ...PROVIDER_KEY_GROUPS.flatMap((g) => g.keys),
   ...OAUTH_KEY_GROUPS.flatMap((g) => g.keys),
 ];
+
+/**
+ * Vault names that are managed as **system-scoped** secrets via the cards on
+ * this page. Saving any of these as a user/workspace secret through the generic
+ * vault table has no effect — the backend reads them with `getSystemSecret`.
+ * Used to warn in the Add-Secret form.
+ */
+export const SYSTEM_SCOPED_SECRET_NAMES = new Set<string>(
+  ALL_VAULT_KEYS.map((k) => k.vaultName),
+);
 
 export const CREDENTIAL_TYPE_COLORS: Record<string, { bg: string; text: string }> = {
   api_key: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400' },
