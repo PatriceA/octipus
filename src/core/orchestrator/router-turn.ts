@@ -27,6 +27,15 @@ export interface RouterTurnOptions {
  *
  * Returns the same `{ response, agentId, sources }` contract as the full
  * orchestrator so `handleMessage` can persist + post-process identically.
+ *
+ * Known degraded-tier limitations (intentional — router targets ≤~10B models):
+ *   - No swarm-tree root node: the single specialist surfaces via
+ *     worker_spawned/worker_completed events, but there's no orchestrator node
+ *     in the swarm sidebar (there is no orchestrator).
+ *   - No mid-run steering: the running agent is the specialist (not role
+ *     'orchestrator'), so a concurrent user message starts a fresh turn rather
+ *     than steering the in-flight one. Acceptable for the small-model tier.
+ *   - One specialist per turn; no parallel swarms, pipelines, or LLM synthesis.
  */
 export async function runRouterTurn(
   sessionId: string,
