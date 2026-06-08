@@ -35,17 +35,15 @@ async function resolveUserId(userId: string): Promise<string> {
  * react. The injected message is persisted so the transcript stays complete
  * (the steering queue itself does not persist).
  */
+type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void };
+
 async function trySteerRunningOrchestrator(sessionId: string, content: string): Promise<boolean> {
   const { getAgentManager } = await import('@/core/agent-manager');
   const mgr = getAgentManager();
   const target = mgr
     .getBySession(sessionId)
-    .find(
-      (a) =>
-        a.getStatus() === 'running' &&
-        a.getContext().role === 'orchestrator' &&
-        typeof (a as { steer?: unknown }).steer === 'function',
-    );
+    .filter((a) => a.getStatus() === 'running' && a.getContext().role === 'orchestrator')
+    .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
   if (!target) return false;
 
   // Guard the injected content exactly as handleMessage guards a normal turn —
@@ -57,11 +55,7 @@ async function trySteerRunningOrchestrator(sessionId: string, content: string): 
     return false;
   }
 
-  (target as unknown as { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void }).steer({
-    role: 'user',
-    content,
-    timestamp: new Date(),
-  });
+  target.steer({ role: 'user', content, timestamp: new Date() });
 
   // Race guard: if the orchestrator finished between the status check and the
   // steer, its steering queue will never drain. Don't persist an orphaned user

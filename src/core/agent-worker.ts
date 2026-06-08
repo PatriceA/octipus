@@ -92,6 +92,10 @@ export class AgentWorker extends BaseAgentWorker {
   /** Inject a message into the agent's context mid-run. */
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);
+    // Grant one iteration of headroom so a steer arriving as the loop is about
+    // to finish (e.g. during the final synthesis turn) is still processed
+    // rather than silently dropped when the iteration budget is exhausted.
+    this.config.maxIterations += 1;
   }
 
   /**
@@ -1039,6 +1043,17 @@ export class AgentWorker extends BaseAgentWorker {
         } else {
           response = 'I was unable to generate a response.';
         }
+      }
+
+      // A steer may have arrived while this (final, no-tool) iteration was
+      // producing text — the mid-iteration drains only run after tool calls.
+      // Honor it instead of returning so a late mid-run user message is never
+      // silently dropped. steer() granted the extra iteration this `continue`
+      // needs.
+      if (this.steeringQueue.length > 0) {
+        agentLogger.info({ agentId: this.context.id }, 'Draining steer before finalizing — continuing loop');
+        this.drainSteeringQueue();
+        continue;
       }
 
       // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
