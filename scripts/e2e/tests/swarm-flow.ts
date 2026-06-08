@@ -1,3 +1,4 @@
+import { deriveParamCount } from '../../../src/core/orchestrator/mode-selector';
 import type { APIClient } from '../client';
 import { fixtures } from '../fixtures';
 import type { TestRunner } from '../runner';
@@ -506,5 +507,96 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     );
     // And every completion must report status='completed' — not just "exited".
     assertAllSpawnsSucceeded(spawns, completions);
+  });
+
+  // ── 5. Size → orchestrator mode (auto) ───────────────────────────────
+  // The runtime half of the model-size → mode feature: in `auto` mode the
+  // orchestrator mode is re-derived each turn from the default model's param
+  // count against the configured thresholds (router < small < lite < full).
+  // The size→mode *mapping* is unit-tested (mode-selector.test.ts); here we
+  // prove the chosen mode actually changes runtime BEHAVIOUR end-to-end.
+  //
+  // Discriminator (deterministic, not LLM-mood-dependent): router mode runs a
+  // single role-scoped worker with NO orchestrator node in the swarm, while
+  // lite/full always create a depth-0 'orchestrator' node up-front — regardless
+  // of whether the LLM chooses to delegate. So we hold the model fixed and slide
+  // the thresholds across its size, asserting the orchestrator node appears or
+  // disappears accordingly.
+  //
+  // Admin-only (mutates global orchestrator settings) — skips cleanly otherwise.
+  await runner.test('Auto mode derives orchestrator behaviour from model size (router ↔ full)', async () => {
+    // Two trivial "say ok" turns — lighter than the 6-min fan-out scenarios
+    // above, so it is NOT gated behind E2E_SKIP_SLOW_SWARM; it self-skips when
+    // the caller lacks admin or the model size can't be derived.
+
+    // Admin gate: a non-admin PUT returns 403 — skip rather than fail.
+    const gate = await client.request<{ error?: string }>('PUT', '/settings/orchestrator.mode', { value: 'auto' });
+    if (gate.status === 403 || (gate.data?.error || '').includes('Admin')) {
+      console.log('    \x1b[33m⊘ requires admin to flip orchestrator settings — skipping\x1b[0m');
+      return;
+    }
+    assertStatus(gate.status, 200);
+
+    // The size the thresholds key off. If the default model id carries no
+    // parseable size, `auto` would fall back to lite (no router branch) and the
+    // router half couldn't be exercised — skip with a clear reason.
+    const params = deriveParamCount(defaultModelId!);
+    if (!params) {
+      console.log(`    \x1b[33m⊘ cannot derive param count from default model '${defaultModelId}' — skipping\x1b[0m`);
+      return;
+    }
+
+    // Read + remember the live values so we can restore them afterwards.
+    const { data: cat } = await client.request<{ settings?: Array<{ key: string; value: unknown }> }>(
+      'GET', '/settings/category/orchestrator',
+    );
+    const original = new Map((cat.settings ?? []).map((s) => [s.key, s.value]));
+    const KEYS = ['orchestrator.mode', 'orchestrator.routerSmallModelMaxParams', 'orchestrator.liteModelMaxParams'];
+
+    const setKey = async (key: string, value: unknown) => {
+      const { status, data } = await client.request<{ error?: string }>('PUT', `/settings/${key}`, { value });
+      assert(status === 200 && !data.error, `failed to set ${key}=${value}: status ${status} ${data.error ?? ''}`);
+    };
+
+    try {
+      // ROUTER: thresholds set ABOVE the model size ⇒ params < router cap ⇒ router.
+      await setKey('orchestrator.routerSmallModelMaxParams', params + 1);
+      await setKey('orchestrator.liteModelMaxParams', params + 2);
+      const routerTurn = await runTurn(await newSession('mode-router'), 'Say "ok" and nothing else.', 60_000);
+      assert(!routerTurn.error, `router-mode turn errored: ${routerTurn.error}`);
+      assertAllSpawnsSucceeded(routerTurn.spawns, routerTurn.completions);
+      const routerOrch = routerTurn.spawns.filter((s) => s.kind === 'orchestrator');
+      assert(
+        routerOrch.length === 0,
+        `router mode (params ${params} < cap ${params + 1}) must NOT spawn an orchestrator node, saw ${routerOrch.length}. ` +
+          'Either auto-mode mis-derived the mode, or the router short-circuit regressed.',
+      );
+
+      // FULL: thresholds set BELOW the model size ⇒ params >= lite cap ⇒ full.
+      await setKey('orchestrator.routerSmallModelMaxParams', 1);
+      await setKey('orchestrator.liteModelMaxParams', 2);
+      const fullTurn = await runTurn(await newSession('mode-full'), 'Say "ok" and nothing else.', 90_000);
+      assert(!fullTurn.error, `full-mode turn errored: ${fullTurn.error}`);
+      assertAllSpawnsSucceeded(fullTurn.spawns, fullTurn.completions);
+      const fullOrch = fullTurn.spawns.filter((s) => s.kind === 'orchestrator');
+      assert(
+        fullOrch.length >= 1,
+        `full mode (params ${params} >= caps) must spawn a depth-0 orchestrator node, saw ${fullOrch.length}. ` +
+          'Either auto-mode mis-derived the mode, or the swarm root node stopped being recorded.',
+      );
+
+      console.log(
+        `    \x1b[2m→ model '${defaultModelId}' (~${(params / 1e9).toFixed(1)}B): ` +
+          'router-cap above size ⇒ no orchestrator node; caps below size ⇒ orchestrator node present.\x1b[0m',
+      );
+    } finally {
+      // Restore the original orchestrator settings, whatever they were.
+      for (const key of KEYS) {
+        if (original.has(key)) {
+          const { status } = await client.request('PUT', `/settings/${key}`, { value: original.get(key) });
+          if (status !== 200) console.log(`    \x1b[33m⚠ failed to restore ${key} (status ${status})\x1b[0m`);
+        }
+      }
+    }
   });
 }
