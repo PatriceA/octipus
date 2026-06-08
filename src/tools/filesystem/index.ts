@@ -18,22 +18,6 @@ import { BaseTool, createParameterSchema } from '../base-tool';
  */
 const DIFF_SOURCE_MAX_BYTES = 256 * 1024;
 
-function getWorkspacePaths(): { root: string; additional: string[] } {
-  try {
-    const config = getConfig();
-    return {
-      root: resolve(config.workspace.rootPath),
-      additional: config.workspace.additionalPaths.map(p => resolve(p)),
-    };
-  } catch {
-    // Config may not be loaded yet during early initialization
-    return {
-      root: resolve(process.env.WORKSPACE_PATH || process.cwd()),
-      additional: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean).map(p => resolve(p)) || [],
-    };
-  }
-}
-
 // Prose/doc extensions auto-indexed into RAG on write. Code and config are
 // intentionally excluded — see autoIndexFile for the rationale.
 const AUTO_INDEX_EXTENSIONS = new Set([
@@ -110,7 +94,7 @@ function findProjectRoot(absPath: string, workspaceRoot: string): string | null 
  * Get or create the session output directory for an agent.
  * Format: {workspace}/sessions/{YYYY-MM-DD}-{topic}/
  */
-async function getSessionOutputDir(context?: AgentContext): Promise<string | null> {
+async function getSessionOutputDir(context: AgentContext | undefined, root: string): Promise<string | null> {
   try {
     const config = getConfig();
     if (!config.workspace.sessionFolders) {
@@ -122,7 +106,6 @@ async function getSessionOutputDir(context?: AgentContext): Promise<string | nul
       return null;
     }
 
-    const { root } = getWorkspacePaths();
     const date = new Date().toISOString().slice(0, 10);
     const topic = (context.topic || context.role || 'general')
       .replace(/[^a-zA-Z0-9_-]/g, '-')
@@ -231,8 +214,8 @@ export class FilesystemTool extends BaseTool {
         encoding: { type: 'string', description: 'File encoding', default: 'utf-8' },
       }),
       async (args, context) => {
-        const filePath = this.resolvePath(this.requireString(args, 'path'), context);
-        this.validatePath(filePath, context);
+        const fs = this.workspaceFor(context);
+        const filePath = this.resolveAndValidate(this.requireString(args, 'path'), context, fs);
 
         const content = await readFile(filePath, { encoding: (args.encoding as BufferEncoding) || 'utf-8' });
         return { content, path: filePath, size: content.length };
@@ -251,6 +234,12 @@ export class FilesystemTool extends BaseTool {
       async (args, context) => {
         const rawPath = this.requireString(args, 'path');
         this.requireString(args, 'content');
+        const fs = this.workspaceFor(context);
+        // `root` is the sandbox root — per-user under multiuser, flat
+        // otherwise. All session-dir / project-marker arithmetic below must
+        // anchor on this (not the flat `config.workspace.rootPath`), or it
+        // produces paths the sandbox then rejects.
+        const root = fs.root;
         let filePath: string;
 
         // Session-dir redirect only applies to agents with NO resolved project.
@@ -259,7 +248,7 @@ export class FilesystemTool extends BaseTool {
         // agent's output lands in a throwaway session folder and nothing ends
         // up in the repo.
         const projectPath = (context?.metadata as Record<string, unknown> | undefined)?.projectPath as string | undefined;
-        const sessionDir = projectPath ? null : await getSessionOutputDir(context);
+        const sessionDir = projectPath ? null : await getSessionOutputDir(context, root);
         if (sessionDir) {
           if (!rawPath.startsWith('/')) {
             // Relative path: by default resolve into session dir, BUT if the
@@ -269,7 +258,6 @@ export class FilesystemTool extends BaseTool {
             // routinely write `trivia_masters/server/src/foo.js` — without
             // this branch every relative write lands in the session folder
             // and the actual repo stays empty.
-            const { root } = getWorkspacePaths();
             const firstSegment = rawPath.split(/[/\\]/, 1)[0];
             const candidate = firstSegment ? resolve(root, firstSegment) : null;
             if (candidate && candidate.startsWith(root) && existsSync(candidate) && findProjectRoot(candidate, root)) {
@@ -283,7 +271,6 @@ export class FilesystemTool extends BaseTool {
             // like `.git`, `package.json`, etc.). Pipeline stages targeting
             // an explicit repo had their writes silently sandboxed to
             // `sessions/.../<repo>/...` — files never landed in the repo.
-            const { root } = getWorkspacePaths();
             const resolved = resolve(rawPath);
             const insideWorkspace = resolved.startsWith(root);
             const inExcludedSubtree = resolved.includes('/sessions/')
@@ -297,16 +284,22 @@ export class FilesystemTool extends BaseTool {
               const relFromRoot = relative(root, resolved);
               filePath = resolve(sessionDir, relFromRoot);
             } else {
-              filePath = this.resolvePath(rawPath, context);
+              filePath = resolved;
             }
           }
         } else if (projectPath && !rawPath.startsWith('/')) {
           // Project-scoped agent: relative paths resolve inside the project
           filePath = resolve(projectPath, rawPath);
         } else {
-          filePath = this.resolvePath(rawPath, context);
+          filePath = rawPath.startsWith('/') ? resolve(rawPath) : resolve(root, rawPath);
         }
-        this.validatePath(filePath, context);
+        // Final sandbox gate — same `fs` that computed `root`, so resolution
+        // and validation can't disagree. Reassign to the canonical
+        // (symlink-resolved) path so the write, prior-content read, mkdir,
+        // auto-index, and reported `path` all operate on the same resolved
+        // target the gate validated — consistent with `resolveAndValidate`
+        // in every other tool here.
+        filePath = this.resolveSafe(fs, filePath);
 
         return withFileMutationQueue(filePath, async () => {
           // Capture prior content (bounded) so the work stream can show a diff
@@ -356,9 +349,9 @@ export class FilesystemTool extends BaseTool {
         content: { type: 'string', description: 'Content to append', required: true },
       }),
       async (args, context) => {
-        const filePath = this.resolvePath(this.requireString(args, 'path'), context);
         this.requireString(args, 'content');
-        this.validatePath(filePath, context);
+        const fs = this.workspaceFor(context);
+        const filePath = this.resolveAndValidate(this.requireString(args, 'path'), context, fs);
 
         return withFileMutationQueue(filePath, async () => {
           const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
@@ -390,10 +383,10 @@ export class FilesystemTool extends BaseTool {
         includeHidden: { type: 'boolean', description: 'Include hidden files', default: false },
       }),
       async (args, context) => {
-        const dirPath = this.resolvePath((args.path as string) || '.', context);
-        this.validatePath(dirPath, context);
+        const fs = this.workspaceFor(context);
+        const dirPath = this.resolveAndValidate((args.path as string) || '.', context, fs);
 
-        const entries = await this.listDir(dirPath, args.recursive as boolean, args.includeHidden as boolean);
+        const entries = await this.listDir(dirPath, args.recursive as boolean, args.includeHidden as boolean, fs.root);
         return { path: dirPath, entries };
       },
       { permissionAction: 'list' }
@@ -406,8 +399,8 @@ export class FilesystemTool extends BaseTool {
         path: { type: 'string', description: 'Path to the file or directory', required: true },
       }),
       async (args, context) => {
-        const filePath = this.resolvePath(args.path as string, context);
-        this.validatePath(filePath, context);
+        const fs = this.workspaceFor(context);
+        const filePath = this.resolveAndValidate(args.path as string, context, fs);
 
         const stats = await stat(filePath);
         return {
@@ -432,8 +425,8 @@ export class FilesystemTool extends BaseTool {
         recursive: { type: 'boolean', description: 'Create parent directories', default: true },
       }),
       async (args, context) => {
-        const dirPath = this.resolvePath(args.path as string, context);
-        this.validatePath(dirPath, context);
+        const fs = this.workspaceFor(context);
+        const dirPath = this.resolveAndValidate(args.path as string, context, fs);
 
         await mkdir(dirPath, { recursive: args.recursive !== false });
         return { success: true, path: dirPath };
@@ -449,8 +442,8 @@ export class FilesystemTool extends BaseTool {
         recursive: { type: 'boolean', description: 'Delete directories recursively', default: false },
       }),
       async (args, context) => {
-        const filePath = this.resolvePath(args.path as string, context);
-        this.validatePath(filePath, context);
+        const fs = this.workspaceFor(context);
+        const filePath = this.resolveAndValidate(args.path as string, context, fs);
 
         return withFileMutationQueue(filePath, async () => {
           await rm(filePath, { recursive: args.recursive as boolean, force: false });
@@ -468,10 +461,9 @@ export class FilesystemTool extends BaseTool {
         destination: { type: 'string', description: 'Destination path', required: true },
       }),
       async (args, context) => {
-        const srcPath = this.resolvePath(args.source as string, context);
-        const destPath = this.resolvePath(args.destination as string, context);
-        this.validatePath(srcPath, context);
-        this.validatePath(destPath, context);
+        const fs = this.workspaceFor(context);
+        const srcPath = this.resolveAndValidate(args.source as string, context, fs);
+        const destPath = this.resolveAndValidate(args.destination as string, context, fs);
 
         return withFileMutationQueue(destPath, async () => {
           await copyFile(srcPath, destPath);
@@ -489,10 +481,9 @@ export class FilesystemTool extends BaseTool {
         destination: { type: 'string', description: 'Destination path', required: true },
       }),
       async (args, context) => {
-        const srcPath = this.resolvePath(args.source as string, context);
-        const destPath = this.resolvePath(args.destination as string, context);
-        this.validatePath(srcPath, context);
-        this.validatePath(destPath, context);
+        const fs = this.workspaceFor(context);
+        const srcPath = this.resolveAndValidate(args.source as string, context, fs);
+        const destPath = this.resolveAndValidate(args.destination as string, context, fs);
 
         return withFileMutationQueue(destPath, async () => {
           await rename(srcPath, destPath);
@@ -511,8 +502,8 @@ export class FilesystemTool extends BaseTool {
         maxResults: { type: 'number', description: 'Maximum results', default: 100 },
       }),
       async (args, context) => {
-        const dirPath = this.resolvePath((args.path as string) || '.', context);
-        this.validatePath(dirPath, context);
+        const fs = this.workspaceFor(context);
+        const dirPath = this.resolveAndValidate((args.path as string) || '.', context, fs);
 
         const pattern = safeRegExp(args.pattern as string);
         if (!pattern) {
@@ -529,7 +520,7 @@ export class FilesystemTool extends BaseTool {
 
             const fullPath = join(dir, entry.name);
             if (pattern.test(entry.name)) {
-              results.push(relative(getWorkspacePaths().root, fullPath));
+              results.push(relative(fs.root, fullPath));
             }
             if (entry.isDirectory() && !entry.name.startsWith('.')) {
               await search(fullPath);
@@ -552,40 +543,47 @@ export class FilesystemTool extends BaseTool {
     return value;
   }
 
-  private resolvePath(path: string, context?: import('@/core/types').AgentContext): string {
-    if (path.startsWith('/')) {
-      return resolve(path);
-    }
-    // Use project-specific path from agent context when available
-    const projectPath = (context?.metadata as Record<string, unknown>)?.projectPath as string | undefined;
-    if (projectPath) {
-      return resolve(projectPath, path);
-    }
-    const { root } = getWorkspacePaths();
-    return resolve(root, path);
-  }
-
   /**
-   * Path sandbox — Phase 1b-3.
+   * Build the path sandbox for this call — the single source of truth for
+   * BOTH resolution and validation.
    *
-   * Delegates to `WorkspaceFS.forAgent(context)` so the same call site
-   * picks the right layout based on `config.multiuser.enabled`:
+   * `WorkspaceFS.forAgent(context)` picks the layout from
+   * `config.multiuser.enabled`:
    *   - off → flat root at `config.workspace.rootPath` (legacy single-user
-   *     behavior, identical to the previous in-place implementation).
+   *     behavior).
    *   - on  → per-user nested root under
    *     `<workspace.rootPath>/users/{userId}/workspaces/default/files`.
    *
-   * Both modes share `additionalPaths` and the legacy `/tmp/assistant-`
-   * tmp prefix as extra-allowed locations; both block traversal,
-   * absolute-path escape, and symlink escape.
+   * `additionalPaths` and the legacy `/tmp/assistant-` prefix are allowed
+   * extras; both modes block traversal, absolute-path escape, and symlink
+   * escape. A devMode `projectPath` (absolute path to a real external
+   * project the worker was pointed at) is added as an extra-allowed prefix
+   * so project-scoped reads/writes pass the sandbox check.
    *
-   * Without an `AgentContext` we fall back to the flat root — that's
-   * the path the unit test harness and direct callers take.
+   * Previously resolution (`resolvePath`) anchored on the *flat*
+   * `config.workspace.rootPath` while validation (`validatePath`) anchored
+   * on the per-user `WorkspaceFS` root. With multiuser on those two roots
+   * differ, so every relative-path call resolved to the flat root and then
+   * failed validation against the nested root ("outside allowed workspace
+   * directories"). Routing both through this one instance keeps them from
+   * drifting again.
    */
-  private validatePath(path: string, context?: AgentContext): void {
-    const fs = WorkspaceFS.forAgent(context);
+  private workspaceFor(context?: AgentContext): WorkspaceFS {
+    const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+      ?.projectPath as string | undefined;
+    return WorkspaceFS.forAgent(context, {
+      extraAllowedPrefixes: projectPath ? [resolve(projectPath)] : [],
+    });
+  }
+
+  /**
+   * Validate an already-computed path against the workspace sandbox and
+   * return the canonical (symlink-resolved) absolute path. Translates the
+   * internal `WorkspaceFsError` into the user-facing message.
+   */
+  private resolveSafe(fs: WorkspaceFS, path: string): string {
     try {
-      fs.resolve(path);
+      return fs.resolve(path);
     } catch (err) {
       if (err instanceof WorkspaceFsError) {
         throw new Error(`Path '${path}' is outside allowed workspace directories`);
@@ -594,10 +592,32 @@ export class FilesystemTool extends BaseTool {
     }
   }
 
+  /**
+   * Resolve a user-supplied path and validate it against `fs` in one step.
+   * Resolution rules (preserved from the former `resolvePath`):
+   *   - absolute path → used as-is;
+   *   - relative path + devMode `projectPath` → resolved under the project;
+   *   - relative path otherwise → resolved under `fs.root`.
+   * The result is then gated through `fs.resolve` so it can never land
+   * outside the sandbox.
+   */
+  private resolveAndValidate(rawPath: string, context: AgentContext | undefined, fs: WorkspaceFS): string {
+    let candidate: string;
+    if (rawPath.startsWith('/')) {
+      candidate = resolve(rawPath);
+    } else {
+      const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+        ?.projectPath as string | undefined;
+      candidate = projectPath ? resolve(projectPath, rawPath) : resolve(fs.root, rawPath);
+    }
+    return this.resolveSafe(fs, candidate);
+  }
+
   private async listDir(
     dir: string,
     recursive: boolean,
-    includeHidden: boolean
+    includeHidden: boolean,
+    root: string
   ): Promise<{ name: string; path: string; isDirectory: boolean; size?: number }[]> {
     const entries = await readdir(dir, { withFileTypes: true });
     const results: { name: string; path: string; isDirectory: boolean; size?: number }[] = [];
@@ -606,12 +626,12 @@ export class FilesystemTool extends BaseTool {
       if (!includeHidden && entry.name.startsWith('.')) continue;
 
       const fullPath = join(dir, entry.name);
-      const relativePath = relative(getWorkspacePaths().root, fullPath);
+      const relativePath = relative(root, fullPath);
 
       if (entry.isDirectory()) {
         results.push({ name: entry.name, path: relativePath, isDirectory: true });
         if (recursive) {
-          const subEntries = await this.listDir(fullPath, true, includeHidden);
+          const subEntries = await this.listDir(fullPath, true, includeHidden, root);
           results.push(...subEntries);
         }
       } else {
