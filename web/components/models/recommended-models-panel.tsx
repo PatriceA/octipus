@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Cpu, Download, HardDrive, Sparkles, TriangleAlert } from 'lucide-react';
+import { Check, ChevronDown, Cpu, Download, Gauge, HardDrive, Sparkles, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 
@@ -28,9 +28,11 @@ interface SizedModel {
   sizeSource: 'live' | 'hint';
   notes?: string;
 }
+type FitTier = 'fits' | 'overspill' | 'too-big';
 interface ScoredModel {
   entry: SizedModel;
   fits: boolean;
+  fitTier: FitTier;
   fitMargin: number;
   recommended: boolean;
   note?: string;
@@ -65,6 +67,8 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
   const [scored, setScored] = useState<ScoredModel[]>([]);
   const [error, setError] = useState('');
   const [showAll, setShowAll] = useState(false);
+  // Collapse the scan results so the installed-models list below stays reachable.
+  const [collapsed, setCollapsed] = useState(false);
   // modelId → live install job (progress / outcome).
   const [jobs, setJobs] = useState<Record<string, InstallJob>>({});
 
@@ -79,6 +83,7 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
       }
       setHardware(res.hardware ?? null);
       setScored(res.scored ?? []);
+      setCollapsed(false);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -128,7 +133,10 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
     setTimeout(tick, 600);
   };
 
-  const visible = showAll ? scored : scored.filter((s) => s.recommended || s.fits);
+  // Runnable models (fits + overspill) show in the main list; too-big hides
+  // behind "show more". `showAll` reveals the too-big tier as well.
+  const visible = showAll ? scored : scored.filter((s) => s.recommended || s.fitTier !== 'too-big');
+  const hasResults = hardware !== null || scored.length > 0;
 
   return (
     <div className="border border-outline-variant/10 rounded-xs bg-surface-container-low p-4 space-y-4">
@@ -144,20 +152,32 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
             </p>
           </div>
         </div>
-        <button
-          onClick={scan}
-          disabled={scanning}
-          className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 cursor-pointer font-medium whitespace-nowrap"
-        >
-          {scanning ? 'Scanning…' : hardware ? 'Re-scan' : 'Scan hardware'}
-        </button>
+        <div className="flex items-center gap-2">
+          {hasResults && (
+            <button
+              onClick={() => setCollapsed((c) => !c)}
+              aria-expanded={!collapsed}
+              title={collapsed ? 'Expand scan results' : 'Collapse scan results'}
+              className="p-2 rounded-full hover:bg-surface-container-high cursor-pointer text-on-surface-variant"
+            >
+              <ChevronDown className={`w-4 h-4 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+            </button>
+          )}
+          <button
+            onClick={scan}
+            disabled={scanning}
+            className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 cursor-pointer font-medium whitespace-nowrap"
+          >
+            {scanning ? 'Scanning…' : hardware ? 'Re-scan' : 'Scan hardware'}
+          </button>
+        </div>
       </div>
 
       {error && (
         <div className="bg-error/10 border border-error/20 rounded-xs px-3 py-2 text-error text-sm">{error}</div>
       )}
 
-      {hardware && (
+      {!collapsed && hardware && (
         <div className="flex flex-wrap gap-3 text-sm text-on-surface-variant">
           <span className="inline-flex items-center gap-1.5">
             <HardDrive className="w-4 h-4" />
@@ -173,7 +193,7 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
         </div>
       )}
 
-      {visible.length > 0 && (
+      {!collapsed && visible.length > 0 && (
         <div className="space-y-2">
           {visible.map((s) => (
             <ModelRow key={s.entry.id} scored={s} hardware={hardware} job={jobs[s.entry.id]} onInstall={() => install(s.entry)} />
@@ -187,6 +207,15 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
             </button>
           )}
         </div>
+      )}
+
+      {collapsed && hasResults && (
+        <p className="text-sm text-on-surface-variant">
+          Scan results hidden.{' '}
+          <button onClick={() => setCollapsed(false)} className="text-primary hover:underline cursor-pointer">
+            Show
+          </button>
+        </p>
       )}
     </div>
   );
@@ -203,7 +232,7 @@ function ModelRow({
   job?: InstallJob;
   onInstall: () => void;
 }) {
-  const { entry, fits, recommended, note, orchestratorMode, orchestratorModeNote } = scored;
+  const { entry, fitTier, recommended, note, orchestratorMode, orchestratorModeNote } = scored;
   const modeBadge =
     orchestratorMode === 'full'
       ? 'bg-primary/10 text-primary'
@@ -213,6 +242,8 @@ function ModelRow({
   const budgetRef = hardware?.totalVramMB || entry.vramMB;
   const barPct = Math.min(100, Math.round((entry.vramMB / Math.max(budgetRef, 1)) * 100));
   const installed = job?.status === 'done';
+  // Three-tier fit: green (fits VRAM), amber (RAM overspill — slower), red (too big).
+  const barColor = fitTier === 'fits' ? 'bg-primary' : fitTier === 'overspill' ? 'bg-tertiary' : 'bg-error';
 
   return (
     <div className="flex items-center gap-3 px-3 py-2.5 rounded-xs border border-outline-variant/10 bg-surface">
@@ -237,19 +268,26 @@ function ModelRow({
         </div>
         <div className="mt-1.5 flex items-center gap-2">
           <div className="h-1.5 w-28 rounded-full bg-surface-container-high overflow-hidden">
-            <div className={`h-full ${fits ? 'bg-primary' : 'bg-error'}`} style={{ width: `${barPct}%` }} />
+            <div className={`h-full ${barColor}`} style={{ width: `${barPct}%` }} />
           </div>
           <span className="text-xs text-on-surface-variant">
             {fmtGB(entry.vramMB)} {entry.sizeSource === 'live' ? '' : '(est.)'}
           </span>
-          {!fits && (
+          {fitTier === 'overspill' && (
+            <span className="text-xs text-tertiary inline-flex items-center gap-1" title="Larger than VRAM — Ollama spills into RAM. Runs, but slower.">
+              <Gauge className="w-3 h-3" /> RAM overspill — slower
+            </span>
+          )}
+          {fitTier === 'too-big' && (
             <span className="text-xs text-error inline-flex items-center gap-1">
-              <TriangleAlert className="w-3 h-3" /> tight fit
+              <TriangleAlert className="w-3 h-3" /> too big for this machine
             </span>
           )}
         </div>
-        {(note || job?.error) && <p className="mt-1 text-xs text-error">{job?.error ?? note}</p>}
-        {recommended && orchestratorModeNote && (
+        {(note || job?.error) && (
+          <p className={`mt-1 text-xs ${job?.error ? 'text-error' : 'text-on-surface-variant'}`}>{job?.error ?? note}</p>
+        )}
+        {orchestratorModeNote && (
           <p className="mt-1 text-xs text-on-surface-variant">As default: {orchestratorModeNote}.</p>
         )}
       </div>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseNvidiaSmi, probeHardware } from './probes';
+import { parseNvidiaSmi, parseRocmSmiVram, probeHardware } from './probes';
 
 describe('parseNvidiaSmi', () => {
   test('parses a single GPU line', () => {
@@ -36,6 +36,34 @@ describe('parseNvidiaSmi', () => {
 
   test('returns empty for empty input', () => {
     expect(parseNvidiaSmi('')).toEqual([]);
+  });
+});
+
+describe('parseRocmSmiVram', () => {
+  test('parses the --json form and converts bytes to MB', () => {
+    const out = '{"card0": {"VRAM Total Memory (B)": "17179869184", "VRAM Total Used Memory (B)": "1342181376"}}';
+    expect(parseRocmSmiVram(out)).toBe(16384); // 16 GiB
+  });
+
+  test('sums VRAM across multiple GPUs in JSON form', () => {
+    const out =
+      '{"card0": {"VRAM Total Memory (B)": "17179869184"}, "card1": {"VRAM Total Memory (B)": "8589934592"}}';
+    expect(parseRocmSmiVram(out)).toBe(16384 + 8192);
+  });
+
+  test('parses the plain-text log form', () => {
+    const out = [
+      '============ ROCm System Management Interface ============',
+      'GPU[0]\t\t: VRAM Total Memory (B): 17179869184',
+      'GPU[0]\t\t: VRAM Total Used Memory (B): 1342181376',
+      '=========================================================',
+    ].join('\n');
+    expect(parseRocmSmiVram(out)).toBe(16384);
+  });
+
+  test('returns 0 when no total is present', () => {
+    expect(parseRocmSmiVram('no memory info here')).toBe(0);
+    expect(parseRocmSmiVram('')).toBe(0);
   });
 });
 

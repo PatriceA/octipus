@@ -48,11 +48,23 @@ export interface SizedModel extends ModelCatalogEntry {
   sizeSource: 'live' | 'hint';
 }
 
+/**
+ * How a model sits against the host's memory:
+ *   - 'fits':     within the VRAM budget — ideal, full-speed.
+ *   - 'overspill': over VRAM but within total system memory — Ollama can run it
+ *     by spilling weights into RAM (shared-memory APUs, or partial GPU offload);
+ *     runnable but slower.
+ *   - 'too-big':  exceeds even the overspill budget — not runnable here.
+ */
+export type FitTier = 'fits' | 'overspill' | 'too-big';
+
 /** A sized model scored against a concrete HardwareProfile. */
 export interface ScoredModel {
   entry: SizedModel;
-  /** Whether the model fits the computed budget. */
+  /** Whether the model fits the VRAM budget at full speed (=== fitTier 'fits'). */
   fits: boolean;
+  /** Three-way fit classification — see {@link FitTier}. */
+  fitTier: FitTier;
   /** Budget headroom in MB (negative when it does not fit). For ranking. */
   fitMargin: number;
   /** Best-in-class pick for at least one of its topics that fits the budget. */

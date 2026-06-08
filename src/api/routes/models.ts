@@ -381,17 +381,37 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
             if (!testRes.ok) {
               const errData = await testRes.json().catch(() => ({}));
               const errMsg = errData?.error?.message || `LiteLLM returned ${testRes.status}`;
+              // Fail loud: a 401 here almost always means the proxy enforces a
+              // master key but Octipus has none (litellm.apiKey / LITELLM_MASTER_KEY).
+              // Surface it in the log, not just the HTTP response, so it's debuggable.
+              coreLogger.error(
+                {
+                  status: testRes.status,
+                  litellmBase,
+                  modelId,
+                  provider,
+                  hasKey: !!litellmKey,
+                  keySource: config.litellm.apiKey ? 'config' : process.env.LITELLM_MASTER_KEY ? 'env' : 'none',
+                  errData,
+                },
+                'LiteLLM model test rejected',
+              );
               return { success: false, error: errMsg };
             }
 
             const testData = await testRes.json();
             const reply = testData.choices?.[0]?.message?.content || '';
             return { success: true, message: `Model responded via LiteLLM: "${reply.slice(0, 100)}"` };
-          } catch (_fetchErr) {
+          } catch (fetchErr) {
+            coreLogger.error(
+              { err: fetchErr, litellmBase, modelId, provider },
+              'Cannot reach LiteLLM proxy',
+            );
             return { success: false, error: `Cannot reach LiteLLM proxy at ${litellmBase}` };
           }
         }
       } catch (err) {
+        coreLogger.error({ err, provider: body.provider, modelId: body.modelId }, 'Model test failed');
         return { success: false, error: (err as Error).message };
       }
     },
@@ -722,12 +742,19 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       // Annotate each model with the orchestrator mode it would imply as the
       // default, so the UI can tell the user what the model means for how
       // Octipus runs (router/lite/full). Thresholds come from config.
+      //
+      // Only annotate models that could actually BE the orchestrator default —
+      // i.e. text-generation models. Embedding and vision/OCR models can never
+      // be the orchestrator, so a "router/lite/full" label on them is
+      // meaningless and was the source of the inconsistent UI text.
       const orch = getConfig().orchestrator;
       const thresholds = {
         routerSmallModelMaxParams: orch.routerSmallModelMaxParams,
         liteModelMaxParams: orch.liteModelMaxParams,
       };
+      const ORCHESTRATOR_CAPABLE_TOPICS = new Set(['chat', 'general', 'coding', 'research']);
       for (const s of scored) {
+        if (!s.entry.topics.some((t) => ORCHESTRATOR_CAPABLE_TOPICS.has(t))) continue;
         const { mode, note } = describeModeForParams(s.entry.params, thresholds);
         s.orchestratorMode = mode;
         s.orchestratorModeNote = note;
@@ -868,7 +895,18 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           headers,
           signal: AbortSignal.timeout(5000),
         });
-        if (!res.ok) return { error: `LiteLLM unreachable (${res.status})` };
+        if (!res.ok) {
+          coreLogger.error(
+            {
+              status: res.status,
+              litellmBase,
+              hasKey: !!litellmKey,
+              keySource: config.litellm.apiKey ? 'config' : process.env.LITELLM_MASTER_KEY ? 'env' : 'none',
+            },
+            'LiteLLM model list rejected',
+          );
+          return { error: `LiteLLM unreachable (${res.status})` };
+        }
         const data = await res.json();
 
         const models = (data.data || []).map((m: any) => {
@@ -883,6 +921,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
 
         return { models };
       } catch (err) {
+        coreLogger.error({ err, litellmBase }, 'Cannot reach LiteLLM for model list');
         return { error: `Cannot reach LiteLLM: ${(err as Error).message}` };
       }
     },
