@@ -27,10 +27,11 @@ import { buildSecurityReminder, guardInput } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { ModelSelector } from './model-selector';
 import { resolveOrchestratorMode } from './mode-selector';
+import { runRouterTurn } from './router-turn';
 import { buildOutputDirective } from './output-directive';
 import { guardOutput } from './output-guard';
 import { filterPII } from './pii-filter';
-import { getRoleConfig } from './roles';
+import { getLiteOrchestratorPrompt, getRoleConfig } from './roles';
 import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
@@ -597,6 +598,16 @@ export class OrchestratorService {
     );
     coreLogger.info({ sessionId, modelName, orchestratorMode }, 'Orchestrator mode resolved');
 
+    // Router mode: no orchestrator LLM — classify → one specialist → relay.
+    // The small local model only runs as a single role-scoped worker.
+    if (orchestratorMode === 'router') {
+      return runRouterTurn(sessionId, userId, message, classification, this.deps, {
+        workspaceId,
+        extraSystemContext,
+        guardFlags,
+      });
+    }
+
     const orchestratorConfig = getRoleConfig('orchestrator');
 
     // Build the swarm root node AgentNode up front so meta-tools can bind to
@@ -656,15 +667,17 @@ export class OrchestratorService {
     } = { current: null };
     const orchestratorWorkerRef: { current: AgentWorker | null } = { current: null };
 
+    const isLite = orchestratorMode === 'lite';
     const metaTools = createMetaTools(this, {
       parentNode,
       swarmRefs: {
         detachHookRef: orchestratorDetachHookRef,
         workerRef: orchestratorWorkerRef,
       },
+      lite: isLite,
     });
 
-    let systemPrompt = orchestratorConfig.systemPromptTemplate;
+    let systemPrompt = isLite ? getLiteOrchestratorPrompt() : orchestratorConfig.systemPromptTemplate;
     if (guardFlags.length > 0) {
       systemPrompt += buildSecurityReminder(guardFlags);
     }
@@ -799,7 +812,7 @@ export class OrchestratorService {
       role: 'orchestrator',
       systemPrompt,
       tools: metaTools,
-      maxIterations: 25,
+      maxIterations: isLite ? orchCfg.liteMaxIterations : 25,
       timeout: orchestratorTimeout,
       // Seed the user's raw request so the spawner can forward it verbatim
       // to every child. Without this, children only see the orchestrator's

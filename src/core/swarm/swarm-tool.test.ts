@@ -30,8 +30,28 @@ describe('validateSpawnChildArgs', () => {
     expect('error' in r).toBe(true);
   });
 
-  test('rejects missing subtopic', () => {
+  test('defaults subtopic from the topic when omitted (lite-friendly)', () => {
     const r = validateSpawnChildArgs({ ...valid, subtopic: '' });
+    expect('params' in r).toBe(true);
+    if ('params' in r) {
+      // topic 'security' is itself a role, so subtopic falls back to it.
+      expect(r.params.subtopic).toBe('security');
+    }
+  });
+
+  test('lite schema: role + taskBrief only, topic/subtopic synthesized', () => {
+    const r = validateSpawnChildArgs({ role: 'coding', taskBrief: 'fix the null deref' });
+    expect('params' in r).toBe(true);
+    if ('params' in r) {
+      expect(r.params.role).toBe('coding');
+      expect(r.params.topic).toBe('coding');
+      expect(r.params.subtopic).toBe('coding');
+      expect(r.params.expectedOutput.shape).toBe('summary');
+    }
+  });
+
+  test('lite schema: rejects when role is missing and topic cannot resolve', () => {
+    const r = validateSpawnChildArgs({ taskBrief: 'do something' });
     expect('error' in r).toBe(true);
   });
 

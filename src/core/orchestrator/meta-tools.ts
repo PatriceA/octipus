@@ -37,8 +37,13 @@ export interface OrchestratorSwarmRefs {
  */
 export function createMetaTools(
   orchestrator: OrchestratorService,
-  options?: { parentNode?: AgentNode; swarmRefs?: OrchestratorSwarmRefs },
+  options?: { parentNode?: AgentNode; swarmRefs?: OrchestratorSwarmRefs; lite?: boolean },
 ): ToolHandler[] {
+  // Lite mode (small models): expose only `spawn_child` (flat schema) +
+  // `remember_this`. Detach/collect/pipeline/pii/reflect/status are dropped —
+  // a small model can't juggle them, and single-step delegation doesn't need
+  // them. Built below, then filtered just before return.
+  const lite = options?.lite === true;
   // Pipeline gate: once `create_pipeline` runs, further delegation is blocked.
   // `spawn_child` is NOT gated — multiple swarm calls per turn are explicitly
   // allowed (swarm-design.md §Spawn Mechanics).
@@ -58,7 +63,7 @@ export function createMetaTools(
   // refs (legacy unit-test callers) the tool stays in await-only mode.
   if (options?.parentNode) {
     const refs = options.swarmRefs;
-    if (refs) {
+    if (refs && !lite) {
       const detachHookRef = refs.detachHookRef;
       tools.push(
         createSpawnChildTool(options.parentNode, undefined, {
@@ -70,7 +75,8 @@ export function createMetaTools(
       tools.push(createCollectChildrenTool(options.parentNode, refs.workerRef));
       options.parentNode.allowedToolIds.add('collect_children');
     } else {
-      tools.push(createSpawnChildTool(options.parentNode));
+      // Lite (or no refs): await-only single spawn. Lite uses the flat schema.
+      tools.push(createSpawnChildTool(options.parentNode, undefined, undefined, lite ? { lite: true } : undefined));
     }
   }
 
@@ -404,5 +410,8 @@ export function createMetaTools(
     },
   );
 
+  if (lite) {
+    return tools.filter((t) => t.name === 'spawn_child' || t.name === 'remember_this');
+  }
   return tools;
 }

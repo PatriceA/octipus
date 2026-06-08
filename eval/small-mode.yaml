@@ -1,0 +1,44 @@
+name: Small-Mode Orchestrator Tests
+description: >
+  Verify router/lite orchestrator modes route correctly. Router mode maps
+  classification → role deterministically (no orchestrator LLM) and relays a
+  single specialist's output; the topic→role mapping is identical to full mode,
+  so routing assertions hold across modes. Run with
+  ORCHESTRATOR_MODE=router (or a ≤10B default model under mode=auto).
+
+tests:
+  - id: router-coding-task
+    description: Coding request routes to a single coding specialist
+    input: "Fix the null pointer dereference in the auth middleware"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: coding
+    tags: [small-mode, router, coding]
+
+  - id: router-research-task
+    description: Research request routes to the research specialist
+    input: "Research current best practices for rate-limiting a public API"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [small-mode, router, research]
+
+  - id: router-review-readonly
+    description: Audit/review request routes to the review specialist
+    input: "Review the database access layer for SQL injection risks"
+    assertions:
+      - type: routes_to_role
+        value: review
+    tags: [small-mode, router, review]
+
+  - id: router-greeting-no-spawn
+    description: Greetings short-circuit to a direct reply (no specialist spawn)
+    input: "hey there"
+    assertions:
+      - type: classification
+        value: casual
+    tags: [small-mode, router, casual]
