@@ -7,7 +7,7 @@
  * unexpected errors silently — they record the reason on the result.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { arch, cpus, platform, totalmem } from 'node:os';
 
 export interface ProbeResult {
@@ -213,6 +213,101 @@ export function parseNvidiaSmi(stdout: string): DetectedGpu[] {
 }
 
 /**
+ * Parse total AMD VRAM (MB) out of `rocm-smi --showmeminfo vram` output, in
+ * either the `--json` form or the plain-text log form. Sums "VRAM Total Memory
+ * (B)" across all reported GPUs. Pure + exported for unit testing. Returns 0
+ * when no total can be read.
+ *
+ * JSON:  {"card0": {"VRAM Total Memory (B)": "17179869184", ...}}
+ * Text:  GPU[0] : VRAM Total Memory (B): 17179869184
+ */
+export function parseRocmSmiVram(stdout: string): number {
+  let totalBytes = 0;
+  const trimmed = stdout.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, Record<string, string>>;
+      for (const card of Object.values(obj)) {
+        const raw = card?.['VRAM Total Memory (B)'];
+        const bytes = raw ? Number.parseInt(raw, 10) : 0;
+        if (Number.isFinite(bytes) && bytes > 0) totalBytes += bytes;
+      }
+    } catch {
+      // fall through to the text parser below
+    }
+  }
+  if (totalBytes === 0) {
+    for (const m of stdout.matchAll(/VRAM Total Memory \(B\):\s*(\d+)/g)) {
+      const bytes = Number.parseInt(m[1]!, 10);
+      if (Number.isFinite(bytes) && bytes > 0) totalBytes += bytes;
+    }
+  }
+  return Math.floor(totalBytes * MB_PER_BYTE);
+}
+
+/**
+ * Read total VRAM (MB) from the DRM sysfs nodes
+ * (`/sys/class/drm/card*\/device/mem_info_vram_total`). Works for AMD GPUs even
+ * without rocm-smi installed. Dedups by the resolved PCI device path so a GPU
+ * exposed under multiple `cardN` nodes isn't counted twice. Returns 0 on any
+ * read failure or when no DRM VRAM node exists (e.g. CPU-only hosts).
+ */
+function readSysfsVramMB(): number {
+  try {
+    const seen = new Set<string>();
+    let totalBytes = 0;
+    for (const entry of readdirSync('/sys/class/drm')) {
+      if (!/^card\d+$/.test(entry)) continue; // skip connectors like card0-DP-1
+      const deviceDir = `/sys/class/drm/${entry}/device`;
+      const vramFile = `${deviceDir}/mem_info_vram_total`;
+      if (!existsSync(vramFile)) continue;
+      let key: string;
+      try {
+        key = realpathSync(deviceDir);
+      } catch {
+        key = deviceDir;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const bytes = Number.parseInt(readFileSync(vramFile, 'utf8').trim(), 10);
+      if (Number.isFinite(bytes) && bytes > 0) totalBytes += bytes;
+    }
+    return Math.floor(totalBytes * MB_PER_BYTE);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Detect an AMD GPU and its usable VRAM. Prefers `rocm-smi`'s reported total,
+ * falling back to the DRM sysfs node when rocm-smi is absent or reports nothing
+ * (e.g. the GPU is in a low-power state). Returns null when there is no evidence
+ * of an AMD GPU at all. Never throws.
+ */
+async function detectAmdGpu(): Promise<{ gpu: DetectedGpu; sources: HardwareSource[] } | null> {
+  const sources: HardwareSource[] = [];
+  let vramMB = 0;
+
+  if (await commandExists('rocm-smi')) {
+    sources.push('rocm-smi');
+    const out = await runCapture(['rocm-smi', '--showmeminfo', 'vram', '--json']);
+    if (out) vramMB = parseRocmSmiVram(out);
+  }
+
+  // Fall back to sysfs (also catches AMD GPUs with no rocm-smi installed).
+  if (vramMB === 0) {
+    const sysfsMB = readSysfsVramMB();
+    if (sysfsMB > 0) {
+      vramMB = sysfsMB;
+      sources.push('sysfs');
+    }
+  }
+
+  if (sources.length === 0) return null; // no rocm-smi and no DRM VRAM node ⇒ not AMD
+  return { gpu: { vendor: 'amd', name: 'AMD GPU (ROCm)', vramMB }, sources };
+}
+
+/**
  * Detect host hardware for model fit-scoring. Never throws; returns a
  * CPU-only profile when no accelerator is found or detection tools are absent.
  */
@@ -243,10 +338,13 @@ export async function probeHardware(): Promise<HardwareProfile> {
         }
       }
     }
-    // AMD/ROCm — presence only; reliable VRAM parsing is deferred (CPU-only budget).
-    if (gpus.length === 0 && (await commandExists('rocm-smi'))) {
-      gpus.push({ vendor: 'amd', name: 'AMD GPU (ROCm)', vramMB: 0 });
-      source.push('rocm-smi');
+    // AMD/ROCm — VRAM via rocm-smi, with a DRM sysfs fallback.
+    if (gpus.length === 0) {
+      const amd = await detectAmdGpu();
+      if (amd) {
+        gpus.push(amd.gpu);
+        source.push(...amd.sources);
+      }
     }
   }
 

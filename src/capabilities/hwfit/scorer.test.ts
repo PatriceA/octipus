@@ -53,17 +53,24 @@ const PROFILES: Record<string, HardwareProfile> = {
 };
 
 describe('computeBudgetMB', () => {
-  test('GPU budget applies 0.85 headroom', () => {
-    expect(computeBudgetMB(gpuHost(12288))).toBe(Math.floor(12288 * 0.85));
+  test('GPU ideal budget applies 0.85 headroom', () => {
+    expect(computeBudgetMB(gpuHost(12288)).idealMB).toBe(Math.floor(12288 * 0.85));
   });
 
-  test('CPU-only budget is capped regardless of large RAM', () => {
+  test('GPU overspill budget extends into system RAM', () => {
+    // Ideal is VRAM-bound; overspill is 0.8 * RAM, letting bigger models spill.
+    const budget = computeBudgetMB(gpuHost(12288, 32000));
+    expect(budget.overspillMB).toBe(Math.floor(32000 * 0.8));
+    expect(budget.overspillMB).toBeGreaterThan(budget.idealMB);
+  });
+
+  test('CPU-only ideal budget is capped regardless of large RAM', () => {
     // 64GB RAM * 0.5 = 32000, but the cap holds it at 6000.
-    expect(computeBudgetMB(cpuHost(64000))).toBe(6000);
+    expect(computeBudgetMB(cpuHost(64000)).idealMB).toBe(6000);
   });
 
   test('CPU-only small RAM uses the RAM fraction', () => {
-    expect(computeBudgetMB(cpuHost(8000))).toBe(4000);
+    expect(computeBudgetMB(cpuHost(8000)).idealMB).toBe(4000);
   });
 });
 
@@ -76,12 +83,36 @@ describe('scoreCatalog', () => {
     }
   });
 
-  test('fits flag matches the computed budget', () => {
+  test('fits flag and tier match the computed budget', () => {
     const hw = gpuHost(8192);
     const budget = computeBudgetMB(hw);
     for (const s of score(hw)) {
-      expect(s.fits).toBe(s.entry.vramMB <= budget);
+      expect(s.fits).toBe(s.entry.vramMB <= budget.idealMB);
+      const expectedTier =
+        s.entry.vramMB <= budget.idealMB ? 'fits' : s.entry.vramMB <= budget.overspillMB ? 'overspill' : 'too-big';
+      expect(s.fitTier).toBe(expectedTier);
     }
+  });
+
+  test('overspill tier surfaces models over VRAM but within RAM', () => {
+    // Small VRAM, huge RAM: bigger models should land in the overspill tier
+    // (runnable but slower) rather than too-big.
+    const scored = score(gpuHost(8192, 64000));
+    const overspill = scored.filter((s) => s.fitTier === 'overspill');
+    expect(overspill.length).toBeGreaterThan(0);
+    for (const s of overspill) {
+      expect(s.entry.vramMB).toBeGreaterThan(Math.floor(8192 * 0.85));
+      expect(s.entry.vramMB).toBeLessThanOrEqual(Math.floor(64000 * 0.8));
+    }
+  });
+
+  test('a full-speed fit is preferred over a larger overspill model', () => {
+    // 8GB VRAM but plenty of RAM — the chat pick must still be a VRAM-fitting
+    // model, not a larger one that only runs via overspill.
+    const hw = gpuHost(8192, 64000);
+    const rec = topicRec(score(hw), 'chat');
+    expect(rec).toBeTruthy();
+    expect(rec!.fits).toBe(true);
   });
 
   test('a big GPU recommends a more capable chat model than a small GPU', () => {
@@ -101,7 +132,7 @@ describe('scoreCatalog', () => {
           expect(s.note, 'non-fitting recommendation must carry a note').toBeTruthy();
         }
         if (s.recommended && s.fits) {
-          expect(s.entry.vramMB).toBeLessThanOrEqual(budget);
+          expect(s.entry.vramMB).toBeLessThanOrEqual(budget.idealMB);
         }
       }
     }
