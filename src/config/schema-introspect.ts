@@ -91,5 +91,5 @@ export function getFieldConstraints(key: string): FieldConstraints | null {
     c.enumValues = opts as string[];
   }
 
-  return c.min !== undefined || c.max !== undefined || c.enumValues ? c : null;
+  return c.min !== undefined || c.max !== undefined || c.integer || c.enumValues ? c : null;
 }
