@@ -37,7 +37,8 @@ async function resolveUserId(userId: string): Promise<string> {
  */
 type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void };
 
-async function trySteerRunningOrchestrator(sessionId: string, content: string): Promise<boolean> {
+/** Exported for unit tests. */
+export async function trySteerRunningOrchestrator(sessionId: string, content: string): Promise<boolean> {
   const { getAgentManager } = await import('@/core/agent-manager');
   const mgr = getAgentManager();
   const target = mgr
