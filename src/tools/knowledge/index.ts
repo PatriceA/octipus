@@ -1,7 +1,34 @@
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
-import type { ToolManifest } from '@/core/types';
+import type { AgentContext, ToolManifest } from '@/core/types';
+import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+
+/**
+ * Sandbox for the indexing tools. Like the filesystem tool's `workspaceFor`,
+ * it pins reads to the caller's workspace root (per-user under multiuser; flat
+ * otherwise) plus `additionalPaths` and a devMode `projectPath`. Without this
+ * the index tools fed `Bun.file(path).text()` any absolute path the agent
+ * named — arbitrary host-file read into the KB.
+ */
+function workspaceFor(context?: AgentContext): WorkspaceFS {
+  const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+    ?.projectPath as string | undefined;
+  return WorkspaceFS.forAgent(context, {
+    extraAllowedPrefixes: projectPath ? [projectPath] : [],
+  });
+}
+
+function resolveInWorkspace(fs: WorkspaceFS, path: string): string {
+  try {
+    return fs.resolve(path);
+  } catch (err) {
+    if (err instanceof WorkspaceFsError) {
+      throw new Error(`Path '${path}' is outside allowed workspace directories`);
+    }
+    throw err;
+  }
+}
 
 export class KnowledgeTool extends BaseTool {
   readonly id = 'knowledge';
@@ -150,13 +177,15 @@ export class KnowledgeTool extends BaseTool {
         path: { type: 'string', description: 'Absolute path to the file to index', required: true },
         type: { type: 'string', description: 'Source type: document or code', default: 'document' },
       }),
-      async (args) => {
+      async (args, context) => {
         const indexer = getFileIndexer();
+        const fs = workspaceFor(context);
+        const safePath = resolveInWorkspace(fs, args.path as string);
         const chunks = await indexer.indexFile(
-          args.path as string,
+          safePath,
           (args.type as 'document' | 'code') || 'document',
         );
-        return { indexed: true, chunks, path: args.path };
+        return { indexed: true, chunks, path: safePath };
       },
       { permissionAction: 'index' },
     );
@@ -168,10 +197,14 @@ export class KnowledgeTool extends BaseTool {
         path: { type: 'string', description: 'Directory path to index', required: true },
         patterns: { type: 'string', description: 'Comma-separated glob patterns (default: **/*.md,**/*.txt)', default: '**/*.md,**/*.txt' },
       }),
-      async (args) => {
+      async (args, context) => {
         const indexer = getFileIndexer();
         const patterns = ((args.patterns as string) || '**/*.md,**/*.txt').split(',').map(p => p.trim());
-        const result = await indexer.indexDirectory(args.path as string, patterns);
+        const fs = workspaceFor(context);
+        const safePath = resolveInWorkspace(fs, args.path as string);
+        const result = await indexer.indexDirectory(safePath, patterns, {
+          isAllowed: (p) => fs.resolveOptional(p) !== null,
+        });
         return result;
       },
       { permissionAction: 'index' },

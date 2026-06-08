@@ -1,6 +1,6 @@
 import { Elysia, } from 'elysia';
 import { readdir, readFile, } from 'fs/promises';
-import { resolve } from 'path';
+import { resolve, sep } from 'path';
 import { apiContext } from '@/api/context';
 
 const EVAL_RESULTS_DIR = resolve(process.cwd(), 'eval', 'results');
@@ -60,12 +60,24 @@ async function listResultFiles(): Promise<SavedEvalFile[]> {
   }
 }
 
+/**
+ * Resolve an eval-result id to a path strictly inside EVAL_RESULTS_DIR, or
+ * null if the id escapes it. Uses a path-segment check, not a bare
+ * `startsWith(EVAL_RESULTS_DIR)` — the latter also accepts sibling dirs that
+ * merely share the prefix (e.g. `…/results-evil/x.json`). Exported for tests.
+ */
+export function resolveEvalResultPath(id: string): string | null {
+  const filename = id.endsWith('.json') ? id : `${id}.json`;
+  const filePath = resolve(EVAL_RESULTS_DIR, filename);
+  if (filePath !== EVAL_RESULTS_DIR && !filePath.startsWith(EVAL_RESULTS_DIR + sep)) return null;
+  return filePath;
+}
+
 async function getResultById(id: string): Promise<SavedEvalFile | null> {
   try {
     const filename = id.endsWith('.json') ? id : `${id}.json`;
-    const filePath = resolve(EVAL_RESULTS_DIR, filename);
-    // Prevent path traversal
-    if (!filePath.startsWith(EVAL_RESULTS_DIR)) return null;
+    const filePath = resolveEvalResultPath(id);
+    if (!filePath) return null;
     const content = await readFile(filePath, 'utf-8');
     const data = JSON.parse(content);
     return {

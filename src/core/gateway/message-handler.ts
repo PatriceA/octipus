@@ -158,7 +158,23 @@ async function handleChatSend(
     // the wrong repo. Pre-create the session row here when projectPath
     // is supplied so the dev-mode context is in place before the
     // orchestrator reads it.
+    // devMode/projectPath point the agent at an arbitrary host path, so honor
+    // them only for a single-user install or an admin caller — otherwise any
+    // user on a shared instance could escape their workspace sandbox by
+    // sending projectPath='/etc'. Gated at this ingestion site so the flag
+    // never reaches session context for an untrusted caller. (See
+    // src/security/devmode.ts; mirrors the REST /chat gate.)
+    let devModeOk = false;
     if (message.projectPath) {
+      const { userRepository } = await import('@/db/repositories/user-repository');
+      const { devModeAllowed } = await import('@/security/devmode');
+      const u = await userRepository.findById(userId);
+      devModeOk = devModeAllowed(!!u?.isAdmin);
+      if (!devModeOk) {
+        coreLogger.warn({ userId, sessionId: message.sessionId }, 'Ignoring devMode/projectPath from non-admin under multiuser');
+      }
+    }
+    if (message.projectPath && devModeOk) {
       const { sessionRepository } = await import('@/db/repositories/session-repository');
       const session = await sessionRepository.findById(message.sessionId);
       if (session) {

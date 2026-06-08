@@ -3,6 +3,7 @@ import { apiContext } from '@/api/context';
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } from '@/core/rag/health';
 import { getFileIndexer } from '@/core/rag/indexer';
+import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { apiLogger } from '@/utils/logger';
 
 const logger = apiLogger.child({ component: 'knowledge-route' });
@@ -254,18 +255,50 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       return { error: 'Authentication required' };
     }
 
-    const notReady = ensureKBReady(set);
-    if (notReady) return notReady;
-
     const { path, type = 'file', purpose = 'document', patterns } = body;
     const indexer = getFileIndexer();
     const validPurpose = (purpose === 'code' ? 'code' : 'document') as 'document' | 'code';
 
+    // Sandbox the caller-supplied path BEFORE anything else touches it.
+    // Without this, `indexer.indexFile` does `Bun.file(path).text()` on ANY
+    // absolute path the request names — an authenticated user could index
+    // `/etc/passwd`, app secrets, or another tenant's workspace into their
+    // own KB and read it back via search. `WorkspaceFS.forAgent` pins
+    // resolution to the caller's workspace root (per-user under multiuser;
+    // flat single-user root otherwise) plus the operator-configured
+    // `additionalPaths` escape hatch. Mirrors the session-file routes and the
+    // filesystem tool. Runs before the KB-readiness gate so a hostile path is
+    // rejected regardless of embedding-service state.
+    //
+    // For a directory we validate the root here AND pass a per-file guard to
+    // `indexDirectory` (below), so a symlinked leaf inside the tree that points
+    // outward is rejected too. The file branch is covered by `fs.resolve`'s
+    // realpath check.
+    let safePath: string;
+    const fs = WorkspaceFS.forAgent({ userId: user.id });
+    try {
+      safePath = fs.resolve(path);
+    } catch (err) {
+      if (err instanceof WorkspaceFsError) {
+        set.status = 400;
+        logger.warn({ path, code: err.code, userId: user.id }, 'Index request rejected — path outside workspace');
+        return { error: `Path '${path}' is outside allowed workspace directories` };
+      }
+      throw err;
+    }
+
+    const notReady = ensureKBReady(set);
+    if (notReady) return notReady;
+
     try {
       if (type === 'directory') {
         const globPatterns = patterns ? patterns.split(',').map(p => p.trim()) : undefined;
-        const result = await indexer.indexDirectory(path, globPatterns);
-        logger.info({ path, filesIndexed: result.filesIndexed, chunksStored: result.chunksStored, errors: result.errors.length, userId: user.id }, 'Directory indexed');
+        // Per-file guard: a globbed leaf that realpath-resolves outside the
+        // workspace (e.g. a symlink to /etc) is skipped, not indexed.
+        const result = await indexer.indexDirectory(safePath, globPatterns, {
+          isAllowed: (p) => fs.resolveOptional(p) !== null,
+        });
+        logger.info({ path: safePath, filesIndexed: result.filesIndexed, chunksStored: result.chunksStored, errors: result.errors.length, userId: user.id }, 'Directory indexed');
         // If every file failed, 5xx so the UI shows red, not a happy green check.
         if (result.filesIndexed === 0 && result.errors.length > 0) {
           set.status = 500;
@@ -276,19 +309,19 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
         }
         return result;
       } else {
-        const chunks = await indexer.indexFile(path, validPurpose);
-        logger.info({ path, chunks, userId: user.id }, 'File indexed');
+        const chunks = await indexer.indexFile(safePath, validPurpose);
+        logger.info({ path: safePath, chunks, userId: user.id }, 'File indexed');
         if (chunks === 0) {
           // indexText returns 0 either for empty content or every-chunk-failed
           // (which now throws, so we'd be in the catch). This branch is "empty content".
-          logger.warn({ path, userId: user.id }, 'File indexed with 0 chunks — file is empty or whitespace');
+          logger.warn({ path: safePath, userId: user.id }, 'File indexed with 0 chunks — file is empty or whitespace');
         }
         return { filesIndexed: 1, chunksStored: chunks, errors: [] };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
-      logger.error({ err, message, stack, path, type, userId: user.id }, 'Index request failed');
+      logger.error({ err, message, stack, path: safePath, type, userId: user.id }, 'Index request failed');
       // 500 for genuine server/provider failures. "file not found" is user error — 400.
       const isUserError = /file not found|ENOENT/i.test(message);
       set.status = isUserError ? 400 : 500;
