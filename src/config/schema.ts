@@ -181,6 +181,22 @@ export const cliModelsConfigSchema = z.object({
 export const orchestratorConfigSchema = z.object({
   enabled: z.boolean().default(true),
   defaultModel: z.string().optional().describe('Override model for orchestrator. Uses DB default model if unset.'),
+  /**
+   * Orchestrator execution mode. 'auto' (default) re-derives the mode every
+   * turn from the current default model's parameter count, so swapping to a
+   * smaller model changes the mode with no restart:
+   *   - router: no orchestrator LLM — classify → one specialist → relay (≤~10B)
+   *   - lite:   shrunken LLM orchestrator, single-step delegation (~10–24B)
+   *   - full:   today's full swarm orchestrator (≥~24B)
+   * Setting an explicit value pins that mode regardless of model size.
+   */
+  mode: z.enum(['auto', 'full', 'lite', 'router']).default('auto'),
+  /** Iteration cap for the lite orchestrator loop (full mode uses 25). */
+  liteMaxIterations: z.number().min(1).max(10).default(3),
+  /** auto: models with fewer params than this run in router mode. */
+  routerSmallModelMaxParams: z.number().default(10_000_000_000),
+  /** auto: models with fewer params than this (and ≥ router threshold) run in lite mode. */
+  liteModelMaxParams: z.number().default(24_000_000_000),
   piiFilterEnabled: z.boolean().default(true),
   maxPipelineStages: z.number().min(1).max(20).default(10),
   approvalTimeoutMs: z.number().min(0).default(3600000), // 1 hour

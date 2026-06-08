@@ -112,6 +112,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
     orchestrator: {
       enabled: process.env.ORCHESTRATOR_ENABLED !== 'false',
       defaultModel: process.env.ORCHESTRATOR_MODEL || undefined,
+      mode: (process.env.ORCHESTRATOR_MODE as 'auto' | 'full' | 'lite' | 'router') || 'auto',
+      liteMaxIterations: parseInt(process.env.ORCHESTRATOR_LITE_MAX_ITERATIONS || '3', 10),
+      routerSmallModelMaxParams: parseInt(process.env.ORCHESTRATOR_ROUTER_MAX_PARAMS || '10000000000', 10),
+      liteModelMaxParams: parseInt(process.env.ORCHESTRATOR_LITE_MAX_PARAMS || '24000000000', 10),
       piiFilterEnabled: process.env.PII_FILTER_ENABLED !== 'false',
       maxPipelineStages: parseInt(process.env.MAX_PIPELINE_STAGES || '10', 10),
       approvalTimeoutMs: parseInt(process.env.APPROVAL_TIMEOUT_MS || '3600000', 10),

@@ -26,6 +26,7 @@ import { getOrchestratorHooks } from './hooks';
 import { buildSecurityReminder, guardInput } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { ModelSelector } from './model-selector';
+import { resolveOrchestratorMode } from './mode-selector';
 import { buildOutputDirective } from './output-directive';
 import { guardOutput } from './output-guard';
 import { filterPII } from './pii-filter';
@@ -578,6 +579,23 @@ export class OrchestratorService {
   ): Promise<{ response: string; agentId: string; sources: string[] }> {
     const agentManager = getAgentManager();
     const modelName = await this.modelSelector.selectForOrchestration(sessionId);
+
+    // Resolve the orchestrator mode for THIS turn. 'auto' (default) re-derives
+    // from the current default model's size every turn, so swapping to a
+    // smaller model switches the orchestrator to lite/router with no restart.
+    // PR1 wires the resolution + telemetry; the router/lite branches land in
+    // the follow-up PR, so behavior here is still 'full' for every mode.
+    const orchCfg = getConfig().orchestrator;
+    const modelMeta = await getModelRegistry().getModelByModelId(modelName);
+    const orchestratorMode = resolveOrchestratorMode(
+      { modelId: modelName, metadata: modelMeta?.metadata },
+      {
+        mode: orchCfg.mode,
+        routerSmallModelMaxParams: orchCfg.routerSmallModelMaxParams,
+        liteModelMaxParams: orchCfg.liteModelMaxParams,
+      },
+    );
+    coreLogger.info({ sessionId, modelName, orchestratorMode }, 'Orchestrator mode resolved');
 
     const orchestratorConfig = getRoleConfig('orchestrator');
 
