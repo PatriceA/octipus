@@ -3,6 +3,7 @@ import { apiContext } from '@/api/context';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
+import { getNoteRepository } from '@/db/repositories/note-repository';
 import { apiLogger } from '@/utils/logger';
 
 const logger = apiLogger.child({ component: 'notes-route' });
@@ -73,6 +74,34 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         tags: t.Optional(t.Array(t.String())),
         frontmatter: t.Optional(t.Record(t.String(), t.Unknown())),
         workspaceId: t.Optional(t.String()),
+      }),
+      detail: { tags: ['notes'] },
+    },
+  )
+
+  // Bases-style property query — table/card/list views are built on this.
+  .post(
+    '/query',
+    async ({ user, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const rows = await getNoteRepository().query(user.id, {
+        kind: body.kind,
+        tag: body.tag,
+        frontmatter: body.frontmatter,
+        sort: body.sort,
+        order: body.order,
+        limit: body.limit ?? 100,
+      });
+      return { notes: rows, total: rows.length };
+    },
+    {
+      body: t.Object({
+        kind: t.Optional(t.String()),
+        tag: t.Optional(t.String()),
+        frontmatter: t.Optional(t.Record(t.String(), t.Unknown())),
+        sort: t.Optional(t.Union([t.Literal('updated'), t.Literal('created'), t.Literal('title'), t.Literal('date')])),
+        order: t.Optional(t.Union([t.Literal('asc'), t.Literal('desc')])),
+        limit: t.Optional(t.Number()),
       }),
       detail: { tags: ['notes'] },
     },

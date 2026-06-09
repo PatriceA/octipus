@@ -72,6 +72,43 @@ export class NoteRepository {
       .offset(opts.offset ?? 0);
   }
 
+  /**
+   * Bases-style property query — filter notes by kind, tag, and
+   * frontmatter property equality, with a chosen sort. Tenant-scoped.
+   * The filter stays structured (field/op/value), not a query DSL.
+   */
+  async query(
+    userId: string,
+    opts: {
+      kind?: string;
+      tag?: string;
+      frontmatter?: Record<string, unknown>;
+      sort?: 'updated' | 'created' | 'title' | 'date';
+      order?: 'asc' | 'desc';
+      includeArchived?: boolean;
+      limit?: number;
+    } = {},
+  ): Promise<Note[]> {
+    const conditions = [eq(notes.userId, userId)];
+    if (opts.kind) conditions.push(eq(notes.noteKind, opts.kind));
+    if (opts.tag) conditions.push(sql`${opts.tag} = ANY(${notes.tags})`);
+    if (opts.frontmatter && Object.keys(opts.frontmatter).length > 0) {
+      conditions.push(sql`${notes.frontmatter} @> ${JSON.stringify(opts.frontmatter)}::jsonb`);
+    }
+    if (!opts.includeArchived) conditions.push(isNull(notes.archivedAt));
+    const col = opts.sort === 'created' ? notes.createdAt
+      : opts.sort === 'title' ? notes.title
+      : opts.sort === 'date' ? notes.noteDate
+      : notes.updatedAt;
+    const dir = opts.order === 'asc' ? sql`asc` : sql`desc`;
+    return this.db
+      .select()
+      .from(notes)
+      .where(and(...conditions))
+      .orderBy(sql`${col} ${dir}`)
+      .limit(opts.limit ?? 100);
+  }
+
   /** Soft delete — notes archive, they don't vanish. */
   async archive(userId: string, id: string): Promise<boolean> {
     const result = await this.db

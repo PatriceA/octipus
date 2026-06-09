@@ -83,4 +83,24 @@ describe('NotesTool', () => {
   test('read_note requires id or slug', async () => {
     await expect(call('read_note', {})).rejects.toThrow(/requires id or slug/);
   });
+
+  test('query_notes filters by tag', async () => {
+    await call('write_note', { title: 'Tagged', body: 'has #project tag' });
+    await call('write_note', { title: 'Untagged', body: 'nothing here' });
+    const res = (await call('query_notes', { tag: 'project' })) as { notes: Array<{ title: string }> };
+    expect(res.notes).toHaveLength(1);
+    expect(res.notes[0].title).toBe('Tagged');
+  });
+
+  test('export_canvas returns a JSON Canvas for a note', async () => {
+    const a = (await call('write_note', { title: 'Center', body: 'see [[Edge]]' })) as { id: string };
+    await call('write_note', { title: 'Edge' });
+    const canvas = (await call('export_canvas', { entry_type: 'note', entry_id: a.id, hops: 1 })) as { nodes: unknown[]; edges: unknown[] };
+    expect(Array.isArray(canvas.nodes)).toBe(true);
+    expect(canvas.nodes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('sync_vault fails loud when vault sync is disabled', async () => {
+    await expect(call('sync_vault', { direction: 'export' })).rejects.toThrow(/disabled/i);
+  });
 });

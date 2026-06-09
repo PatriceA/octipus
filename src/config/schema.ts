@@ -338,6 +338,17 @@ export const workspaceConfigSchema = z.object({
   ocrEndpoint: z.string().default('http://localhost:11435'),
 });
 
+/**
+ * Knowledge-graph Tier 3 — two-way Obsidian vault sync. When `enabled`,
+ * notes can be exported to / imported from a real vault directory. DB
+ * stays authoritative; `direction` bounds which way sync may run.
+ */
+export const vaultSyncConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  path: z.string().default('./workspace/vault'),
+  direction: z.enum(['export', 'import', 'both']).default('both'),
+});
+
 // Full configuration schema
 export const configSchema = z.object({
   storageMode: storageModeSchema,
@@ -359,6 +370,7 @@ export const configSchema = z.object({
   orchestrator: orchestratorConfigSchema.prefault({}),
   cliModels: cliModelsConfigSchema.prefault({}),
   workspace: workspaceConfigSchema.prefault({}),
+  vaultSync: vaultSyncConfigSchema.prefault({}),
   multiuser: multiuserConfigSchema.prefault({}),
   compaction: compactionConfigSchema.prefault({}),
   memory: z.object({
@@ -400,6 +412,7 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>;
 export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
+export type VaultSyncConfig = z.infer<typeof vaultSyncConfigSchema>;
 export type MultiuserConfig = z.infer<typeof multiuserConfigSchema>;
 export type CompactionConfig = z.infer<typeof compactionConfigSchema>;
 export type WhatsAppConfig = z.infer<typeof whatsappConfigSchema>;

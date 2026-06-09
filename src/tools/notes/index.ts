@@ -1,8 +1,11 @@
+import { getCanvasBuilder } from '@/core/knowledge/canvas';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
+import { getVaultSync } from '@/core/knowledge/vault';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import type { ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
+import { getNoteRepository } from '@/db/repositories/note-repository';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -14,7 +17,7 @@ import { BaseTool, createParameterSchema } from '../base-tool';
 export class NotesTool extends BaseTool {
   readonly id = 'notes';
   readonly name = 'Notes';
-  readonly version = '1.0.0';
+  readonly version = '1.1.0';
   readonly description = 'Author and navigate markdown notes — create/edit notes with [[wikilinks]] and #tags, read with backlinks, search, quick-capture to a daily note, and get suggested connections.';
 
   getManifest(): ToolManifest {
@@ -35,6 +38,9 @@ export class NotesTool extends BaseTool {
         { name: 'capture_note', description: 'Append a timestamped line to today\'s daily note', parameters: { text: { type: 'string', description: 'Text to capture', required: true } }, returns: 'The daily note' },
         { name: 'suggest_links', description: 'Suggest unlinked but related entities for a note', parameters: { note_id: { type: 'string', description: 'Note id', required: true } }, returns: 'Suggested connections with similarity' },
         { name: 'archive_note', description: 'Soft-delete (archive) a note', parameters: { id: { type: 'string', description: 'Note id', required: true } }, returns: 'Whether the note was archived' },
+        { name: 'query_notes', description: 'Bases-style property query over notes', parameters: {}, returns: 'Matching notes as a table' },
+        { name: 'export_canvas', description: 'Build a JSON Canvas of a note neighbourhood', parameters: { entry_type: { type: 'string', description: 'Entry type', required: true }, entry_id: { type: 'string', description: 'Entry id', required: true } }, returns: 'A JSON Canvas document' },
+        { name: 'sync_vault', description: 'Export/import notes to/from an Obsidian vault', parameters: { direction: { type: 'string', description: 'export | import', required: true } }, returns: 'Sync result counts' },
       ],
     };
   }
@@ -184,6 +190,79 @@ export class NotesTool extends BaseTool {
       async (args, context) => {
         const ok = await getNoteService().archive(context.userId, args.id as string);
         return { archived: ok };
+      },
+      { permissionAction: 'write' },
+    );
+
+    // ── Tier 3: interoperability & spatial surfaces ──────────────────
+
+    this.registerTool(
+      'query_notes',
+      'Bases-style query — list notes filtered by kind, tag, and frontmatter property equality, with a chosen sort. Returns a table of matching notes.',
+      createParameterSchema({
+        kind: { type: 'string', description: 'Filter by note_kind' },
+        tag: { type: 'string', description: 'Filter by tag' },
+        frontmatter: { type: 'object', description: 'Frontmatter property equality filter, e.g. {"status":"active"}' },
+        sort: { type: 'string', description: 'updated (default) | created | title | date' },
+        order: { type: 'string', description: 'asc | desc (default)' },
+        limit: { type: 'number', description: 'Max rows (default 100)', default: 100 },
+      }),
+      async (args, context) => {
+        const rows = await getNoteRepository().query(context.userId, {
+          kind: (args.kind as string) || undefined,
+          tag: (args.tag as string) || undefined,
+          frontmatter: (args.frontmatter as Record<string, unknown>) || undefined,
+          sort: (args.sort as 'updated' | 'created' | 'title' | 'date') || undefined,
+          order: (args.order as 'asc' | 'desc') || undefined,
+          limit: (args.limit as number) || 100,
+        });
+        return { notes: rows.map((n) => ({ id: n.id, slug: n.slug, title: n.title, kind: n.noteKind, tags: n.tags, noteDate: n.noteDate, frontmatter: n.frontmatter, updatedAt: n.updatedAt })) };
+      },
+      { requiresPermission: false },
+    );
+
+    this.registerTool(
+      'export_canvas',
+      'Build a JSON Canvas (jsoncanvas.org) of the neighbourhood around a note — the note at the centre, linked entities on a ring. Opens natively in Obsidian; persist via artifacts or write to the vault as a .canvas file.',
+      createParameterSchema({
+        entry_type: { type: 'string', description: 'Entry entity type (e.g. note)', required: true },
+        entry_id: { type: 'string', description: 'Entry entity id', required: true },
+        hops: { type: 'number', description: 'Neighbourhood radius (default 1)', default: 1 },
+      }),
+      async (args, context) => {
+        const canvas = await getCanvasBuilder().fromNeighbourhood(
+          context.userId,
+          { type: args.entry_type as string, id: args.entry_id as string },
+          (args.hops as number) || 1,
+        );
+        return canvas;
+      },
+      { requiresPermission: false },
+    );
+
+    this.registerTool(
+      'sync_vault',
+      'Sync notes to/from a real Obsidian vault directory. Requires vaultSync enabled in config. DB is authoritative — on import, files that differ from existing notes are reported as conflicts and skipped unless force=true.',
+      createParameterSchema({
+        direction: { type: 'string', description: 'export (DB→vault) | import (vault→DB)', required: true },
+        force: { type: 'boolean', description: 'On import, let the file win over a differing DB note', default: false },
+      }),
+      async (args, context) => {
+        const { getConfig } = await import('@/config');
+        const cfg = getConfig().vaultSync;
+        if (!cfg?.enabled) {
+          throw new Error('Vault sync is disabled. Enable vaultSync in config and set a path first.');
+        }
+        const direction = args.direction as string;
+        if (direction === 'export') {
+          if (cfg.direction === 'import') throw new Error('vaultSync.direction is "import" — export is not permitted.');
+          return getVaultSync().exportVault(context.userId, cfg.path);
+        }
+        if (direction === 'import') {
+          if (cfg.direction === 'export') throw new Error('vaultSync.direction is "export" — import is not permitted.');
+          return getVaultSync().importVault(context.userId, cfg.path, { force: (args.force as boolean) ?? false });
+        }
+        throw new Error(`Unknown sync direction "${direction}" — use "export" or "import".`);
       },
       { permissionAction: 'write' },
     );

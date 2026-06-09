@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { getCanvasBuilder } from '@/core/knowledge/canvas';
 import { getKnowledgeGraph } from '@/core/knowledge/graph';
 import { getDb } from '@/db/postgres';
 import { knowledgeLinks } from '@/db/schema/knowledge-links';
@@ -62,6 +63,20 @@ export const graphRoutes = new Elysia({ prefix: '/graph' })
         entryId: t.Optional(t.String()),
         hops: t.Optional(t.String()),
       }),
+      detail: { tags: ['graph'] },
+    },
+  )
+
+  // JSON Canvas (jsoncanvas.org) projection of a note neighbourhood.
+  .get(
+    '/canvas',
+    async ({ user, query, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const hops = Math.min(5, Math.max(1, parseInt(query.hops ?? '1', 10)));
+      return getCanvasBuilder().fromNeighbourhood(user.id, { type: query.entryType, id: query.entryId }, hops);
+    },
+    {
+      query: t.Object({ entryType: t.String(), entryId: t.String(), hops: t.Optional(t.String()) }),
       detail: { tags: ['graph'] },
     },
   );
