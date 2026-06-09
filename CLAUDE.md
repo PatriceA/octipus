@@ -141,6 +141,16 @@ think you need to break one, open an issue first.
 - **Commits:** imperative summary (`fix classifier crash`, not `fixed`), blank
   line, body explaining the *why*.
 - **One thing per PR.** Refactor + feature in the same PR = two PRs.
+- **Stacked PRs — mind the merge order.** When PR B's base is another feature
+  branch A (not `main`), GitHub does **not** retarget B to `main` when A merges.
+  If you merge A→`main` and then hit "merge" on B, B merges into A's (now
+  orphaned) branch, **not** `main` — its content silently never lands on `main`.
+  Two safe options: (a) retarget each child PR's base to `main` and merge the
+  stack **bottom-up** (A, then B rebased on `main`, …); or (b) since the
+  top-of-stack branch already contains the whole stack, merge `main` into it
+  (so the diff is only the new work) and land that one branch into `main`.
+  Either way, **verify it actually landed**: `git cat-file -e origin/main:<a
+  file from each PR>` after merging. (This has bitten us more than once.)
 - **Tests:** new code needs tests. Routing / prompt / tool-selection changes
   must pass `bun run eval`.
 - **Before declaring done:** `bun run typecheck && bun run lint && bun test`
