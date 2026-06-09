@@ -40,27 +40,45 @@ Architecture in one line:
 ```
 src/
   api/            REST routes + WS (Elysia)
-  channels/       Telegram, Slack, Teams, WhatsApp, WebChat
+  channels/       Telegram, Slack, Teams, WhatsApp, WebChat (+ discovery, linking)
   config/         Zod-validated config, hot-reload
   core/
     gateway/      WS entry, command registry
-    orchestrator/ classifier, router, roles, pipelines, meta-tools
+    orchestrator/ classifier, router, roles, pipelines, meta-tools, guards
     swarm/        spawn_child, budgets, cancel, error mapping
     rag/          auto-indexer, hybrid search (BM25 + vector)
     errors/       FailoverReason / RecoveryAction / classifyError
-    agent-worker.ts, cli-agent-worker.ts, tool-executor.ts
-  db/             Drizzle schema, repositories, migrations, seeds
+    memory/       long-term memory; personas/ persona engine; reader/ ; research/
+    artifacts/ documents/ trajectories/ work-stream/  agent output surfaces
+    agent-worker.ts, cli-agent-worker.ts, tool-executor.ts, scheduler.ts
+  db/             Drizzle schema, repositories, migrations, seeds (seed-*.ts)
+  models/         provider clients, ModelRegistry, circuit-breaker, conformance
+  security/       auth (JWT/passkeys/TOTP/SAML), vault (AES-256-GCM), permissions
+  skills/         skill registry: DB-backed + filesystem (SKILL.md) discovery
+  tools/          built-in tools (fs, shell, git, github, gitlab, browser,
+                  docker, docs, knowledge, messaging, m365, google-workspace,
+                  websearch, voice, visual, scheduling, tasks, artifacts…)
   mcp/            external MCP client bridge
-  models/         provider clients, ModelRegistry, conformance
-  security/       auth (JWT/passkeys/TOTP), vault (AES-256-GCM), permissions
-  skills/         domain knowledge registry
-  tools/          built-in tools (fs, shell, git, browser, docs, etc.)
-mcp-server/       standalone MCP server (59+ tools)
+  connectors/     OAuth connectors (e.g. Atlassian) + registry
+  extensions/     extension API + loader (host-side plugin runtime)
+  plugins/        plugin loader + plugin-as-tool wrapper
+  hooks/          event hook manager (triggers, actions, suggestions)
+  capabilities/   optional hardware/capability installers (hwfit)
+  voice/          STT / TTS / wake-word / telephony
+  visual/         screenshot capture + analysis
+  tui-pi/         terminal chat client (pi-tui)
+  tui-editor/     TUI code editor
+  services/ shared/ setup/   org services, shared types/diff, setup probes
+mcp-server/       standalone MCP server (59+ tools across ~20 groups)
 web/              Next.js dashboard
+browser-extension/  companion browser extension
+bin/              octi launcher CLI (bin/octi start|stop)
+personas/         persona YAML definitions
+extensions/       installed plugins (example-plugin, github)
 eval/             YAML eval scenarios
-scripts/          migrate, setup, backup, e2e, integration
-docs/             feature & architecture docs
-.octipus/         design notes (swarm-design, audits, project-summary)
+scripts/          migrate, setup, backup, doctor, e2e, integration, key rotation
+docs/             feature & architecture docs (see README Documentation table)
+.octipus/         design notes (swarm-design, audits, project-summary, plans)
 ```
 
 ## Commands (Bun)
@@ -72,13 +90,18 @@ docs/             feature & architecture docs
 | Start full stack | `bin/octi start` (stop: `bin/octi stop`) |
 | Type check       | `bun run typecheck`              |
 | Lint             | `bun run lint` (fix: `bun run lint:fix`) |
-| Unit tests       | `bun test`                       |
+| Unit tests       | `bun run test` (= `bun test src scripts`) |
+| TUI tests        | `bun run test:tui`               |
+| Integration      | `bun run test:integration` (Docker Postgres) |
 | E2E (API/WS)     | `bun run test:e2e`               |
 | Web E2E          | `bun run test:web`               |
-| Eval suite       | `bun run eval`                   |
+| Eval suite       | `bun run eval` (`eval:routing`, `eval:quality`) |
 | DB migrate       | `bun run db:migrate`             |
 | DB generate      | `bun run db:generate`            |
+| DB studio        | `bun run db:studio`              |
 | Setup wizard     | `bun run setup`                  |
+| TUI client       | `bun run tui` (edit: `bun run tui:edit`) |
+| Doctor / preflight | `bun run scripts/doctor.ts`    |
 
 Default ports: backend `3005`, web `3007`. Use `bin/octi` rather than raw
 `bun run` when starting the full stack so channels, web, and workers come up
@@ -128,19 +151,33 @@ think you need to break one, open an issue first.
 
 ## Adding things (cheat sheet)
 
-- **Role** → `src/core/orchestrator/roles/<name>/{config.ts,prompt.md,tools.ts}`.
-  Auto-discovered via folder scan; no manual registration. Add classifier keywords
-  in `src/core/orchestrator/classifier.ts` if it has a distinct topic.
-- **Skill** → `src/core/skills/<name>/{skill.json,knowledge.md}`. Auto-loaded.
+- **Role** → `src/core/orchestrator/roles/<name>/` (existing roles: ai,
+  architecture, automation, coding, communication, data, design, devops,
+  finance, general, pm, qa, research, review, security, writing, orchestrator).
+  Auto-discovered via folder scan; no manual registration. Add classifier
+  keywords in `src/core/orchestrator/classifier.ts` if it has a distinct topic.
+- **Skill** → system skills are seeded in `src/db/seed-skills.ts` (DB-backed,
+  with embeddings). Filesystem skills follow the agentskills.io spec: a
+  `SKILL.md` (or flat `*.md`) under `.octipus/skills/`, `~/.octipus/agent/skills/`,
+  `~/.claude/skills/`, `.agents/skills/`, etc. — auto-discovered by
+  `src/skills/external-loader.ts`. (No more `skill.json`/`knowledge.md`.)
 - **Tool (built-in)** → `src/tools/<name>/index.ts` extending `BaseTool`.
   Auto-discovered via `discovery.ts`; no need to register in `src/tools/index.ts`.
-- **MCP tool** → `mcp-server/src/tools/<group>/<tool>.ts` with Zod schema +
-  handler + `register` call. Inventory auto-discovers.
+- **MCP tool** → `mcp-server/src/tools/<group>.ts` with Zod schema + `server.tool`
+  registration. Inventory auto-discovers.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no
-  channel-specific orchestrator hooks.
-- **Expert / Profile** → seed in `src/db/seed-experts.ts` or POST via API.
-- **DB schema change** → edit Drizzle schema, then `bun run db:generate` to
-  produce a migration, then `bun run db:migrate`.
+  channel-specific orchestrator hooks. Auto-discovered via `discovery.ts`.
+- **Plugin / extension** → a directory under `extensions/` (in OCTIPUS_HOME) with
+  `plugin.json` + `index.ts`; loaded by `src/plugins/loader.ts`. See the
+  `plugin-development` skill and `docs/PLUGINS.md`.
+- **Persona** → a YAML file in `personas/`; loaded by `src/core/personas/`.
+- **Connector** → `src/connectors/<name>/definition.ts`, register in the
+  connector registry. OAuth via `oauth-http-transport.ts`.
+- **Hook** → wire triggers/actions in `src/hooks/` (`triggers.ts`, `actions.ts`).
+- **Expert / Profile** → seed in `src/db/seed-experts.ts` / `seed-presets.ts`,
+  or POST via API.
+- **DB schema change** → edit Drizzle schema in `src/db/schema/`, then
+  `bun run db:generate` to produce a migration, then `bun run db:migrate`.
 
 ## Things to avoid
 
@@ -162,6 +199,11 @@ think you need to break one, open an issue first.
 | Permission model                      | `src/security/`, `src/core/tool-executor.ts` |
 | DB schema                             | `src/db/schema/`                          |
 | WS protocol                           | `src/core/gateway/`, `src/api/websocket.ts` |
+| Skills (DB + filesystem)              | `src/skills/`, `src/db/seed-skills.ts`    |
+| Plugins / extensions                  | `src/plugins/`, `src/extensions/`, `docs/PLUGINS.md` |
+| Personas                              | `src/core/personas/`, `personas/`         |
+| RAG / knowledge base                  | `src/core/rag/`, `docs/RAG.md`            |
+| Voice / TUI clients                   | `src/voice/`, `src/tui-pi/`, `src/tui-editor/` |
 | Architecture deep dive                | `docs/AGENT-ARCHITECTURE.md`              |
 | Full docs index                       | `README.md` → Documentation table         |
 
