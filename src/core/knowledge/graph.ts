@@ -58,12 +58,16 @@ export class KnowledgeGraph {
   constructor(private readonly links: KnowledgeLinkRepository = getKnowledgeLinkRepository()) {}
 
   /**
-   * Bounded BFS over resolved edges. Seed nodes are not included in the
-   * result; only reached neighbours are. Ghost edges (`to_id IS NULL`)
-   * are not traversable — there is nothing to traverse *to* — which is
-   * correct: an unresolved wikilink has no target yet.
+   * Bounded BFS over resolved edges, scoped to one user. Seed nodes are
+   * not included in the result; only reached neighbours are. Ghost edges
+   * (`to_id IS NULL`) are not traversable — there is nothing to traverse
+   * *to* — which is correct: an unresolved wikilink has no target yet.
+   *
+   * `userId` is mandatory: the traversal must never cross tenant
+   * boundaries, even when handed an entry id that belongs to another
+   * user (it simply finds no edges).
    */
-  async traverse(entry: EntityRef[], opts: TraverseOptions = {}): Promise<TraversalResult> {
+  async traverse(userId: string, entry: EntityRef[], opts: TraverseOptions = {}): Promise<TraversalResult> {
     const hops = opts.hops ?? 2;
     const direction = opts.direction ?? 'both';
     const maxNodes = opts.maxNodes ?? 200;
@@ -89,12 +93,12 @@ export class KnowledgeGraph {
       const levelEdges: Array<{ edge: KnowledgeLink; dir: 'out' | 'in' }> = [];
       for (const [type, ids] of byType) {
         if (direction === 'out' || direction === 'both') {
-          for (const edge of await this.links.outgoingForIds(type, ids)) {
+          for (const edge of await this.links.outgoingForIds(userId, type, ids)) {
             levelEdges.push({ edge, dir: 'out' });
           }
         }
         if (direction === 'in' || direction === 'both') {
-          for (const edge of await this.links.backlinksForIds(type, ids)) {
+          for (const edge of await this.links.backlinksForIds(userId, type, ids)) {
             levelEdges.push({ edge, dir: 'in' });
           }
         }

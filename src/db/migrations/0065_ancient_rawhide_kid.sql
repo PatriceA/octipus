@@ -17,8 +17,8 @@ CREATE TABLE "knowledge_links" (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX "knowledge_links_unique_edge_idx" ON "knowledge_links" USING btree ("user_id","from_type","from_id","to_ref","link_type");--> statement-breakpoint
-CREATE INDEX "knowledge_links_to_idx" ON "knowledge_links" USING btree ("to_type","to_id");--> statement-breakpoint
-CREATE INDEX "knowledge_links_from_idx" ON "knowledge_links" USING btree ("from_type","from_id");--> statement-breakpoint
-CREATE INDEX "knowledge_links_user_idx" ON "knowledge_links" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "knowledge_links_to_idx" ON "knowledge_links" USING btree ("user_id","to_type","to_id");--> statement-breakpoint
+CREATE INDEX "knowledge_links_from_idx" ON "knowledge_links" USING btree ("user_id","from_type","from_id");--> statement-breakpoint
 CREATE INDEX "knowledge_links_workspace_idx" ON "knowledge_links" USING btree ("workspace_id");--> statement-breakpoint
-CREATE INDEX "knowledge_links_unresolved_idx" ON "knowledge_links" USING btree ("to_ref") WHERE "knowledge_links"."to_id" IS NULL;
+CREATE INDEX "knowledge_links_ref_idx" ON "knowledge_links" USING btree ("user_id","to_ref");--> statement-breakpoint
+CREATE INDEX "knowledge_links_unresolved_idx" ON "knowledge_links" USING btree ("user_id","to_ref") WHERE "knowledge_links"."to_id" IS NULL;

@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { WikiLink } from '@/core/knowledge/wikilink';
+import { coreLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import {
   type KnowledgeLink,
@@ -26,6 +27,12 @@ export class KnowledgeLinkRepository {
    * unique index on (user_id, from_type, from_id, to_ref, link_type) —
    * so re-asserting an existing edge refreshes its label/origin/
    * confidence rather than erroring.
+   *
+   * Resolution semantics: on conflict, a non-null `record.toId`/`toType`
+   * *binds* a previously-ghost edge (resolves it); passing `null` keeps
+   * whatever is already stored — it does NOT clear an existing binding.
+   * To revert an edge to ghost state use `deleteForEntity` (which calls
+   * the private `unbindInbound`), not `create`.
    */
   async create(
     record: Omit<NewKnowledgeLink, 'id' | 'createdAt' | 'updatedAt'>,
@@ -45,13 +52,18 @@ export class KnowledgeLinkRepository {
           label: record.label ?? null,
           origin: record.origin,
           confidence: record.confidence ?? null,
-          // Re-binding an edge that was previously a ghost resolves it.
+          // Re-binding an edge that was previously a ghost resolves it;
+          // null preserves the existing binding (see JSDoc above).
           toId: record.toId ?? sql`${knowledgeLinks.toId}`,
           toType: record.toType ?? sql`${knowledgeLinks.toType}`,
           updatedAt: new Date(),
         },
       })
       .returning();
+    if (!result[0]) {
+      // Should be unreachable — insert-or-update always returns the row.
+      throw new Error('knowledge_links upsert returned no row');
+    }
     return result[0];
   }
 
@@ -60,20 +72,20 @@ export class KnowledgeLinkRepository {
     return rows[0] ?? null;
   }
 
-  /** Outgoing edges from an entity ("what does X link to"). */
-  async getOutgoing(fromType: string, fromId: string): Promise<KnowledgeLink[]> {
+  /** Outgoing edges from an entity ("what does X link to"), tenant-scoped. */
+  async getOutgoing(userId: string, fromType: string, fromId: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.fromType, fromType), eq(knowledgeLinks.fromId, fromId)));
+      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.fromType, fromType), eq(knowledgeLinks.fromId, fromId)));
   }
 
-  /** Backlinks — resolved edges pointing at an entity ("what links to X"). */
-  async getBacklinks(toType: string, toId: string): Promise<KnowledgeLink[]> {
+  /** Backlinks — resolved edges pointing at an entity ("what links to X"), tenant-scoped. */
+  async getBacklinks(userId: string, toType: string, toId: string): Promise<KnowledgeLink[]> {
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.toType, toType), eq(knowledgeLinks.toId, toId)));
+      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toType, toType), eq(knowledgeLinks.toId, toId)));
   }
 
   /**
@@ -88,22 +100,22 @@ export class KnowledgeLinkRepository {
       .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toRef, toRef)));
   }
 
-  /** Resolved outgoing edges for a batch of source ids — the BFS step. */
-  async outgoingForIds(fromType: string, fromIds: string[]): Promise<KnowledgeLink[]> {
+  /** Resolved outgoing edges for a batch of source ids — the BFS step. Tenant-scoped. */
+  async outgoingForIds(userId: string, fromType: string, fromIds: string[]): Promise<KnowledgeLink[]> {
     if (fromIds.length === 0) return [];
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.fromType, fromType), inArray(knowledgeLinks.fromId, fromIds)));
+      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.fromType, fromType), inArray(knowledgeLinks.fromId, fromIds)));
   }
 
-  /** Resolved backlink edges for a batch of target ids — the reverse BFS step. */
-  async backlinksForIds(toType: string, toIds: string[]): Promise<KnowledgeLink[]> {
+  /** Resolved backlink edges for a batch of target ids — the reverse BFS step. Tenant-scoped. */
+  async backlinksForIds(userId: string, toType: string, toIds: string[]): Promise<KnowledgeLink[]> {
     if (toIds.length === 0) return [];
     return this.db
       .select()
       .from(knowledgeLinks)
-      .where(and(eq(knowledgeLinks.toType, toType), inArray(knowledgeLinks.toId, toIds)));
+      .where(and(eq(knowledgeLinks.userId, userId), eq(knowledgeLinks.toType, toType), inArray(knowledgeLinks.toId, toIds)));
   }
 
   /**
@@ -124,7 +136,11 @@ export class KnowledgeLinkRepository {
     const { userId, workspaceId, fromType, fromId, wikilinks, tags, createdByAgentId } = params;
 
     // Desired edge set, keyed by `${linkType}:${toRef}` (the part of the
-    // unique index that varies within one source).
+    // unique index that varies within one source). Tier 1 tracks
+    // note-level edges, not heading-level: `[[A#Intro]]` and `[[A#Risks]]`
+    // from the same source collapse to one `references` edge to `a` (the
+    // Map key dedups them here). `WikiLink.heading` is preserved by the
+    // parser for display but is intentionally not part of the edge identity.
     const desired = new Map<string, Omit<NewKnowledgeLink, 'id' | 'createdAt' | 'updatedAt'>>();
     for (const link of wikilinks) {
       desired.set(`references:${link.ref}`, {
@@ -261,6 +277,9 @@ export class KnowledgeLinkRepository {
       .delete(knowledgeLinks)
       .where(and(eq(knowledgeLinks.origin, 'suggestion'), lt(knowledgeLinks.createdAt, cutoff)))
       .returning({ id: knowledgeLinks.id });
+    if (result.length > 0) {
+      coreLogger.info({ component: 'knowledge-links', count: result.length, cutoff }, 'Reaped unaccepted suggestion edges');
+    }
     return result.length;
   }
 

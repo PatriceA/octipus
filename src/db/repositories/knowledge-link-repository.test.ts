@@ -56,7 +56,7 @@ describe('KnowledgeLinkRepository', () => {
     });
     expect(link.id).toBeDefined();
     expect(link.origin).toBe('user');
-    const out = await repo.getOutgoing('note', fromId);
+    const out = await repo.getOutgoing(userId, 'note', fromId);
     expect(out).toHaveLength(1);
     expect(out[0].toId).toBe(toId);
   });
@@ -71,7 +71,7 @@ describe('KnowledgeLinkRepository', () => {
       userId, fromType: 'note', fromId, toRef: 'plan', linkType: 'references',
       origin: 'user', label: 'new',
     });
-    const out = await repo.getOutgoing('note', fromId);
+    const out = await repo.getOutgoing(userId, 'note', fromId);
     expect(out).toHaveLength(1);
     expect(out[0].id).toBe(second.id);
     expect(out[0].label).toBe('new');
@@ -89,7 +89,7 @@ describe('KnowledgeLinkRepository', () => {
       userId, fromType: 'note', fromId: randomUUID(),
       toRef: 'target', linkType: 'references', origin: 'wikilink',
     });
-    expect(await repo.getBacklinks('note', targetId)).toHaveLength(1);
+    expect(await repo.getBacklinks(userId, 'note', targetId)).toHaveLength(1);
     expect(await repo.getBacklinksByRef(userId, 'target')).toHaveLength(2);
   });
 
@@ -121,7 +121,7 @@ describe('KnowledgeLinkRepository', () => {
     expect(changed.added).toBe(1);
     expect(changed.removed).toBe(2);
 
-    const out = await repo.getOutgoing('note', fromId);
+    const out = await repo.getOutgoing(userId, 'note', fromId);
     expect(out.map((e) => e.toRef).sort()).toEqual(['a', 'c']);
   });
 
@@ -136,7 +136,7 @@ describe('KnowledgeLinkRepository', () => {
     const resolved = await repo.resolveTo({ userId, toRef: 'target-note', toType: 'note', toId: noteId });
     expect(resolved).toBe(1); // only the reference edge, not the tag edge
 
-    const out = await repo.getOutgoing('note', fromId);
+    const out = await repo.getOutgoing(userId, 'note', fromId);
     const ref = out.find((e) => e.linkType === 'references');
     const tag = out.find((e) => e.linkType === 'tagged');
     expect(ref?.toId).toBe(noteId);
@@ -162,8 +162,8 @@ describe('KnowledgeLinkRepository', () => {
     expect(unbound).toBe(1);
 
     // Outbound gone, inbound reverted to ghost (still present, to_id null).
-    expect(await repo.getOutgoing('note', entityId)).toHaveLength(0);
-    const inbound = await repo.getOutgoing('note', sourceId);
+    expect(await repo.getOutgoing(userId, 'note', entityId)).toHaveLength(0);
+    const inbound = await repo.getOutgoing(userId, 'note', sourceId);
     expect(inbound).toHaveLength(1);
     expect(inbound[0].toId).toBeNull();
   });
@@ -175,9 +175,9 @@ describe('KnowledgeLinkRepository', () => {
     await repo.create({ userId, fromType: 'note', fromId: a, toType: 'note', toId: target, toRef: 't', linkType: 'references', origin: 'user' });
     await repo.create({ userId, fromType: 'note', fromId: b, toType: 'note', toId: target, toRef: 't', linkType: 'references', origin: 'user' });
 
-    expect(await repo.outgoingForIds('note', [a, b])).toHaveLength(2);
-    expect(await repo.backlinksForIds('note', [target])).toHaveLength(2);
-    expect(await repo.outgoingForIds('note', [])).toHaveLength(0);
+    expect(await repo.outgoingForIds(userId, 'note', [a, b])).toHaveLength(2);
+    expect(await repo.backlinksForIds(userId, 'note', [target])).toHaveLength(2);
+    expect(await repo.outgoingForIds(userId, 'note', [])).toHaveLength(0);
   });
 
   test('reapUnacceptedSuggestions only drops old suggestion edges', async () => {
@@ -197,5 +197,22 @@ describe('KnowledgeLinkRepository', () => {
     await repo.create({ userId: otherUserId, fromType: 'note', fromId, toRef: 'shared', linkType: 'references', origin: 'user' });
     expect(await repo.getBacklinksByRef(userId, 'shared')).toHaveLength(1);
     expect(await repo.getBacklinksByRef(otherUserId, 'shared')).toHaveLength(1);
+  });
+
+  test('read paths never cross tenant boundaries', async () => {
+    const fromId = randomUUID();
+    const toId = randomUUID();
+    // An edge owned by otherUserId.
+    await repo.create({
+      userId: otherUserId, fromType: 'note', fromId,
+      toType: 'note', toId, toRef: 'theirs', linkType: 'references', origin: 'user',
+    });
+    // userId must not see it via any read path, even with the right ids.
+    expect(await repo.getOutgoing(userId, 'note', fromId)).toHaveLength(0);
+    expect(await repo.getBacklinks(userId, 'note', toId)).toHaveLength(0);
+    expect(await repo.outgoingForIds(userId, 'note', [fromId])).toHaveLength(0);
+    expect(await repo.backlinksForIds(userId, 'note', [toId])).toHaveLength(0);
+    // The owner does.
+    expect(await repo.getOutgoing(otherUserId, 'note', fromId)).toHaveLength(1);
   });
 });

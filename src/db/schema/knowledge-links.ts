@@ -79,15 +79,17 @@ export const knowledgeLinks = pgTable('knowledge_links', {
   // works before and after resolution.
   uniqueEdge: uniqueIndex('knowledge_links_unique_edge_idx')
     .on(table.userId, table.fromType, table.fromId, table.toRef, table.linkType),
-  // Backlinks — the killer query ("what links to X").
-  toIdx: index('knowledge_links_to_idx').on(table.toType, table.toId),
-  // Outgoing edges.
-  fromIdx: index('knowledge_links_from_idx').on(table.fromType, table.fromId),
-  userIdx: index('knowledge_links_user_idx').on(table.userId),
+  // Backlinks — the killer query ("what links to X"). `user_id` first so
+  // every read is tenant-scoped at the index level, not just the WHERE.
+  toIdx: index('knowledge_links_to_idx').on(table.userId, table.toType, table.toId),
+  // Outgoing edges, tenant-scoped.
+  fromIdx: index('knowledge_links_from_idx').on(table.userId, table.fromType, table.fromId),
   workspaceIdx: index('knowledge_links_workspace_idx').on(table.workspaceId),
+  // Backlinks-by-ref + resolution: catches ghosts and tag membership.
+  refIdx: index('knowledge_links_ref_idx').on(table.userId, table.toRef),
   // Unresolved-wikilink resolution sweep — only the ghost rows.
   unresolvedIdx: index('knowledge_links_unresolved_idx')
-    .on(table.toRef)
+    .on(table.userId, table.toRef)
     .where(sql`${table.toId} IS NULL`),
 }));
 

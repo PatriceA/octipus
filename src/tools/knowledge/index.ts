@@ -50,8 +50,10 @@ export class KnowledgeTool extends BaseTool {
         return { available: true, degraded: true, reason: 'No embedding model configured — indexing and semantic search disabled' };
       }
       return { available: true };
-    } catch {
-      return { available: true, degraded: true, reason: 'No embedding model configured' };
+    } catch (err) {
+      const { toolLogger } = await import('@/utils/logger');
+      toolLogger.warn({ err, toolId: this.id }, 'KnowledgeTool availability check failed — treating embedding features as degraded');
+      return { available: true, degraded: true, reason: 'Embedding model availability could not be determined' };
     }
   }
 
@@ -170,7 +172,7 @@ export class KnowledgeTool extends BaseTool {
         if (entries.length === 0) {
           return { ...base, linked: [], note: 'No graph entry points among the hits (their source ids do not address knowledge entities).' };
         }
-        const traversal = await getKnowledgeGraph().traverse(entries, { hops: 1, direction: 'both' });
+        const traversal = await getKnowledgeGraph().traverse(context.userId, entries, { hops: 1, direction: 'both', maxNodes: 25 });
         return {
           ...base,
           linked: traversal.nodes.map((n) => ({ type: n.type, id: n.id, depth: n.depth, via: n.viaDirection })),
@@ -279,7 +281,7 @@ export class KnowledgeTool extends BaseTool {
         from_id: { type: 'string', description: 'Source entity UUID', required: true },
         to_type: { type: 'string', description: 'Target entity type (omit for an unresolved ghost link)' },
         to_id: { type: 'string', description: 'Target entity UUID (omit for a ghost link by ref)' },
-        to_ref: { type: 'string', description: 'Canonical target slug/ref. Required if to_id is omitted; derived from the target title otherwise.' },
+        to_ref: { type: 'string', description: 'Canonical target slug. Strongly recommended whenever you know the target title — it is what get_backlinks(ref) and ghost resolution match on. If omitted while to_id is given, the id is stored as the ref and backlink-by-slug lookups will not find this edge.' },
         link_type: { type: 'string', description: 'references (default) | derived_from | contradicts | mentions | child_of', default: 'references' },
         label: { type: 'string', description: 'Optional edge label / alias' },
       }),
@@ -321,7 +323,7 @@ export class KnowledgeTool extends BaseTool {
         if (args.ref) {
           links = await repo.getBacklinksByRef(context.userId, slugify(args.ref as string));
         } else if (args.entity_type && args.entity_id) {
-          links = await repo.getBacklinks(args.entity_type as string, args.entity_id as string);
+          links = await repo.getBacklinks(context.userId, args.entity_type as string, args.entity_id as string);
         } else {
           throw new Error('get_backlinks requires either ref, or both entity_type and entity_id.');
         }
@@ -342,11 +344,12 @@ export class KnowledgeTool extends BaseTool {
         direction: { type: 'string', description: 'out | in | both (default both)', default: 'both' },
         link_types: { type: 'string', description: 'Optional comma-separated link types to follow (e.g. "references,derived_from")' },
       }),
-      async (args) => {
+      async (args, context) => {
         const linkTypes = typeof args.link_types === 'string' && args.link_types
           ? (args.link_types as string).split(',').map((s) => s.trim()).filter(Boolean)
           : undefined;
         const result = await getKnowledgeGraph().traverse(
+          context.userId,
           [{ type: args.entry_type as string, id: args.entry_id as string }],
           {
             hops: (args.hops as number) || 2,

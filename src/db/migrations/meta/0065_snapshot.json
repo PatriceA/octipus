@@ -1,5 +1,5 @@
 {
-  "id": "8077362f-4752-4c49-99a7-c55eb596e51a",
+  "id": "863ad7c4-aabc-4bbc-ba70-57820906d0ac",
   "prevId": "650bfeeb-f04a-4395-a450-7271dbe61cfa",
   "version": "7",
   "dialect": "postgresql",
@@ -3788,6 +3788,12 @@
           "name": "knowledge_links_to_idx",
           "columns": [
             {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "to_type",
               "isExpression": false,
               "asc": true,
@@ -3809,6 +3815,12 @@
           "name": "knowledge_links_from_idx",
           "columns": [
             {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "from_type",
               "isExpression": false,
               "asc": true,
@@ -3816,21 +3828,6 @@
             },
             {
               "expression": "from_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "knowledge_links_user_idx": {
-          "name": "knowledge_links_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3856,9 +3853,36 @@
           "method": "btree",
           "with": {}
         },
+        "knowledge_links_ref_idx": {
+          "name": "knowledge_links_ref_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "to_ref",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "knowledge_links_unresolved_idx": {
           "name": "knowledge_links_unresolved_idx",
           "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "to_ref",
               "isExpression": false,

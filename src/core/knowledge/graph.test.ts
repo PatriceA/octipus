@@ -64,13 +64,13 @@ describe('KnowledgeGraph.traverse', () => {
   });
 
   test('1-hop outgoing finds direct neighbours only', async () => {
-    const r = await graph.traverse([{ type: 'note', id: A }], { hops: 1, direction: 'out' });
+    const r = await graph.traverse(userId, [{ type: 'note', id: A }], { hops: 1, direction: 'out' });
     expect(r.nodes.map((n) => n.id).sort()).toEqual([B, D].sort());
     expect(r.nodes.every((n) => n.depth === 1)).toBe(true);
   });
 
   test('2-hop outgoing reaches transitive neighbours with increasing depth', async () => {
-    const r = await graph.traverse([{ type: 'note', id: A }], { hops: 2, direction: 'out' });
+    const r = await graph.traverse(userId, [{ type: 'note', id: A }], { hops: 2, direction: 'out' });
     const byId = new Map(r.nodes.map((n) => [n.id, n.depth]));
     expect(byId.get(B)).toBe(1);
     expect(byId.get(D)).toBe(1);
@@ -78,39 +78,48 @@ describe('KnowledgeGraph.traverse', () => {
   });
 
   test('direction=in follows backlinks', async () => {
-    const r = await graph.traverse([{ type: 'note', id: A }], { hops: 1, direction: 'in' });
+    const r = await graph.traverse(userId, [{ type: 'note', id: A }], { hops: 1, direction: 'in' });
     expect(r.nodes.map((n) => n.id)).toEqual([E]);
     expect(r.nodes[0].viaDirection).toBe('in');
   });
 
   test('direction=both follows edges either way', async () => {
-    const r = await graph.traverse([{ type: 'note', id: A }], { hops: 1, direction: 'both' });
+    const r = await graph.traverse(userId, [{ type: 'note', id: A }], { hops: 1, direction: 'both' });
     expect(r.nodes.map((n) => n.id).sort()).toEqual([B, D, E].sort());
   });
 
   test('linkTypes filter restricts traversal', async () => {
-    const r = await graph.traverse([{ type: 'note', id: A }], { hops: 1, direction: 'out', linkTypes: ['child_of'] });
+    const r = await graph.traverse(userId, [{ type: 'note', id: A }], { hops: 1, direction: 'out', linkTypes: ['child_of'] });
     expect(r.nodes.map((n) => n.id)).toEqual([D]);
   });
 
   test('does not traverse ghost (unresolved) edges', async () => {
     const F = randomUUID();
     await repo.create({ userId, fromType: 'note', fromId: F, toRef: 'nowhere', linkType: 'references', origin: 'wikilink' });
-    const r = await graph.traverse([{ type: 'note', id: F }], { hops: 2, direction: 'out' });
+    const r = await graph.traverse(userId, [{ type: 'note', id: F }], { hops: 2, direction: 'out' });
     expect(r.nodes).toHaveLength(0);
   });
 
   test('seed nodes are excluded and cycles terminate', async () => {
     // Add a cycle C -> A.
     await repo.create({ userId, fromType: 'note', fromId: C, toType: 'note', toId: A, toRef: A, linkType: 'references', origin: 'user' });
-    const r = await graph.traverse([{ type: 'note', id: A }], { hops: 5, direction: 'out' });
+    const r = await graph.traverse(userId, [{ type: 'note', id: A }], { hops: 5, direction: 'out' });
     // Reaches B, C, D — but not A again (seed, already visited).
     expect(r.nodes.map((n) => n.id).sort()).toEqual([B, C, D].sort());
   });
 
   test('throws when traversal exceeds maxNodes (fail loud)', async () => {
     await expect(
-      graph.traverse([{ type: 'note', id: A }], { hops: 2, direction: 'both', maxNodes: 1 }),
+      graph.traverse(userId, [{ type: 'note', id: A }], { hops: 2, direction: 'both', maxNodes: 1 }),
     ).rejects.toThrow(/exceeded maxNodes/);
+  });
+
+  test('traversal is tenant-scoped — another user reaches nothing', async () => {
+    const intruder = randomUUID();
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: intruder, username: 'intruder' }]);
+    // intruder traverses from A (which belongs to `userId`) → no edges visible.
+    const r = await graph.traverse(intruder, [{ type: 'note', id: A }], { hops: 3, direction: 'both' });
+    expect(r.nodes).toHaveLength(0);
   });
 });
