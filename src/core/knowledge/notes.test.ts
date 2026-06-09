@@ -27,8 +27,14 @@ describe('NoteService', () => {
     await seedUsers([{ id: userId, username: 'notes-user' }]);
     const linksMod = await import('@/db/repositories/knowledge-link-repository');
     links = new linksMod.KnowledgeLinkRepository();
+    // Inject a real EmbeddingService (not getEmbeddingService(), which other
+    // test files mock.module into a partial stub that leaks across the suite).
+    // 'test-model' has no live provider, so embedding calls fail and the
+    // service degrades exactly as a no-model deployment would — but the DB
+    // methods (countBySource/deleteBySource) are real.
+    const { EmbeddingService } = await import('@/core/rag/embeddings');
     const mod = await import('./notes');
-    svc = new mod.NoteService();
+    svc = new mod.NoteService(undefined, undefined, new EmbeddingService('test-model'));
   });
 
   afterAll(async () => {

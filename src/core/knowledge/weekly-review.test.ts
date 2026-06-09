@@ -25,7 +25,8 @@ describe('weekly review', () => {
     assembleReviewContext = mod.assembleReviewContext;
     generateWeeklyReview = mod.generateWeeklyReview;
     renderReviewPrompt = mod.renderReviewPrompt;
-    svc = (await import('./notes')).getNoteService();
+    const { EmbeddingService } = await import('@/core/rag/embeddings');
+    svc = new (await import('./notes')).NoteService(undefined, undefined, new EmbeddingService('test-model'));
     links = new (await import('@/db/repositories/knowledge-link-repository')).KnowledgeLinkRepository();
   });
 
@@ -60,6 +61,7 @@ describe('weekly review', () => {
     await svc.capture(userId, null, 'shipped the [[Knowledge Graph]] feature', today);
 
     const result = await generateWeeklyReview(userId, null, {
+      notes: svc,
       resolveModelId: async () => 'fake-model',
       complete: async (req) => {
         // The assembled material should have reached the prompt.
