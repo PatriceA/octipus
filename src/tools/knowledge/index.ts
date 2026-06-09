@@ -14,9 +14,14 @@ import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-
 function workspaceFor(context?: AgentContext): WorkspaceFS {
   const projectPath = (context?.metadata as Record<string, unknown> | undefined)
     ?.projectPath as string | undefined;
-  return WorkspaceFS.forAgent(context, {
+  const fs = WorkspaceFS.forAgent(context, {
     extraAllowedPrefixes: projectPath ? [projectPath] : [],
   });
+  // Materialize the per-user workspace root (see the filesystem tool's
+  // workspaceFor) so index_directory on a fresh multiuser workspace doesn't
+  // ENOENT before the root has been written to.
+  fs.ensureRootSync();
+  return fs;
 }
 
 function resolveInWorkspace(fs: WorkspaceFS, path: string): string {
