@@ -20,6 +20,7 @@ export type EmbeddingPurpose =
   | 'code'
   | 'image_description'
   | 'knowledge_artifact'
+  | 'note'
   | 'message'
   | 'ephemeral';
 

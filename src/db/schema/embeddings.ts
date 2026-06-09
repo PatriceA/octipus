@@ -126,6 +126,8 @@ export interface EmbeddingMetadata {
   originalLength?: number;
   language?: string;
   filePath?: string;
+  /** Human title of the source (e.g. a note's title) for result display. */
+  title?: string;
 }
 
 export type Embedding = typeof embeddings.$inferSelect;

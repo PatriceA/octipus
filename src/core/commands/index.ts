@@ -9,5 +9,6 @@ import './models';
 import './plan';
 import './eval';
 import './cost';
+import './capture';
 
 export { getAllCommands, getCommand, handleCommand } from './registry';
