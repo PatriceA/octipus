@@ -463,6 +463,13 @@
       "when": 1780980411458,
       "tag": "0065_ancient_rawhide_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1780980777333,
+      "tag": "0066_uneven_the_hand",
+      "breakpoints": true
     }
   ]
 }

@@ -24,6 +24,7 @@ export * from './knowledge-links';
 export * from './memories';
 export * from './messages';
 export * from './models';
+export * from './notes';
 export * from './notifications';
 export * from './organizations';
 export * from './org-sso';

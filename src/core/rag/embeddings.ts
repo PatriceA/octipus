@@ -20,6 +20,7 @@ export type EmbeddingPurpose =
   | 'code'
   | 'image_description'
   | 'knowledge_artifact'
+  | 'note'
   | 'message'
   | 'ephemeral';
 
@@ -136,6 +137,8 @@ export class EmbeddingService {
       headingLevel?: number | null;
       docId?: string | null;
     },
+    /** Owner for tenant-scoped search (e.g. notes). NULL = unscoped/global. */
+    ownerUserId?: string | null,
   ): Promise<string> {
     const db = getDb();
     const model = this.model || await this.resolveModel().catch(() => 'unknown');
@@ -144,6 +147,7 @@ export class EmbeddingService {
       content,
       embedding,
       model,
+      userId: ownerUserId ?? null,
       metadata: metadata || {},
       purpose,
       contentSha256: sha256Hex(content),
@@ -170,12 +174,14 @@ export class EmbeddingService {
     content: string,
     metadata?: EmbeddingMetadata,
     documentId?: string,
+    /** Owner for tenant-scoped search (e.g. notes). NULL = unscoped/global. */
+    ownerUserId?: string | null,
   ): Promise<number> {
     // Memory-redesign Phase C — pick the structural chunker when the
     // content looks like Markdown (or the caller's filePath hint says
     // so). Other content types fall through to the flat chunker.
     if (looksLikeMarkdown(content, metadata?.filePath)) {
-      return this.indexStructured(purpose, sourceId, content, metadata, documentId);
+      return this.indexStructured(purpose, sourceId, content, metadata, documentId, ownerUserId);
     }
     const chunks = this.chunkText(content);
     if (chunks.length === 0) {
@@ -201,6 +207,8 @@ export class EmbeddingService {
             totalChunks: chunks.length,
             originalLength: content.length,
           },
+          undefined,
+          ownerUserId,
         );
         storedIds.push(id);
         stored++;
@@ -264,6 +272,7 @@ export class EmbeddingService {
     content: string,
     metadata: EmbeddingMetadata | undefined,
     documentId: string | undefined,
+    ownerUserId?: string | null,
   ): Promise<number> {
     const chunks: StructuralChunk[] = chunkMarkdown(content);
     if (chunks.length === 0) return 0;
@@ -295,6 +304,7 @@ export class EmbeddingService {
             headingLevel: c.headingLevel,
             docId: documentId ?? null,
           },
+          ownerUserId,
         );
         insertedIds[i] = id;
         storedTexts.push(c.content);
@@ -389,7 +399,7 @@ export class EmbeddingService {
    * nothing is actually relevant — useless for small knowledge bases where
    * every entry ranks "in the top N" by default.
    */
-  async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0): Promise<SearchResult[]> {
+  async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, userId?: string): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
@@ -403,9 +413,13 @@ export class EmbeddingService {
     const db = getDb();
 
     const similarityExpr = cosineSimilarity(embeddings.embedding, queryEmbedding);
-    const conditions = purpose
-      ? and(eq(embeddings.purpose, purpose))
-      : undefined;
+    // Tenant scope: when `userId` is given, restrict to that owner's rows.
+    // Used for per-user surfaces (notes); omitted for shared/global KB.
+    const filters = [
+      purpose ? eq(embeddings.purpose, purpose) : undefined,
+      userId ? eq(embeddings.userId, userId) : undefined,
+    ].filter(Boolean);
+    const conditions = filters.length > 0 ? and(...filters) : undefined;
 
     const results = await db
       .select({
@@ -442,9 +456,10 @@ export class EmbeddingService {
   }
 
   /** Full-text search only (no embedding needed) */
-  async ftsSearch(query: string, limit = 5, purpose?: EmbeddingPurpose): Promise<SearchResult[]> {
+  async ftsSearch(query: string, limit = 5, purpose?: EmbeddingPurpose, userId?: string): Promise<SearchResult[]> {
     const db = getDb();
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
 
     const results = await db.execute(sql`
       SELECT id, content, abstract, purpose, source_id, metadata,
@@ -453,6 +468,7 @@ export class EmbeddingService {
       FROM embeddings
       WHERE content_tsv @@ plainto_tsquery('english', ${query})
         ${purposeFilter}
+        ${userFilter}
       ORDER BY similarity DESC
       LIMIT ${limit}
     `);
@@ -496,6 +512,7 @@ export class EmbeddingService {
     purpose?: EmbeddingPurpose,
     alpha = 0.6,
     minSimilarity = 0,
+    userId?: string,
   ): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
@@ -505,12 +522,14 @@ export class EmbeddingService {
         { err, queryLength: query.length },
         'Hybrid search: embedding failed, falling back to keyword-only (FTS)',
       );
-      return this.ftsSearch(query, limit, purpose);
+      return this.ftsSearch(query, limit, purpose, userId);
     }
 
     const db = getDb();
     const vecLiteral = `[${queryEmbedding.join(',')}]`;
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
+    // Tenant scope (notes etc.); omitted for the shared/global KB.
+    const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
     const k = 60; // RRF constant
 
     const results = await db.execute(sql`
@@ -520,6 +539,7 @@ export class EmbeddingService {
         FROM embeddings
         WHERE content_tsv @@ plainto_tsquery('english', ${query})
           ${purposeFilter}
+          ${userFilter}
         LIMIT 50
       ),
       vec AS (
@@ -531,7 +551,7 @@ export class EmbeddingService {
                row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec,
                1 - (embedding <=> ${vecLiteral}::vector) AS cosine_sim
         FROM embeddings
-        WHERE 1=1 ${purposeFilter}
+        WHERE 1=1 ${purposeFilter} ${userFilter}
         ORDER BY embedding <=> ${vecLiteral}::vector
         LIMIT 50
       ),
@@ -794,6 +814,16 @@ export class EmbeddingService {
         withoutAbstract: abs.without_abstract || 0,
       },
     };
+  }
+
+  /** Number of stored chunks for a (purpose, sourceId). Cheap presence check. */
+  async countBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
+    const db = getDb();
+    const r = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(embeddings)
+      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId)));
+    return r[0]?.c ?? 0;
   }
 
   // ── Deletion ──────────────────────────────────────────────────────
