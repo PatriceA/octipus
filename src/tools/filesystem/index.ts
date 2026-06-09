@@ -571,9 +571,17 @@ export class FilesystemTool extends BaseTool {
   private workspaceFor(context?: AgentContext): WorkspaceFS {
     const projectPath = (context?.metadata as Record<string, unknown> | undefined)
       ?.projectPath as string | undefined;
-    return WorkspaceFS.forAgent(context, {
+    const fs = WorkspaceFS.forAgent(context, {
       extraAllowedPrefixes: projectPath ? [resolve(projectPath)] : [],
     });
+    // Materialize the workspace root. In multiuser the per-user root
+    // (`workspace/users/<uid>/workspaces/default/files`) is not seeded
+    // anywhere — nothing calls ensureRoot at session setup — so read/list/
+    // file_info on a fresh user hit ENOENT until the first write lazily
+    // mkdirs it. Creating the caller's own root here is benign and
+    // idempotent (existsSync-guarded) and makes reads return empty instead.
+    fs.ensureRootSync();
+    return fs;
   }
 
   /**
