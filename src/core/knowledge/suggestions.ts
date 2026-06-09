@@ -47,7 +47,8 @@ export class SuggestionService {
     let hits: Awaited<ReturnType<EmbeddingService['hybridSearch']>>;
     try {
       // Pull a buffer beyond `limit` because we filter self/linked below.
-      hits = await this.embeddings.hybridSearch(query, limit * 4, 'note', undefined, 0.3);
+      // Tenant-scoped: only this user's note embeddings are candidates.
+      hits = await this.embeddings.hybridSearch(query, limit * 4, 'note', undefined, 0.3, userId);
     } catch (err) {
       coreLogger.warn({ err, component: 'suggestions', noteId }, 'Link suggestions unavailable (no embedding model?)');
       return [];

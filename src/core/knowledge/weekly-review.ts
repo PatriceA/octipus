@@ -76,7 +76,7 @@ export async function assembleReviewContext(userId: string, end: Date = new Date
     await db
       .select({ factType: memories.factType, content: memories.content, createdAt: memories.createdAt })
       .from(memories)
-      .where(and(eq(memories.userId, userId), isNull(memories.supersededBy), gte(memories.createdAt, start)))
+      .where(and(eq(memories.userId, userId), isNull(memories.supersededBy), gte(memories.createdAt, start), lte(memories.createdAt, end)))
       .orderBy(desc(memories.createdAt))
       .limit(50)
   ).map((m) => ({ factType: m.factType, content: m.content }));

@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getKnowledgeGraph } from '@/core/knowledge/graph';
@@ -47,7 +47,9 @@ export const graphRoutes = new Elysia({ prefix: '/graph' })
       const edgeRows = await db
         .select()
         .from(knowledgeLinks)
-        .where(eq(knowledgeLinks.userId, user.id))
+        // Only resolved edges are renderable as node→node lines; ghost
+        // edges (unresolved wikilinks) have no target to draw to.
+        .where(and(eq(knowledgeLinks.userId, user.id), isNotNull(knowledgeLinks.toId)))
         .limit(5000);
       return {
         nodes: noteRows.map((n) => ({ type: 'note', id: n.id, slug: n.slug, label: n.title, kind: n.kind })),
@@ -82,9 +84,6 @@ async function loadNoteNodes(userId: string, ids: string[]) {
   const rows = await db
     .select({ id: notes.id, slug: notes.slug, title: notes.title, kind: notes.noteKind })
     .from(notes)
-    .where(eq(notes.userId, userId));
-  const wanted = new Set(ids);
-  return rows
-    .filter((r) => wanted.has(r.id))
-    .map((n) => ({ type: 'note', id: n.id, slug: n.slug, label: n.title, kind: n.kind }));
+    .where(and(eq(notes.userId, userId), inArray(notes.id, ids), isNull(notes.archivedAt)));
+  return rows.map((n) => ({ type: 'note', id: n.id, slug: n.slug, label: n.title, kind: n.kind }));
 }

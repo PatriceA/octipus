@@ -102,8 +102,12 @@ export class NoteService {
       created = false;
       // Unchanged body → metadata refreshed above, but skip the expensive
       // re-link + re-index passes (design: no-op on unchanged content).
+      // Report the *actual* index state (a prior save may have failed to
+      // index when no embedding model was configured) rather than assuming
+      // success — otherwise `indexed:true` would lie about searchability.
       if (bodyUnchanged) {
-        return { note, created, indexed: true, links: { added: 0, removed: 0 } };
+        const indexed = body.trim().length === 0 || (await this.embeddings.countBySource('note', sourceIdFor(note.id))) > 0;
+        return { note, created, indexed, links: { added: 0, removed: 0 } };
       }
     } else {
       note = await this.notes.create({
@@ -148,7 +152,7 @@ export class NoteService {
       if (note.body.trim().length === 0) return true;
       await this.embeddings.indexText('note', sourceIdFor(note.id), note.body, {
         title: note.title,
-      });
+      }, undefined, note.userId);
       return true;
     } catch (err) {
       coreLogger.warn(
@@ -229,7 +233,14 @@ export class NoteService {
   }
 }
 
-/** Coerce a date-ish string to `YYYY-MM-DD`. */
+/**
+ * Coerce a date-ish string to `YYYY-MM-DD`.
+ *
+ * NOTE: this is UTC. A capture made late in the day in a UTC− timezone
+ * lands on the next day's daily note. Timezone is not yet plumbed from
+ * the channel/browser; callers that need local-day behaviour should pass
+ * an explicit `day` derived in the user's timezone. Tracked for Tier 3.
+ */
 function normalizeDay(day: string): string {
   const d = new Date(day);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid date for daily note: ${day}`);

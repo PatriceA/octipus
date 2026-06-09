@@ -45,6 +45,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       try {
         const result = await getNoteService().save({
           userId: user.id,
+          workspaceId: body.workspaceId ?? null,
           id: body.id,
           slug: body.slug,
           title: body.title,
@@ -57,6 +58,8 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       } catch (err) {
         // Update of a non-existent / non-owned note → 404 (no enumeration).
         if (err instanceof Error && /not found/.test(err.message)) { set.status = 404; return { error: 'Note not found' }; }
+        // Concurrent create racing the same slug → 409, not a 500.
+        if (err instanceof Error && /unique constraint|duplicate key/i.test(err.message)) { set.status = 409; return { error: 'A note with this slug already exists' }; }
         throw err;
       }
     },
@@ -69,6 +72,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         noteKind: t.Optional(t.String()),
         tags: t.Optional(t.Array(t.String())),
         frontmatter: t.Optional(t.Record(t.String(), t.Unknown())),
+        workspaceId: t.Optional(t.String()),
       }),
       detail: { tags: ['notes'] },
     },
@@ -78,10 +82,15 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     '/capture',
     async ({ user, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const note = await getNoteService().capture(user.id, null, body.text, body.date);
-      return { id: note.id, slug: note.slug };
+      try {
+        const note = await getNoteService().capture(user.id, body.workspaceId ?? null, body.text, body.date);
+        return { id: note.id, slug: note.slug };
+      } catch (err) {
+        if (err instanceof Error && /invalid date/i.test(err.message)) { set.status = 400; return { error: err.message }; }
+        throw err;
+      }
     },
-    { body: t.Object({ text: t.String(), date: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
+    { body: t.Object({ text: t.String(), date: t.Optional(t.String()), workspaceId: t.Optional(t.String()) }), detail: { tags: ['notes'] } },
   )
 
   .get(

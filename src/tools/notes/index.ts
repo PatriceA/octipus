@@ -132,8 +132,8 @@ export class NotesTool extends BaseTool {
         query: { type: 'string', description: 'Search query', required: true },
         limit: { type: 'number', description: 'Max results (default 5)', default: 5 },
       }),
-      async (args) => {
-        const results = await getEmbeddingService().hybridSearch(args.query as string, (args.limit as number) || 5, 'note', undefined, 0.3);
+      async (args, context) => {
+        const results = await getEmbeddingService().hybridSearch(args.query as string, (args.limit as number) || 5, 'note', undefined, 0.3, context.userId);
         return {
           results: results.map((r) => ({ id: r.id, sourceId: r.sourceId, title: r.metadata.title, abstract: r.abstract || r.content.slice(0, 200), similarity: r.similarity.toFixed(3) })),
           hint: 'sourceId is note:<noteId>. Use read_note to load the full note.',
