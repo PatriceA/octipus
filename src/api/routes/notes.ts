@@ -90,7 +90,7 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
         frontmatter: body.frontmatter,
         sort: body.sort,
         order: body.order,
-        limit: body.limit ?? 100,
+        limit: Math.min(1000, Math.max(1, body.limit ?? 100)),
       });
       return { notes: rows, total: rows.length };
     },

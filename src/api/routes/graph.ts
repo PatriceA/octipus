@@ -24,7 +24,8 @@ export const graphRoutes = new Elysia({ prefix: '/graph' })
 
       // Local neighbourhood mode.
       if (query.entryType && query.entryId) {
-        const hops = Math.min(5, Math.max(1, parseInt(query.hops ?? '2', 10)));
+        const parsed = parseInt(query.hops ?? '2', 10);
+        const hops = Math.min(5, Math.max(1, Number.isFinite(parsed) ? parsed : 2));
         const result = await getKnowledgeGraph().traverse(
           user.id,
           [{ type: query.entryType, id: query.entryId }],
@@ -72,7 +73,8 @@ export const graphRoutes = new Elysia({ prefix: '/graph' })
     '/canvas',
     async ({ user, query, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
-      const hops = Math.min(5, Math.max(1, parseInt(query.hops ?? '1', 10)));
+      const parsedHops = parseInt(query.hops ?? '1', 10);
+      const hops = Math.min(5, Math.max(1, Number.isFinite(parsedHops) ? parsedHops : 1));
       return getCanvasBuilder().fromNeighbourhood(user.id, { type: query.entryType, id: query.entryId }, hops);
     },
     {

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { type NewNote, type Note, notes } from '../schema/notes';
 
@@ -38,6 +38,15 @@ export class NoteRepository {
       .where(and(eq(notes.id, id), eq(notes.userId, userId)))
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  /** Batch fetch by ids, tenant-scoped. Used by the canvas builder to avoid N+1. */
+  async getByIds(userId: string, ids: string[]): Promise<Note[]> {
+    if (ids.length === 0) return [];
+    return this.db
+      .select()
+      .from(notes)
+      .where(and(eq(notes.userId, userId), inArray(notes.id, ids)));
   }
 
   async getBySlug(userId: string, workspaceId: string | null, slug: string): Promise<Note | null> {

@@ -208,13 +208,21 @@ export class NotesTool extends BaseTool {
         limit: { type: 'number', description: 'Max rows (default 100)', default: 100 },
       }),
       async (args, context) => {
+        const sort = args.sort as string | undefined;
+        const order = args.order as string | undefined;
+        if (sort && !['updated', 'created', 'title', 'date'].includes(sort)) {
+          throw new Error(`Unknown sort "${sort}" — use updated | created | title | date.`);
+        }
+        if (order && !['asc', 'desc'].includes(order)) {
+          throw new Error(`Unknown order "${order}" — use asc | desc.`);
+        }
         const rows = await getNoteRepository().query(context.userId, {
           kind: (args.kind as string) || undefined,
           tag: (args.tag as string) || undefined,
           frontmatter: (args.frontmatter as Record<string, unknown>) || undefined,
-          sort: (args.sort as 'updated' | 'created' | 'title' | 'date') || undefined,
-          order: (args.order as 'asc' | 'desc') || undefined,
-          limit: (args.limit as number) || 100,
+          sort: sort as 'updated' | 'created' | 'title' | 'date' | undefined,
+          order: order as 'asc' | 'desc' | undefined,
+          limit: Math.min(1000, Math.max(1, (args.limit as number) || 100)),
         });
         return { notes: rows.map((n) => ({ id: n.id, slug: n.slug, title: n.title, kind: n.noteKind, tags: n.tags, noteDate: n.noteDate, frontmatter: n.frontmatter, updatedAt: n.updatedAt })) };
       },
@@ -233,7 +241,7 @@ export class NotesTool extends BaseTool {
         const canvas = await getCanvasBuilder().fromNeighbourhood(
           context.userId,
           { type: args.entry_type as string, id: args.entry_id as string },
-          (args.hops as number) || 1,
+          Math.min(5, Math.max(1, (args.hops as number) || 1)),
         );
         return canvas;
       },

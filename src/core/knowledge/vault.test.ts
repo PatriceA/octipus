@@ -99,4 +99,15 @@ describe('VaultSync (embedded)', () => {
     expect(forced.updated).toBe(1);
     expect((await svc.getBySlug(userId, null, 'doc'))?.body.trim()).toBe('EDITED in the vault');
   });
+
+  test('metadata-only vault edits (tags) sync without a conflict', async () => {
+    await svc.save({ userId, slug: 'meta', title: 'Meta', body: 'stable body' });
+    await vault.exportVault(userId, dir);
+    // Change only the tags in the frontmatter; body untouched.
+    await writeFile(join(dir, 'meta.md'), '---\ntitle: Meta\nslug: meta\nkind: note\ntags: [added]\n---\nstable body\n');
+    const res = await vault.importVault(userId, dir);
+    expect(res.conflicts).toEqual([]);
+    expect(res.updated).toBe(1);
+    expect((await svc.getBySlug(userId, null, 'meta'))?.tags).toEqual(['added']);
+  });
 });

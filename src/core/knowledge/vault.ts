@@ -1,6 +1,5 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
-import { sha256Hex } from '@/core/rag/embeddings';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { coreLogger } from '@/utils/logger';
 import { getNoteService, type NoteService } from './notes';
 import type { Note } from '@/db/schema/notes';
@@ -32,9 +31,14 @@ export interface ParsedNoteFile {
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 
+/** Strip characters that would break the single-line frontmatter values. */
+function fmValue(v: string): string {
+  return v.replace(/[\r\n]+/g, ' ').trim();
+}
+
 /** Serialise a note to markdown with a YAML-ish frontmatter block. */
 export function serializeNote(note: Pick<Note, 'title' | 'slug' | 'noteKind' | 'noteDate' | 'tags' | 'body'>): string {
-  const fm: string[] = ['---', `title: ${note.title}`, `slug: ${note.slug}`, `kind: ${note.noteKind}`];
+  const fm: string[] = ['---', `title: ${fmValue(note.title)}`, `slug: ${fmValue(note.slug)}`, `kind: ${fmValue(note.noteKind)}`];
   if (note.noteDate) fm.push(`date: ${note.noteDate}`);
   if (note.tags.length) fm.push(`tags: [${note.tags.join(', ')}]`);
   fm.push('---', '');
@@ -70,24 +74,48 @@ export function parseNoteFile(content: string, fallbackSlug: string): ParsedNote
   };
 }
 
-export interface VaultExportResult { exported: number; dir: string }
+export interface VaultExportResult { exported: number; dir: string; truncated: boolean }
 export interface VaultImportResult { imported: number; updated: number; unchanged: number; conflicts: string[] }
+
+const EXPORT_LIMIT = 10000;
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
+}
 
 export class VaultSync {
   constructor(private readonly notes: NoteService = getNoteService()) {}
 
-  /** Export all of a user's active notes to `<dir>/<slug>.md`. */
+  /**
+   * Export a user's active, user-level notes to `<dir>/<slug>.md`.
+   * Workspace-scoped notes are out of scope for vault sync (lookup on
+   * import is user-level) and are skipped to avoid duplicate round-trips.
+   */
   async exportVault(userId: string, dir: string): Promise<VaultExportResult> {
-    const all = await this.notes.list(userId, { limit: 10000 });
+    const all = (await this.notes.list(userId, { limit: EXPORT_LIMIT })).filter((n) => n.workspaceId === null);
+    const truncated = all.length >= EXPORT_LIMIT;
+    if (truncated) {
+      coreLogger.warn({ component: 'vault', userId, limit: EXPORT_LIMIT }, 'Vault export hit the note limit — some notes were not exported');
+    }
+    const root = resolve(dir);
     let exported = 0;
     for (const note of all) {
-      const filePath = join(dir, `${note.slug}.md`);
+      const filePath = join(root, `${note.slug}.md`);
+      // Defense in depth: a slug should never escape the vault dir (slugify
+      // strips `.`), but never write outside it even if one slips through.
+      if (filePath !== root && !filePath.startsWith(root + sep)) {
+        coreLogger.error({ component: 'vault', slug: note.slug }, 'Slug escapes vault dir — skipping note');
+        continue;
+      }
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, serializeNote(note), 'utf8');
       exported++;
     }
-    coreLogger.info({ component: 'vault', userId, dir, exported }, 'Exported notes to vault');
-    return { exported, dir };
+    coreLogger.info({ component: 'vault', userId, dir, exported, truncated }, 'Exported notes to vault');
+    return { exported, dir, truncated };
   }
 
   /**
@@ -103,12 +131,27 @@ export class VaultSync {
       const parsed = parseNoteFile(content, slugify(rel));
       const existing = await this.notes.getBySlug(userId, null, parsed.slug);
       if (existing) {
-        if (existing.bodySha256 === sha256Hex(parsed.body)) {
+        // Compare normalised bodies — editors routinely add/strip a
+        // trailing newline, which must not register as a content conflict.
+        const bodySame = existing.body.trimEnd() === parsed.body.trimEnd();
+        const metaSame =
+          existing.title === parsed.title &&
+          existing.noteKind === parsed.noteKind &&
+          (existing.noteDate ?? null) === (parsed.noteDate ?? null) &&
+          arraysEqual(existing.tags, parsed.tags);
+        if (bodySame && metaSame) {
           result.unchanged++;
           continue;
         }
+        if (bodySame && !metaSame) {
+          // Body matches; only frontmatter (tags/kind/date/title) changed —
+          // a safe metadata sync, not a content conflict.
+          await this.notes.save({ userId, id: existing.id, title: parsed.title, body: parsed.body, noteKind: parsed.noteKind, noteDate: parsed.noteDate, tags: parsed.tags });
+          result.updated++;
+          continue;
+        }
         if (!opts.force) {
-          // DB wins; surface the clash rather than silently overwriting.
+          // Body differs and DB wins; surface the clash rather than overwriting.
           result.conflicts.push(parsed.slug);
           continue;
         }
@@ -130,8 +173,11 @@ async function collectMarkdown(dir: string): Promise<string[]> {
   let entries: import('node:fs').Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return out; // missing dir → nothing to import
+  } catch (err) {
+    // A missing dir is valid on first sync; anything else (EACCES, EIO) is
+    // a real problem we must not swallow.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    throw err;
   }
   for (const entry of entries) {
     const abs = join(dir, entry.name);

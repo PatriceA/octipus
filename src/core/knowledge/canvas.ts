@@ -103,14 +103,16 @@ export class CanvasBuilder {
     return { nodes, edges };
   }
 
-  /** Resolve display labels/slugs for note refs (other types fall back to id). */
+  /** Resolve display labels/slugs for note refs (other types fall back to id). Batched. */
   private async labels(userId: string, refs: Array<{ type: string; id: string }>): Promise<Map<string, { label: string; slug?: string }>> {
     const out = new Map<string, { label: string; slug?: string }>();
+    const noteIds = [...new Set(refs.filter((r) => r.type === 'note').map((r) => r.id))];
+    const notesById = new Map((await this.notes.getByIds(userId, noteIds)).map((n) => [n.id, n]));
     for (const ref of refs) {
       const key = `${ref.type}:${ref.id}`;
       if (out.has(key)) continue;
       if (ref.type === 'note') {
-        const note = await this.notes.getById(userId, ref.id);
+        const note = notesById.get(ref.id);
         out.set(key, note ? { label: note.title, slug: note.slug } : { label: key });
       } else {
         out.set(key, { label: key });

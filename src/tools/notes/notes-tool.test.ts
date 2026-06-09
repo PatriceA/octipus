@@ -100,6 +100,14 @@ describe('NotesTool', () => {
     expect(canvas.nodes.length).toBeGreaterThanOrEqual(1);
   });
 
+  test('query_notes filters by frontmatter and rejects an invalid sort', async () => {
+    await call('write_note', { title: 'FM' });
+    // No frontmatter set via write_note, so an equality filter returns nothing.
+    const none = (await call('query_notes', { frontmatter: { status: 'active' } })) as { notes: unknown[] };
+    expect(none.notes).toHaveLength(0);
+    await expect(call('query_notes', { sort: 'bogus' })).rejects.toThrow(/Unknown sort/);
+  });
+
   test('sync_vault fails loud when vault sync is disabled', async () => {
     await expect(call('sync_vault', { direction: 'export' })).rejects.toThrow(/disabled/i);
   });
