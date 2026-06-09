@@ -43,8 +43,12 @@ describe('VaultSync (embedded)', () => {
     await runMigrations();
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: userId, username: 'vault-user' }, { id: importer, username: 'vault-importer' }]);
-    vault = (await import('./vault')).getVaultSync();
-    svc = (await import('./notes')).getNoteService();
+    // Inject a real EmbeddingService — see notes.test.ts for why the
+    // getEmbeddingService() singleton can't be trusted across the suite.
+    const { EmbeddingService } = await import('@/core/rag/embeddings');
+    const { NoteService } = await import('./notes');
+    svc = new NoteService(undefined, undefined, new EmbeddingService('test-model'));
+    vault = new (await import('./vault')).VaultSync(svc);
   });
 
   afterAll(async () => {

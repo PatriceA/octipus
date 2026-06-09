@@ -21,7 +21,8 @@ describe('CanvasBuilder', () => {
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: userId, username: 'canvas-user' }]);
     builder = (await import('./canvas')).getCanvasBuilder();
-    svc = (await import('./notes')).getNoteService();
+    const { EmbeddingService } = await import('@/core/rag/embeddings');
+    svc = new (await import('./notes')).NoteService(undefined, undefined, new EmbeddingService('test-model'));
   });
 
   afterAll(async () => {
