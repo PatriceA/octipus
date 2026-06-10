@@ -44,6 +44,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     supportsTools: model.supportsTools,
     supportsStreaming: model.supportsStreaming,
     disableThinking: model.metadata?.extraBody?.think === false,
+    // Stored as a raw count; the field edits in billions for readability.
+    paramCountB: model.metadata?.paramCount ? String(model.metadata.paramCount / 1_000_000_000) : '',
     costPerInputToken: model.costPerInputToken,
     costPerOutputToken: model.costPerOutputToken,
     // CLI agent settings
@@ -161,6 +163,23 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         };
       }
 
+      // Parameter count drives orchestrator auto-mode selection. Apply it last
+      // so none of the provider-specific metadata branches above clobber it,
+      // and only send metadata when there's something to persist.
+      {
+        const billions = Number.parseFloat(formData.paramCountB);
+        const base = (payload.metadata as Record<string, unknown> | undefined)
+          ?? { ...(model.metadata || {}) };
+        if (formData.paramCountB.trim() !== '' && Number.isFinite(billions) && billions > 0) {
+          base.paramCount = Math.round(billions * 1_000_000_000);
+          payload.metadata = base;
+        } else if ('paramCount' in base) {
+          // Cleared the field → drop the override so auto-detect resumes.
+          delete base.paramCount;
+          payload.metadata = base;
+        }
+      }
+
       await onSave(model.name, payload);
       onClose();
     } catch (err) {
@@ -216,6 +235,24 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               />
               <p className="text-xs text-on-surface-variant mt-0.5">Bump higher if responses are getting truncated (e.g. thinking models burn tokens before replying).</p>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-on-surface-variant mb-1">Parameter Count (billions)</label>
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              value={formData.paramCountB}
+              onChange={(e) => setFormData({ ...formData, paramCountB: e.target.value })}
+              placeholder="e.g. 128 for a 128B model"
+              title="Used to auto-select the orchestrator mode when Orchestrator > Mode is 'auto'"
+              className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
+            />
+            <p className="text-xs text-on-surface-variant mt-0.5">
+              Drives the orchestrator mode (router/lite/full) when mode is <code className="bg-surface-container-high px-1 rounded">auto</code>.
+              External model IDs without a size tag (e.g. <code className="bg-surface-container-high px-1 rounded">deepseek-v4-flash</code>) default to <strong>lite</strong> until set here. Leave empty to infer from the model ID.
+            </p>
           </div>
 
           <div>

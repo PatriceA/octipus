@@ -141,6 +141,12 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
           <span className="text-on-surface-variant">Priority</span>
           <span className="text-on-surface">{model.priority}</span>
         </div>
+        {model.metadata?.paramCount ? (
+          <div className="flex justify-between">
+            <span className="text-on-surface-variant">Params</span>
+            <span className="text-on-surface">{(model.metadata.paramCount / 1_000_000_000).toFixed(0)}B</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-3 pt-3 border-t border-outline-variant/10 flex flex-wrap gap-1.5">
