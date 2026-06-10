@@ -22,12 +22,23 @@ export const STRIP_TAGS = new Set([
   'object', 'embed', 'video', 'audio', 'source', 'track', 'param', 'picture',
 ]);
 
-/** Tags kept in the output. Everything else is unwrapped to its text/children. */
+/**
+ * Base allowlist — tags kept in the output; everything else is unwrapped to its
+ * text/children. This matches the reader's original set (no `div`/`span`, which
+ * the reader deliberately flattens away as layout chrome).
+ */
 export const ALLOWED_TAGS = new Set([
   'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote',
   'pre', 'code', 'em', 'strong', 'b', 'i', 'a', 'img', 'figure', 'figcaption',
-  'table', 'thead', 'tbody', 'tr', 'td', 'th', 'br', 'hr', 'div', 'span',
+  'table', 'thead', 'tbody', 'tr', 'td', 'th', 'br', 'hr',
 ]);
+
+/**
+ * Email allowlist — the base set plus `div`/`span`, which email HTML uses
+ * heavily for line/section structure (dropping them runs lines together).
+ * They carry no allowed attributes, so they add no XSS surface.
+ */
+export const EMAIL_ALLOWED_TAGS = new Set([...ALLOWED_TAGS, 'div', 'span']);
 
 /** Per-tag attribute allowlist. */
 export const ALLOWED_ATTRS: Record<string, Set<string>> = {
@@ -83,19 +94,23 @@ function attr(el: Element, name: string): string | undefined {
   return v == null ? undefined : v;
 }
 
-/** Serialize a node subtree to sanitized HTML using the tag/attr allowlist. */
-export function serialize(node: AnyNode): string {
+/**
+ * Serialize a node subtree to sanitized HTML using the tag/attr allowlist.
+ * `allowed` defaults to the base (reader) set; callers that need a wider set
+ * (e.g. email, with div/span) pass it explicitly.
+ */
+export function serialize(node: AnyNode, allowed: Set<string> = ALLOWED_TAGS): string {
   if (isText(node)) return escapeText(node.data);
   if (!isTag(node)) return '';
   const tag = node.name.toLowerCase();
-  const inner = node.children.map(serialize).join('');
-  if (!ALLOWED_TAGS.has(tag)) return inner; // unwrap unknown tags, keep their text/children
+  const inner = node.children.map((c) => serialize(c, allowed)).join('');
+  if (!allowed.has(tag)) return inner; // unwrap unknown tags, keep their text/children
   if (tag === 'br' || tag === 'hr') return `<${tag}>`;
 
   let attrs = '';
-  const allowed = ALLOWED_ATTRS[tag];
-  if (allowed) {
-    for (const name of allowed) {
+  const allowedAttrs = ALLOWED_ATTRS[tag];
+  if (allowedAttrs) {
+    for (const name of allowedAttrs) {
       let val = attr(node, name);
       if ((name === 'href' || name === 'src') && val) val = safeUrl(val);
       if (val) attrs += ` ${name}="${escapeAttr(val)}"`;
@@ -110,11 +125,11 @@ export function serialize(node: AnyNode): string {
  * STRIP_TAGS subtrees, then serializes the remaining tree through the
  * allowlist. Use this to render untrusted HTML (e.g. an email body).
  */
-export function sanitizeHtmlFragment(html: string): string {
+export function sanitizeHtmlFragment(html: string, allowed: Set<string> = EMAIL_ALLOWED_TAGS): string {
   if (!html) return '';
   const doc = parseDocument(html);
   for (const tag of STRIP_TAGS) {
     for (const el of getElementsByTagName(tag, doc, true)) removeElement(el);
   }
-  return doc.children.map(serialize).join('').trim();
+  return doc.children.map((c) => serialize(c, allowed)).join('').trim();
 }

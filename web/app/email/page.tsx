@@ -71,6 +71,8 @@ export default function EmailPage() {
         });
         setNextPageToken(res.nextPageToken);
       }
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setLoadingMore(false);
     }
