@@ -286,14 +286,10 @@ export class ConnectionManager {
         }
 
         case 'api_key': {
-          // API key auth — accepts either:
-          //   1. A personal api token (`octi_…`) issued via Settings →
-          //      API Tokens. Checked against the api_tokens table.
-          //   2. The bootstrap MASTER_KEY (only when multi-user is off).
-          //
-          // The browser extension and any third-party WS client should
-          // use a personal token; MASTER_KEY support stays for
-          // single-user installs that explicitly disabled multi-user.
+          // API key auth — accepts a personal API token (`octi_…`) issued via
+          // Settings → API Tokens, checked against the api_tokens table. The
+          // browser extension and any third-party WS client use such a token.
+          // (The legacy MASTER_KEY fallback was removed with single-user mode.)
           const key = msg.credentials.key as string;
           if (!key) {
             this.sendAuthError(conn, 'Missing API key');

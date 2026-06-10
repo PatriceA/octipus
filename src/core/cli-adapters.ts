@@ -34,7 +34,10 @@ function getOrCreateMcpConfig(): string | null {
   const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
 
   const apiPort = process.env.API_PORT || process.env.PORT || '3005';
-  const apiKey = process.env.MASTER_KEY || process.env.OCTIPUS_API_KEY || '';
+  // Only a scoped API token is accepted by the server now (the MASTER_KEY
+  // fallback was removed with single-user mode). bin/octi writes the MCP
+  // bootstrap token into OCTIPUS_API_KEY after the server boots.
+  const apiKey = process.env.OCTIPUS_API_KEY || '';
 
   const config = {
     mcpServers: {

@@ -547,12 +547,11 @@ export class FilesystemTool extends BaseTool {
    * Build the path sandbox for this call — the single source of truth for
    * BOTH resolution and validation.
    *
-   * `WorkspaceFS.forAgent(context)` picks the layout from
-   * `config.multiuser.enabled`:
-   *   - off → flat root at `config.workspace.rootPath` (legacy single-user
-   *     behavior).
-   *   - on  → per-user nested root under
+   * `WorkspaceFS.forAgent(context)` picks the layout by userId:
+   *   - a real user → per-user nested root under
    *     `<workspace.rootPath>/users/{userId}/workspaces/default/files`.
+   *   - system jobs (`userId === 'system'`/absent) → flat root at
+   *     `config.workspace.rootPath`.
    *
    * `additionalPaths` and the legacy `/tmp/assistant-` prefix are allowed
    * extras; both modes block traversal, absolute-path escape, and symlink

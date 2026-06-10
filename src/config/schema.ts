@@ -1,4 +1,10 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
+
+// Absolute workspace root under the user's home — `path.resolve` does not
+// expand `~`, so schema defaults must be concrete absolute paths.
+const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 // Storage mode: 'embedded' (PGlite + in-memory) or 'external' (PostgreSQL + Valkey)
 export const storageModeSchema = z.enum(['embedded', 'external']).default('external');
@@ -320,14 +326,14 @@ export const skillsConfigSchema = z.object({
 });
 
 export const workspaceConfigSchema = z.object({
-  // Default outside the repo tree (mirrors database.dataDir) so workspace
-  // files can never be accidentally committed/pushed. Editable via
-  // PUT /api/workspace; existing installs keep their configured path.
-  rootPath: z.string().default('~/.octipus/workspace'),
+  // Default outside the repo tree so workspace files can never be
+  // accidentally committed/pushed. Editable via PUT /api/workspace; existing
+  // installs keep their configured path.
+  rootPath: z.string().default(WORKSPACE_ROOT),
   additionalPaths: z.array(z.string()).default([]),
   sessionFolders: z.boolean().default(true),
   autoIndexFiles: z.boolean().default(true),
-  documentsPath: z.string().default('~/.octipus/workspace/documents'),
+  documentsPath: z.string().default(join(WORKSPACE_ROOT, 'documents')),
   maxUploadSize: z.number().min(0).default(52428800), // 50MB
   ocrModel: z.string().default('glm-ocr'),
   ocrEndpoint: z.string().default('http://localhost:11435'),

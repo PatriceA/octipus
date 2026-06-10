@@ -33,8 +33,8 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       const pipelineManager = getPipelineManager();
 
       // Admins see everything (operational triage); regular users see
-      // only their own. The legacy 'system' pseudo-id (MASTER_KEY) only
-      // appears when MULTIUSER=false.
+      // only their own. The 'system' pseudo-id is used by in-process
+      // system jobs.
       if (user.isAdmin || user.id === 'system') {
         return { pipelines: await pipelineManager.listAll() };
       }

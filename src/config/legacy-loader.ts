@@ -1,5 +1,10 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { defaultConfig } from './defaults';
 import type { Config } from './schema';
+
+// Absolute workspace root (see defaults.ts — `~` is not expanded by resolve()).
+const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 /**
  * Load ALL config from environment variables (legacy behavior).
@@ -133,11 +138,11 @@ export function loadFromEnvLegacy(): Partial<Config> {
       orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
     },
     workspace: {
-      rootPath: process.env.WORKSPACE_PATH || '~/.octipus/workspace',
+      rootPath: process.env.WORKSPACE_PATH || WORKSPACE_ROOT,
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
       sessionFolders: true,
       autoIndexFiles: true,
-      documentsPath: process.env.DOCUMENTS_PATH || './workspace/documents',
+      documentsPath: process.env.DOCUMENTS_PATH || join(WORKSPACE_ROOT, 'documents'),
       maxUploadSize: parseInt(process.env.MAX_UPLOAD_SIZE || '52428800', 10),
       ocrModel: process.env.OCR_MODEL || 'glm-ocr',
       ocrEndpoint: process.env.OCR_ENDPOINT || 'http://localhost:11435',

@@ -1,4 +1,11 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Config } from './schema';
+
+// Absolute workspace root under the user's home (outside the repo tree, so
+// workspace files can't be committed). `path.resolve` does NOT expand `~`, so
+// we compute the absolute path here rather than emit a literal tilde.
+const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 export const defaultConfig: Partial<Config> = {
   storageMode: 'external',
@@ -87,11 +94,11 @@ export const defaultConfig: Partial<Config> = {
     orgWorkspaces: true,
   },
   workspace: {
-    rootPath: '~/.octipus/workspace',
+    rootPath: WORKSPACE_ROOT,
     additionalPaths: [],
     sessionFolders: true,
     autoIndexFiles: true,
-    documentsPath: '~/.octipus/workspace/documents',
+    documentsPath: join(WORKSPACE_ROOT, 'documents'),
     maxUploadSize: 52428800,
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',
