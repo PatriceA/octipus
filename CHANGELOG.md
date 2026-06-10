@@ -7,6 +7,46 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### QA batch — end-user surfaces (2026-06-10)
+
+Findings from the 2026-06-10 QA pass, delivered as nine focused branches
+(each independently reviewed). Highlights:
+
+- **Single-user mode removed — always multi-user.** The `multiuser.enabled`
+  flag and the legacy `MASTER_KEY` Bearer fallback are gone; every request
+  must carry a session or API token. A single-user install simply never
+  creates a second user. Workspaces are always per-user; the default
+  workspace root moved out of the repo tree to `~/.octipus/workspace`
+  (gitignore-leak fix). **Operator action:** anyone authenticating via
+  `MASTER_KEY` must mint an API token (`POST /api/tokens`) or log in. Run
+  `bun run test:e2e` against a live stack before deploying. Supersedes the
+  feature-flag note in the 2026-05 multi-user entry below.
+- **Agent file-writes resolve correctly in the UI.** `file_change` events now
+  carry the path the tool actually wrote (post session-relocation), fixing
+  "File not found" when clicking an agent-created file.
+- **Notes / to-dos route to their real features.** The `general` role now has
+  the `notes` and `tasks` tools (+ prompt routing), so "write a note" / "add
+  a to-do" hit the Notes / Tasks tabs instead of dropping a loose markdown
+  file. The Tools page shows which roles can use each tool.
+- **Markdown renders everywhere.** A shared sanitized renderer backs chat,
+  Deep Research reports, document/file previews, and a new Notes
+  Edit/Preview toggle.
+- **Run-mode indicator.** The web header and TUI status bar show
+  Router / Light / Full (derived from the default-model size); the duplicate
+  user card was removed from the sidebar.
+- **Dashboard feature-status rework.** Required vs optional per feature,
+  OCR + Vision shown separately, Memory Extraction + Evaluation added,
+  Architecture dropped, per-feature hover help, two-column layout.
+- **New-repo parent folder.** "Create new repository" lets you pick the
+  parent folder (root / additional paths) with a destination preview;
+  symlink-safe containment.
+- **MCP feature tools.** tasks, notes, email, memory, Deep Research, and
+  Reader are now exposed on the standalone MCP server.
+- **Email overhaul.** HTML bodies render (server-side sanitized), messages
+  mark read on open, inbox paginates (Load more), "Draft reply" proposes
+  directions for you to choose before drafting, bigger reading pane, triage
+  shows a result summary.
+
 ### Streamlined setup (2026-05-26)
 
 One way in. The six divergent setup paths (`install.sh`, inquirer

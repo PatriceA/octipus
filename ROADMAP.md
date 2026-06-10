@@ -125,6 +125,43 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Done (recent)
 
+### 2026-06-10 — QA batch (end-user surfaces)
+
+Nine focused branches from the 2026-06-10 QA pass, each independently
+reviewed. Operator + release notes in
+[`CHANGELOG.md`](CHANGELOG.md#qa-batch--end-user-surfaces-2026-06-10).
+
+- **Single-user mode removed — always multi-user.** The `multiuser.enabled`
+  flag and the legacy `MASTER_KEY` Bearer fallback are gone (HTTP + WS);
+  every request carries a session or API token, workspaces are always
+  per-user, quotas/rate-limits always apply, `devMode` is admin-only. The
+  default workspace root moved out of the repo to `~/.octipus/workspace`.
+  **Supersedes** the "feature flag that defaults off" design in the
+  2026-05 multi-user entry. *Pre-merge: validate `bun run test:e2e` on a
+  live stack — the auth path can't be checked headless.*
+- **Cluster bugs.** (1) `file_change` events emit the resolved write path
+  (fixes "File not found" on agent-created files); (2) `general` role
+  granted the `notes` + `tasks` tools so notes/to-dos reach their tabs
+  instead of loose files, plus a role→tool map on the Tools page; (3) a
+  shared sanitized markdown renderer reused across chat, Deep Research,
+  document/file previews, and a Notes Edit/Preview toggle.
+- **Run-mode indicator** (Router/Light/Full) in the web header + TUI; the
+  duplicate sidebar user card removed.
+- **Dashboard feature-status rework** — required vs optional, OCR + Vision
+  split, Memory Extraction + Evaluation added, Architecture dropped,
+  per-feature hover help, two columns.
+- **New-repo parent folder picker** (symlink-safe containment).
+- **MCP feature tools** — tasks / notes / email / memory / Deep Research /
+  Reader exposed on the standalone MCP server.
+- **Email overhaul** — sanitized HTML rendering, mark-read on open, inbox
+  pagination, reply-options-then-draft flow, bigger reading pane, triage
+  summary.
+
+Still open from this pass: ToDo UI grouping + per-item notes display
+(backend already supports task notes); persisting changed-file manifests
+for *pre-existing* sessions (going-forward works); optional "save the
+article" in Reader.
+
 ### 2026-06-03 batch — Enrichment wave-2 complete
 
 All five enrichment features delivered end-to-end (tool/service + API route + web page), 5 PRs (#47-#51):
@@ -534,7 +571,10 @@ Three deferred items moved to **Now** above.
   Five phased PRs (#3 Phase 0 → #18 Phase 4 follow-up); every
   behavioral change gated behind a feature flag that defaults
   off, so existing single-user installs see byte-for-byte
-  unchanged behavior. Highlights: `Principal` type +
+  unchanged behavior. **(Superseded 2026-06-10: the
+  `multiuser.enabled` flag and single-user path were removed —
+  Octipus is now always multi-user. See the 2026-06-10 entry.)**
+  Highlights: `Principal` type +
   `scopedRepos(principal)` factory with cross-tenant
   enumeration-collapse, vault `scope` enum + per-user HKDF DEKs,
   `WorkspaceFS` filesystem sandbox, personal access tokens
