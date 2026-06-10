@@ -538,7 +538,7 @@ export class ToolExecutor {
           );
         } else {
           agentLogger.error(
-            { error, agentId: this.context.id, tool: toolCall.name },
+            { err: error, agentId: this.context.id, tool: toolCall.name },
             'Tool execution failed'
           );
         }

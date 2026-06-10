@@ -208,7 +208,7 @@ export abstract class BaseTool {
           'Tool execution cancelled'
         );
       } else {
-        toolLogger.error({ error, toolId: this.id, tool: toolName }, 'Tool execution failed');
+        toolLogger.error({ err: error, toolId: this.id, tool: toolName }, 'Tool execution failed');
       }
       throw error;
     }
