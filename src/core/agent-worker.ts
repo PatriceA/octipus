@@ -787,6 +787,11 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Handle tool calls if present
       if (completion.toolCalls?.length && !this.toolExecutor.toolsDisabled) {
+        // Recover near-miss tool names (bare sub-name / typo) up front so every
+        // downstream read — loop-detection signatures, logs, the tool_call
+        // events, and the toolId lookup — reflects the tool that will actually
+        // run, not the model's mistyped name.
+        this.toolExecutor.normalizeToolCallNames(completion.toolCalls);
         const toolNames = completion.toolCalls.map(tc => tc.name);
 
         // Detect hallucinated "respond" tools — smaller models sometimes invent
@@ -923,6 +928,10 @@ export class AgentWorker extends BaseAgentWorker {
         const textToolCalls = this.parseTextToolCalls(completion.content);
         if (textToolCalls.length > 0) {
           completion.toolCalls = textToolCalls;
+          // Normalize near-miss names before the recovery log, the persisted
+          // assistant message, and the action emit below — same coherence
+          // requirement as the structured path.
+          this.toolExecutor.normalizeToolCallNames(textToolCalls);
           // Re-run the tool call handling above
           agentLogger.info({
             agentId: this.context.id, iteration: this.iteration,

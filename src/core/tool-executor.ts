@@ -11,6 +11,30 @@ import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
+/**
+ * Bounded Levenshtein edit distance. Returns early once the running minimum
+ * exceeds `max`, so a near-miss check costs O(n·m) only for genuinely close
+ * strings. Used to recover from models that emit a slightly-off tool name.
+ */
+function boundedLevenshtein(a: string, b: string, max: number): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  let curr = new Array<number>(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (curr[j] < rowMin) rowMin = curr[j];
+    }
+    if (rowMin > max) return max + 1;
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
 const FILE_CHANGE_TOOLS = new Set([
   'filesystem__write_file',
   'filesystem__append_file',
@@ -105,6 +129,76 @@ export class ToolExecutor {
 
   getToolId(toolName: string): string | undefined {
     return this.tools.get(toolName)?.toolId;
+  }
+
+  /**
+   * Rewrite any near-miss tool-call names to their canonical registered form
+   * in place. Must run before anything reads `tc.name` for display or routing
+   * (the worker's `tool_call` event, this executor's `action` snapshot) so the
+   * whole event stream agrees with what actually executes. Idempotent — exact
+   * matches are left untouched; unresolvable names are left for the miss path
+   * to report. See `resolveToolName`.
+   */
+  normalizeToolCallNames(toolCalls: ToolCall[]): void {
+    for (const tc of toolCalls) {
+      if (this.tools.has(tc.name)) continue;
+      const resolved = this.resolveToolName(tc.name);
+      if (resolved && 'canonical' in resolved) {
+        agentLogger.info(
+          { agentId: this.context.id, requested: tc.name, routedTo: resolved.canonical },
+          'Routed near-miss tool name to its canonical form',
+        );
+        tc.name = resolved.canonical;
+      }
+    }
+  }
+
+  /**
+   * Recover from a tool name the model got slightly wrong before it dead-ends
+   * at `Unknown tool`. Registered names are prefixed (`filesystem__read_file`);
+   * models periodically emit the bare sub-name (`read_file`) or a typo. Two
+   * stages, both auto-routing ONLY when the match is unambiguous:
+   *
+   *  1. Bare-name alias: if `name` has no `__` and exactly one registered tool
+   *     ends with `__<name>`, route to it. Ambiguous (two groups own the same
+   *     sub-name) → no route.
+   *  2. Fuzzy fallback: closest registered name within edit distance 2. Routes
+   *     only when that closest name is unique at the minimum distance.
+   *
+   * Returns the resolved canonical name (caller looks it up + logs the
+   * correction), a `didYouMean` hint when a single best guess exists but we
+   * won't silently route, or null when nothing is close.
+   */
+  private resolveToolName(name: string): { canonical: string } | { didYouMean: string } | null {
+    // Stage 1: unambiguous bare sub-name → prefixed name.
+    if (!name.includes('__')) {
+      const suffix = `__${name}`;
+      const owners: string[] = [];
+      for (const registered of this.tools.keys()) {
+        if (registered.endsWith(suffix)) owners.push(registered);
+      }
+      if (owners.length === 1) return { canonical: owners[0] };
+    }
+
+    // Stage 2: closest registered name within edit distance 2.
+    const MAX_DISTANCE = 2;
+    let best: string | undefined;
+    let bestDist = MAX_DISTANCE + 1;
+    let tied = false;
+    for (const registered of this.tools.keys()) {
+      const d = boundedLevenshtein(name, registered, MAX_DISTANCE);
+      if (d < bestDist) {
+        bestDist = d;
+        best = registered;
+        tied = false;
+      } else if (d === bestDist) {
+        tied = true;
+      }
+    }
+    if (best === undefined || bestDist > MAX_DISTANCE) return null;
+    // A unique closest name is safe to auto-route; a tie is reported as a hint
+    // so the next iteration can correct itself rather than us guessing wrong.
+    return tied ? { didYouMean: best } : { canonical: best };
   }
 
   /** Check if any of the given tool calls target a final (delegation) tool */
@@ -206,6 +300,11 @@ export class ToolExecutor {
    * cap is enforced at the spawner (see `parent.budget.fanOut.cap`).
    */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
+    // Rewrite near-miss names to canonical BEFORE the action snapshot below, so
+    // the emitted call names match what executes. Idempotent if the worker
+    // already normalized (it does, before its own tool_call event).
+    this.normalizeToolCallNames(toolCalls);
+
     this.emitFn('action', {
       role: this.context.role,
       toolCalls: toolCalls.map(tc => {
@@ -245,10 +344,16 @@ export class ToolExecutor {
       const tool = this.tools.get(toolCall.name);
 
       if (!tool) {
+        // Names were already normalized at entry, so anything still missing is
+        // genuinely unknown — but offer the closest match as a hint so the next
+        // iteration can self-correct instead of blindly retrying.
+        const resolved = this.resolveToolName(toolCall.name);
+        const hint =
+          resolved && 'didYouMean' in resolved ? ` Did you mean "${resolved.didYouMean}"?` : '';
         results.push({
           toolCallId: toolCall.id,
           result: null,
-          error: `Unknown tool: ${toolCall.name}`,
+          error: `Unknown tool: ${toolCall.name}.${hint}`,
         });
         continue;
       }
