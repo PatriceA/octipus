@@ -62,4 +62,15 @@ describe('workspace routes — admin clears the gate', () => {
     // returns the probe result, not an auth error
     expect(r.body.error).toBeUndefined();
   });
+
+  test('POST /workspace/repositories rejects a parentPath outside the workspace', async () => {
+    // Admin clears the 403 gate, but an arbitrary parent (e.g. /etc) must be
+    // refused with 400 — repos may only land under the root or additional paths.
+    const r = await req(await appFor(true), 'POST', '/api/workspace/repositories', {
+      name: 'x',
+      parentPath: '/etc',
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/parent folder/i);
+  });
 });

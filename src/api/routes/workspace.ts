@@ -194,17 +194,40 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     const config = getConfig();
     const rootPath = resolve(config.workspace.rootPath);
 
-    // Containment: reject names that escape the workspace root via traversal
-    // (`../`), absolute paths, or null bytes. Without this, name="../../x"
-    // creates an attacker-chosen directory anywhere the process can write.
+    // Resolve the parent directory the repo lands in. Defaults to the
+    // workspace root; an explicit `parentPath` lets the user choose where the
+    // repo goes (the QA: "Create new repository doesn't let me choose the
+    // parent folder"). The parent must be the workspace root, an additional
+    // path, or a directory underneath one of them — never an arbitrary path.
+    const allowedRoots = [rootPath, ...config.workspace.additionalPaths.map((p) => resolve(p))];
+    let parentPath = rootPath;
+    if (body.parentPath) {
+      const candidate = resolve(body.parentPath);
+      const withinAllowed = allowedRoots.some(
+        (r) => candidate === r || candidate.startsWith(r + '/'),
+      );
+      if (!withinAllowed) {
+        set.status = 400;
+        return { error: 'Parent folder must be the workspace root or an additional path (or a subfolder of one)' };
+      }
+      if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
+        set.status = 400;
+        return { error: 'Parent folder does not exist or is not a directory' };
+      }
+      parentPath = candidate;
+    }
+
+    // Containment: reject names that escape the parent via traversal (`../`),
+    // absolute paths, or null bytes. Without this, name="../../x" creates an
+    // attacker-chosen directory anywhere the process can write.
     if (body.name.includes('\0') || body.name.includes('/') || body.name.includes('\\')) {
       set.status = 400;
       return { error: 'Invalid repository name: must not contain path separators or null bytes' };
     }
-    const repoPath = resolve(rootPath, body.name);
-    if (repoPath !== join(rootPath, body.name) || !repoPath.startsWith(rootPath + '/')) {
+    const repoPath = resolve(parentPath, body.name);
+    if (repoPath !== join(parentPath, body.name) || !repoPath.startsWith(parentPath + '/')) {
       set.status = 400;
-      return { error: 'Invalid repository name: resolves outside the workspace root' };
+      return { error: 'Invalid repository name: resolves outside the parent folder' };
     }
 
     if (existsSync(repoPath)) {
@@ -229,6 +252,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
   }, {
     body: t.Object({
       name: t.String({ minLength: 1 }),
+      parentPath: t.Optional(t.String()),
       initGit: t.Optional(t.Boolean()),
     }),
     detail: { tags: ['workspace'] },

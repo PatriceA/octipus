@@ -34,6 +34,11 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
   // Create repository state
   const [showCreateRepo, setShowCreateRepo] = useState(false);
   const [newRepoName, setNewRepoName] = useState('');
+  // Where the new repo lands. Candidates are the workspace root + each
+  // configured additional path; default is the root. Surfaced so the user
+  // isn't left guessing where "Create new repository" puts the folder.
+  const [parentFolders, setParentFolders] = useState<{ name: string; path: string }[]>([]);
+  const [repoParent, setRepoParent] = useState('');
   const [initGit, setInitGit] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -51,6 +56,14 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
     try {
       const ws = await api.get<{ rootPath: string; additionalPaths: string[] }>('/workspace');
       if (ws?.rootPath) {
+        // Parent-folder candidates for new repos: the root + each additional path.
+        const parents = [
+          { name: 'Workspace root', path: ws.rootPath },
+          ...(ws.additionalPaths || []).map((p) => ({ name: p.split('/').pop() || p, path: p })),
+        ];
+        setParentFolders(parents);
+        setRepoParent((cur) => cur || ws.rootPath);
+
         const dirs: ProjectEntry[] = [];
 
         const listChildren = async (basePath: string) => {
@@ -93,7 +106,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
     try {
       const result = await api.post<{ name: string; path: string; isGit: boolean }>(
         '/workspace/repositories',
-        { name: trimmed, initGit },
+        { name: trimmed, parentPath: repoParent || undefined, initGit },
       );
 
       if (result?.path) {
@@ -266,6 +279,24 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                 </button>
               ) : (
                 <div className="mt-2 p-3 bg-surface-container border border-outline-variant/10 rounded-lg space-y-3">
+                  {/* Parent folder — where the repo gets created */}
+                  {parentFolders.length > 1 && (
+                    <div>
+                      <label className="block text-[11px] text-on-surface-variant mb-1">Parent folder</label>
+                      <select
+                        value={repoParent}
+                        onChange={(e) => setRepoParent(e.target.value)}
+                        className="w-full px-3 py-2 bg-background border border-outline-variant/10 rounded-lg text-sm text-on-surface focus:ring-2 focus:ring-primary"
+                      >
+                        {parentFolders.map((f) => (
+                          <option key={f.path} value={f.path}>
+                            {f.name} — {f.path}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {/* Repo name input */}
                   <div>
                     <input
@@ -283,6 +314,12 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                       placeholder="Repository name..."
                       className="w-full px-3 py-2 bg-background border border-outline-variant/10 rounded-lg text-sm text-on-surface placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
                     />
+                    {/* Destination preview so the user always sees where it lands */}
+                    {repoParent && (
+                      <p className="mt-1 text-[11px] text-on-surface-variant truncate">
+                        Creates: <span className="font-mono">{repoParent}/{newRepoName.trim() || 'name'}</span>
+                      </p>
+                    )}
                   </div>
 
                   {/* Init git checkbox */}
