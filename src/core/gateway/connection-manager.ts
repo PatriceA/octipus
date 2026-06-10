@@ -286,14 +286,10 @@ export class ConnectionManager {
         }
 
         case 'api_key': {
-          // API key auth — accepts either:
-          //   1. A personal api token (`octi_…`) issued via Settings →
-          //      API Tokens. Checked against the api_tokens table.
-          //   2. The bootstrap MASTER_KEY (only when multi-user is off).
-          //
-          // The browser extension and any third-party WS client should
-          // use a personal token; MASTER_KEY support stays for
-          // single-user installs that explicitly disabled multi-user.
+          // API key auth — accepts a personal API token (`octi_…`) issued via
+          // Settings → API Tokens, checked against the api_tokens table. The
+          // browser extension and any third-party WS client use such a token.
+          // (The legacy MASTER_KEY fallback was removed with single-user mode.)
           const key = msg.credentials.key as string;
           if (!key) {
             this.sendAuthError(conn, 'Missing API key');
@@ -321,20 +317,10 @@ export class ConnectionManager {
             this.sendAuthError(conn, 'Invalid API key');
             return;
           }
-          // Legacy MASTER_KEY — only honored when multi-user is off so
-          // an attacker can't bypass the per-user scope by guessing it.
-          const { getConfig } = await import('@/config');
-          const multiuserOn = !!getConfig().multiuser?.enabled;
-          const masterKey = process.env.MASTER_KEY;
-          if (!multiuserOn && masterKey && key === masterKey) {
-            userId = 'system';
-            trustLevel = 'system';
-            isAdmin = true;
-          } else {
-            this.sendAuthError(conn, 'Invalid API key');
-            return;
-          }
-          break;
+          // Not a valid API token — reject. (The legacy MASTER_KEY fallback
+          // was removed with single-user mode; automation uses an API token.)
+          this.sendAuthError(conn, 'Invalid API key');
+          return;
         }
 
         default:

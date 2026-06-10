@@ -23,7 +23,6 @@ beforeAll(() => {
 afterEach(async () => {
   // Reset config flags between tests.
   const { getConfig } = await import('@/config');
-  getConfig().multiuser.enabled = false;
   getConfig().security.dockerIsolation = 'off';
 });
 
@@ -50,18 +49,9 @@ describe('userNetworkName', () => {
 });
 
 describe('isolationActive', () => {
-  test('false when multiuser.enabled is off', async () => {
-    const { isolationActive } = await import('@/security/docker-isolation');
-    const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = false;
-    getConfig().security.dockerIsolation = 'enforce';
-    expect(isolationActive('11111111-1111-1111-1111-111111111111')).toBe(false);
-  });
-
   test('false when dockerIsolation is "off"', async () => {
     const { isolationActive } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
     getConfig().security.dockerIsolation = 'off';
     expect(isolationActive('11111111-1111-1111-1111-111111111111')).toBe(false);
   });
@@ -69,7 +59,6 @@ describe('isolationActive', () => {
   test('false for system / local / empty userIds even when on', async () => {
     const { isolationActive } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
     getConfig().security.dockerIsolation = 'enforce';
     expect(isolationActive('system')).toBe(false);
     expect(isolationActive('local')).toBe(false);
@@ -80,7 +69,6 @@ describe('isolationActive', () => {
   test('true when both flags on and a real userId is supplied', async () => {
     const { isolationActive } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
     getConfig().security.dockerIsolation = 'enforce';
     expect(isolationActive('11111111-1111-1111-1111-111111111111')).toBe(true);
   });
@@ -95,7 +83,6 @@ describe('flag generators', () => {
   test('listFilterFlags emits --filter label=… when on', async () => {
     const { listFilterFlags } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
     getConfig().security.dockerIsolation = 'enforce';
     expect(listFilterFlags('11111111-1111-1111-1111-111111111111')).toEqual([
       '--filter', 'label=octipus.user_id=11111111-1111-1111-1111-111111111111',
@@ -105,7 +92,6 @@ describe('flag generators', () => {
   test('runIsolationFlags emits --label and --network when on', async () => {
     const { runIsolationFlags } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
     getConfig().security.dockerIsolation = 'enforce';
     const flags = runIsolationFlags('11111111-1111-1111-1111-111111111111');
     expect(flags).toContain('--label');
@@ -117,7 +103,6 @@ describe('flag generators', () => {
   test('buildIsolationFlags emits only --label (image builds have no network)', async () => {
     const { buildIsolationFlags } = await import('@/security/docker-isolation');
     const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
     getConfig().security.dockerIsolation = 'enforce';
     const flags = buildIsolationFlags('11111111-1111-1111-1111-111111111111');
     expect(flags).toEqual([

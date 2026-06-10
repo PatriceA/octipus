@@ -1,4 +1,11 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Config } from './schema';
+
+// Absolute workspace root under the user's home (outside the repo tree, so
+// workspace files can't be committed). `path.resolve` does NOT expand `~`, so
+// we compute the absolute path here rather than emit a literal tilde.
+const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 export const defaultConfig: Partial<Config> = {
   storageMode: 'external',
@@ -79,22 +86,19 @@ export const defaultConfig: Partial<Config> = {
     orchestratorHookTimeoutMs: 2700000,
   },
   multiuser: {
-    // Multi-user is the default since v0.3 — the legacy single-user
-    // path with MASTER_KEY Bearer auth is still reachable by setting
-    // MULTIUSER=false in .env, but new installs go straight onto the
-    // scoped-repos + api-tokens stack.
-    enabled: true,
+    // Octipus is always multi-user — there is no single-user mode and no
+    // MASTER_KEY fallback. These sub-flags tune independent layered features.
     auditShadow: true,
     enforcePermissions: true,
     rlsEnabled: false,           // requires non-superuser app role; opt-in
     orgWorkspaces: true,
   },
   workspace: {
-    rootPath: './workspace',
+    rootPath: WORKSPACE_ROOT,
     additionalPaths: [],
     sessionFolders: true,
     autoIndexFiles: true,
-    documentsPath: './workspace/documents',
+    documentsPath: join(WORKSPACE_ROOT, 'documents'),
     maxUploadSize: 52428800,
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',

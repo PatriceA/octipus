@@ -4,7 +4,6 @@ import {
   canActOnUser,
   isAdmin,
   isAuthenticated,
-  principalFromMasterKey,
   principalFromUser,
   SYSTEM_PRINCIPAL,
 } from './principal';
@@ -26,13 +25,6 @@ describe('Principal', () => {
     expect(p.roles).toContain('system_admin');
   });
 
-  test('principalFromMasterKey is tagged distinctly from real users', () => {
-    const p = principalFromMasterKey({ id: 'u1', username: 'admin', isAdmin: true });
-    expect(p.kind).toBe('master_key');
-    expect(p.isAdmin).toBe(true);
-    expect(p.sessionToken).toBeNull();
-  });
-
   test('SYSTEM_PRINCIPAL is admin and frozen', () => {
     expect(SYSTEM_PRINCIPAL.kind).toBe('system');
     expect(SYSTEM_PRINCIPAL.isAdmin).toBe(true);
@@ -45,10 +37,9 @@ describe('Principal', () => {
     expect(isAuthenticated(ANONYMOUS_PRINCIPAL)).toBe(false);
   });
 
-  test('isAuthenticated true for user/system/service/master_key, false for anonymous/null', () => {
+  test('isAuthenticated true for user/system, false for anonymous/null', () => {
     expect(isAuthenticated(SYSTEM_PRINCIPAL)).toBe(true);
     expect(isAuthenticated(principalFromUser({ id: 'u', username: 'x', isAdmin: false }))).toBe(true);
-    expect(isAuthenticated(principalFromMasterKey({ id: 'u', username: 'x', isAdmin: true }))).toBe(true);
     expect(isAuthenticated(ANONYMOUS_PRINCIPAL)).toBe(false);
     expect(isAuthenticated(null)).toBe(false);
     expect(isAuthenticated(undefined)).toBe(false);

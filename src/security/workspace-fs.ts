@@ -143,19 +143,15 @@ export class WorkspaceFS {
   /**
    * Build a `WorkspaceFS` for an in-flight agent.
    *
-   *   - When `multiuser.enabled` is true AND the agent has a real userId
-   *     (not the legacy `'system'` sentinel), returns the per-user
-   *     nested layout.
-   *   - Otherwise returns a flat `withRoot` instance pinned to
-   *     `config.workspace.rootPath` so single-user installs and
-   *     system-job tools keep their current layout.
+   *   - A real userId (not the `'system'` sentinel) gets the per-user
+   *     nested layout under `<dataRoot>/users/<id>/…`.
+   *   - System jobs (`userId === 'system'` or absent) get a flat
+   *     `withRoot` instance pinned to `config.workspace.rootPath`.
    *
-   * In both modes:
+   * In both cases:
    *   - `config.workspace.additionalPaths` are added as extra allowed
-   *     prefixes (lets a single-user deployment expose multiple repos).
-   *   - The legacy `/tmp/assistant-` prefix is allowed for transient
-   *     files. Pre-Phase-1b filesystem tools relied on this; we keep
-   *     it so behavior is unchanged.
+   *     prefixes (lets a deployment expose multiple repos).
+   *   - The legacy `/tmp/assistant-` prefix is allowed for transient files.
    */
   static forAgent(
     context?: { userId?: string },
@@ -164,7 +160,6 @@ export class WorkspaceFS {
     let cfg: ReturnType<typeof getConfig> | undefined;
     try { cfg = getConfig(); } catch { /* config may not be loaded */ }
 
-    const multiuser = !!cfg?.multiuser?.enabled;
     const dataRoot = options.dataRoot
       ?? pathResolve(cfg?.workspace.rootPath || './workspace');
     const additional = (cfg?.workspace.additionalPaths ?? []).map((p) => pathResolve(p));
@@ -176,7 +171,7 @@ export class WorkspaceFS {
       ...(options.extraAllowedPrefixes ?? []),
     ];
 
-    if (multiuser && context?.userId && context.userId !== 'system') {
+    if (context?.userId && context.userId !== 'system') {
       const principal = principalFromUser({
         id: context.userId,
         username: context.userId,

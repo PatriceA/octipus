@@ -8,20 +8,16 @@
  *
  * The `kind` discriminator lets the auth layer represent:
  *   - `user`         — a human authenticated via session cookie / bearer
- *   - `service`      — an API token bound to a service account (Phase 1+)
+ *   - `service`      — an API token bound to a service account
  *   - `system`       — background jobs (cron, compaction, reapers)
- *   - `master_key`   — legacy MASTER_KEY Bearer fallback, resolved to the
- *                      first admin user. Only valid when
- *                      `config.multiuser.enabled === false`. Phase 1
- *                      removes this variant entirely.
  *   - `anonymous`    — no credentials present; only public routes accept it
  */
 
-export type PrincipalKind = 'user' | 'service' | 'system' | 'master_key' | 'anonymous';
+export type PrincipalKind = 'user' | 'service' | 'system' | 'anonymous';
 
 export interface Principal {
   readonly kind: PrincipalKind;
-  /** UUID for `user`/`service`/`master_key`, sentinel string for `system`/`anonymous`. */
+  /** UUID for `user`/`service`, sentinel string for `system`/`anonymous`. */
   readonly userId: string;
   readonly username: string;
   readonly isAdmin: boolean;
@@ -52,7 +48,7 @@ export interface Principal {
    * tenant headers are silently ignored — alice handing bob's
    * workspace UUID gets her own default workspace, not bob's row.
    *
-   * Populated for any real user (`user` / `master_key` / `service`)
+   * Populated for any real user (`user` / `service`)
    * — the resolver lazily creates a default workspace if needed.
    * Anonymous / system principals leave it undefined. The
    * `multiuser.orgWorkspaces` flag only gates header-driven
@@ -99,27 +95,6 @@ export function principalFromUser(
     isAdmin: user.isAdmin,
     sessionToken,
     roles: user.isAdmin ? ['system_admin', 'user'] : ['user'],
-  };
-}
-
-/**
- * Build a principal for the legacy MASTER_KEY Bearer fallback.
- *
- * Phase 0: emitted only when `multiuser.enabled === false` and the request
- * presented the master key. Carries `kind: 'master_key'` so audit and
- * downstream code can distinguish it from a real session login.
- *
- * Phase 1: this constructor is removed and the fallback is replaced with
- * a printed bootstrap-admin token on first run.
- */
-export function principalFromMasterKey(adminUser: UserLike): Principal {
-  return {
-    kind: 'master_key',
-    userId: adminUser.id,
-    username: adminUser.username,
-    isAdmin: true,
-    sessionToken: null,
-    roles: ['system_admin', 'user'],
   };
 }
 

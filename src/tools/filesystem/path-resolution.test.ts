@@ -4,17 +4,17 @@
  * Regression coverage for the bug where resolution and validation used two
  * DIFFERENT workspace roots. `resolvePath` anchored on the flat
  * `config.workspace.rootPath`; `validatePath` anchored on the per-user
- * `WorkspaceFS` root. With `multiuser.enabled` (the default since v0.3) the
- * two roots diverge, so EVERY relative-path call resolved to the flat root
- * and then failed validation against the nested per-user root with
- * "Path '…' is outside allowed workspace directories" — even though the path
- * was the legitimate workspace.
+ * `WorkspaceFS` root. For a real (non-system) user the two roots diverge, so
+ * EVERY relative-path call resolved to the flat root and then failed
+ * validation against the nested per-user root with "Path '…' is outside
+ * allowed workspace directories" — even though the path was the legitimate
+ * workspace.
  *
  * The fix collapses both onto a single `WorkspaceFS.forAgent(context)`
  * instance whose `.resolve()` does resolution AND validation. These tests
  * drive the real tool handlers end-to-end (no mocks) against an ephemeral
- * `WORKSPACE_PATH`, in both multiuser (nested root) and single-user (flat
- * root) layouts.
+ * `WORKSPACE_PATH`, in both the per-user nested layout (real users) and the
+ * flat layout (system jobs).
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -96,9 +96,8 @@ afterAll(() => {
   for (const [k, v] of Object.entries(savedEnv)) setEnv(k, v);
 });
 
-describe('multiuser ON — nested per-user root', () => {
+describe('real users — nested per-user root', () => {
   beforeEach(async () => {
-    setEnv('MULTIUSER', 'true');
     await reloadConfig();
   });
 
@@ -215,16 +214,18 @@ describe('multiuser ON — nested per-user root', () => {
   });
 });
 
-describe('multiuser OFF — flat single-user root (no regression)', () => {
+describe('system jobs — flat workspace root (no per-user nesting)', () => {
+  // Octipus is always multi-user, so real users get a per-user nested root.
+  // In-process system jobs (`userId: 'system'`) are the only callers that
+  // still resolve against the flat `config.workspace.rootPath`.
   beforeEach(async () => {
-    setEnv('MULTIUSER', 'false');
     await reloadConfig();
   });
 
   test('list_directory(".") resolves to the flat workspace root', async () => {
     mkdirSync(dataRoot, { recursive: true });
     const tool = await makeTool();
-    const res = (await tool.handler('list_directory').execute({ path: '.' }, ctx())) as {
+    const res = (await tool.handler('list_directory').execute({ path: '.' }, ctx({ userId: 'system' }))) as {
       path: string;
     };
     expect(res.path).toBe(resolve(dataRoot));
@@ -234,7 +235,7 @@ describe('multiuser OFF — flat single-user root (no regression)', () => {
     const tool = await makeTool();
     const res = (await tool.handler('write_file').execute(
       { path: 'notes.md', content: 'hi\n' },
-      ctx(),
+      ctx({ userId: 'system' }),
     )) as { path: string };
     expect(res.path.startsWith(resolve(dataRoot) + sep)).toBe(true);
     expect(existsSync(res.path)).toBe(true);
@@ -243,7 +244,7 @@ describe('multiuser OFF — flat single-user root (no regression)', () => {
   test('escapes are still rejected in flat mode', async () => {
     const tool = await makeTool();
     await expect(
-      tool.handler('read_file').execute({ path: '/etc/passwd' }, ctx()),
+      tool.handler('read_file').execute({ path: '/etc/passwd' }, ctx({ userId: 'system' })),
     ).rejects.toThrow(/outside allowed workspace directories/);
   });
 });

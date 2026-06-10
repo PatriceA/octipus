@@ -882,22 +882,13 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Permission rules for tool access control. Format: { allow: ["shell(git:*)"], deny: ["shell(rm -rf:*)"], ask: ["shell(sudo:*)"] }. Rules use tool(matcher) syntax with wildcards.',
     isSecret: false,
   },
-  // ── Multi-user (Phase 0 feature flag) ──
-  {
-    key: 'multiuser.enabled',
-    category: 'multiuser',
-    valueType: 'boolean',
-    defaultValue: true,
-    description: 'Enable strict multi-user isolation. When true, MASTER_KEY Bearer fallback is suppressed and every request must carry a valid session or api token. Default since v0.3 — set MULTIUSER=false to fall back to the legacy single-user path.',
-    isSecret: false,
-    envVar: 'MULTIUSER',
-  },
+  // ── Multi-user (always on; these tune layered features) ──
   {
     key: 'multiuser.auditShadow',
     category: 'multiuser',
     valueType: 'boolean',
     defaultValue: true,
-    description: 'When true, the audit middleware records every state-changing request without enforcing anything. Lets operators inspect audit data before flipping multiuser.enabled.',
+    description: 'When true, the audit middleware records every state-changing request without enforcing anything. Lets operators inspect audit data before enforcing.',
     isSecret: false,
     envVar: 'MULTIUSER_AUDIT_SHADOW',
   },

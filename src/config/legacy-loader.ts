@@ -1,5 +1,10 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { defaultConfig } from './defaults';
 import type { Config } from './schema';
+
+// Absolute workspace root (see defaults.ts — `~` is not expanded by resolve()).
+const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 /**
  * Load ALL config from environment variables (legacy behavior).
@@ -124,28 +129,20 @@ export function loadFromEnvLegacy(): Partial<Config> {
       orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),
     },
     multiuser: {
-      enabled: process.env.MULTIUSER === 'true',
+      // No `enabled` flag — Octipus is always multi-user. These sub-flags
+      // tune independent layered features; enforcePermissions is
+      // secure-by-default (opt out with MULTIUSER_ENFORCE_PERMISSIONS=false).
       auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
-      // Secure-by-default since the May-5 multi-user flip
-      // (defaults.ts + settings-registry already use true). The legacy
-      // env loader was left as `=== 'true'` which forced false in
-      // env-only tests and made the upstream `permissions.isolation`
-      // expectation fail. Single-user installs that need the legacy
-      // permissive behavior opt out with MULTIUSER_ENFORCE_PERMISSIONS
-      // =false. Blast radius is narrow: the only call site that
-      // depended on the system-user bypass is the MCP-bridge route
-      // (api/routes/tools.ts), so unrelated single-user e2e tests
-      // are unaffected.
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
       orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
     },
     workspace: {
-      rootPath: process.env.WORKSPACE_PATH || './workspace',
+      rootPath: process.env.WORKSPACE_PATH || WORKSPACE_ROOT,
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
       sessionFolders: true,
       autoIndexFiles: true,
-      documentsPath: process.env.DOCUMENTS_PATH || './workspace/documents',
+      documentsPath: process.env.DOCUMENTS_PATH || join(WORKSPACE_ROOT, 'documents'),
       maxUploadSize: parseInt(process.env.MAX_UPLOAD_SIZE || '52428800', 10),
       ocrModel: process.env.OCR_MODEL || 'glm-ocr',
       ocrEndpoint: process.env.OCR_ENDPOINT || 'http://localhost:11435',

@@ -96,14 +96,11 @@ export class AgentManager {
       throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
     }
 
-    // Phase 3c-2 — per-user concurrency quota. Only fires when
-    // multi-user mode is on; single-user installs rely on the global
-    // cap above and skip the per-user check. Throws QuotaExceededError
-    // (distinct from the global cap's plain Error) so callers can
-    // distinguish.
+    // Per-user concurrency quota for real users (system/local jobs rely on
+    // the global cap above). Throws QuotaExceededError (distinct from the
+    // global cap's plain Error) so callers can distinguish.
     if (
-      getConfig().multiuser?.enabled
-      && options.userId
+      options.userId
       && options.userId !== 'system'
       && options.userId !== 'local'
     ) {

@@ -43,7 +43,6 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
     const { getConfig } = await import('@/config');
     getConfig().multiuser.rlsEnabled = false;
     getConfig().multiuser.orgWorkspaces = false;
-    getConfig().multiuser.enabled = false;
 
     const { getDb } = await import('@/db/postgres');
     const { users } = await import('@/db/schema/users');

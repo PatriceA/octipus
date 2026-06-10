@@ -34,8 +34,7 @@ const LABEL_KEY = 'octipus.user_id';
 export function isolationActive(userId: string | null | undefined): boolean {
   if (!userId || userId === 'system' || userId === 'local') return false;
   try {
-    const cfg = getConfig();
-    return !!cfg.multiuser?.enabled && cfg.security.dockerIsolation === 'enforce';
+    return getConfig().security.dockerIsolation === 'enforce';
   } catch {
     return false;
   }
