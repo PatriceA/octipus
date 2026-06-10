@@ -3,6 +3,8 @@ export {
   draftReply,
   getInbox,
   getMessage,
+  markRead,
+  replyOptions,
   sendReply,
   summarizeMessage,
   triageInbox,

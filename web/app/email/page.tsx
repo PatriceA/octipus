@@ -16,7 +16,7 @@ interface InboxItem {
   unread: boolean;
   triage?: Triage;
 }
-interface EmailMessage extends InboxItem { body: string; to?: Addr[] }
+interface EmailMessage extends InboxItem { body: string; html?: string; to?: Addr[] }
 interface Draft { to: string; subject: string; body: string }
 
 const priorityBadge: Record<string, string> = {
@@ -35,13 +35,19 @@ export default function EmailPage() {
   const [summary, setSummary] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [triaging, setTriaging] = useState(false);
+  const [nextPageToken, setNextPageToken] = useState<string | undefined>();
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [notice, setNotice] = useState('');
+  // Reply-options flow: the model proposes directions, the user picks one,
+  // THEN a draft is generated — instead of the model assuming a stance.
+  const [replyOpts, setReplyOpts] = useState<string[] | null>(null);
 
   const loadInbox = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get<{ provider: string | null; items: InboxItem[]; error?: string }>('/email/inbox');
+      const res = await api.get<{ provider: string | null; items: InboxItem[]; nextPageToken?: string; error?: string }>('/email/inbox');
       if (res.error) setError(res.error);
-      else { setProvider(res.provider); setItems(res.items || []); setError(''); }
+      else { setProvider(res.provider); setItems(res.items || []); setNextPageToken(res.nextPageToken); setError(''); }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -49,17 +55,46 @@ export default function EmailPage() {
     }
   }, []);
 
+  const loadMore = async () => {
+    if (!nextPageToken) return;
+    setLoadingMore(true);
+    try {
+      const res = await api.get<{ items: InboxItem[]; nextPageToken?: string; error?: string }>(
+        `/email/inbox?pageToken=${encodeURIComponent(nextPageToken)}`,
+      );
+      if (res.error) setError(res.error);
+      else {
+        // Dedupe — provider pages can overlap.
+        setItems((xs) => {
+          const seen = new Set(xs.map((x) => x.id));
+          return [...xs, ...(res.items || []).filter((x) => !seen.has(x.id))];
+        });
+        setNextPageToken(res.nextPageToken);
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load inbox once on mount
     loadInbox();
   }, [loadInbox]);
 
   const open = async (id: string) => {
-    setOpenMsg(null); setSummary(''); setDraft(null); setBusy('open');
+    setOpenMsg(null); setSummary(''); setDraft(null); setReplyOpts(null); setBusy('open');
     try {
       const msg = await api.get<EmailMessage & { error?: string }>(`/email/message/${id}`);
-      if (msg.error) setError(msg.error);
-      else setOpenMsg(msg);
+      if (msg.error) { setError(msg.error); return; }
+      setOpenMsg(msg);
+      // Mark read on open: clear the unread flag locally + in the provider.
+      if (msg.unread) {
+        setItems((xs) => xs.map((x) => (x.id === id ? { ...x, unread: false } : x)));
+        api.post(`/email/message/${id}/mark-read`, {}).catch(() => {
+          // Revert the optimistic flag if the provider call fails.
+          setItems((xs) => xs.map((x) => (x.id === id ? { ...x, unread: true } : x)));
+        });
+      }
     } finally {
       setBusy('');
     }
@@ -74,13 +109,25 @@ export default function EmailPage() {
     } finally { setBusy(''); }
   };
 
-  const makeDraft = async () => {
+  // Step 1: ask the model for reply directions; the user picks one next.
+  const fetchReplyOptions = async () => {
+    if (!openMsg) return;
+    setBusy('options'); setReplyOpts(null); setDraft(null);
+    try {
+      const res = await api.post<{ options?: string[]; error?: string }>(`/email/message/${openMsg.id}/reply-options`, {});
+      if (res.error) setError(res.error);
+      else setReplyOpts(res.options && res.options.length > 0 ? res.options : ['Write a reply']);
+    } finally { setBusy(''); }
+  };
+
+  // Step 2: draft a reply in the direction the user chose.
+  const draftWith = async (instruction: string) => {
     if (!openMsg) return;
     setBusy('draft');
     try {
-      const res = await api.post<Draft & { error?: string }>(`/email/message/${openMsg.id}/draft`, {});
+      const res = await api.post<Draft & { error?: string }>(`/email/message/${openMsg.id}/draft`, { instruction });
       if (res.error) setError(res.error);
-      else setDraft({ to: res.to, subject: res.subject, body: res.body });
+      else { setDraft({ to: res.to, subject: res.subject, body: res.body }); setReplyOpts(null); }
     } finally { setBusy(''); }
   };
 
@@ -106,11 +153,17 @@ export default function EmailPage() {
   };
 
   const triage = async () => {
-    setTriaging(true);
+    setTriaging(true); setNotice('');
     try {
       const res = await api.post<{ triage?: Record<string, Triage>; error?: string }>('/email/triage', {});
       if (res.triage) {
-        setItems((xs) => xs.map((x) => (res.triage![x.id] ? { ...x, triage: res.triage![x.id] } : x)));
+        const t = res.triage;
+        setItems((xs) => xs.map((x) => (t[x.id] ? { ...x, triage: t[x.id] } : x)));
+        const counts = Object.values(t).reduce(
+          (acc, v) => { acc[v.priority] = (acc[v.priority] ?? 0) + 1; return acc; },
+          {} as Record<string, number>,
+        );
+        setNotice(`Triaged ${Object.keys(t).length}: ${counts.high ?? 0} high · ${counts.normal ?? 0} normal · ${counts.low ?? 0} low.`);
       } else if (res.error) setError(res.error);
     } finally { setTriaging(false); }
   };
@@ -130,13 +183,19 @@ export default function EmailPage() {
           </div>
         </div>
         {provider && (
-          <button onClick={triage} disabled={triaging} className="px-3 py-2 text-sm border border-outline-variant/20 rounded-full hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface disabled:opacity-50">
+          <button
+            onClick={triage}
+            disabled={triaging}
+            title="Use AI to sort the inbox into high / normal / low priority. Reads only sender, subject and snippet — never full bodies."
+            className="px-3 py-2 text-sm border border-outline-variant/20 rounded-full hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface disabled:opacity-50"
+          >
             {triaging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-primary" />} Triage inbox
           </button>
         )}
       </div>
 
       {error && <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">{error}<button onClick={() => setError('')} className="ml-2 underline">dismiss</button></div>}
+      {notice && <div className="bg-primary/10 border border-primary/20 rounded-xs px-4 py-2 text-primary text-sm">{notice}<button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button></div>}
 
       {!provider ? (
         <div className="text-center py-12 text-on-surface-variant">
@@ -164,6 +223,15 @@ export default function EmailPage() {
                 <div className="text-xs text-on-surface-variant/70 truncate">{it.snippet}</div>
               </button>
             ))}
+            {nextPageToken && (
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="w-full text-sm text-on-surface-variant hover:text-on-surface py-2 inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null} Load more
+              </button>
+            )}
           </div>
 
           {/* Read pane */}
@@ -184,13 +252,45 @@ export default function EmailPage() {
 
                 <div className="flex flex-wrap gap-2">
                   <ActionBtn onClick={summarize} busy={busy === 'summarize'} icon={Sparkles}>Summarize</ActionBtn>
-                  <ActionBtn onClick={makeDraft} busy={busy === 'draft'} icon={FileText}>Draft reply</ActionBtn>
+                  <ActionBtn onClick={fetchReplyOptions} busy={busy === 'options' || busy === 'draft'} icon={FileText}>Draft reply</ActionBtn>
                   <ActionBtn onClick={archive} busy={busy === 'archive'} icon={Archive}>Archive</ActionBtn>
                 </div>
 
                 {summary && <div className="text-sm bg-surface-container-low rounded-xs p-3 text-on-surface whitespace-pre-wrap">{summary}</div>}
 
-                <div className="text-sm text-on-surface whitespace-pre-wrap max-h-72 overflow-y-auto border-t border-outline-variant/10 pt-3">{openMsg.body}</div>
+                {/* Email body — render sanitized HTML when present (most mail is
+                    HTML); fall back to plain text. The body is the important
+                    part, so give it at least half the viewport. */}
+                {openMsg.html ? (
+                  <div
+                    className="email-html text-sm text-on-surface min-h-[40vh] max-h-[60vh] overflow-y-auto border-t border-outline-variant/10 pt-3 [&_a]:text-primary [&_a]:underline [&_img]:max-w-full"
+                    // Sanitized server-side via the shared allowlist sanitizer
+                    // (src/core/html/sanitize.ts) — no scripts/handlers/unsafe URLs survive.
+                    dangerouslySetInnerHTML={{ __html: openMsg.html }}
+                  />
+                ) : (
+                  <div className="text-sm text-on-surface whitespace-pre-wrap min-h-[40vh] max-h-[60vh] overflow-y-auto border-t border-outline-variant/10 pt-3">{openMsg.body}</div>
+                )}
+
+                {/* Reply directions — the user chooses before a draft is written. */}
+                {replyOpts && (
+                  <div className="space-y-2 border-t border-outline-variant/10 pt-3">
+                    <p className="text-xs uppercase tracking-wide text-on-surface-variant">How do you want to reply?</p>
+                    <div className="flex flex-wrap gap-2">
+                      {replyOpts.map((opt) => (
+                        <button
+                          key={opt}
+                          onClick={() => draftWith(opt)}
+                          disabled={busy === 'draft'}
+                          className="px-2.5 py-1.5 text-sm border border-primary/30 rounded-full hover:bg-primary-container/20 text-on-surface disabled:opacity-50"
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                      <button onClick={() => setReplyOpts(null)} className="px-2 py-1.5 text-sm text-on-surface-variant hover:text-on-surface">Cancel</button>
+                    </div>
+                  </div>
+                )}
 
                 {draft && (
                   <div className="space-y-2 border-t border-outline-variant/10 pt-3">

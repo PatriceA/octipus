@@ -30,5 +30,8 @@ export interface InboxItem {
 /** A full message (inbox row + body), for the read pane. */
 export interface EmailMessage extends InboxItem {
   to?: EmailAddress[];
+  /** Plain-text body (always present — used for AI prompts and as a fallback). */
   body: string;
+  /** Sanitized HTML body, when the message was HTML. Safe to render. */
+  html?: string;
 }
