@@ -10,6 +10,7 @@ import {
   Loader2,
   RotateCcw,
   Search,
+  Users,
   Wrench,
   X,
 } from 'lucide-react';
@@ -116,11 +117,14 @@ function PermissionToggle({
 function ToolModuleCard({
   module,
   userPermissions,
+  roleAccess,
   onPermissionChange,
   onPermissionReset,
 }: {
   module: ToolModule;
   userPermissions: UserPermission[];
+  /** Agent roles whose toolIds include this module — i.e. who can actually call it. */
+  roleAccess: string[];
   onPermissionChange: (toolId: string, action: string, level: PermissionLevel) => void;
   onPermissionReset: (toolId: string, action: string) => void;
 }) {
@@ -181,6 +185,22 @@ function ToolModuleCard({
               {overrideCount} custom
             </span>
           )}
+          <span
+            className={cn(
+              'px-1.5 py-0.5 text-xs rounded-full flex items-center gap-1',
+              roleAccess.length > 0
+                ? 'bg-surface-container-high text-on-surface-variant'
+                : 'bg-amber-900/30 text-warning'
+            )}
+            title={
+              roleAccess.length > 0
+                ? `Agent roles that can use this tool: ${roleAccess.join(', ')}`
+                : 'No agent role grants this tool — agents cannot call it. Add its id to a role’s toolIds.'
+            }
+          >
+            <Users className="w-3 h-3" />
+            {roleAccess.length > 0 ? `${roleAccess.length} roles` : 'unused'}
+          </span>
           <span className="text-xs text-on-surface-variant">v{module.version}</span>
           <span
             className={cn(
@@ -200,6 +220,30 @@ function ToolModuleCard({
 
       {expanded && (
         <div className="border-t border-outline-variant/10 p-4 space-y-1.5">
+          {/* Which agent roles / topics can use this tool — the QA ask: the
+              tool was visible but not which topics could reach it. */}
+          <div className="flex items-start gap-2 pb-2 mb-1.5 border-b border-outline-variant/10">
+            <Users className="w-4 h-4 text-on-surface-variant mt-0.5 shrink-0" />
+            {roleAccess.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                <span className="text-xs text-on-surface-variant mr-1">Available to roles:</span>
+                {roleAccess.map((role) => (
+                  <span
+                    key={role}
+                    className="px-1.5 py-0.5 text-[10px] rounded bg-surface-container-high text-on-surface/80 font-mono"
+                  >
+                    {role}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-warning">
+                Not assigned to any agent role — no agent can call this tool. Add{' '}
+                <span className="font-mono">{module.id}</span> to a role’s <span className="font-mono">toolIds</span>.
+              </p>
+            )}
+          </div>
+
           {/* Capabilities with inline permissions */}
           {capabilities.map(({ permission, tool }) => {
             const effectiveLevel = getEffectiveLevel(permission);
@@ -319,9 +363,21 @@ export default function ToolsPage() {
     },
   });
 
+  const { data: roleMapData } = useQuery({
+    queryKey: ['tool-role-map'],
+    queryFn: async () => {
+      try {
+        return await api.get<{ byTool: Record<string, string[]> }>('/tools/role-map');
+      } catch {
+        return { byTool: {} };
+      }
+    },
+  });
+
   const toolModules = toolsData?.tools || [];
   const userPermissions = permissionsData?.permissions || [];
   const mcpTools = mcpData?.tools || [];
+  const roleByTool = roleMapData?.byTool || {};
 
   const handlePermissionChange = useCallback(
     async (toolId: string, action: string, level: PermissionLevel) => {
@@ -446,6 +502,7 @@ export default function ToolsPage() {
               key={module.id}
               module={module}
               userPermissions={userPermissions}
+              roleAccess={roleByTool[module.id] || []}
               onPermissionChange={handlePermissionChange}
               onPermissionReset={handlePermissionReset}
             />
