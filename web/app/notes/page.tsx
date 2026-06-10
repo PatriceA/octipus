@@ -1,8 +1,9 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, NotebookPen, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
+import { Eye, Loader2, NotebookPen, Pencil, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { Markdown } from '@/components/ui/markdown-renderer';
 import { api } from '@/lib/api';
 
 interface NoteRow {
@@ -24,6 +25,7 @@ export default function NotesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
+  const [mode, setMode] = useState<'edit' | 'preview'>('edit');
 
   const list = useQuery<NoteListResponse>({
     queryKey: ['notes'],
@@ -110,12 +112,48 @@ export default function NotesPage() {
           placeholder="Note title"
           className="w-full text-2xl font-semibold bg-transparent outline-none mb-3"
         />
-        <textarea
-          value={draftBody}
-          onChange={(e) => setDraftBody(e.target.value)}
-          placeholder="Write markdown. Use [[wikilinks]] to connect notes and #tags to categorise."
-          className="w-full h-80 bg-transparent border border-border rounded p-3 font-mono text-sm outline-none resize-y"
-        />
+        <div className="flex items-center gap-1 mb-2">
+          <button
+            type="button"
+            onClick={() => setMode('edit')}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${mode === 'edit' ? 'bg-accent' : 'hover:bg-accent'}`}
+          >
+            <Pencil size={12} /> Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('preview')}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${mode === 'preview' ? 'bg-accent' : 'hover:bg-accent'}`}
+          >
+            <Eye size={12} /> Preview
+          </button>
+        </div>
+        {mode === 'edit' ? (
+          <textarea
+            value={draftBody}
+            onChange={(e) => setDraftBody(e.target.value)}
+            placeholder="Write markdown. Use [[wikilinks]] to connect notes and #tags to categorise."
+            className="w-full h-80 bg-transparent border border-border rounded p-3 font-mono text-sm outline-none resize-y"
+          />
+        ) : (
+          <div className="w-full min-h-80 border border-border rounded p-3">
+            {draftBody.trim() ? (
+              <Markdown content={draftBody} />
+            ) : (
+              <p className="text-sm text-muted-foreground">Nothing to preview yet.</p>
+            )}
+          </div>
+        )}
+        {/* Syntax help — the QA noted there was no guidance on linking or markdown. */}
+        <p className="mt-2 text-xs text-muted-foreground">
+          <span className="font-mono">[[Note Title]]</span> links to another note ·{' '}
+          <span className="font-mono">#tag</span> categorises ·{' '}
+          <span className="font-mono">**bold**</span>{' '}
+          <span className="font-mono">*italic*</span>{' '}
+          <span className="font-mono"># Heading</span>{' '}
+          <span className="font-mono">- list</span>{' '}
+          <span className="font-mono">`code`</span> · use Preview to see it rendered.
+        </p>
         <div className="flex items-center gap-2 mt-3">
           <button
             type="button"
