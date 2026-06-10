@@ -10,10 +10,8 @@ import { getSessionManager } from '@/security/auth/session';
 import {
   ANONYMOUS_PRINCIPAL,
   type Principal,
-  principalFromMasterKey,
   principalFromUser,
 } from '@/security/principal';
-import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { setupGatewayWebSocket } from './gateway-ws';
 import { auditShadowMiddleware } from './middleware/audit-shadow';
@@ -164,7 +162,6 @@ export function createServer() {
     .derive(async ({ request }) => {
       const authHeader = request.headers.get('authorization');
       const sessionManager = getSessionManager();
-      const multiuserEnabled = !!getConfig().multiuser?.enabled;
 
       let token: string | undefined;
 
@@ -211,36 +208,9 @@ export function createServer() {
       }
 
       if (!session) {
-        // MASTER_KEY Bearer fallback — single-user / MCP convenience.
-        // Disabled when multi-user mode is on (Phase 1+ removes it).
-        if (!multiuserEnabled) {
-          const masterKey = process.env.MASTER_KEY;
-          if (masterKey && secureCompare(token, masterKey)) {
-            apiLogger.warn(
-              { ip: request.headers.get('x-forwarded-for') || 'unknown', path: new URL(request.url).pathname },
-              'MASTER_KEY used as API bearer (admin access, single-user mode). The master key is the vault root encryption secret — prefer minting a scoped API token (POST /api/tokens) for automation.'
-            );
-            // Resolve to the first admin user so UUID-typed queries work
-            const db = getDb();
-            const [adminUser] = await db.select({ id: users.id, username: users.username })
-              .from(users).where(eq(users.isAdmin, true)).orderBy(users.createdAt).limit(1);
-            if (adminUser) {
-              const userObj = { id: adminUser.id, username: adminUser.username, isAdmin: true };
-              return {
-                user: userObj,
-                session: null,
-                principal: principalFromMasterKey(userObj),
-              };
-            }
-            // Fallback if no admin user exists yet — keep legacy 'system' shape.
-            const fallback = { id: 'system', username: 'system', isAdmin: true };
-            return {
-              user: fallback,
-              session: null,
-              principal: principalFromMasterKey(fallback),
-            };
-          }
-        }
+        // No session and no valid API token → anonymous. (The legacy
+        // MASTER_KEY Bearer fallback was removed with single-user mode —
+        // automation must mint a scoped API token via POST /api/tokens.)
         return { user: null, session: null, principal: ANONYMOUS_PRINCIPAL as Principal };
       }
 

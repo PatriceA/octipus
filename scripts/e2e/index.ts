@@ -47,7 +47,7 @@ export async function run() {
 
   console.log(`\x1b[1m\x1b[36mAssistant E2E Test Suite\x1b[0m`);
   console.log(`API: ${BASE_URL}`);
-  console.log(`Auth: ${fixtures.usingMasterKey ? 'MASTER_KEY' : 'register/login'}\n`);
+  console.log('Auth: register/login\n');
 
   try {
     await testHealth(runner, client);

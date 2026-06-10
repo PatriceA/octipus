@@ -21,7 +21,7 @@ export type WsFrame = Record<string, unknown> & { type: string };
 export interface GatewayWSClientOptions {
   url?: string;
   token?: string | null;
-  /** Auth method — default derived from fixtures: 'api_key' when MASTER_KEY, else 'session_token' */
+  /** Auth method — defaults to 'session_token' (the register/login token). */
   authMethod?: 'session_token' | 'api_key' | 'local';
   clientType?: 'webchat' | 'tui' | 'channel' | 'mobile' | 'acp' | 'agent';
   clientVersion?: string;
@@ -51,8 +51,7 @@ export class GatewayWSClient {
 
   constructor(options: GatewayWSClientOptions = {}) {
     const token = options.token !== undefined ? options.token : fixtures.authToken;
-    const authMethod = options.authMethod
-      ?? (fixtures.usingMasterKey ? 'api_key' : 'session_token');
+    const authMethod = options.authMethod ?? 'session_token';
 
     this.options = {
       url: options.url || fixtures.gatewayUrl,

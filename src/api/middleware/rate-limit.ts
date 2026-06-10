@@ -1,5 +1,4 @@
 import { Elysia } from 'elysia';
-import { getConfig } from '@/config';
 import type { Principal } from '@/security/principal';
 import { isAuthenticated } from '@/security/principal';
 import { getRateLimiter } from '@/security/rate-limiter';
@@ -93,10 +92,6 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     }
 
     // ── Layer 2: per-user (Phase 3c-2) ─────────────────────────────
-    let multiuser = false;
-    try { multiuser = !!getConfig().multiuser?.enabled; } catch { /* config not loaded */ }
-    if (!multiuser) return;
-
     const principal = (ctx as { principal?: Principal }).principal;
     if (!principal || !isAuthenticated(principal)) return;
     if (principal.userId === 'system' || principal.userId === 'local') return;

@@ -277,23 +277,15 @@ export const swarmConfigSchema = z.object({
   }).prefault({}),
 });
 
-// Multi-user configuration schema
+// Multi-user configuration schema.
 //
-// Phase 0: feature flag is default-off. When `enabled` is false the server
-// behaves identically to the single-user past — including the MASTER_KEY
-// Bearer fallback in `src/api/server.ts`. When `enabled` is true (Phase 1+):
-// the fallback is suppressed, every request must carry a valid session
-// token, and every state-changing route must produce an audit row.
-//
-// The `auditShadow` sub-flag is independent: even with multiuser disabled
-// we want to start collecting audit data so operators can inspect it
-// before flipping the main flag.
+// Octipus is always multi-user: every request must carry a valid session or
+// API token (there is no MASTER_KEY fallback), workspaces are per-user, and
+// quotas / per-user rate limits apply. A single-user install simply never
+// creates a second user. The sub-flags below tune independent features
+// layered on top.
 export const multiuserConfigSchema = z.object({
-  enabled: z.boolean().default(false),
   auditShadow: z.boolean().default(true),
-  // Default-on since May-5 multi-user flip; aligns with defaults.ts +
-  // settings-registry + the loader. Single-user installs opt out via
-  // MULTIUSER_ENFORCE_PERMISSIONS=false.
   enforcePermissions: z.boolean().default(true),
   /**
    * Postgres Row-Level Security — Phase 3b. When true, the connection
@@ -328,11 +320,14 @@ export const skillsConfigSchema = z.object({
 });
 
 export const workspaceConfigSchema = z.object({
-  rootPath: z.string().default('./workspace'),
+  // Default outside the repo tree (mirrors database.dataDir) so workspace
+  // files can never be accidentally committed/pushed. Editable via
+  // PUT /api/workspace; existing installs keep their configured path.
+  rootPath: z.string().default('~/.octipus/workspace'),
   additionalPaths: z.array(z.string()).default([]),
   sessionFolders: z.boolean().default(true),
   autoIndexFiles: z.boolean().default(true),
-  documentsPath: z.string().default('./workspace/documents'),
+  documentsPath: z.string().default('~/.octipus/workspace/documents'),
   maxUploadSize: z.number().min(0).default(52428800), // 50MB
   ocrModel: z.string().default('glm-ocr'),
   ocrEndpoint: z.string().default('http://localhost:11435'),

@@ -321,20 +321,10 @@ export class ConnectionManager {
             this.sendAuthError(conn, 'Invalid API key');
             return;
           }
-          // Legacy MASTER_KEY — only honored when multi-user is off so
-          // an attacker can't bypass the per-user scope by guessing it.
-          const { getConfig } = await import('@/config');
-          const multiuserOn = !!getConfig().multiuser?.enabled;
-          const masterKey = process.env.MASTER_KEY;
-          if (!multiuserOn && masterKey && key === masterKey) {
-            userId = 'system';
-            trustLevel = 'system';
-            isAdmin = true;
-          } else {
-            this.sendAuthError(conn, 'Invalid API key');
-            return;
-          }
-          break;
+          // Not a valid API token — reject. (The legacy MASTER_KEY fallback
+          // was removed with single-user mode; automation uses an API token.)
+          this.sendAuthError(conn, 'Invalid API key');
+          return;
         }
 
         default:

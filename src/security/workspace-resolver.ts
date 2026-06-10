@@ -68,7 +68,7 @@ export async function resolveWorkspace(
   principal: Principal,
   header: string | null | undefined,
 ): Promise<WorkspaceResolution> {
-  if (principal.kind !== 'user' && principal.kind !== 'master_key' && principal.kind !== 'service') {
+  if (principal.kind !== 'user' && principal.kind !== 'service') {
     return { workspaceId: null, isDefault: true };
   }
 

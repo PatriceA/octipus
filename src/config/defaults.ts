@@ -79,22 +79,19 @@ export const defaultConfig: Partial<Config> = {
     orchestratorHookTimeoutMs: 2700000,
   },
   multiuser: {
-    // Multi-user is the default since v0.3 — the legacy single-user
-    // path with MASTER_KEY Bearer auth is still reachable by setting
-    // MULTIUSER=false in .env, but new installs go straight onto the
-    // scoped-repos + api-tokens stack.
-    enabled: true,
+    // Octipus is always multi-user — there is no single-user mode and no
+    // MASTER_KEY fallback. These sub-flags tune independent layered features.
     auditShadow: true,
     enforcePermissions: true,
     rlsEnabled: false,           // requires non-superuser app role; opt-in
     orgWorkspaces: true,
   },
   workspace: {
-    rootPath: './workspace',
+    rootPath: '~/.octipus/workspace',
     additionalPaths: [],
     sessionFolders: true,
     autoIndexFiles: true,
-    documentsPath: './workspace/documents',
+    documentsPath: '~/.octipus/workspace/documents',
     maxUploadSize: 52428800,
     ocrModel: 'glm-ocr',
     ocrEndpoint: 'http://localhost:11435',

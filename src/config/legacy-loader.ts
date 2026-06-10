@@ -124,24 +124,16 @@ export function loadFromEnvLegacy(): Partial<Config> {
       orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),
     },
     multiuser: {
-      enabled: process.env.MULTIUSER === 'true',
+      // No `enabled` flag — Octipus is always multi-user. These sub-flags
+      // tune independent layered features; enforcePermissions is
+      // secure-by-default (opt out with MULTIUSER_ENFORCE_PERMISSIONS=false).
       auditShadow: process.env.MULTIUSER_AUDIT_SHADOW !== 'false',
-      // Secure-by-default since the May-5 multi-user flip
-      // (defaults.ts + settings-registry already use true). The legacy
-      // env loader was left as `=== 'true'` which forced false in
-      // env-only tests and made the upstream `permissions.isolation`
-      // expectation fail. Single-user installs that need the legacy
-      // permissive behavior opt out with MULTIUSER_ENFORCE_PERMISSIONS
-      // =false. Blast radius is narrow: the only call site that
-      // depended on the system-user bypass is the MCP-bridge route
-      // (api/routes/tools.ts), so unrelated single-user e2e tests
-      // are unaffected.
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
       orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
     },
     workspace: {
-      rootPath: process.env.WORKSPACE_PATH || './workspace',
+      rootPath: process.env.WORKSPACE_PATH || '~/.octipus/workspace',
       additionalPaths: process.env.WORKSPACE_ADDITIONAL_PATHS?.split(',').filter(Boolean) || [],
       sessionFolders: true,
       autoIndexFiles: true,

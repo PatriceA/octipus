@@ -610,14 +610,11 @@ export class AgentWorker extends BaseAgentWorker {
       // Aggregate across this user's running + completed agents for the
       // current UTC day. Distinct from the per-agent maxTokenBudget
       // above: throws QuotaExceededError so callers can distinguish a
-      // user-cap hit from an agent-cap hit. Only fires when multi-user
-      // mode is on and the agent has a real userId (not the legacy
-      // 'system'/'local' sentinel).
+      // user-cap hit from an agent-cap hit. Only fires for a real userId
+      // (not the 'system'/'local' sentinel).
       try {
-        const { getConfig } = await import('@/config');
         if (
-          getConfig().multiuser?.enabled
-          && this.context.userId
+          this.context.userId
           && this.context.userId !== 'system'
           && this.context.userId !== 'local'
         ) {

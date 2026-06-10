@@ -64,12 +64,6 @@ afterAll(async () => {
   await closeStorage();
 });
 
-beforeEach(async () => {
-  // Reset the multiuser flag — tests opt in individually.
-  const { getConfig } = await import('@/config');
-  getConfig().multiuser.enabled = false;
-});
-
 // ─── Gate 1: concurrent-agents on agent-manager.spawn() ───────────
 //
 // Exercises the willExceed gate the way agent-manager.spawn() calls
@@ -158,23 +152,7 @@ describe('gate: per-user API rate limit middleware', () => {
       .group('/api', (a) => a.get('/sessions', () => ({ ok: true }))) as unknown as ElysiaLike;
   }
 
-  test('flag off: no per-user limit is applied even when the principal has a tiny override', async () => {
-    const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = false;
-    const { getQuotaManager } = await import('@/security/quotas');
-    await getQuotaManager().setOverride(aliceId, { maxApiCallsPerMinute: 1 });
-
-    const app = await buildApp(aliceId);
-    // Many requests; all 200.
-    for (let i = 0; i < 5; i++) {
-      const res = await app.handle(new Request('http://localhost/api/sessions'));
-      expect(res.status).toBe(200);
-    }
-  });
-
-  test('flag on + tiny cap: 429 after the second request', async () => {
-    const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
+  test('tiny cap: 429 after the second request', async () => {
     const { getQuotaManager } = await import('@/security/quotas');
     await getQuotaManager().setOverride(bobId, { maxApiCallsPerMinute: 2 });
 
@@ -188,10 +166,7 @@ describe('gate: per-user API rate limit middleware', () => {
     expect(body.quota?.max).toBe(2);
   });
 
-  test('flag on + anonymous: middleware skips (anonymous traffic isn’t per-user-limited)', async () => {
-    const { getConfig } = await import('@/config');
-    getConfig().multiuser.enabled = true;
-
+  test('anonymous: middleware skips (anonymous traffic isn’t per-user-limited)', async () => {
     const app = await buildApp(null);
     for (let i = 0; i < 5; i++) {
       const res = await app.handle(new Request('http://localhost/api/sessions'));
