@@ -66,10 +66,12 @@ export default function NotesPage() {
     setSelectedId(null);
     setDraftTitle('');
     setDraftBody('');
+    setMode('edit');
   }
 
   function openNote(n: NoteRow) {
     setSelectedId(n.id);
+    setMode('edit');
     api.get<NoteDetail>(`/notes/${n.id}`).then((d) => {
       setDraftTitle(d.title);
       setDraftBody(d.body);

@@ -132,7 +132,7 @@ export function Markdown({ content, className }: { content: string; className?: 
           a({ href, children }) {
             return (
               <a
-                href={href}
+                href={href ?? '#'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary underline hover:opacity-80"

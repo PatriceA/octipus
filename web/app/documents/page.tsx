@@ -263,7 +263,7 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
     /\.(md|csv|json|xml|yaml|yml|log|ini|conf|toml|html|htm|css|js|ts|py|sh|sql)$/i.test(originalName);
   // Markdown files render formatted (headings, lists, tables) instead of as a
   // raw monospace dump — Deep Research saves its reports here as .md.
-  const isMarkdown = mimeType === 'text/markdown' || /\.(md|markdown)$/i.test(originalName);
+  const isMarkdown = mimeType === 'text/markdown' || /\.(md|markdown|mdx)$/i.test(originalName);
   const previewable = isImage || isPdf || isText;
 
   useEffect(() => {
