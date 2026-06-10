@@ -290,45 +290,92 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     }
   })
 
-  // Feature status — checks which features have models configured via topic routing
+  // Feature status — which features have a model bound to the topic they
+  // depend on. Each entry carries `required` (a hard dependency that throws if
+  // unbound vs. a soft one that falls back to the default model) and `help`
+  // (hover text explaining the feature). Only topics a feature actually depends
+  // on are listed. OCR and Vision are separate rows (distinct models/roles).
   .get('/features', async () => {
     const FEATURE_TOPICS = [
-      { name: 'Chat & Orchestration', topic: 'general', hint: 'Add a model and set it as default' },
-      { name: 'Code Generation', topic: 'coding', hint: "Assign a model to the 'coding' topic" },
-      { name: 'Knowledge Base (RAG)', topic: 'embedding', hint: "Assign the 'embedding' topic to an embedding model" },
-      { name: 'Document OCR', topic: 'vision', hint: "Pull a vision model (e.g., glm-ocr) and assign 'vision' topic" },
-      { name: 'Research', topic: 'research', hint: "Assign a model to the 'research' topic" },
-      { name: 'Architecture', topic: 'architecture', hint: "Assign a model to the 'architecture' topic" },
+      { key: 'chat', name: 'Chat', topic: 'general', required: true,
+        help: 'The base chat brain — every message that is not delegated runs on your default model.',
+        hint: 'Add a model and set it as the default' },
+      { key: 'orchestration', name: 'Orchestration', topic: 'general', required: true,
+        help: 'The swarm orchestrator that routes work to specialist agents. Its depth (Router/Light/Full) follows the default model size.',
+        hint: 'Set a default model — orchestration runs on it' },
+      { key: 'coding', name: 'Code generation', topic: 'coding', required: false,
+        help: 'Used when a request is classified as coding. Optional — falls back to the default model if unset.',
+        hint: "Assign a model to the 'coding' topic" },
+      { key: 'embedding', name: 'Knowledge base (embeddings)', topic: 'embedding', required: true,
+        help: 'Embeddings power knowledge-base indexing and semantic search. Required for RAG.',
+        hint: "Assign the 'embedding' topic to an embedding model" },
+      { key: 'memory', name: 'Memory extraction', topic: 'memory_extraction', required: false,
+        help: 'Decides what to remember from conversations. Optional — without it, memory capture is skipped.',
+        hint: "Assign a model to the 'memory_extraction' topic" },
+      { key: 'ocr', name: 'Document OCR', topic: 'ocr', required: false,
+        help: 'Extracts text from scanned PDFs and images. Falls back to the Vision model if unset.',
+        hint: "Assign an OCR model (e.g. glm-ocr) to the 'ocr' topic" },
+      { key: 'vision', name: 'Image vision', topic: 'vision', required: false,
+        help: 'Describes image attachments and is the fallback for OCR.',
+        hint: "Assign a vision model to the 'vision' topic" },
+      { key: 'research', name: 'Deep Research', topic: 'research', required: false,
+        help: 'Powers Deep Research reports. Optional — falls back to the default model if unset.',
+        hint: "Assign a model to the 'research' topic" },
+      { key: 'evaluation', name: 'Evaluation', topic: 'evaluation', required: false,
+        help: 'LLM-as-judge used by the eval suite. Optional — falls back to the default model if unset.',
+        hint: "Assign a model to the 'evaluation' topic" },
     ] as const;
 
     const registry = getModelRegistry();
+    // Chat and Orchestration run on the *default* model: the orchestrator and
+    // router resolve via getDefaultModel(), and getModelForTopic() has no
+    // default fallback. So a 'general' binding is NOT what makes them work —
+    // resolve those rows against the default instead of the topic.
+    const defaultModel = await registry.getDefaultModel();
+
+    // A model "explicitly" serves a specialist topic only when it carries that
+    // topic (legacy array or topicRoles) — the default model can't stand in.
+    const isExplicit = (
+      model: Awaited<ReturnType<typeof registry.getModelForTopic>>,
+      topic: string,
+    ): boolean => !!(model && (model.topics?.includes(topic) || (model.topicRoles && topic in model.topicRoles)));
+
+    const SPECIALIST_TOPICS = ['embedding', 'vision', 'ocr'];
 
     const features = await Promise.all(
-      FEATURE_TOPICS.map(async ({ name, topic, hint }) => {
+      FEATURE_TOPICS.map(async ({ key, name, topic, required, help, hint }) => {
         try {
-          const model = await registry.getModelForTopic(topic);
-          // getModelForTopic falls back to default model. For specialist topics
-          // (embedding, vision) that require specific model capabilities, check
-          // whether the resolved model actually has the topic in its topics array
-          // or topicRoles — otherwise the default model can't fulfill the role.
-          const specialistTopics = ['embedding', 'vision'];
-          let isExplicit = true;
-          if (model && specialistTopics.includes(topic)) {
-            const hasTopic = model.topics?.includes(topic);
-            const hasTopicRole = model.topicRoles && topic in model.topicRoles;
-            isExplicit = !!(hasTopic || hasTopicRole);
+          if (topic === 'general') {
+            const configured = !!defaultModel;
+            return {
+              key, name, topic, required, help, configured,
+              model: configured ? defaultModel!.name : null,
+              ...(configured ? {} : { hint }),
+            };
           }
 
-          const configured = !!(model && isExplicit);
+          const model = await registry.getModelForTopic(topic);
+          const explicit = SPECIALIST_TOPICS.includes(topic) ? isExplicit(model, topic) : !!model;
+          let configured = !!(model && explicit);
+          let resolvedModel = configured ? model!.name : null;
+
+          // The document processor falls OCR back to the vision model, so OCR
+          // is functional whenever either 'ocr' or 'vision' is explicitly bound.
+          if (key === 'ocr' && !configured) {
+            const vision = await registry.getModelForTopic('vision');
+            if (isExplicit(vision, 'vision')) {
+              configured = true;
+              resolvedModel = `${vision!.name} (via vision)`;
+            }
+          }
+
           return {
-            name,
-            topic,
-            configured,
-            model: configured ? model!.name : null,
+            key, name, topic, required, help, configured,
+            model: resolvedModel,
             ...(configured ? {} : { hint }),
           };
         } catch {
-          return { name, topic, configured: false, model: null, hint };
+          return { key, name, topic, required, help, configured: false, model: null, hint };
         }
       }),
     );
