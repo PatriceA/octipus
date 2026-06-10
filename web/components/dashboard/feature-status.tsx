@@ -84,7 +84,13 @@ export function FeatureStatus() {
                     >
                       {feature.required ? 'required' : 'optional'}
                     </span>
-                    <span title={feature.help} className="cursor-help text-on-surface-variant/70">
+                    <span
+                      title={feature.help}
+                      aria-label={feature.help}
+                      role="img"
+                      tabIndex={0}
+                      className="cursor-help text-on-surface-variant/70 focus:outline-none focus:text-on-surface"
+                    >
                       <HelpCircle className="w-3 h-3" />
                     </span>
                   </div>

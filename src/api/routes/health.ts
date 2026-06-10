@@ -327,32 +327,51 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     ] as const;
 
     const registry = getModelRegistry();
+    // Chat and Orchestration run on the *default* model: the orchestrator and
+    // router resolve via getDefaultModel(), and getModelForTopic() has no
+    // default fallback. So a 'general' binding is NOT what makes them work —
+    // resolve those rows against the default instead of the topic.
+    const defaultModel = await registry.getDefaultModel();
+
+    // A model "explicitly" serves a specialist topic only when it carries that
+    // topic (legacy array or topicRoles) — the default model can't stand in.
+    const isExplicit = (
+      model: Awaited<ReturnType<typeof registry.getModelForTopic>>,
+      topic: string,
+    ): boolean => !!(model && (model.topics?.includes(topic) || (model.topicRoles && topic in model.topicRoles)));
+
+    const SPECIALIST_TOPICS = ['embedding', 'vision', 'ocr'];
 
     const features = await Promise.all(
       FEATURE_TOPICS.map(async ({ key, name, topic, required, help, hint }) => {
         try {
-          const model = await registry.getModelForTopic(topic);
-          // getModelForTopic falls back to the default model. Specialist topics
-          // need a model with that specific capability, so the default can't
-          // fulfil them — count them configured only when the resolved model
-          // explicitly carries the topic.
-          const specialistTopics = ['embedding', 'vision', 'ocr'];
-          let isExplicit = true;
-          if (model && specialistTopics.includes(topic)) {
-            const hasTopic = model.topics?.includes(topic);
-            const hasTopicRole = model.topicRoles && topic in model.topicRoles;
-            isExplicit = !!(hasTopic || hasTopicRole);
+          if (topic === 'general') {
+            const configured = !!defaultModel;
+            return {
+              key, name, topic, required, help, configured,
+              model: configured ? defaultModel!.name : null,
+              ...(configured ? {} : { hint }),
+            };
           }
 
-          const configured = !!(model && isExplicit);
+          const model = await registry.getModelForTopic(topic);
+          const explicit = SPECIALIST_TOPICS.includes(topic) ? isExplicit(model, topic) : !!model;
+          let configured = !!(model && explicit);
+          let resolvedModel = configured ? model!.name : null;
+
+          // The document processor falls OCR back to the vision model, so OCR
+          // is functional whenever either 'ocr' or 'vision' is explicitly bound.
+          if (key === 'ocr' && !configured) {
+            const vision = await registry.getModelForTopic('vision');
+            if (isExplicit(vision, 'vision')) {
+              configured = true;
+              resolvedModel = `${vision!.name} (via vision)`;
+            }
+          }
+
           return {
-            key,
-            name,
-            topic,
-            required,
-            help,
-            configured,
-            model: configured ? model!.name : null,
+            key, name, topic, required, help, configured,
+            model: resolvedModel,
             ...(configured ? {} : { hint }),
           };
         } catch {
