@@ -149,7 +149,10 @@ describe('resolvedFileChangePath — file_change emits the path the tool wrote',
   // exist at the requested location ("File not found" on click).
   test('returns `path` for write/append/delete/create_directory results', () => {
     const relocated = '/workspace/sessions/2026-06-10-general-abc/todo.md';
+    // write_file carries bytesWritten; append/delete/create_directory return
+    // just { success, path } — both shapes must resolve to `path`.
     expect(resolvedFileChangePath({ success: true, path: relocated, bytesWritten: 40 })).toBe(relocated);
+    expect(resolvedFileChangePath({ success: true, path: relocated })).toBe(relocated);
   });
 
   test('prefers `destination` for copy/move results', () => {

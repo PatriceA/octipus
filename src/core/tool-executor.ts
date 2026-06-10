@@ -476,8 +476,11 @@ export class ToolExecutor {
         // returned no path (e.g. an error result).
         if (FILE_CHANGE_TOOLS.has(toolCall.name)) {
           const resolvedPath = resolvedFileChangePath(result);
+          // Fallback for a result with no path (malformed/edge-case result):
+          // mirror the helper's destination-first preference so copy/move point
+          // at where the file now lives, not where it came from.
           const filePath = resolvedPath
-            ?? ((toolCall.arguments.path || toolCall.arguments.destination || toolCall.arguments.source) as string | undefined);
+            ?? ((toolCall.arguments.destination || toolCall.arguments.path || toolCall.arguments.source) as string | undefined);
           if (filePath) {
             agentLogger.info(
               { agentId: this.context.id, tool: toolCall.name, path: filePath },
