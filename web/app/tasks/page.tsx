@@ -26,11 +26,26 @@ function priorityClasses(p: number): string {
   return 'bg-surface-container-high text-on-surface-variant/60';
 }
 
+/**
+ * Parse a task dueAt to epoch ms. Date-only strings (`YYYY-MM-DD`, which the
+ * tasks tool accepts) are interpreted in LOCAL time at noon — `new Date(...)`
+ * would read them as UTC midnight, pushing same-day tasks into "Overdue" for
+ * users west of UTC. Returns NaN for unparseable values.
+ */
+function dueMs(dueAt: string): number {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) {
+    const [y, m, d] = dueAt.split('-').map(Number);
+    return new Date(y, m - 1, d, 12, 0, 0, 0).getTime();
+  }
+  return new Date(dueAt).getTime();
+}
+
 function dueLabel(dueAt?: string | null): { text: string; overdue: boolean } | null {
   if (!dueAt) return null;
-  const d = new Date(dueAt);
-  const overdue = d.getTime() < Date.now();
-  return { text: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), overdue };
+  const ms = dueMs(dueAt);
+  if (Number.isNaN(ms)) return null;
+  const overdue = ms < Date.now();
+  return { text: new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), overdue };
 }
 
 /** Bucket open tasks into ordered, labelled groups for the chosen grouping. */
@@ -51,17 +66,22 @@ function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: strin
       .map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
   }
 
-  // by === 'due' — Overdue / Today / This week / Later / No date.
+  // by === 'due' — Overdue / Today / This week / Later / No date. Boundaries
+  // are wall-clock day-ends (not rolling 24h windows) so "This week" means
+  // "by the end of the 7th day", consistent across DST.
   const now = Date.now();
   const endOfToday = new Date();
   endOfToday.setHours(23, 59, 59, 999);
-  const weekAhead = now + 7 * 24 * 60 * 60 * 1000;
+  const endOfWeek = new Date();
+  endOfWeek.setDate(endOfWeek.getDate() + 7);
+  endOfWeek.setHours(23, 59, 59, 999);
   const bucket = (t: Task): string => {
     if (!t.dueAt) return 'none';
-    const d = new Date(t.dueAt).getTime();
+    const d = dueMs(t.dueAt);
+    if (Number.isNaN(d)) return 'none';
     if (d < now) return 'overdue';
     if (d <= endOfToday.getTime()) return 'today';
-    if (d <= weekAhead) return 'week';
+    if (d <= endOfWeek.getTime()) return 'week';
     return 'later';
   };
   const defs: { key: string; title: string }[] = [
@@ -125,10 +145,12 @@ export default function TasksPage() {
   };
 
   const updateNotes = async (task: Task, notes: string) => {
+    // Optimistic: update local state immediately so the prop reflects the new
+    // value before the request resolves. This also makes a redundant second
+    // save (e.g. blur + click) a no-op against the saver's own equality guard.
+    setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, notes } : t)));
     try {
       await api.patch(`/tasks/${task.id}`, { notes });
-      // Optimistic local update so the editor doesn't flash on refetch.
-      setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, notes } : t)));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -269,6 +291,12 @@ function TaskRow({
   const [editingNotes, setEditingNotes] = useState(false);
   const [draft, setDraft] = useState(task.notes ?? '');
 
+  // Keep the draft in sync with external updates (agent edits / refetch) while
+  // the editor is closed — without this, reopening could show a stale value.
+  useEffect(() => {
+    if (!editingNotes) setDraft(task.notes ?? '');
+  }, [task.notes, editingNotes]);
+
   const saveNotes = () => {
     setEditingNotes(false);
     if (draft !== (task.notes ?? '')) onUpdateNotes(task, draft);
@@ -336,8 +364,10 @@ function TaskRow({
             className="w-full rounded-xs border border-outline-variant/20 bg-surface px-2 py-1.5 text-sm text-on-surface resize-y"
           />
           <div className="flex gap-2 mt-1">
-            <button onClick={saveNotes} className="text-xs px-2 py-1 rounded bg-primary/10 text-primary">Save</button>
-            <button onClick={() => setEditingNotes(false)} className="text-xs px-2 py-1 text-on-surface-variant hover:text-on-surface">Cancel</button>
+            {/* preventDefault on mousedown keeps focus so the textarea's blur
+                doesn't also fire saveNotes (which would double-PATCH). */}
+            <button onMouseDown={(e) => e.preventDefault()} onClick={saveNotes} className="text-xs px-2 py-1 rounded bg-primary/10 text-primary">Save</button>
+            <button onMouseDown={(e) => e.preventDefault()} onClick={() => setEditingNotes(false)} className="text-xs px-2 py-1 text-on-surface-variant hover:text-on-surface">Cancel</button>
           </div>
         </div>
       ) : task.notes ? (
