@@ -22,11 +22,13 @@ export function registerNotesTools(server: McpServer, client: OctiClient): void 
       title: z.string().describe('Note title'),
       body: z.string().optional().describe('Markdown body (may contain [[wikilinks]] and #tags)'),
       id: z.string().optional().describe('Existing note id to update (omit to create)'),
+      slug: z.string().optional().describe('Explicit slug (defaults to a slug of the title)'),
+      noteKind: z.string().optional().describe('note (default) | moc | literature | …'),
       tags: z.array(z.string()).optional().describe('Explicit tags'),
     },
-    async ({ title, body, id, tags }) => {
+    async ({ title, body, id, slug, noteKind, tags }) => {
       try {
-        return asText(await client.executeTool('notes', 'write_note', { title, body, id, tags }));
+        return asText(await client.executeTool('notes', 'write_note', { title, body, id, slug, note_kind: noteKind, tags }));
       } catch (error) {
         return asError(error);
       }
@@ -55,10 +57,11 @@ export function registerNotesTools(server: McpServer, client: OctiClient): void 
     {
       kind: z.string().optional().describe('Note kind filter'),
       tag: z.string().optional().describe('Tag filter'),
+      limit: z.number().optional().describe('Max results (default 50)'),
     },
-    async ({ kind, tag }) => {
+    async ({ kind, tag, limit }) => {
       try {
-        return asText(await client.executeTool('notes', 'list_notes', { kind, tag }));
+        return asText(await client.executeTool('notes', 'list_notes', { kind, tag, limit }));
       } catch (error) {
         return asError(error);
       }
@@ -68,10 +71,13 @@ export function registerNotesTools(server: McpServer, client: OctiClient): void 
   server.tool(
     'octipus_search_notes',
     'Hybrid search over note content.',
-    { query: z.string().describe('Search query') },
-    async ({ query }) => {
+    {
+      query: z.string().describe('Search query'),
+      limit: z.number().optional().describe('Max results (default 5)'),
+    },
+    async ({ query, limit }) => {
       try {
-        return asText(await client.executeTool('notes', 'search_notes', { query }));
+        return asText(await client.executeTool('notes', 'search_notes', { query, limit }));
       } catch (error) {
         return asError(error);
       }
@@ -80,11 +86,14 @@ export function registerNotesTools(server: McpServer, client: OctiClient): void 
 
   server.tool(
     'octipus_capture_note',
-    "Append a timestamped line to today's daily note (quick capture).",
-    { text: z.string().describe('Text to capture') },
-    async ({ text }) => {
+    "Append a timestamped line to a daily note (quick capture).",
+    {
+      text: z.string().describe('Text to capture'),
+      date: z.string().optional().describe('Target day (YYYY-MM-DD); defaults to today'),
+    },
+    async ({ text, date }) => {
       try {
-        return asText(await client.executeTool('notes', 'capture_note', { text }));
+        return asText(await client.executeTool('notes', 'capture_note', { text, date }));
       } catch (error) {
         return asError(error);
       }

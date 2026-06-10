@@ -13,15 +13,16 @@ export function registerMemoryTools(server: McpServer, client: OctiClient): void
     {
       factType: z.string().optional().describe('Filter by fact type'),
       limit: z.number().optional().describe('Max rows (default 100, max 500)'),
+      includeHistory: z.boolean().optional().describe('Include superseded (historical) facts'),
     },
-    async ({ factType, limit }) => {
+    async ({ factType, limit, includeHistory }) => {
       try {
-        const res = await client.listMemories({ factType, limit });
+        const res = await client.listMemories({ factType, limit, includeHistory });
         if (!res.memories?.length) {
           return { content: [{ type: 'text' as const, text: 'No memories stored.' }] };
         }
         const formatted = res.memories
-          .map((m: any) => `- [${m.factType}] ${m.content} (id: ${m.id})`)
+          .map((m) => `- [${m.factType}] ${m.content} (id: ${m.id})`)
           .join('\n');
         return { content: [{ type: 'text' as const, text: `${res.total} memories:\n${formatted}` }] };
       } catch (error) {
@@ -36,8 +37,10 @@ export function registerMemoryTools(server: McpServer, client: OctiClient): void
     { id: z.string().describe('Memory id') },
     async ({ id }) => {
       try {
-        const res = await client.deleteMemory(id);
-        return { content: [{ type: 'text' as const, text: res.deleted ? `Deleted ${id}` : (res.error ?? 'No change') }] };
+        // deleteMemory throws on a 404 (not-found), so reaching here means it
+        // was deleted.
+        await client.deleteMemory(id);
+        return { content: [{ type: 'text' as const, text: `Deleted memory ${id}` }] };
       } catch (error) {
         return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
       }
