@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import { Elysia, t } from 'elysia';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { apiContext } from '@/api/context';
@@ -202,17 +202,27 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     const allowedRoots = [rootPath, ...config.workspace.additionalPaths.map((p) => resolve(p))];
     let parentPath = rootPath;
     if (body.parentPath) {
-      const candidate = resolve(body.parentPath);
+      if (!existsSync(body.parentPath) || !statSync(body.parentPath).isDirectory()) {
+        set.status = 400;
+        return { error: 'Parent folder does not exist or is not a directory' };
+      }
+      // Canonicalise via realpath BEFORE the containment check: resolve() is
+      // purely lexical, so a symlink inside an allowed root (e.g. ws/escape ->
+      // /etc) would otherwise pass the prefix check and redirect mkdir/git
+      // outside the sandbox. Compare the real path instead.
+      let candidate: string;
+      try {
+        candidate = realpathSync(resolve(body.parentPath));
+      } catch {
+        set.status = 400;
+        return { error: 'Parent folder could not be resolved' };
+      }
       const withinAllowed = allowedRoots.some(
         (r) => candidate === r || candidate.startsWith(r + '/'),
       );
-      if (!withinAllowed) {
+      if (!withinAllowed || isPathDenied(candidate)) {
         set.status = 400;
         return { error: 'Parent folder must be the workspace root or an additional path (or a subfolder of one)' };
-      }
-      if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
-        set.status = 400;
-        return { error: 'Parent folder does not exist or is not a directory' };
       }
       parentPath = candidate;
     }
@@ -223,6 +233,13 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     if (body.name.includes('\0') || body.name.includes('/') || body.name.includes('\\')) {
       set.status = 400;
       return { error: 'Invalid repository name: must not contain path separators or null bytes' };
+    }
+    // Dot-only names resolve to the parent itself or its parent; the containment
+    // check below already rejects them, but block explicitly so the intent is
+    // obvious and a future weakening of that check can't open a hole.
+    if (body.name === '.' || body.name === '..') {
+      set.status = 400;
+      return { error: 'Invalid repository name' };
     }
     const repoPath = resolve(parentPath, body.name);
     if (repoPath !== join(parentPath, body.name) || !repoPath.startsWith(parentPath + '/')) {

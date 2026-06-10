@@ -73,4 +73,10 @@ describe('workspace routes — admin clears the gate', () => {
     expect(r.status).toBe(400);
     expect(r.body.error).toMatch(/parent folder/i);
   });
+
+  test('POST /workspace/repositories rejects dot-only names', async () => {
+    const r = await req(await appFor(true), 'POST', '/api/workspace/repositories', { name: '..' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/invalid repository name/i);
+  });
 });
