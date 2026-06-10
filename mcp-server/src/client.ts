@@ -95,6 +95,17 @@ export interface ToolInfo {
   }>;
 }
 
+export type ResearchDepth = 'quick' | 'standard' | 'deep';
+
+export interface MemoryRow {
+  id: string;
+  factType: string;
+  content: string;
+  confidence?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export class OctiClient {
   constructor(
     private baseUrl: string,
@@ -267,6 +278,41 @@ export class OctiClient {
       throw new Error(res.error);
     }
     return res.result;
+  }
+
+  // ─── Memory (long-term facts) ───
+
+  async listMemories(opts: { factType?: string; limit?: number; includeHistory?: boolean } = {}): Promise<{ memories: MemoryRow[]; total: number }> {
+    const q = new URLSearchParams();
+    if (opts.factType) q.set('factType', opts.factType);
+    if (opts.limit) q.set('limit', String(opts.limit));
+    if (opts.includeHistory) q.set('includeHistory', 'true');
+    const qs = q.toString();
+    return this.request(`/api/memory${qs ? `?${qs}` : ''}`);
+  }
+
+  async deleteMemory(id: string): Promise<{ deleted?: boolean; error?: string }> {
+    return this.request(`/api/memory/${id}`, { method: 'DELETE' });
+  }
+
+  // ─── Deep Research (async jobs) ───
+
+  async startResearch(question: string, depth?: ResearchDepth): Promise<{ jobId: string; status: string }> {
+    return this.request('/api/research', { method: 'POST', body: JSON.stringify({ question, depth }) });
+  }
+
+  async getResearch(jobId: string): Promise<unknown> {
+    return this.request(`/api/research/${jobId}`);
+  }
+
+  // ─── Reader (URL → clean article + AI actions) ───
+
+  async readUrl(url: string): Promise<unknown> {
+    return this.request('/api/reader', { method: 'POST', body: JSON.stringify({ url }) });
+  }
+
+  async readerAction(action: string, opts: { url?: string; text?: string; argument?: string }): Promise<unknown> {
+    return this.request('/api/reader/action', { method: 'POST', body: JSON.stringify({ action, ...opts }) });
   }
 
   // ─── Skills (domain knowledge) ───

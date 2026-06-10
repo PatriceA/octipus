@@ -24,6 +24,12 @@ import { registerGatewayTools } from './tools/gateway.js';
 import { registerHealthTools } from './tools/health.js';
 import { registerAuditTools } from './tools/audit.js';
 import { registerArtifactTools } from './tools/artifacts.js';
+import { registerTasksTools } from './tools/tasks.js';
+import { registerNotesTools } from './tools/notes.js';
+import { registerEmailTools } from './tools/email.js';
+import { registerMemoryTools } from './tools/memory.js';
+import { registerResearchTools } from './tools/research.js';
+import { registerReaderTools } from './tools/reader.js';
 
 export function createServer(octiUrl: string): McpServer {
   const server = new McpServer({
@@ -54,6 +60,13 @@ export function createServer(octiUrl: string): McpServer {
   registerHealthTools(server, client);
   registerAuditTools(server, client);
   registerArtifactTools(server, client);
+  // Newer end-user features — previously absent from the MCP surface.
+  registerTasksTools(server, client);
+  registerNotesTools(server, client);
+  registerEmailTools(server, client);
+  registerMemoryTools(server, client);
+  registerResearchTools(server, client);
+  registerReaderTools(server, client);
 
   return server;
 }
