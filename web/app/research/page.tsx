@@ -2,6 +2,7 @@
 
 import { Loader2, Telescope } from 'lucide-react';
 import { useState } from 'react';
+import { Markdown } from '@/components/ui/markdown-renderer';
 import { api } from '@/lib/api';
 
 interface Source { id: string; url: string; title: string; retrievedAt: string }
@@ -162,7 +163,7 @@ export default function ResearchPage() {
           {report.sections.map((sec, i) => (
             <section key={i} className="space-y-2">
               <h3 className="text-xl font-semibold text-on-surface">{sec.heading}</h3>
-              <p className="text-on-surface whitespace-pre-wrap leading-relaxed">{sec.markdown}</p>
+              <Markdown content={sec.markdown} className="text-on-surface" />
               {sec.citations.length > 0 && (
                 <p className="text-xs text-on-surface-variant">
                   {sec.citations.map((id) => sourceNum.get(id)).filter(Boolean).map((n) => (
@@ -175,7 +176,7 @@ export default function ResearchPage() {
 
           <section className="rounded-xs border border-outline-variant/10 bg-surface-container-low p-3">
             <h3 className="text-sm font-semibold text-on-surface-variant uppercase tracking-wide mb-1">Limitations</h3>
-            <p className="text-sm text-on-surface">{report.limitations}</p>
+            <Markdown content={report.limitations} className="text-on-surface" />
           </section>
 
           <section>

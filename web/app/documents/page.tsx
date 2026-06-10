@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Markdown } from '@/components/ui/markdown-renderer';
 import { api, getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -260,6 +261,9 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
     mimeType === 'application/json' ||
     mimeType === 'application/xml' ||
     /\.(md|csv|json|xml|yaml|yml|log|ini|conf|toml|html|htm|css|js|ts|py|sh|sql)$/i.test(originalName);
+  // Markdown files render formatted (headings, lists, tables) instead of as a
+  // raw monospace dump — Deep Research saves its reports here as .md.
+  const isMarkdown = mimeType === 'text/markdown' || /\.(md|markdown|mdx)$/i.test(originalName);
   const previewable = isImage || isPdf || isText;
 
   useEffect(() => {
@@ -362,6 +366,10 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
           <img src={blobUrl} alt={originalName} className="max-w-full max-h-[60vh] mx-auto block" />
         ) : isPdf && blobUrl ? (
           <iframe src={blobUrl} title={originalName} className="w-full h-[60vh] bg-on-surface" />
+        ) : isMarkdown && textContent !== null ? (
+          <div className="p-3 max-h-[60vh] overflow-auto">
+            <Markdown content={textContent} />
+          </div>
         ) : isText && textContent !== null ? (
           <pre className="text-xs text-on-surface-variant whitespace-pre-wrap font-mono p-3 max-h-[60vh] overflow-auto">
             {textContent}
@@ -479,9 +487,9 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
               {data.summary && (
                 <div>
                   <h4 className="text-sm font-medium text-on-surface/80 mb-2">Summary</h4>
-                  <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
-                    {data.summary}
-                  </p>
+                  <div className="text-on-surface-variant bg-surface-container-low rounded-lg p-3">
+                    <Markdown content={data.summary} />
+                  </div>
                 </div>
               )}
 

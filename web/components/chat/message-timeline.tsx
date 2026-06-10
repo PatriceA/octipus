@@ -2,11 +2,9 @@
 
 import {
   Bot,
-  Check,
   CheckCircle,
   ChevronDown,
   ChevronRight,
-  Copy,
   FileEdit,
   FilePlus,
   FileText,
@@ -19,11 +17,10 @@ import {
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import DiffView from '@/components/chat/diff-view';
+import { Markdown } from '@/components/ui/markdown-renderer';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -167,134 +164,13 @@ function ElapsedTimer({ startTime, active = true }: { startTime: number; active?
 }
 
 // ---------------------------------------------------------------------------
-// CodeBlock
+// MessageContent — markdown rendered via the shared <Markdown> component
+// (web/components/ui/markdown-renderer.tsx), so chat, research, documents and
+// notes all render markdown identically.
 // ---------------------------------------------------------------------------
 
-function CodeBlock({ language, code }: { language: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, [code]);
-
-  return (
-    <div className="relative my-3 rounded-xs bg-surface-container-lowest text-gray-100 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-1.5 bg-surface-container-low text-xs text-on-surface-variant">
-        <span>{language || 'text'}</span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 hover:text-on-surface transition-colors"
-          aria-label="Copy code"
-        >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
-      <pre className="p-4 overflow-x-auto text-sm leading-relaxed">
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// MessageContent
-// ---------------------------------------------------------------------------
-
-// Markdown rendering via react-markdown + remark-gfm. GFM adds tables,
-// task lists, strikethrough, and autolinks — without it the orchestrator's
-// pipe-delimited tables (which it produces freely) render as literal `|`
-// characters. Code fences route through the existing CodeBlock so the
-// copy-button stays consistent with the rest of the timeline.
 function MessageContent({ content }: { content: string }) {
-  return (
-    <div className="space-y-2 text-sm leading-relaxed">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code({ inline, className, children, ...props }: {
-            inline?: boolean;
-            className?: string;
-            children?: React.ReactNode;
-          } & React.HTMLAttributes<HTMLElement>) {
-            const text = String(children ?? '').replace(/\n$/, '');
-            // Heuristic — if the model wraps a short single-line token
-            // (command, container name, file path) in a fenced block
-            // without specifying a language, render it as inline code so
-            // the chat bubble keeps its prose flow. Multi-line content,
-            // language-tagged blocks, and anything over ~80 chars still
-            // go through the full CodeBlock (with copy button).
-            const match = /language-(\w+)/.exec(className || '');
-            const looksLikeAccidentalFence =
-              !inline &&
-              !match &&
-              !text.includes('\n') &&
-              text.length > 0 &&
-              text.length <= 80;
-            if (inline || looksLikeAccidentalFence) {
-              return (
-                <code
-                  className="bg-surface-container-highest px-1 py-0.5 rounded font-mono text-sm"
-                  {...props}
-                >
-                  {text}
-                </code>
-              );
-            }
-            return <CodeBlock language={match?.[1] || 'text'} code={text} />;
-          },
-          p({ children }) {
-            return <p className="whitespace-pre-wrap">{children}</p>;
-          },
-          // GFM tables — overflow-x so wide tables scroll instead of bleeding
-          // out of the message bubble. The bubble caps width via the parent.
-          table({ children }) {
-            return (
-              <div className="overflow-x-auto my-2">
-                <table className="border-collapse text-sm">{children}</table>
-              </div>
-            );
-          },
-          thead({ children }) {
-            return <thead className="bg-surface-container-high">{children}</thead>;
-          },
-          th({ children }) {
-            return (
-              <th className="border border-outline-variant/20 px-2 py-1 text-left font-semibold">
-                {children}
-              </th>
-            );
-          },
-          td({ children }) {
-            return <td className="border border-outline-variant/20 px-2 py-1 align-top">{children}</td>;
-          },
-          a({ href, children }) {
-            return (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline hover:opacity-80"
-              >
-                {children}
-              </a>
-            );
-          },
-          ul({ children }) {
-            return <ul className="list-disc pl-5 space-y-0.5">{children}</ul>;
-          },
-          ol({ children }) {
-            return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
-          },
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
+  return <Markdown content={content} />;
 }
 
 // ---------------------------------------------------------------------------
