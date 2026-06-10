@@ -6,6 +6,8 @@ import {
   draftReply,
   getInbox,
   getMessage,
+  markRead,
+  replyOptions,
   sendReply,
   summarizeMessage,
   triageInbox,
@@ -27,13 +29,48 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
         const limit = Math.min(Math.max(Number(query?.limit) || 20, 1), 50);
-        return await getInbox(user.id, limit);
+        return await getInbox(user.id, limit, query?.pageToken || undefined);
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
       }
     },
-    { query: t.Object({ limit: t.Optional(t.String()) }), detail: { tags: ['email'] } }
+    { query: t.Object({ limit: t.Optional(t.String()), pageToken: t.Optional(t.String()) }), detail: { tags: ['email'] } }
+  )
+
+  // Mark a message read (clears the unread flag in the provider).
+  .post(
+    '/message/:id/mark-read',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        return await markRead(user.id, provider, params.id);
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
+  )
+
+  // Propose reply directions for the user to choose BEFORE drafting.
+  .post(
+    '/message/:id/reply-options',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        const message = await getMessage(user.id, provider, params.id);
+        return { options: await replyOptions(user.id, message) };
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Read a full message.

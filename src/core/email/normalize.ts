@@ -4,7 +4,13 @@
  * pure means gmail vs m365 differences are handled in one tested place and the
  * UI never sees a provider-specific payload. Fixture-tested.
  */
+import { sanitizeHtmlFragment } from '@/core/html/sanitize';
 import type { EmailAddress, EmailMessage, InboxItem } from './types';
+
+/** Collapse an HTML body to readable plain text (for AI prompts / fallback). */
+function htmlToText(html: string): string {
+  return html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 /** Parse a raw "From" header ("Jane Doe <jane@x.com>" or "jane@x.com"). */
 export function parseAddress(raw: string | undefined): EmailAddress {
@@ -70,11 +76,28 @@ function decodeGmailBody(msg: GmailMessage): string {
   }
 }
 
+/** Decode the Gmail text/html part, if present, as a base64url string. */
+function decodeGmailHtml(msg: GmailMessage): string | undefined {
+  const data = msg.payload?.parts?.find((p) => p.mimeType === 'text/html')?.body?.data;
+  if (!data) return undefined;
+  try {
+    return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 export function gmailToMessage(msg: GmailMessage): EmailMessage {
+  const rawHtml = decodeGmailHtml(msg);
+  const html = rawHtml ? sanitizeHtmlFragment(rawHtml) : undefined;
+  const plain = decodeGmailBody(msg).trim();
   return {
     ...normalizeGmail(msg),
     to: (header(msg, 'to') ?? '').split(',').map(parseAddress).filter((a) => a.email),
-    body: decodeGmailBody(msg).trim(),
+    // Prefer the decoded plain part; fall back to text from the HTML so AI
+    // prompts and search always have something even for HTML-only mail.
+    body: plain || (rawHtml ? htmlToText(rawHtml) : ''),
+    html: html || undefined,
   };
 }
 
@@ -120,11 +143,12 @@ export const normalizeM365List = (messages: GraphMessage[]): InboxItem[] => mess
 
 export function m365ToMessage(msg: GraphMessage): EmailMessage {
   const raw = msg.body?.content ?? msg.bodyPreview ?? '';
-  // Graph HTML bodies → strip tags for the plain read pane.
-  const body = msg.body?.contentType === 'html' ? raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : raw.trim();
+  const isHtml = msg.body?.contentType === 'html';
+  const html = isHtml ? sanitizeHtmlFragment(raw) : undefined;
   return {
     ...normalizeM365(msg),
     to: (msg.toRecipients ?? []).map((r) => graphAddress(r.emailAddress)).filter((a) => a.email),
-    body,
+    body: isHtml ? htmlToText(raw) : raw.trim(),
+    html: html || undefined,
   };
 }

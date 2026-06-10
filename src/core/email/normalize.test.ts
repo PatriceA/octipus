@@ -83,6 +83,21 @@ describe('normalizeM365', () => {
     expect(msg.body).not.toContain('<');
   });
 
+  test('m365ToMessage keeps a sanitized html body', () => {
+    const msg = m365ToMessage(GRAPH);
+    expect(msg.html).toBe('<p>Hello <b>world</b></p>');
+  });
+
+  test('m365ToMessage sanitizes scripts out of the html body', () => {
+    const msg = m365ToMessage({
+      ...GRAPH,
+      body: { content: '<p>hi</p><script>steal()</script><a href="javascript:alert(1)">x</a>', contentType: 'html' },
+    });
+    expect(msg.html).toContain('<p>hi</p>');
+    expect(msg.html).not.toContain('script');
+    expect(msg.html).not.toContain('javascript:');
+  });
+
   test('read mail is not unread', () => {
     expect(normalizeM365({ ...GRAPH, isRead: true }).unread).toBe(false);
   });
