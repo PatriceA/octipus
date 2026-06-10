@@ -130,6 +130,7 @@ export class OctipusTuiApp {
       u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
       u.pathname = '';
       u.search = '';
+      u.hash = '';
       return u.toString().replace(/\/$/, '');
     } catch {
       return null;
@@ -149,7 +150,9 @@ export class OctipusTuiApp {
         this.tui.requestRender();
       }
     } catch {
-      /* status mode is non-critical — ignore lookup failures */
+      // Non-critical, and the TUI owns the alt-screen — writing to
+      // stdout/console here would corrupt the rendered UI, so we intentionally
+      // stay silent on a failed mode lookup rather than log.
     }
   }
 

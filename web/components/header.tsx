@@ -54,21 +54,19 @@ export function Header() {
   const [runMode, setRunMode] = useState<{
     label: string | null;
     description: string;
-    model: string | null;
   } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = () =>
       api
-        .get<{ mode: string | null; label: string | null; description: string; model: string | null }>(
-          '/health/orchestrator',
-        )
+        .get<{ mode: string | null; label: string | null; description: string }>('/health/orchestrator')
         .then((d) => {
           if (!cancelled) setRunMode(d);
         })
-        .catch(() => {
-          /* header badge is non-critical — stay silent if it can't load */
+        .catch((err) => {
+          // Non-critical badge — keep the UI silent but leave a breadcrumb.
+          console.debug('orchestrator run-mode lookup failed', err);
         });
     load();
     const id = setInterval(load, 60_000);
@@ -362,7 +360,7 @@ export function Header() {
         {runMode?.label && (
           <div
             className="hidden md:flex items-center"
-            title={`Octipus run mode: ${runMode.description}${runMode.model ? ` · orchestrator model: ${runMode.model}` : ''}`}
+            title={`Octipus run mode: ${runMode.description}`}
           >
             <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider rounded-xs bg-surface-container text-on-surface-variant border border-outline-variant/40">
               {runMode.label}

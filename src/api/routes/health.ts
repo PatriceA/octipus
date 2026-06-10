@@ -347,7 +347,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     const registry = getModelRegistry();
     const model = await registry.getDefaultModel();
     if (!model) {
-      return { mode: null, label: null, description: 'No default model set', model: null };
+      return { mode: null, label: null, description: 'No default model set' };
     }
     const mode = resolveOrchestratorMode(
       { modelId: model.modelId, metadata: model.metadata },
@@ -357,6 +357,11 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         liteModelMaxParams: orch.liteModelMaxParams,
       },
     );
+    // Display labels — 'lite' surfaces as "Light" per product naming; the raw
+    // `mode` id stays the canonical value for any programmatic consumer. This
+    // route is public (like the other /health routes) so it deliberately does
+    // NOT echo the model name — that would leak infra info to anonymous callers
+    // (cf. /health/detailed, which is auth-gated for the same reason).
     const LABELS = { router: 'Router', lite: 'Light', full: 'Full' } as const;
-    return { mode, label: LABELS[mode], description: describeMode(mode), model: model.name };
+    return { mode, label: LABELS[mode], description: describeMode(mode) };
   });
