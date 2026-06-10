@@ -142,6 +142,87 @@ describe('ToolExecutor — per-tool completion events', () => {
   });
 });
 
+describe('ToolExecutor — near-miss tool name routing', () => {
+  // Tools registered with prefixed names; the model sometimes emits the bare
+  // sub-name or a typo. The executor recovers when the match is unambiguous.
+  function fsTool(name: string): ToolHandler {
+    return {
+      name,
+      toolId: 'agent', // skip permission gating in the unit test
+      description: name,
+      parameters: {},
+      execute: async () => `ran ${name}`,
+    };
+  }
+
+  function resultFor(exec: ToolExecutor, calls: ToolCall[]) {
+    return exec.handleToolCalls(calls);
+  }
+
+  test('routes a bare sub-name to its unique prefixed tool', async () => {
+    const { exec, emitted } = setupExecutor(fsTool('filesystem__read_file'));
+    const msgs = await resultFor(exec, [{ id: 'c1', name: 'read_file', arguments: {} }]);
+    // It executed (observation carries the result), not an Unknown-tool error.
+    const joined = JSON.stringify(msgs);
+    expect(joined).toContain('ran filesystem__read_file');
+    expect(joined).not.toContain('Unknown tool');
+    // And the completion event reports success.
+    const complete = emitted.find(
+      (e) => e.type === 'action' && e.data?.type === 'tool_call_complete',
+    );
+    expect(complete?.data.status).toBe('ok');
+  });
+
+  test('routes a single-char typo via fuzzy fallback', async () => {
+    const { exec } = setupExecutor(fsTool('filesystem__list_directory'));
+    const msgs = await resultFor(exec, [
+      { id: 'c1', name: 'filesystem__list_directroy', arguments: {} },
+    ]);
+    expect(JSON.stringify(msgs)).toContain('ran filesystem__list_directory');
+  });
+
+  test('does NOT route when a bare sub-name is ambiguous across groups', async () => {
+    const exec = new ToolExecutor(makeContext(), () => {});
+    exec.registerTool(fsTool('filesystem__search'));
+    exec.registerTool(fsTool('knowledge__search'));
+    const msgs = await resultFor(exec, [{ id: 'c1', name: 'search', arguments: {} }]);
+    const joined = JSON.stringify(msgs);
+    expect(joined).toContain('Unknown tool: search');
+    expect(joined).not.toContain('ran ');
+  });
+
+  test('normalizeToolCallNames mutates near-miss names and is idempotent', () => {
+    const exec = new ToolExecutor(makeContext(), () => {});
+    exec.registerTool(fsTool('filesystem__read_file'));
+    const calls: ToolCall[] = [
+      { id: 'c1', name: 'read_file', arguments: {} }, // bare → routed
+      { id: 'c2', name: 'filesystem__read_file', arguments: {} }, // exact → untouched
+      { id: 'c3', name: 'totally_unknown', arguments: {} }, // unresolvable → left as-is
+    ];
+    exec.normalizeToolCallNames(calls);
+    expect(calls[0].name).toBe('filesystem__read_file');
+    expect(calls[1].name).toBe('filesystem__read_file');
+    expect(calls[2].name).toBe('totally_unknown');
+    // Running again is a no-op.
+    exec.normalizeToolCallNames(calls);
+    expect(calls.map((c) => c.name)).toEqual([
+      'filesystem__read_file',
+      'filesystem__read_file',
+      'totally_unknown',
+    ]);
+  });
+
+  test('reports Unknown tool with no hint when nothing is close', async () => {
+    const { exec } = setupExecutor(fsTool('filesystem__read_file'));
+    const msgs = await resultFor(exec, [
+      { id: 'c1', name: 'completely_unrelated_xyz', arguments: {} },
+    ]);
+    const joined = JSON.stringify(msgs);
+    expect(joined).toContain('Unknown tool: completely_unrelated_xyz');
+    expect(joined).not.toContain('Did you mean');
+  });
+});
+
 describe('resolvedFileChangePath — file_change emits the path the tool wrote', () => {
   // write_file relocates `/workspace/todo.md` into the session output dir and
   // returns the canonical path. The file_change event must carry that resolved
