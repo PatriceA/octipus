@@ -49,6 +49,8 @@ export class OctipusTuiApp {
   private readonly composer: Composer;
   private readonly overlays: OverlayController;
   private readonly sessionId = newSessionId();
+  /** Gateway WS URL — also used to derive the HTTP base for status lookups. */
+  private readonly gatewayUrl?: string;
   private projectPath?: string;
   private cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   private permissionHandle: OverlayHandle | null = null;
@@ -69,6 +71,7 @@ export class OctipusTuiApp {
       url: options.gatewayUrl,
       getSessionId: () => this.sessionId,
     });
+    this.gatewayUrl = options.gatewayUrl;
     this.projectPath = options.projectPath;
     this.onShutdown = options.onShutdown;
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
@@ -113,6 +116,44 @@ export class OctipusTuiApp {
   async start(): Promise<void> {
     this.tui.start();
     await this.adapter.connect();
+    // Show the orchestrator run mode (Router/Light/Full) once connected, so the
+    // user sees how Octipus is running from the first screen. Non-critical.
+    void this.loadRunMode();
+  }
+
+  /** Derive the HTTP API base from the gateway WS URL (ws://host:port/gateway
+   *  → http://host:port). Returns null if no gateway URL is known. */
+  private httpBase(): string | null {
+    if (!this.gatewayUrl) return null;
+    try {
+      const u = new URL(this.gatewayUrl);
+      u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+      u.pathname = '';
+      u.search = '';
+      u.hash = '';
+      return u.toString().replace(/\/$/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fetch the orchestrator run mode and surface it in the status bar. */
+  private async loadRunMode(): Promise<void> {
+    const base = this.httpBase();
+    if (!base) return;
+    try {
+      const res = await fetch(`${base}/health/orchestrator`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { label?: string | null };
+      if (data?.label) {
+        this.status.setMode(data.label);
+        this.tui.requestRender();
+      }
+    } catch {
+      // Non-critical, and the TUI owns the alt-screen — writing to
+      // stdout/console here would corrupt the rendered UI, so we intentionally
+      // stay silent on a failed mode lookup rather than log.
+    }
   }
 
   async stop(): Promise<void> {

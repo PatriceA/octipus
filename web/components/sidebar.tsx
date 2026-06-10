@@ -197,22 +197,8 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* User card — single dim-border block, status dot + role. Matches
-          the TUI status-bar pattern of "● label · meta". */}
-      {!collapsed && user && (
-        <div className="px-2 py-2 border-t border-outline-variant/40">
-          <div className="flex items-center gap-2 px-2 py-1.5 text-[12px]">
-            <span
-              className={cn('dot', user.isAdmin ? 'dot-warn' : 'dot-ok')}
-              aria-hidden
-            />
-            <span className="truncate text-on-surface">{user.username}</span>
-            <span className="ml-auto text-[10px] text-outline-variant uppercase tracking-wider">
-              {user.isAdmin ? 'root' : 'user'}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* User identity lives in the header profile dropdown (single source of
+          truth); the duplicate sidebar card was removed per QA. */}
     </aside>
   );
 }

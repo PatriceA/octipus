@@ -1,6 +1,8 @@
 import { Elysia } from 'elysia';
 import { getUMI } from '@/channels/interface';
+import { getConfig } from '@/config';
 import { getGateway } from '@/core/gateway';
+import { describeMode, resolveOrchestratorMode } from '@/core/orchestrator/mode-selector';
 import { checkDbHealth } from '@/db/postgres';
 import { checkRedisHealth } from '@/db/redis';
 import { getHealthChecker } from '@/models/health-checker';
@@ -381,4 +383,32 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     );
 
     return { features };
+  })
+
+  // Orchestrator run-mode — router / lite / full, derived from the default
+  // model's size and the configured thresholds (same logic the runtime uses
+  // each turn). Surfaced so the web header and TUI can always show how Octipus
+  // is running. Returns mode=null when no default model is set yet.
+  .get('/orchestrator', async () => {
+    const orch = getConfig().orchestrator;
+    const registry = getModelRegistry();
+    const model = await registry.getDefaultModel();
+    if (!model) {
+      return { mode: null, label: null, description: 'No default model set' };
+    }
+    const mode = resolveOrchestratorMode(
+      { modelId: model.modelId, metadata: model.metadata },
+      {
+        mode: orch.mode,
+        routerSmallModelMaxParams: orch.routerSmallModelMaxParams,
+        liteModelMaxParams: orch.liteModelMaxParams,
+      },
+    );
+    // Display labels — 'lite' surfaces as "Light" per product naming; the raw
+    // `mode` id stays the canonical value for any programmatic consumer. This
+    // route is public (like the other /health routes) so it deliberately does
+    // NOT echo the model name — that would leak infra info to anonymous callers
+    // (cf. /health/detailed, which is auth-gated for the same reason).
+    const LABELS = { router: 'Router', lite: 'Light', full: 'Full' } as const;
+    return { mode, label: LABELS[mode], description: describeMode(mode) };
   });

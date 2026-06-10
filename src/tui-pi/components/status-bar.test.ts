@@ -24,6 +24,15 @@ describe('StatusBar', () => {
     expect(strip(bar.render(80)[0])).toContain('⟨security⟩');
   });
 
+  test('renders run-mode segment when set, hidden otherwise', () => {
+    const bar = new StatusBar();
+    expect(strip(bar.render(80)[0])).not.toContain('[Full]');
+    bar.setMode('Full');
+    expect(strip(bar.render(80)[0])).toContain('[Full]');
+    bar.setMode(null);
+    expect(strip(bar.render(80)[0])).not.toContain('[Full]');
+  });
+
   test('renders cumulative stats when non-zero', () => {
     const bar = new StatusBar();
     bar.setStats({ tokens: 1234, cost: 0.05, turns: 3 });
