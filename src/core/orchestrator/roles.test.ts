@@ -59,6 +59,28 @@ describe('getRoleConfig', () => {
   });
 });
 
+describe('general role grants the user-facing capture tools', () => {
+  // Regression guard: agents were falling back to `filesystem.write_file`
+  // (dumping todo.md / notes/*.md into a session folder) because the general
+  // role lacked the dedicated tools. Notes and to-dos must route to the tools
+  // that back the Notes and Tasks tabs, not to loose files.
+  const { toolIds } = ROLE_CONFIGS.general;
+
+  test('grants the notes tool (Notes tab)', () => {
+    expect(toolIds).toContain('notes');
+  });
+
+  test('grants the tasks tool (Tasks/ToDo tab)', () => {
+    expect(toolIds).toContain('tasks');
+  });
+
+  test('prompt steers "note"/"to-do" requests to the tools, not files', () => {
+    const prompt = ROLE_CONFIGS.general.systemPromptTemplate;
+    expect(prompt).toContain('write_note');
+    expect(prompt).toContain('create_task');
+  });
+});
+
 describe('OUTPUT_FORMATTING_RULES', () => {
   test('discourages fenced blocks for short tokens', () => {
     expect(OUTPUT_FORMATTING_RULES).toMatch(/single backticks/i);

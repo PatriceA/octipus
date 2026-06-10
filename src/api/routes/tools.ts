@@ -1,5 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
 import { getExtensionRegistry } from '@/extensions/registry';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getPermissionManager } from '@/security/permissions';
@@ -103,6 +104,32 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       }));
 
       return { tools: [...registeredTools, ...mcpTools] };
+    },
+    { detail: { tags: ['tools'] } }
+  )
+
+  // Role ↔ tool mapping. The authorization boundary is the role: an agent of
+  // role R may call tool T iff T ∈ ROLE_CONFIGS[R].toolIds. The Tools page uses
+  // this to show, per tool, which roles/topics can actually use it (the QA ask:
+  // "I see the tool but not which topics can use them"). MUST be before /:id.
+  .get(
+    '/role-map',
+    async ({ user }) => {
+      if (!user) {
+        return { error: 'Not authenticated' };
+      }
+
+      // toolId -> roles that grant it (reverse index for the per-tool view).
+      const byTool: Record<string, string[]> = {};
+      const roles = Object.values(ROLE_CONFIGS).map((cfg) => {
+        for (const toolId of cfg.toolIds) {
+          (byTool[toolId] ??= []).push(cfg.role);
+        }
+        return { role: cfg.role, defaultTopic: cfg.defaultTopic, toolIds: cfg.toolIds };
+      });
+      for (const roleList of Object.values(byTool)) roleList.sort();
+
+      return { roles, byTool };
     },
     { detail: { tags: ['tools'] } }
   )
