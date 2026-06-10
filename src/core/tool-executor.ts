@@ -20,6 +20,23 @@ const FILE_CHANGE_TOOLS = new Set([
   'filesystem__create_directory',
 ]);
 
+/**
+ * Pull the canonical filesystem path out of a file-mutating tool's *result*.
+ * write/append/delete/create_directory return `{ path }`; copy/move return
+ * `{ source, destination }` where `destination` is the file that now exists.
+ * Returns undefined when the result carries no usable path so the caller can
+ * fall back to the requested-argument path.
+ */
+export function resolvedFileChangePath(result: unknown): string | undefined {
+  if (result == null || typeof result !== 'object') return undefined;
+  const r = result as Record<string, unknown>;
+  const destination = r.destination;
+  if (typeof destination === 'string' && destination.length > 0) return destination;
+  const path = r.path;
+  if (typeof path === 'string' && path.length > 0) return path;
+  return undefined;
+}
+
 /** Tools whose wall-clock duration is *paused* out of the calling agent's
  * timer — the agent is blocked waiting on the child, not doing work. */
 const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
@@ -449,9 +466,18 @@ export class ToolExecutor {
 
         results.push({ toolCallId: toolCall.id, result });
 
-        // Emit file change events for file-modifying operations
+        // Emit file change events for file-modifying operations.
+        // Prefer the path the tool actually wrote to (its result), not the
+        // path the agent *requested* in its arguments: write_file relocates
+        // `/workspace/foo.md` into a per-session output dir and returns the
+        // canonical post-relocation path. Emitting the argument path here was
+        // making the UI link a file that doesn't exist there ("File not
+        // found" on click). Fall back to the argument path only if the tool
+        // returned no path (e.g. an error result).
         if (FILE_CHANGE_TOOLS.has(toolCall.name)) {
-          const filePath = (toolCall.arguments.path || toolCall.arguments.destination || toolCall.arguments.source) as string | undefined;
+          const resolvedPath = resolvedFileChangePath(result);
+          const filePath = resolvedPath
+            ?? ((toolCall.arguments.path || toolCall.arguments.destination || toolCall.arguments.source) as string | undefined);
           if (filePath) {
             agentLogger.info(
               { agentId: this.context.id, tool: toolCall.name, path: filePath },

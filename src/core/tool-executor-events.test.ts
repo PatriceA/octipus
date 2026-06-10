@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { ToolExecutor } from './tool-executor';
+import { ToolExecutor, resolvedFileChangePath } from './tool-executor';
 import type { ToolHandler } from './agent-base';
 import type { AgentContext, ToolCall } from './types';
 
@@ -139,5 +139,28 @@ describe('ToolExecutor — per-tool completion events', () => {
     expect(complete).toBeDefined();
     expect(complete!.data.resultPreview).toContain('files');
     expect(complete!.data.resultPreview).toContain('a.ts');
+  });
+});
+
+describe('resolvedFileChangePath — file_change emits the path the tool wrote', () => {
+  // write_file relocates `/workspace/todo.md` into the session output dir and
+  // returns the canonical path. The file_change event must carry that resolved
+  // path, not the requested argument path, or the UI links a file that does not
+  // exist at the requested location ("File not found" on click).
+  test('returns `path` for write/append/delete/create_directory results', () => {
+    const relocated = '/workspace/sessions/2026-06-10-general-abc/todo.md';
+    expect(resolvedFileChangePath({ success: true, path: relocated, bytesWritten: 40 })).toBe(relocated);
+  });
+
+  test('prefers `destination` for copy/move results', () => {
+    expect(resolvedFileChangePath({ success: true, source: '/a/old.md', destination: '/a/new.md' }))
+      .toBe('/a/new.md');
+  });
+
+  test('returns undefined so the caller can fall back when no path is present', () => {
+    expect(resolvedFileChangePath({ success: true })).toBeUndefined();
+    expect(resolvedFileChangePath(null)).toBeUndefined();
+    expect(resolvedFileChangePath('not an object')).toBeUndefined();
+    expect(resolvedFileChangePath({ path: '' })).toBeUndefined();
   });
 });
