@@ -17,12 +17,15 @@ export class StatusBar implements Component {
   private expert: string | null = null;
   private stats: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   private mcp: McpSummary | null = null;
+  private mode: string | null = null;
 
   setStatus(status: ConnectionStatus): void { this.status = status; }
   setProject(project: string | undefined): void { this.project = project; }
   setExpert(expert: string | null): void { this.expert = expert; }
   setStats(stats: CumulativeStats): void { this.stats = stats; }
   setMcp(summary: McpSummary | null): void { this.mcp = summary; }
+  /** Orchestrator run mode label (Router/Light/Full); null hides the segment. */
+  setMode(mode: string | null): void { this.mode = mode; }
 
   invalidate(): void { /* no cached state */ }
 
@@ -35,6 +38,7 @@ export class StatusBar implements Component {
         : chalk.hex(palette.error)('●');
     const title = chalk.bold.hex(palette.accent)('Octipus');
     const parts: string[] = [`${dot} ${title}`];
+    if (this.mode) parts.push(chalk.hex(palette.accent)(`[${this.mode}]`));
     if (this.project) parts.push(chalk.hex(palette.statusFg)(`${getGlyphs().project}${this.project}`));
     if (this.expert)  parts.push(chalk.hex(palette.accent)(`⟨${this.expert}⟩`));
     if (this.mcp && this.mcp.total > 0) {

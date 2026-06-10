@@ -1,6 +1,8 @@
 import { Elysia } from 'elysia';
 import { getUMI } from '@/channels/interface';
+import { getConfig } from '@/config';
 import { getGateway } from '@/core/gateway';
+import { describeMode, resolveOrchestratorMode } from '@/core/orchestrator/mode-selector';
 import { checkDbHealth } from '@/db/postgres';
 import { checkRedisHealth } from '@/db/redis';
 import { getHealthChecker } from '@/models/health-checker';
@@ -334,4 +336,27 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     );
 
     return { features };
+  })
+
+  // Orchestrator run-mode — router / lite / full, derived from the default
+  // model's size and the configured thresholds (same logic the runtime uses
+  // each turn). Surfaced so the web header and TUI can always show how Octipus
+  // is running. Returns mode=null when no default model is set yet.
+  .get('/orchestrator', async () => {
+    const orch = getConfig().orchestrator;
+    const registry = getModelRegistry();
+    const model = await registry.getDefaultModel();
+    if (!model) {
+      return { mode: null, label: null, description: 'No default model set', model: null };
+    }
+    const mode = resolveOrchestratorMode(
+      { modelId: model.modelId, metadata: model.metadata },
+      {
+        mode: orch.mode,
+        routerSmallModelMaxParams: orch.routerSmallModelMaxParams,
+        liteModelMaxParams: orch.liteModelMaxParams,
+      },
+    );
+    const LABELS = { router: 'Router', lite: 'Light', full: 'Full' } as const;
+    return { mode, label: LABELS[mode], description: describeMode(mode), model: model.name };
   });
