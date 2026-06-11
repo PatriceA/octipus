@@ -44,6 +44,7 @@ export class TasksTool extends BaseTool {
       createParameterSchema({
         status: { type: 'string', description: 'Filter by status', enum: ['open', 'done', 'archived'] },
         dueToday: { type: 'boolean', description: 'Only tasks due by end of today' },
+        category: { type: 'string', description: 'Filter to a category/list (e.g. "Shopping"); "none" for uncategorized' },
       }),
       async (args, context) => {
         const principal = this.principalFor(context);
@@ -55,6 +56,7 @@ export class TasksTool extends BaseTool {
         const tasks = await scopedRepos(principal).tasks.listOwn({
           status: args.status as string | undefined,
           dueBefore,
+          category: args.category as string | undefined,
         });
         return { tasks: tasks.map(summarize) };
       },
@@ -63,11 +65,12 @@ export class TasksTool extends BaseTool {
 
     this.registerTool(
       'create_task',
-      'Create a new task for the user. Set source to record where it came from (e.g. "agent", "reader", "research", "email").',
+      'Create a new task for the user. Set source to record where it came from (e.g. "agent", "reader", "research", "email"). Set category to file it under a user list (e.g. "Shopping", "House work").',
       createParameterSchema({
         title: { type: 'string', description: 'Task title', required: true },
         notes: { type: 'string', description: 'Optional details' },
         priority: { type: 'number', description: 'Priority 0 (none) to 3 (high)' },
+        category: { type: 'string', description: 'Optional user category/list, e.g. "Shopping" or "Car"' },
         dueAt: { type: 'string', description: 'Due date/time, ISO 8601' },
         source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
       }),
@@ -77,6 +80,7 @@ export class TasksTool extends BaseTool {
           title: args.title as string,
           notes: (args.notes as string | undefined) ?? null,
           priority: clampPriority(args.priority),
+          category: normalizeCategory(args.category),
           dueAt: parseDueAt(args.dueAt),
           source: normalizeSource(args.source),
           sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
@@ -88,13 +92,14 @@ export class TasksTool extends BaseTool {
 
     this.registerTool(
       'update_task',
-      'Update a task\'s title, notes, status, priority, or due date.',
+      'Update a task\'s title, notes, status, priority, category, or due date.',
       createParameterSchema({
         id: { type: 'string', description: 'Task id', required: true },
         title: { type: 'string', description: 'New title' },
         notes: { type: 'string', description: 'New notes' },
         status: { type: 'string', description: 'open|done|archived', enum: ['open', 'done', 'archived'] },
         priority: { type: 'number', description: 'Priority 0..3' },
+        category: { type: 'string', description: 'User category/list; empty string clears it' },
         dueAt: { type: 'string', description: 'Due date/time, ISO 8601' },
       }),
       async (args, context) => {
@@ -108,7 +113,10 @@ export class TasksTool extends BaseTool {
           notes: args.notes as string | undefined,
           status,
           priority: args.priority !== undefined ? clampPriority(args.priority) : undefined,
-          dueAt: args.dueAt ? parseDueAt(args.dueAt) : undefined,
+          category: args.category !== undefined ? normalizeCategory(args.category) : undefined,
+          // `!== undefined` (not truthiness): an explicit "" clears the due date;
+          // absent leaves it unchanged. parseDueAt('') → null (clear).
+          dueAt: args.dueAt !== undefined ? parseDueAt(args.dueAt) : undefined,
           ...completionPatch(status, Boolean(existing.completedAt)),
         });
         return { updated: true, task: task ? summarize(task) : null };
@@ -168,6 +176,13 @@ function normalizeSource(s: unknown): string {
   return typeof s === 'string' && TASK_SOURCES.has(s) ? s : 'agent';
 }
 
+/** Trim an optional category; empty/absent → null (uncategorized). */
+function normalizeCategory(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const c = v.trim();
+  return c === '' ? null : c.slice(0, 100);
+}
+
 /** Parse an optional ISO due-date; returns null on absent/garbage rather than NaN. */
 function parseDueAt(v: unknown): Date | null {
   if (!v) return null;
@@ -183,13 +198,14 @@ function completionPatch(nextStatus: string | undefined, wasCompleted: boolean):
 
 function summarize(t: {
   id: string; title: string; status: string; priority: number;
-  dueAt: Date | null; completedAt: Date | null; source: string; notes: string | null;
+  category: string | null; dueAt: Date | null; completedAt: Date | null; source: string; notes: string | null;
 }) {
   return {
     id: t.id,
     title: t.title,
     status: t.status,
     priority: t.priority,
+    category: t.category,
     dueAt: t.dueAt,
     completedAt: t.completedAt,
     source: t.source,

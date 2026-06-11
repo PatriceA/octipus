@@ -22,6 +22,12 @@ export const tasks = pgTable('tasks', {
   notes: text('notes'),
   status: text('status').default('open').notNull(), // 'open' | 'done' | 'archived'
   priority: integer('priority').default(0).notNull(), // 0 none .. 3 high
+  /**
+   * Free-form user category / list ("Shopping", "House work", "Car"). NULL =
+   * uncategorized. Not an enum — categories are user-defined; the UI offers
+   * existing ones for reuse but never constrains the set.
+   */
+  category: text('category'),
   dueAt: timestamp('due_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email'. */

@@ -21,10 +21,11 @@ export function registerTasksTools(server: McpServer, client: OctiClient): void 
     {
       status: z.enum(['open', 'done', 'archived']).optional().describe('Filter by status'),
       dueToday: z.boolean().optional().describe('Only tasks due by end of today'),
+      category: z.string().optional().describe('Filter to a category/list (e.g. "Shopping"); "none" for uncategorized'),
     },
-    async ({ status, dueToday }) => {
+    async ({ status, dueToday, category }) => {
       try {
-        return asText(await client.executeTool('tasks', 'list_tasks', { status, dueToday }));
+        return asText(await client.executeTool('tasks', 'list_tasks', { status, dueToday, category }));
       } catch (error) {
         return asError(error);
       }
@@ -38,11 +39,12 @@ export function registerTasksTools(server: McpServer, client: OctiClient): void 
       title: z.string().describe('Task title'),
       notes: z.string().optional().describe('Optional details'),
       priority: z.number().min(0).max(3).optional().describe('Priority 0 (none) to 3 (high)'),
+      category: z.string().optional().describe('Optional user category/list, e.g. "Shopping" or "Car"'),
       dueAt: z.string().optional().describe('Due date/time, ISO 8601'),
     },
-    async ({ title, notes, priority, dueAt }) => {
+    async ({ title, notes, priority, category, dueAt }) => {
       try {
-        return asText(await client.executeTool('tasks', 'create_task', { title, notes, priority, dueAt, source: 'agent' }));
+        return asText(await client.executeTool('tasks', 'create_task', { title, notes, priority, category, dueAt, source: 'agent' }));
       } catch (error) {
         return asError(error);
       }
@@ -51,18 +53,19 @@ export function registerTasksTools(server: McpServer, client: OctiClient): void 
 
   server.tool(
     'octipus_update_task',
-    'Update an existing task (title, notes, status, priority, or due date).',
+    'Update an existing task (title, notes, status, priority, category, or due date).',
     {
       id: z.string().describe('Task id'),
       title: z.string().optional(),
       notes: z.string().optional(),
       status: z.enum(['open', 'done', 'archived']).optional(),
       priority: z.number().min(0).max(3).optional(),
+      category: z.string().optional().describe('User category/list; empty string clears it'),
       dueAt: z.string().optional().describe('Due date/time, ISO 8601'),
     },
-    async ({ id, title, notes, status, priority, dueAt }) => {
+    async ({ id, title, notes, status, priority, category, dueAt }) => {
       try {
-        return asText(await client.executeTool('tasks', 'update_task', { id, title, notes, status, priority, dueAt }));
+        return asText(await client.executeTool('tasks', 'update_task', { id, title, notes, status, priority, category, dueAt }));
       } catch (error) {
         return asError(error);
       }
