@@ -218,7 +218,63 @@ function parseJson<T>(raw: string): T | null {
   return m ? tryParse(m[0]) : null;
 }
 
-const VALID_PRIORITY = new Set<EmailTriage['priority']>(['high', 'normal', 'low']);
+/**
+ * Coerce a model-supplied priority to one of our three buckets. Small models
+ * routinely return `"High"`, `"urgent"`, `"medium"`, `1`, etc.; the strict
+ * lowercase-only check silently dropped every one of them (the QA: "Triaged 0"
+ * even though the model replied). Unknown values fall back to `'normal'` rather
+ * than vanishing — a triaged item the model couldn't bucket is still triaged.
+ */
+export function coercePriority(v: unknown): EmailTriage['priority'] {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (s === 'high' || s === 'urgent' || s === 'important' || s === '1' || s === 'p1') return 'high';
+  if (s === 'low' || s === 'fyi' || s === 'spam' || s === '3' || s === 'p3') return 'low';
+  // 'normal' | 'medium' | 'med' | '2' | 'p2' | anything unrecognized
+  return 'normal';
+}
+
+/**
+ * Normalize the model's triage payload into `[id, raw]` pairs regardless of
+ * shape. Models return either the asked-for id→object MAP, or (commonly for
+ * smaller models) an ARRAY of `{id, priority, …}` rows, sometimes wrapped under
+ * a key like `triage`/`results`/`messages`. Each shape used to be dropped
+ * wholesale: array keys ("0","1",…) aren't real ids, so nothing matched.
+ */
+export function triageEntries(parsed: unknown): Array<[string, Record<string, unknown>]> {
+  if (!parsed || typeof parsed !== 'object') return [];
+  let node: unknown = parsed;
+  // Unwrap a single common wrapper key (`{"triage": …}`) ONLY when the outer
+  // object isn't already an id→triage map — otherwise a map that happens to
+  // contain a key literally named "results"/"items"/… would be discarded along
+  // with all its real entries. "Already a map" = at least one value is a triage
+  // object (carries a `priority`).
+  if (!Array.isArray(node)) {
+    const obj = node as Record<string, unknown>;
+    const alreadyMap = Object.values(obj).some(
+      (v) => v && typeof v === 'object' && !Array.isArray(v) && 'priority' in (v as object),
+    );
+    if (!alreadyMap) {
+      for (const key of ['triage', 'results', 'items', 'messages', 'emails']) {
+        const inner = obj[key];
+        if (inner && typeof inner === 'object') { node = inner; break; }
+      }
+    }
+  }
+  const out: Array<[string, Record<string, unknown>]> = [];
+  if (Array.isArray(node)) {
+    for (const el of node) {
+      if (!el || typeof el !== 'object') continue;
+      const row = el as Record<string, unknown>;
+      const id = row.id ?? row.messageId ?? row.message_id ?? row.uid;
+      if (typeof id === 'string') out.push([id, row]);
+    }
+  } else {
+    for (const [id, val] of Object.entries(node as Record<string, unknown>)) {
+      if (val && typeof val === 'object') out.push([id, val as Record<string, unknown>]);
+    }
+  }
+  return out;
+}
 
 /**
  * Triage a batch of inbox items into priorities via the model. Opt-in (not on
@@ -242,14 +298,26 @@ export async function triageInbox(userId: string, items: InboxItem[]): Promise<R
     maxTokens: 1200,
     userId,
   });
-  const parsed = parseJson<Record<string, EmailTriage>>(result.content ?? '');
-  if (!parsed || typeof parsed !== 'object') return {};
-  // Validate: only known ids, only valid priority values reach the UI.
+  const parsed = parseJson<unknown>(result.content ?? '');
+  // Accept the id→object map OR an array of rows OR a wrapped variant, and
+  // coerce loose priority strings — so a model that "replied but in the wrong
+  // shape" still triages instead of silently producing "Triaged 0".
   const clean: Record<string, EmailTriage> = {};
-  for (const [id, t] of Object.entries(parsed)) {
-    if (ids.has(id) && t && VALID_PRIORITY.has(t.priority)) {
-      clean[id] = { priority: t.priority, category: t.category, reason: t.reason };
-    }
+  for (const [id, t] of triageEntries(parsed)) {
+    if (!ids.has(id)) continue;
+    clean[id] = {
+      priority: coercePriority(t.priority),
+      category: typeof t.category === 'string' ? t.category : 'other',
+      reason: typeof t.reason === 'string' ? t.reason : '',
+    };
+  }
+  // Fail loud if the model answered but nothing survived id-matching — that's a
+  // real bug (id format drift), not an empty inbox, and was invisible before.
+  if (result.content && Object.keys(clean).length === 0 && items.length > 0) {
+    coreLogger.warn(
+      { userId, items: items.length, sample: result.content.slice(0, 200) },
+      'email: triage produced no usable entries despite a model response',
+    );
   }
   return clean;
 }

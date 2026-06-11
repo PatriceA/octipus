@@ -40,11 +40,87 @@ export const ALLOWED_TAGS = new Set([
  */
 export const EMAIL_ALLOWED_TAGS = new Set([...ALLOWED_TAGS, 'div', 'span']);
 
-/** Per-tag attribute allowlist. */
+/** Per-tag attribute allowlist (base / reader mode — URL-bearing only). */
 export const ALLOWED_ATTRS: Record<string, Set<string>> = {
   a: new Set(['href']),
   img: new Set(['src', 'alt']),
 };
+
+/**
+ * Presentational (email-mode) per-tag attributes — purely layout, no script
+ * surface. Email HTML is table-based and inline-styled; without these the
+ * message collapses into unstyled text that looks nothing like the original
+ * (the QA: "looks vastly different to … google"). Merged with `ALLOWED_ATTRS`
+ * only when `presentational` is set.
+ */
+const PRESENTATIONAL_ATTRS: Record<string, Set<string>> = {
+  img: new Set(['width', 'height', 'align']),
+  table: new Set(['width', 'height', 'align', 'bgcolor', 'border', 'cellpadding', 'cellspacing']),
+  td: new Set(['width', 'height', 'align', 'valign', 'bgcolor', 'colspan', 'rowspan']),
+  th: new Set(['width', 'height', 'align', 'valign', 'bgcolor', 'colspan', 'rowspan']),
+  tr: new Set(['align', 'valign', 'bgcolor', 'height']),
+  p: new Set(['align']),
+  div: new Set(['align']),
+  h1: new Set(['align']), h2: new Set(['align']), h3: new Set(['align']),
+  h4: new Set(['align']), h5: new Set(['align']), h6: new Set(['align']),
+};
+
+/**
+ * CSS properties kept from an inline `style` in presentational mode. Strictly
+ * cosmetic — no `position` (overlay/clickjacking), no `behavior`/`expression`,
+ * no anything that loads a resource. Values are additionally scrubbed by
+ * `sanitizeStyle` (rejects `url(...)`, `expression`, `@import`, etc.).
+ */
+const SAFE_CSS_PROPS = new Set([
+  // NOTE: `background-color` only — NOT the `background` shorthand, which
+  // subsumes `background-image: url(...)` and would put resource loading one
+  // value-pattern check away from working.
+  'color', 'background-color',
+  'font', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant',
+  'text-align', 'text-decoration', 'text-transform', 'text-indent',
+  'line-height', 'letter-spacing', 'word-spacing', 'white-space', 'direction',
+  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
+  'border-color', 'border-style', 'border-width', 'border-radius', 'border-collapse', 'border-spacing',
+  'width', 'max-width', 'min-width', 'height', 'max-height', 'min-height',
+  'display', 'vertical-align', 'text-overflow', 'overflow',
+  'list-style', 'list-style-type', 'list-style-position',
+]);
+
+/**
+ * Any CSS function that can load a resource, run script, or read host context.
+ * Matched with optional whitespace before `(` because `url\n(` / `url\t(` are
+ * still parsed as the function by browsers — `includes('url(')` would miss them
+ * (defense-in-depth: don't let the filter be fooled even where the engine is
+ * lenient). Colour/sizing functions (`rgb`/`rgba`/`hsl`/`hsla`/`calc`) are NOT
+ * here — they're safe and legitimately used in email styling.
+ */
+const UNSAFE_CSS_FN = /(?:url|expression|image|image-set|cross-fade|element|attr|var|-moz-binding)\s*\(/i;
+
+/**
+ * Scrub an inline `style` value to only safe, cosmetic declarations. Drops any
+ * declaration whose property isn't in `SAFE_CSS_PROPS` or whose value carries a
+ * resource load / script / host-context vector (any `UNSAFE_CSS_FN`,
+ * `javascript:`, `@import`, comments, angle brackets, backslash escapes).
+ * Returns '' if nothing safe survives.
+ */
+export function sanitizeStyle(raw: string | undefined): string {
+  if (!raw) return '';
+  const out: string[] = [];
+  for (const decl of raw.split(';')) {
+    const idx = decl.indexOf(':');
+    if (idx < 0) continue;
+    const prop = decl.slice(0, idx).trim().toLowerCase();
+    const value = decl.slice(idx + 1).trim();
+    if (!SAFE_CSS_PROPS.has(prop) || !value) continue;
+    const lv = value.toLowerCase();
+    if (UNSAFE_CSS_FN.test(lv) || lv.includes('javascript:')
+      || lv.includes('@import') || lv.includes('/*') || lv.includes('<') || lv.includes('\\')) continue;
+    out.push(`${prop}: ${value}`);
+  }
+  return out.join('; ');
+}
 
 export const escapeText = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -94,18 +170,31 @@ function attr(el: Element, name: string): string | undefined {
   return v == null ? undefined : v;
 }
 
+export interface SerializeOptions {
+  /** Tags kept in the output (defaults to the base reader set). */
+  allowed?: Set<string>;
+  /**
+   * Keep cosmetic presentation — sanitized inline `style` plus layout
+   * attributes (table widths, align, bgcolor, …). On for the email viewer so
+   * messages render close to how the sender built them; off for the reader,
+   * which deliberately flattens to clean prose.
+   */
+  presentational?: boolean;
+}
+
 /**
  * Serialize a node subtree to sanitized HTML using the tag/attr allowlist.
- * `allowed` defaults to the base (reader) set; callers that need a wider set
- * (e.g. email, with div/span) pass it explicitly.
+ * `opts.allowed` defaults to the base (reader) set; callers that need a wider
+ * set (e.g. email, with div/span) pass it explicitly. `opts.presentational`
+ * additionally keeps cosmetic style/layout attributes.
  */
-export function serialize(node: AnyNode, allowed: Set<string> = ALLOWED_TAGS): string {
+export function serialize(node: AnyNode, opts: SerializeOptions = {}): string {
   if (isText(node)) return escapeText(node.data);
   if (!isTag(node)) return '';
+  const allowed = opts.allowed ?? ALLOWED_TAGS;
   const tag = node.name.toLowerCase();
-  const inner = node.children.map((c) => serialize(c, allowed)).join('');
+  const inner = node.children.map((c) => serialize(c, opts)).join('');
   if (!allowed.has(tag)) return inner; // unwrap unknown tags, keep their text/children
-  if (tag === 'br' || tag === 'hr') return `<${tag}>`;
 
   let attrs = '';
   const allowedAttrs = ALLOWED_ATTRS[tag];
@@ -116,6 +205,20 @@ export function serialize(node: AnyNode, allowed: Set<string> = ALLOWED_TAGS): s
       if (val) attrs += ` ${name}="${escapeAttr(val)}"`;
     }
   }
+  if (opts.presentational) {
+    // Sanitized inline style.
+    const style = sanitizeStyle(attr(node, 'style'));
+    if (style) attrs += ` style="${escapeAttr(style)}"`;
+    // Cosmetic layout attributes (no URL/script surface, used verbatim).
+    const layout = PRESENTATIONAL_ATTRS[tag];
+    if (layout) {
+      for (const name of layout) {
+        const val = attr(node, name);
+        if (val) attrs += ` ${name}="${escapeAttr(val)}"`;
+      }
+    }
+  }
+  if (tag === 'br' || tag === 'hr') return `<${tag}${attrs}>`;
   if (tag === 'img') return `<img${attrs}>`;
   return `<${tag}${attrs}>${inner}</${tag}>`;
 }
@@ -124,12 +227,21 @@ export function serialize(node: AnyNode, allowed: Set<string> = ALLOWED_TAGS): s
  * Sanitize a full HTML fragment to a safe string. Parses the input, removes
  * STRIP_TAGS subtrees, then serializes the remaining tree through the
  * allowlist. Use this to render untrusted HTML (e.g. an email body).
+ *
+ * `opts` may be the wider tag set directly (back-compat) or a
+ * `SerializeOptions` bag. The email viewer passes `{ presentational: true }`.
  */
-export function sanitizeHtmlFragment(html: string, allowed: Set<string> = EMAIL_ALLOWED_TAGS): string {
+export function sanitizeHtmlFragment(
+  html: string,
+  opts: Set<string> | SerializeOptions = EMAIL_ALLOWED_TAGS,
+): string {
   if (!html) return '';
+  // Copy (never mutate the caller's opts object).
+  const options: SerializeOptions = opts instanceof Set ? { allowed: opts } : { ...opts };
+  if (!options.allowed) options.allowed = EMAIL_ALLOWED_TAGS;
   const doc = parseDocument(html);
   for (const tag of STRIP_TAGS) {
     for (const el of getElementsByTagName(tag, doc, true)) removeElement(el);
   }
-  return doc.children.map((c) => serialize(c, allowed)).join('').trim();
+  return doc.children.map((c) => serialize(c, options)).join('').trim();
 }

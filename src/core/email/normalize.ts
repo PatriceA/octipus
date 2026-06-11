@@ -89,7 +89,9 @@ function decodeGmailHtml(msg: GmailMessage): string | undefined {
 
 export function gmailToMessage(msg: GmailMessage): EmailMessage {
   const rawHtml = decodeGmailHtml(msg);
-  const html = rawHtml ? sanitizeHtmlFragment(rawHtml) : undefined;
+  // Presentational: keep sanitized inline style + table layout so the message
+  // renders close to how the sender built it (not flattened to plain text).
+  const html = rawHtml ? sanitizeHtmlFragment(rawHtml, { presentational: true }) : undefined;
   const plain = decodeGmailBody(msg).trim();
   return {
     ...normalizeGmail(msg),
@@ -144,7 +146,8 @@ export const normalizeM365List = (messages: GraphMessage[]): InboxItem[] => mess
 export function m365ToMessage(msg: GraphMessage): EmailMessage {
   const raw = msg.body?.content ?? msg.bodyPreview ?? '';
   const isHtml = msg.body?.contentType === 'html';
-  const html = isHtml ? sanitizeHtmlFragment(raw) : undefined;
+  // Presentational: keep sanitized inline style + table layout (see gmail path).
+  const html = isHtml ? sanitizeHtmlFragment(raw, { presentational: true }) : undefined;
   return {
     ...normalizeM365(msg),
     to: (msg.toRecipients ?? []).map((r) => graphAddress(r.emailAddress)).filter((a) => a.email),
