@@ -18,6 +18,13 @@ export interface Model {
   costPerOutputToken: number;
   metadata?: {
     description?: string;
+    /**
+     * Parameter count as a raw number (e.g. 7_000_000_000 for a 7B model).
+     * Drives the orchestrator mode selector (router/lite/full) when
+     * `orchestrator.mode` is `auto`. Absent for external model IDs that
+     * carry no size tag — set it here so they don't dead-end at lite.
+     */
+    paramCount?: number;
     extraBody?: Record<string, unknown>;
     cliAgent?: {
       permissionMode?: string;
