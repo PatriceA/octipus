@@ -99,6 +99,17 @@ describe('NoteService', () => {
     expect(resolved.toType).toBe('note');
   });
 
+  test('linking to an ALREADY-EXISTING note resolves the edge immediately (graph line shows)', async () => {
+    // The QA bug: B exists first, then A links to it. The A→B edge used to
+    // stay a ghost (to_id NULL) until B was next saved, so the graph (which
+    // only draws resolved edges) showed no connection.
+    const target = await svc.save({ userId, title: 'Existing Target' });
+    const a = await svc.save({ userId, title: 'A', body: 'see [[Existing Target]]' });
+    const edge = (await links.getOutgoing(userId, 'note', a.note.id)).find((e) => e.linkType === 'references');
+    expect(edge?.toId).toBe(target.note.id);
+    expect(edge?.toType).toBe('note');
+  });
+
   test('getOrCreateDaily is idempotent and stamps the date', async () => {
     const d1 = await svc.getOrCreateDaily(userId, null, '2026-06-09T12:00:00Z');
     expect(d1.slug).toBe('daily/2026-06-09');

@@ -136,8 +136,25 @@ export class NoteService {
       tags,
       createdByAgentId: input.createdByAgentId ?? null,
     });
-    // Resolve ghost edges that referenced this note's slug.
+    // Resolve ghost edges that referenced this note's slug (INCOMING: other
+    // notes that linked to this one before it existed).
     await this.links.resolveTo({ userId, toRef: note.slug, toType: SOURCE_PREFIX, toId: note.id });
+
+    // Resolve THIS note's OUTGOING wikilinks against notes that ALREADY exist.
+    // syncWikilinks always inserts edges as ghosts (to_id NULL) and the
+    // incoming-resolve above only binds edges pointing AT this note — so
+    // linking A→B when B already exists left the A→B edge unresolved until B
+    // was next saved, and the graph drew no line between two freshly-linked
+    // notes (the QA bug). Bind each outgoing ref whose slug matches an
+    // existing note now.
+    const outgoingRefs = [...new Set(parsed.wikilinks.map((w) => w.ref))];
+    for (const ref of outgoingRefs) {
+      if (ref === note.slug) continue; // a self-link has nothing to bind
+      const target = await this.notes.getBySlug(userId, workspaceId, ref);
+      if (target) {
+        await this.links.resolveTo({ userId, toRef: ref, toType: SOURCE_PREFIX, toId: target.id });
+      }
+    }
 
     // 3. Re-index (degrades loudly if no embedding model).
     const indexed = await this.reindex(note);
