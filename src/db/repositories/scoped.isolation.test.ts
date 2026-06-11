@@ -122,6 +122,17 @@ describe('ScopedSessionRepo cross-tenant isolation', () => {
     expect(list.find((s) => s.id === bobSession.id)).toBeUndefined();
   });
 
+  test('countOwn counts only the principal’s sessions (not other tenants)', async () => {
+    const alice = await asAlice();
+    const list = await alice.sessions.listOwn();
+    const count = await alice.sessions.countOwn();
+    // Matches listOwn here (well under the page limit) and excludes bob's.
+    expect(count).toBe(list.length);
+    expect(count).toBeGreaterThan(0);
+    const bob = await asBob();
+    expect(await bob.sessions.countOwn()).toBeGreaterThan(0);
+  });
+
   test('update on another user’s session is a no-op (returns null)', async () => {
     const alice = await asAlice();
     const { queryRaw } = await import('@/db/postgres');
