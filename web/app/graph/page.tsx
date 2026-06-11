@@ -9,10 +9,17 @@ interface GraphNode { type: string; id: string; slug?: string; label?: string; k
 interface GraphEdge { id: string; from: { type: string; id: string }; to: { type: string; id: string } | null; toRef: string; linkType: string; origin: string; resolved: boolean }
 interface GraphResponse { nodes: GraphNode[]; edges: GraphEdge[] }
 
+// Above this node count the O(n²) force relaxation gets too heavy to run on
+// every render; we fall back to the cheap ring layout instead.
+const FORCE_LAYOUT_MAX_NODES = 280;
+
 /**
- * Knowledge graph view. Dependency-free SVG with a deterministic circular
- * layout — nodes on a ring, resolved edges as lines. Good enough to see
- * clusters and hubs without pulling in a physics library.
+ * Knowledge graph view. Dependency-free SVG. Nodes are placed by a small
+ * Fruchterman-Reingold force simulation (run synchronously in a memo, seeded
+ * from a ring so it's deterministic — no Math.random) so LINKED notes pull
+ * together into clusters and unconnected notes drift apart, instead of every
+ * node sitting on one circle regardless of its links (the QA: connected notes
+ * "are also not close to each other"). Large graphs fall back to the ring.
  */
 export default function GraphPage() {
   const [selected, setSelected] = useState<string | null>(null);
@@ -27,12 +34,67 @@ export default function GraphPage() {
     const H = 600;
     const cx = W / 2;
     const cy = H / 2;
-    const r = Math.min(W, H) / 2 - 60;
+    const n = nodes.length;
     const pos = new Map<string, { x: number; y: number }>();
-    nodes.forEach((n, i) => {
-      const angle = (2 * Math.PI * i) / Math.max(1, nodes.length);
-      pos.set(`${n.type}:${n.id}`, { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+    if (n === 0) return { W, H, pos };
+
+    const keyOf = (nd: GraphNode) => `${nd.type}:${nd.id}`;
+    const ringR = Math.min(W, H) / 2 - 60;
+    // Seed every node on a ring (deterministic starting state).
+    const p = nodes.map((_, i) => {
+      const a = (2 * Math.PI * i) / n;
+      return { x: cx + ringR * Math.cos(a), y: cy + ringR * Math.sin(a) };
     });
+
+    if (n <= FORCE_LAYOUT_MAX_NODES) {
+      const idx = new Map(nodes.map((nd, i) => [keyOf(nd), i]));
+      const links = (graph.data?.edges ?? [])
+        .filter((e) => e.resolved && e.to)
+        .map((e) => [idx.get(`${e.from.type}:${e.from.id}`), e.to ? idx.get(`${e.to.type}:${e.to.id}`) : undefined])
+        .filter((l): l is [number, number] => l[0] !== undefined && l[1] !== undefined && l[0] !== l[1]);
+
+      const k = Math.sqrt((W * H) / n); // ideal edge length
+      let temp = W / 8;
+      const iters = Math.min(300, 80 + n * 2);
+      for (let it = 0; it < iters; it++) {
+        const disp = p.map(() => ({ x: 0, y: 0 }));
+        // Repulsion between every pair.
+        for (let i = 0; i < n; i++) {
+          for (let j = i + 1; j < n; j++) {
+            const dx = p[i].x - p[j].x;
+            const dy = p[i].y - p[j].y;
+            const dist = Math.hypot(dx, dy) || 0.01;
+            const force = (k * k) / dist;
+            const ux = dx / dist;
+            const uy = dy / dist;
+            disp[i].x += ux * force; disp[i].y += uy * force;
+            disp[j].x -= ux * force; disp[j].y -= uy * force;
+          }
+        }
+        // Attraction along edges.
+        for (const [a, b] of links) {
+          const dx = p[a].x - p[b].x;
+          const dy = p[a].y - p[b].y;
+          const dist = Math.hypot(dx, dy) || 0.01;
+          const force = (dist * dist) / k;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          disp[a].x -= ux * force; disp[a].y -= uy * force;
+          disp[b].x += ux * force; disp[b].y += uy * force;
+        }
+        // Apply, capped by the cooling temperature, clamped to the viewport.
+        for (let i = 0; i < n; i++) {
+          const d = Math.hypot(disp[i].x, disp[i].y) || 0.01;
+          p[i].x += (disp[i].x / d) * Math.min(d, temp);
+          p[i].y += (disp[i].y / d) * Math.min(d, temp);
+          p[i].x = Math.max(30, Math.min(W - 30, p[i].x));
+          p[i].y = Math.max(30, Math.min(H - 30, p[i].y));
+        }
+        temp *= 0.96; // cool down
+      }
+    }
+
+    nodes.forEach((nd, i) => pos.set(keyOf(nd), p[i]));
     return { W, H, pos };
   }, [graph.data]);
 
@@ -50,10 +112,24 @@ export default function GraphPage() {
           <svg viewBox={`0 0 ${layout.W} ${layout.H}`} className="border border-border rounded bg-card flex-1 max-w-4xl">
             <title>Knowledge graph</title>
             {edges.map((e) => {
-              const a = layout.pos.get(`${e.from.type}:${e.from.id}`);
-              const b = e.to ? layout.pos.get(`${e.to.type}:${e.to.id}`) : undefined;
+              const fromKey = `${e.from.type}:${e.from.id}`;
+              const toKey = e.to ? `${e.to.type}:${e.to.id}` : '';
+              const a = layout.pos.get(fromKey);
+              const b = toKey ? layout.pos.get(toKey) : undefined;
               if (!a || !b) return null;
-              return <line key={e.id} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="currentColor" strokeOpacity={0.2} strokeWidth={1} />;
+              // When a node is selected, foreground its incident edges and fade
+              // the rest so the local neighbourhood stands out.
+              const incident = selected === fromKey || selected === toKey;
+              const opacity = selected ? (incident ? 0.55 : 0.06) : 0.2;
+              return (
+                <line
+                  key={e.id}
+                  x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                  stroke={incident ? '#6366f1' : 'currentColor'}
+                  strokeOpacity={opacity}
+                  strokeWidth={incident ? 1.5 : 1}
+                />
+              );
             })}
             {graph.data.nodes.map((n) => {
               const p = layout.pos.get(`${n.type}:${n.id}`);
