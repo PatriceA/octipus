@@ -20,6 +20,13 @@ function parseDueAt(value: string): Date {
   return d;
 }
 
+/** Trim a category; empty string → null (uncategorized). */
+function normalizeCategory(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const c = value.trim();
+  return c === '' ? null : c;
+}
+
 /**
  * Personal tasks/todos (feature #6). All access is through the scoped repo, so
  * cross-tenant ids return "not found" (IDOR-safe). Bodies are TypeBox-validated
@@ -41,13 +48,14 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         dueBefore = new Date();
         dueBefore.setHours(23, 59, 59, 999);
       }
-      const tasks = await scopedRepos(principal).tasks.listOwn({ status: query?.status, dueBefore });
+      const tasks = await scopedRepos(principal).tasks.listOwn({ status: query?.status, dueBefore, category: query?.category });
       return { tasks };
     },
     {
       query: t.Object({
         status: t.Optional(t.Union(STATUSES.map((s) => t.Literal(s)))),
         due: t.Optional(t.String()),
+        category: t.Optional(t.String()),
       }),
       detail: { tags: ['tasks'] },
     }
@@ -87,6 +95,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           title: body.title,
           notes: body.notes ?? null,
           priority: body.priority ?? 0,
+          category: normalizeCategory(body.category),
           dueAt: body.dueAt ? parseDueAt(body.dueAt) : null,
           source: 'user',
         });
@@ -101,13 +110,14 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         title: t.String({ minLength: 1, maxLength: 500 }),
         notes: t.Optional(t.String({ maxLength: 10_000 })),
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
+        category: t.Optional(t.String({ maxLength: 100 })),
         dueAt: t.Optional(t.String()),
       }),
       detail: { tags: ['tasks'] },
     }
   )
 
-  // Update a task (title/notes/status/priority/due). Manages completedAt.
+  // Update a task (title/notes/status/priority/due/category). Manages completedAt.
   .patch(
     '/:id',
     async ({ user, principal, params, body, set }) => {
@@ -131,6 +141,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           notes: body.notes,
           status: body.status,
           priority: body.priority,
+          category: body.category !== undefined ? normalizeCategory(body.category) : undefined,
           dueAt: body.dueAt !== undefined ? (body.dueAt ? parseDueAt(body.dueAt) : null) : undefined,
           ...completionPatch(body.status, Boolean(existing.completedAt)),
         });
@@ -151,6 +162,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         notes: t.Optional(t.Union([t.String({ maxLength: 10_000 }), t.Null()])),
         status: t.Optional(t.String()),
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
+        category: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Null()])),
         dueAt: t.Optional(t.Union([t.String(), t.Null()])),
       }),
       detail: { tags: ['tasks'] },

@@ -683,6 +683,8 @@ export interface TaskListFilter {
   status?: string;
   /** Only tasks due on/before this instant (for "what's due today"). */
   dueBefore?: Date;
+  /** Restrict to a user category/list (exact match; '' / 'none' → uncategorized). */
+  category?: string;
   limit?: number;
 }
 
@@ -711,6 +713,11 @@ export class ScopedTaskRepo {
     const filters: (SQL | undefined)[] = [eq(tasks.userId, this.principal.userId)];
     if (filter.status) filters.push(eq(tasks.status, filter.status));
     if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
+    if (filter.category !== undefined) {
+      const c = filter.category.trim();
+      // '' / 'none' selects the uncategorized bucket; otherwise exact match.
+      filters.push(c === '' || c.toLowerCase() === 'none' ? sql`${tasks.category} IS NULL` : eq(tasks.category, c));
+    }
     filters.push(workspaceFilter(this.principal, tasks.workspaceId));
     return this.db
       .select()

@@ -110,4 +110,38 @@ describe('scoped create / list / complete', () => {
     // A task with no due date is excluded from the due-today view.
     expect(due.tasks.some((t: any) => t.title === 'alice writes a memo')).toBe(false);
   });
+
+  test('category: create stores it, list filters by it (and "none" → uncategorized)', async () => {
+    const milk = await call('create_task', { title: 'buy milk', category: 'Shopping' }, aliceId);
+    expect(milk.task.category).toBe('Shopping');
+    await call('create_task', { title: 'wax the car', category: 'Car' }, aliceId);
+
+    const shopping = await call('list_tasks', { category: 'Shopping' }, aliceId);
+    const shoppingTitles = shopping.tasks.map((t: any) => t.title);
+    expect(shoppingTitles).toContain('buy milk');
+    expect(shoppingTitles).not.toContain('wax the car');
+
+    // 'none' selects uncategorized tasks (e.g. the earlier 'alice writes a memo').
+    const uncategorized = await call('list_tasks', { category: 'none' }, aliceId);
+    expect(uncategorized.tasks.every((t: any) => t.category == null)).toBe(true);
+    expect(uncategorized.tasks.some((t: any) => t.title === 'buy milk')).toBe(false);
+  });
+
+  test('category: update sets and clears it (empty string → null)', async () => {
+    const t = await call('create_task', { title: 'fix the fence' }, aliceId);
+    expect(t.task.category).toBeNull();
+    const tagged = await call('update_task', { id: t.task.id, category: 'House work' }, aliceId);
+    expect(tagged.task.category).toBe('House work');
+    const cleared = await call('update_task', { id: t.task.id, category: '' }, aliceId);
+    expect(cleared.task.category).toBeNull();
+  });
+
+  test('update_task can both set AND clear dueAt (empty string clears)', async () => {
+    const t = await call('create_task', { title: 'renew passport' }, aliceId);
+    const when = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    const set = await call('update_task', { id: t.task.id, dueAt: when }, aliceId);
+    expect(set.task.dueAt).not.toBeNull();
+    const cleared = await call('update_task', { id: t.task.id, dueAt: '' }, aliceId);
+    expect(cleared.task.dueAt).toBeNull();
+  });
 });

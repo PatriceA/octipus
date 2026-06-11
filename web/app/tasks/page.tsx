@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, ListTodo, NotebookPen, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
+import { Check, ListTodo, NotebookPen, Pencil, Plus, RefreshCw, Sparkles, Tag, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
@@ -10,6 +10,7 @@ interface Task {
   notes?: string | null;
   status: 'open' | 'done' | 'archived';
   priority: number;
+  category?: string | null;
   dueAt?: string | null;
   completedAt?: string | null;
   source: string;
@@ -17,7 +18,10 @@ interface Task {
 }
 
 const PRIORITY = ['none', 'low', 'medium', 'high'] as const;
-type GroupBy = 'priority' | 'due' | 'none';
+type GroupBy = 'priority' | 'due' | 'category' | 'none';
+
+/** Patchable fields a row can edit inline (besides notes/status). */
+type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt'>>;
 
 function priorityClasses(p: number): string {
   if (p >= 3) return 'bg-error/10 text-error';
@@ -66,6 +70,21 @@ function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: strin
       .map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
   }
 
+  if (by === 'category') {
+    // Distinct categories, alphabetical, with "Uncategorized" pinned last.
+    const named = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort(
+      (a, b) => a.localeCompare(b),
+    );
+    const groups = named.map((c) => ({
+      key: `c:${c}`,
+      title: c,
+      tasks: tasks.filter((t) => (t.category?.trim() || '') === c),
+    }));
+    const uncategorized = tasks.filter((t) => !t.category?.trim());
+    if (uncategorized.length > 0) groups.push({ key: 'c:', title: 'Uncategorized', tasks: uncategorized });
+    return groups.filter((g) => g.tasks.length > 0).map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
+  }
+
   // by === 'due' — Overdue / Today / This week / Later / No date. Boundaries
   // are wall-clock day-ends (not rolling 24h windows) so "This week" means
   // "by the end of the 7th day", consistent across DST.
@@ -103,6 +122,8 @@ export default function TasksPage() {
   const [error, setError] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState(0);
+  const [newCategory, setNewCategory] = useState('');
+  const [newDue, setNewDue] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('priority');
 
   const fetchTasks = useCallback(async () => {
@@ -122,13 +143,37 @@ export default function TasksPage() {
     fetchTasks();
   }, [fetchTasks]);
 
-  const addTask = async () => {
-    const title = newTitle.trim();
+  // `opts.title`/`opts.category` come from a per-group inline add (grouping by
+  // category) so the new task lands in that group; the top quick-add passes
+  // neither and uses its own inputs (which it then clears).
+  const addTask = async (opts?: { title?: string; category?: string }) => {
+    const title = (opts?.title ?? newTitle).trim();
     if (!title) return;
     try {
-      await api.post('/tasks', { title, priority: newPriority });
-      setNewTitle('');
-      setNewPriority(0);
+      await api.post('/tasks', {
+        title,
+        priority: opts?.title ? 0 : newPriority,
+        category: (opts?.category ?? newCategory).trim() || undefined,
+        dueAt: opts?.title ? undefined : newDue || undefined,
+      });
+      if (!opts?.title) {
+        setNewTitle('');
+        setNewPriority(0);
+        setNewCategory('');
+        setNewDue('');
+      }
+      await fetchTasks();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  // Generic field patch (priority/category/dueAt) used by the inline row editor.
+  // Optimistic so the row reflects the change before the request resolves.
+  const updateFields = async (task: Task, patch: TaskPatch) => {
+    setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t)));
+    try {
+      await api.patch(`/tasks/${task.id}`, patch);
       await fetchTasks();
     } catch (err) {
       setError((err as Error).message);
@@ -177,6 +222,12 @@ export default function TasksPage() {
   const openTasks = tasks.filter((t) => t.status === 'open');
   const done = tasks.filter((t) => t.status === 'done');
   const openGroups = groupOpenTasks(openTasks, groupBy);
+  // Existing categories across all tasks — offered for reuse in inputs so the
+  // user doesn't have to remember exact spellings (the QA: "how should I know
+  // all the titles").
+  const categories = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort(
+    (a, b) => a.localeCompare(b),
+  );
 
   return (
     <div className="space-y-6">
@@ -198,14 +249,34 @@ export default function TasksPage() {
       )}
 
       {/* Quick add */}
-      <div className="flex gap-2">
+      <datalist id="task-categories">
+        {categories.map((c) => <option key={c} value={c} />)}
+      </datalist>
+      <div className="flex flex-wrap gap-2">
         <input
           type="text"
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && addTask()}
           placeholder="Add a task…"
-          className="flex-1 rounded-full border border-outline-variant/20 bg-surface px-4 py-2 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
+          className="flex-1 min-w-[12rem] rounded-full border border-outline-variant/20 bg-surface px-4 py-2 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
+        />
+        <input
+          type="text"
+          list="task-categories"
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && addTask()}
+          placeholder="Category…"
+          title="Optional list/category, e.g. Shopping or Car"
+          className="w-36 rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
+        />
+        <input
+          type="date"
+          value={newDue}
+          onChange={(e) => setNewDue(e.target.value)}
+          title="Optional due date"
+          className="rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface focus:outline-none focus:border-primary"
         />
         <select
           value={newPriority}
@@ -217,7 +288,7 @@ export default function TasksPage() {
           ))}
         </select>
         <button
-          onClick={addTask}
+          onClick={() => addTask()}
           className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
         >
           <Plus className="w-4 h-4" /> Add
@@ -227,7 +298,7 @@ export default function TasksPage() {
       {/* Grouping control */}
       <div className="flex items-center gap-2 text-sm text-on-surface-variant">
         <span>Group by</span>
-        {(['priority', 'due', 'none'] as GroupBy[]).map((g) => (
+        {(['priority', 'due', 'category', 'none'] as GroupBy[]).map((g) => (
           <button
             key={g}
             onClick={() => setGroupBy(g)}
@@ -242,12 +313,24 @@ export default function TasksPage() {
         <p className="text-sm text-on-surface-variant/70">Nothing to do. Add a task above, or ask an agent to remind you.</p>
       ) : (
         openGroups.map((g) => (
-          <TaskGroup key={g.key} title={g.title} tasks={g.tasks} onToggle={toggleDone} onDelete={deleteTask} onUpdateNotes={updateNotes} />
+          <TaskGroup
+            key={g.key}
+            title={g.title}
+            tasks={g.tasks}
+            onToggle={toggleDone}
+            onDelete={deleteTask}
+            onUpdateNotes={updateNotes}
+            onUpdateFields={updateFields}
+            // When grouping by category, a group "+ add" files the new task
+            // straight into that category (the QA: "in the groups the user can
+            // create todos"). `c:` key prefix → the category text after it.
+            onAddToCategory={groupBy === 'category' && g.key.startsWith('c:') ? (title) => addTask({ title, category: g.key.slice(2) }) : undefined}
+          />
         ))
       )}
 
       {done.length > 0 && (
-        <TaskGroup title={`Done (${done.length})`} tasks={done} onToggle={toggleDone} onDelete={deleteTask} onUpdateNotes={updateNotes} />
+        <TaskGroup title={`Done (${done.length})`} tasks={done} onToggle={toggleDone} onDelete={deleteTask} onUpdateNotes={updateNotes} onUpdateFields={updateFields} />
       )}
     </div>
   );
@@ -259,21 +342,60 @@ function TaskGroup({
   onToggle,
   onDelete,
   onUpdateNotes,
+  onUpdateFields,
+  onAddToCategory,
 }: {
   title: string;
   tasks: Task[];
   onToggle: (t: Task) => void;
   onDelete: (id: string) => void;
   onUpdateNotes: (t: Task, notes: string) => void;
+  onUpdateFields: (t: Task, patch: TaskPatch) => void;
+  onAddToCategory?: (title: string) => void;
 }) {
+  const [inlineTitle, setInlineTitle] = useState('');
+  const addInline = () => {
+    const t = inlineTitle.trim();
+    if (!t || !onAddToCategory) return;
+    onAddToCategory(t);
+    setInlineTitle('');
+  };
   return (
     <div className="space-y-2">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-on-surface-variant">{title}</h2>
       {tasks.map((task) => (
-        <TaskRow key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} onUpdateNotes={onUpdateNotes} />
+        <TaskRow key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} onUpdateNotes={onUpdateNotes} onUpdateFields={onUpdateFields} />
       ))}
+      {onAddToCategory && (
+        <div className="flex gap-2 pl-8">
+          <input
+            type="text"
+            value={inlineTitle}
+            onChange={(e) => setInlineTitle(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addInline()}
+            placeholder={`Add to ${title.replace(/ \(\d+\)$/, '')}…`}
+            className="flex-1 rounded-full border border-outline-variant/15 bg-surface px-3 py-1.5 text-sm text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary"
+          />
+          <button
+            onClick={addInline}
+            className="px-3 py-1.5 text-xs rounded-full border border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-high inline-flex items-center gap-1"
+          >
+            <Plus className="w-3 h-3" /> Add
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+/** task.dueAt → a `<input type="date">` value (YYYY-MM-DD), or '' if unset. */
+function toDateInput(dueAt?: string | null): string {
+  if (!dueAt) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(dueAt)) return dueAt.slice(0, 10);
+  const ms = dueMs(dueAt);
+  if (Number.isNaN(ms)) return '';
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function TaskRow({
@@ -281,14 +403,17 @@ function TaskRow({
   onToggle,
   onDelete,
   onUpdateNotes,
+  onUpdateFields,
 }: {
   task: Task;
   onToggle: (t: Task) => void;
   onDelete: (id: string) => void;
   onUpdateNotes: (t: Task, notes: string) => void;
+  onUpdateFields: (t: Task, patch: TaskPatch) => void;
 }) {
   const due = dueLabel(task.dueAt);
   const [editingNotes, setEditingNotes] = useState(false);
+  const [editingMeta, setEditingMeta] = useState(false);
   const [draft, setDraft] = useState(task.notes ?? '');
 
   // Keep the draft in sync with external updates (agent edits / refetch) while
@@ -322,6 +447,11 @@ function TaskRow({
                 {PRIORITY[task.priority]}
               </span>
             )}
+            {task.category && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/10 text-on-surface-variant inline-flex items-center gap-0.5">
+                <Tag className="w-2.5 h-2.5" /> {task.category}
+              </span>
+            )}
             {due && (
               <span className={`text-[10px] ${due.overdue && task.status !== 'done' ? 'text-error' : 'text-on-surface-variant'}`}>
                 due {due.text}
@@ -338,6 +468,13 @@ function TaskRow({
               title={task.notes ? 'Edit notes' : 'Add notes'}
             >
               <NotebookPen className="w-2.5 h-2.5" /> {task.notes ? 'notes' : 'add notes'}
+            </button>
+            <button
+              onClick={() => setEditingMeta((v) => !v)}
+              className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70 hover:text-on-surface"
+              title="Set due date, category, priority"
+            >
+              <Pencil className="w-2.5 h-2.5" /> edit
             </button>
           </div>
         </div>
@@ -373,6 +510,43 @@ function TaskRow({
       ) : task.notes ? (
         <p className="mt-1 pl-8 text-xs text-on-surface-variant whitespace-pre-wrap">{task.notes}</p>
       ) : null}
+
+      {/* Meta editor — set/clear due date, category, priority (the QA: users
+          couldn't set due dates and wanted custom categories). */}
+      {editingMeta && (
+        <div className="mt-2 pl-8 flex flex-wrap items-center gap-2">
+          <label className="text-[11px] text-on-surface-variant inline-flex items-center gap-1">
+            Due
+            <input
+              type="date"
+              defaultValue={toDateInput(task.dueAt)}
+              onChange={(e) => onUpdateFields(task, { dueAt: e.target.value || null })}
+              className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
+            />
+          </label>
+          <input
+            type="text"
+            list="task-categories"
+            defaultValue={task.category ?? ''}
+            placeholder="Category…"
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== (task.category ?? '')) onUpdateFields(task, { category: v || null });
+            }}
+            className="w-32 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
+          />
+          <select
+            defaultValue={task.priority}
+            onChange={(e) => onUpdateFields(task, { priority: Number(e.target.value) })}
+            className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
+          >
+            {PRIORITY.map((label, i) => (
+              <option key={label} value={i}>{label}</option>
+            ))}
+          </select>
+          <button onClick={() => setEditingMeta(false)} className="text-[11px] px-2 py-1 text-on-surface-variant hover:text-on-surface">Done</button>
+        </div>
+      )}
     </div>
   );
 }
