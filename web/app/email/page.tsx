@@ -41,6 +41,8 @@ export default function EmailPage() {
   // Reply-options flow: the model proposes directions, the user picks one,
   // THEN a draft is generated — instead of the model assuming a stance.
   const [replyOpts, setReplyOpts] = useState<string[] | null>(null);
+  // Inbox filter (client-side over the loaded page): all / unread / by priority.
+  const [filter, setFilter] = useState<'all' | 'unread' | 'high' | 'normal' | 'low'>('all');
 
   const loadInbox = useCallback(async () => {
     setLoading(true);
@@ -174,6 +176,13 @@ export default function EmailPage() {
     return <div className="flex items-center justify-center py-20"><RefreshCw className="w-6 h-6 animate-spin text-on-surface-variant" /></div>;
   }
 
+  const unreadCount = items.filter((it) => it.unread).length;
+  const visibleItems = items.filter((it) => {
+    if (filter === 'all') return true;
+    if (filter === 'unread') return it.unread;
+    return it.triage?.priority === filter;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -209,8 +218,33 @@ export default function EmailPage() {
         <div className="grid grid-cols-1 lg:grid-cols-[24rem_1fr] gap-4 items-start">
           {/* Inbox list */}
           <div className="space-y-1">
+            {/* Filter bar — counts reflect the loaded page; "Load more" pulls the rest. */}
+            <div className="flex flex-wrap gap-1.5 pb-2">
+              {([
+                ['all', `All ${items.length}`],
+                ['unread', `Unread ${unreadCount}`],
+                ['high', 'High'],
+                ['normal', 'Normal'],
+                ['low', 'Low'],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setFilter(key)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    filter === key
+                      ? 'border-primary/40 bg-primary-container/30 text-on-surface'
+                      : 'border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-high'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {items.length === 0 && <p className="text-sm text-on-surface-variant">Inbox empty.</p>}
-            {items.map((it) => (
+            {items.length > 0 && visibleItems.length === 0 && (
+              <p className="text-sm text-on-surface-variant">No messages match this filter.</p>
+            )}
+            {visibleItems.map((it) => (
               <button
                 key={it.id}
                 onClick={() => open(it.id)}
