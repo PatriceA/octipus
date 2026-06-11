@@ -89,7 +89,16 @@ export const apiConfigSchema = z.object({
   port: z.number().min(1).max(65535).default(3000),
   corsOrigins: z.array(z.string()).default(['http://localhost:3001']),
   rateLimitWindow: z.number().min(0).default(60000),
-  rateLimitMax: z.number().min(0).default(100),
+  /**
+   * Per-user API-call ceiling per `rateLimitWindow` (the default quota for
+   * `maxApiCallsPerMinute`). Octipus is always multi-user, so this fires for
+   * every authenticated user — including the lone operator of a single-user
+   * install whose dashboard polling counts here. Kept in line with the per-IP
+   * baseline (`BASELINE_IP_LIMIT`, 600/min ≈ 10 req/s "won't bother a real
+   * interactive user"); a stricter value throttles normal dashboard use. Lower
+   * it per-user via /admin/quotas when running true multi-tenant.
+   */
+  rateLimitMax: z.number().min(0).default(600),
 });
 
 // Telegram configuration schema
