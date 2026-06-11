@@ -182,6 +182,32 @@ async function main() {
       console.error(`Vault init failed: ${(err as Error).message}`);
       await exitClean(2);
     }
+
+    // Resolve runtime config from DB settings + vault, exactly as src/index.ts
+    // does at boot. Without this, `config.litellm.apiKey` stays empty, the
+    // LiteLLMClient falls back to the 'sk-litellm' placeholder, and every
+    // completion/grader call 401s ("Invalid proxy server token") against a
+    // proxy that enforces a master key — which is what broke `eval:quality`.
+    // resetLiteLLMClient() drops any client lazily built (with the placeholder)
+    // before this point so the next getLiteLLMClient() picks up the real key.
+    try {
+      const { getConfig } = await import('@/config');
+      const storageMode = getConfig().storageMode || 'external';
+      const { initializeStorage } = await import('@/db/storage');
+      initializeStorage({
+        mode: storageMode,
+        redis: storageMode === 'external' ? getConfig().redis : undefined,
+      });
+      const { getSettingsService } = await import('@/config/settings-service');
+      await getSettingsService().initialize();
+      const { loadRuntimeConfig } = await import('@/config');
+      await loadRuntimeConfig();
+      const { resetLiteLLMClient } = await import('@/models/litellm-client');
+      resetLiteLLMClient();
+    } catch (err) {
+      console.error(`Runtime config load failed: ${(err as Error).message}`);
+      await exitClean(2);
+    }
   }
 
   const dir = evalDir ? resolve(evalDir) : resolve(process.cwd(), 'eval');
