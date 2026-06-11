@@ -12,6 +12,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
@@ -490,9 +491,14 @@ If you cannot write files (e.g., read-only environment), include the summary con
     }
     systemPrompt += workspaceHint;
   } else {
-    // Normal mode: global workspace
+    // Normal mode: global workspace.
+    // Advertise the SAME root the filesystem sandbox enforces. `WorkspaceFS.forAgent`
+    // nests every real user under `<rootPath>/users/<uid>/workspaces/default/files`;
+    // advertising the flat `config.workspace.rootPath` here pointed agents at a path
+    // outside their own sandbox ("outside allowed workspace directories" on absolute
+    // calls). `.root` is a pure path computation — no filesystem side effects.
     const config = getConfig();
-    const workspaceRoot = resolve(config.workspace.rootPath);
+    const workspaceRoot = WorkspaceFS.forAgent({ userId: context.userId }).root;
     const additionalPaths = config.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
     let workspaceHint = `\n\nWORKSPACE CONSTRAINT: You are working in the project at ${workspaceRoot}.`;
     if (additionalPaths.length > 0) {

@@ -143,10 +143,10 @@ export class WorkspaceFS {
   /**
    * Build a `WorkspaceFS` for an in-flight agent.
    *
-   *   - A real userId (not the `'system'` sentinel) gets the per-user
-   *     nested layout under `<dataRoot>/users/<id>/…`.
-   *   - System jobs (`userId === 'system'` or absent) get a flat
-   *     `withRoot` instance pinned to `config.workspace.rootPath`.
+   *   - A real userId (not the `'system'`/`'local'` sentinels) gets the
+   *     per-user nested layout under `<dataRoot>/users/<id>/…`.
+   *   - System/single jobs (`userId === 'system'`/`'local'` or absent) get a
+   *     flat `withRoot` instance pinned to `config.workspace.rootPath`.
    *
    * In both cases:
    *   - `config.workspace.additionalPaths` are added as extra allowed
@@ -171,7 +171,10 @@ export class WorkspaceFS {
       ...(options.extraAllowedPrefixes ?? []),
     ];
 
-    if (context?.userId && context.userId !== 'system') {
+    // `'system'` and `'local'` are both single/system sentinels (mirrors the
+    // matching guards in worker-spawner.ts, agent-manager.ts, agent-worker.ts).
+    // They get the flat root; only a real user id gets a per-user nested root.
+    if (context?.userId && context.userId !== 'system' && context.userId !== 'local') {
       const principal = principalFromUser({
         id: context.userId,
         username: context.userId,
