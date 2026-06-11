@@ -39,13 +39,18 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       const limit = query.limit ? parseInt(query.limit, 10) : 50;
       const repos = scopedRepos(principal);
 
-      const sessions = user.isAdmin && query.all === 'true'
+      const isAdminAll = user.isAdmin && query.all === 'true';
+      const sessions = isAdminAll
         ? await repos.sessions.listAllAdmin(limit)
         : await repos.sessions.listOwn(limit);
+      // `total` is the FULL count (not the capped page), so the dashboard and
+      // "N total" header reflect reality instead of min(count, limit). Admins
+      // viewing the global list fall back to the page length.
+      const total = isAdminAll ? sessions.length : await repos.sessions.countOwn();
 
       const { getConfig } = await import('@/config');
       const config = getConfig();
-      return { sessions, maxTokenBudget: config.agent.maxTokenBudget };
+      return { sessions, total, maxTokenBudget: config.agent.maxTokenBudget };
     },
     {
       query: t.Object({

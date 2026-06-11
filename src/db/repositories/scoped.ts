@@ -133,6 +133,21 @@ export class ScopedSessionRepo {
       .limit(limit);
   }
 
+  /**
+   * Count the principal's own sessions (unbounded by the list `limit`). Used
+   * for the dashboard "sessions" stat, which was wrongly showing the global
+   * agent count. Same scope as `listOwn`.
+   */
+  async countOwn(): Promise<number> {
+    const filters: (SQL | undefined)[] = [eq(sessions.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, sessions.workspaceId));
+    const row = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(sessions)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
+    return row[0]?.count ?? 0;
+  }
+
   /** Admin-only global list. Throws if the principal is not an admin. */
   async listAllAdmin(limit = 50): Promise<Session[]> {
     if (!isAdmin(this.principal)) throw new UnauthenticatedAccessError();

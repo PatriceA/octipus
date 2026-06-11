@@ -21,7 +21,7 @@ export function RecentSessions() {
     queryKey: ['sessions'],
     queryFn: async () => {
       try {
-        return await api.get<Session[] | { sessions: Session[] }>('/sessions?limit=10');
+        return await api.get<Session[] | { sessions: Session[]; total?: number }>('/sessions?limit=10');
       } catch {
         return [];
       }
@@ -29,13 +29,16 @@ export function RecentSessions() {
   });
 
   const sessions: Session[] = Array.isArray(data) ? data : ((data as { sessions: Session[] })?.sessions || []);
+  // Full count — this view fetches only the latest 10, so `sessions.length`
+  // caps at 10. Fall back to the page length for the legacy array shape.
+  const total = Array.isArray(data) ? data.length : ((data as { total?: number })?.total ?? sessions.length);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>recent sessions</CardTitle>
         <span className="ml-auto text-[10px] uppercase tracking-wider text-outline-variant">
-          {sessions.length} total
+          {total} total
         </span>
       </CardHeader>
       <CardContent className="p-0">

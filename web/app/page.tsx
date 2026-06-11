@@ -71,9 +71,23 @@ export default function DashboardPage() {
     },
   });
 
+  // The user's own session count. The card previously showed `health.agents.total`
+  // — the GLOBAL agent count — so creating one chat (orchestrator + worker = 2
+  // agents) read as "2 sessions". `total` is the full per-user count.
+  const { data: sessionData } = useQuery({
+    queryKey: ['sessions', 'count'],
+    queryFn: async () => {
+      try {
+        return await api.get<{ total?: number }>('/sessions?limit=1');
+      } catch {
+        return null;
+      }
+    },
+  });
+
   const stats = [
     { name: 'active agents',  value: health?.agents?.running || 0,         icon: Bot,             tone: 'text-primary' },
-    { name: 'total sessions', value: health?.agents?.total || 0,           icon: MessageSquare,   tone: 'text-tertiary' },
+    { name: 'your sessions',  value: sessionData?.total || 0,              icon: MessageSquare,   tone: 'text-tertiary' },
     { name: 'api requests',   value: usage?.stats?.requestCount || 0,      icon: Activity,        tone: 'text-primary' },
     { name: 'total cost',     value: `$${(usage?.stats?.totalCost || 0).toFixed(2)}`, icon: Zap, tone: 'text-warning' },
   ];
