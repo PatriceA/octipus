@@ -9,7 +9,8 @@ const AUTH_RATE_WINDOW_SECS = 60; // 1 minute
 const USER_QUOTA_WINDOW_SECS = 60;
 
 // Baseline per-IP ceiling on all /api/* traffic, applied in EVERY deployment
-// mode (including single-user, where the per-user quota layer below is off).
+// mode. (The per-user quota layer below also fires for every authenticated
+// user — Octipus is always multi-user — so the two stack.)
 // Generous enough not to bother a real interactive user (~10 req/s) while
 // still capping a runaway client or scripted abuse of expensive model routes.
 // Override with API_RATE_LIMIT_PER_MINUTE (0 disables the baseline).
@@ -18,6 +19,34 @@ const BASELINE_IP_LIMIT = (() => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 600;
 })();
 const BASELINE_IP_WINDOW_SECS = 60;
+
+// A rejected client retries hard, so logging every 429 floods the log with
+// near-identical lines. Throttle each distinct key (IP or user) to one warn
+// per window — the operator still sees that throttling is happening without
+// the spam.
+const lastWarnAt = new Map<string, number>();
+// Hard cap so a flood of distinct keys (e.g. a spoofed-IP storm where every
+// entry is still in-window) can't grow the map without bound. Map preserves
+// insertion order, so the first key is the oldest-inserted — evict it.
+const WARN_MAP_MAX = 5000;
+function shouldWarn(key: string, windowSecs: number): boolean {
+  const now = Date.now();
+  const prev = lastWarnAt.get(key);
+  if (prev !== undefined && now - prev < windowSecs * 1000) return false;
+  // Drop expired entries first; if still over the cap, evict oldest-inserted.
+  if (lastWarnAt.size >= WARN_MAP_MAX) {
+    for (const [k, t] of lastWarnAt) {
+      if (now - t >= windowSecs * 1000) lastWarnAt.delete(k);
+    }
+    while (lastWarnAt.size >= WARN_MAP_MAX) {
+      const oldest = lastWarnAt.keys().next().value;
+      if (oldest === undefined) break;
+      lastWarnAt.delete(oldest);
+    }
+  }
+  lastWarnAt.set(key, now);
+  return true;
+}
 
 function clientIp(request: Request): string {
   return (
@@ -37,11 +66,14 @@ function clientIp(request: Request): string {
  *
  *   2. (Phase 3c-2) Per-user sliding window on `/api/*`, fed by
  *      `quotaManager.getEffectiveQuota(userId).maxApiCallsPerMinute`.
- *      Only fires when `multiuser.enabled` is true and the request
- *      carries an authenticated Principal. Anonymous traffic and the
- *      legacy `system`/`local` sentinels fall through. The window is
- *      reused from `getRateLimiter()` so the storage backend (Redis
- *      or in-memory) is shared with layer 1.
+ *      Octipus is always multi-user, so this fires for ANY request
+ *      carrying an authenticated Principal — including the lone operator
+ *      of a single-user install. Anonymous traffic and the legacy
+ *      `system`/`local` sentinels fall through. The window is reused from
+ *      `getRateLimiter()` so the storage backend (Redis or in-memory) is
+ *      shared with layer 1. The default cap (`api.rateLimitMax`) is kept
+ *      in line with the per-IP baseline so it doesn't throttle normal
+ *      dashboard polling; tighten it per-user via /admin/quotas.
  *
  * The two layers are independent: a request could be IP-limited AND
  * user-limited; the first one to fire returns the 429.
@@ -66,7 +98,9 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
       set.headers['X-RateLimit-Remaining'] = String(result.remaining);
 
       if (!result.allowed) {
-        apiLogger.warn({ ip, retryAfter: result.retryAfter }, 'Rate limit exceeded on auth endpoint');
+        if (shouldWarn(`auth:ip:${ip}`, AUTH_RATE_WINDOW_SECS)) {
+          apiLogger.warn({ ip, retryAfter: result.retryAfter }, 'Rate limit exceeded on auth endpoint');
+        }
         set.status = 429;
         set.headers['Retry-After'] = String(result.retryAfter);
         return { error: 'Too many requests. Please try again later.', retryAfter: result.retryAfter };
@@ -84,7 +118,9 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
       const rateLimiter = getRateLimiter();
       const result = await rateLimiter.check(`api:ip:${ip}`, BASELINE_IP_LIMIT, BASELINE_IP_WINDOW_SECS);
       if (!result.allowed) {
-        apiLogger.warn({ ip, path: url.pathname, retryAfter: result.retryAfter }, 'Baseline per-IP API rate limit exceeded');
+        if (shouldWarn(`api:ip:${ip}`, BASELINE_IP_WINDOW_SECS)) {
+          apiLogger.warn({ ip, path: url.pathname, retryAfter: result.retryAfter }, 'Baseline per-IP API rate limit exceeded');
+        }
         set.status = 429;
         set.headers['Retry-After'] = String(result.retryAfter);
         return { error: 'Too many requests. Please try again later.', retryAfter: result.retryAfter };
@@ -111,10 +147,12 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
       set.headers['X-RateLimit-Remaining'] = String(result.remaining);
 
       if (!result.allowed) {
-        apiLogger.warn(
-          { userId: principal.userId, max, retryAfter: result.retryAfter },
-          'Per-user API quota exceeded',
-        );
+        if (shouldWarn(`user:rl:${principal.userId}`, USER_QUOTA_WINDOW_SECS)) {
+          apiLogger.warn(
+            { userId: principal.userId, max, retryAfter: result.retryAfter },
+            'Per-user API quota exceeded',
+          );
+        }
         set.status = 429;
         set.headers['Retry-After'] = String(result.retryAfter);
         return {

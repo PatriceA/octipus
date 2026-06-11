@@ -48,7 +48,7 @@ export const defaultConfig: Partial<Config> = {
     port: 3000,
     corsOrigins: ['http://localhost:3001'],
     rateLimitWindow: 60000,
-    rateLimitMax: 100,
+    rateLimitMax: 600,
   },
   voice: {
     sttEnabled: false,
