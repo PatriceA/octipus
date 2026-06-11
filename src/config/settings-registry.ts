@@ -17,7 +17,13 @@
  * the .env entry becomes redundant — users edit values via API/UI.
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 export type SettingValueType = 'string' | 'number' | 'boolean' | 'json' | 'string_array';
+
+/** Default workspace root — mirrors WORKSPACE_ROOT in defaults.ts/schema.ts. */
+const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 export interface SettingDefinition {
   key: string;
@@ -558,7 +564,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'workspace.rootPath',
     category: 'workspace',
     valueType: 'string',
-    defaultValue: './workspace',
+    defaultValue: WORKSPACE_ROOT,
     description: 'Workspace root directory',
     isSecret: false,
     envVar: 'WORKSPACE_PATH',

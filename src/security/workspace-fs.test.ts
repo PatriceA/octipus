@@ -213,3 +213,22 @@ describe('WorkspaceFS.withRoot — flat single-user mode', () => {
     expect(() => fs.resolve('/etc/passwd')).toThrow(WorkspaceFsError);
   });
 });
+
+describe('WorkspaceFS.forAgent — sentinel vs real user layout', () => {
+  test("'system' userId gets the flat root", () => {
+    expect(WorkspaceFS.forAgent({ userId: 'system' }, { dataRoot }).root).toBe(dataRoot);
+  });
+
+  test("'local' userId gets the flat root (single-user sentinel, matches the guards in worker-spawner/agent-manager/agent-worker)", () => {
+    expect(WorkspaceFS.forAgent({ userId: 'local' }, { dataRoot }).root).toBe(dataRoot);
+  });
+
+  test('absent userId gets the flat root', () => {
+    expect(WorkspaceFS.forAgent(undefined, { dataRoot }).root).toBe(dataRoot);
+  });
+
+  test('a real userId gets the per-user nested root', () => {
+    expect(WorkspaceFS.forAgent({ userId: 'alice-uuid' }, { dataRoot }).root)
+      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+});

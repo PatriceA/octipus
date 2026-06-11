@@ -775,9 +775,13 @@ export class OrchestratorService {
       wsContext += `\n\nFor complex implementation tasks in this project, PREFER using the "Full Development Cycle" pipeline (via create_pipeline) to ensure thorough research, architecture planning, and testing.`;
       systemPrompt += wsContext;
     } else {
-      // Normal mode: generic workspace awareness
+      // Normal mode: generic workspace awareness.
+      // Advertise the per-user sandbox root (the same one the filesystem tool
+      // enforces via WorkspaceFS.forAgent), not the flat config.workspace.rootPath —
+      // otherwise the orchestrator hands workers absolute paths that fall outside
+      // their own sandbox.
       const wsConfig = getConfig();
-      const wsRoot = resolve(wsConfig.workspace.rootPath);
+      const wsRoot = WorkspaceFS.forAgent({ userId }).root;
       const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
       try {
         const { readdirSync, statSync: statS } = await import('fs');
@@ -793,7 +797,10 @@ export class OrchestratorService {
         }
         wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
         systemPrompt += wsContext;
-      } catch {
+      } catch (err) {
+        // The per-user nested root may not exist yet (new user who hasn't
+        // written a file). Fall back to a bare workspace line; not fatal.
+        coreLogger.debug({ err, wsRoot }, 'workspace readdir skipped — root may not exist yet');
         systemPrompt += `\nWORKSPACE: ${wsRoot}`;
       }
     }
