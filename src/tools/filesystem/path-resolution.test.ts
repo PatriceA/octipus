@@ -169,6 +169,92 @@ describe('real users — nested per-user root', () => {
     expect(r.content).toBe(body);
   });
 
+  test('write then read by the SAME RELATIVE path round-trips (session-dir anchoring)', async () => {
+    // The reported QA bug: write_file anchors a relative path on the session
+    // output dir, but read_file anchored it on the workspace root — so the
+    // agent wrote `poem.md` (→ sessions/…/poem.md) and got ENOENT reading
+    // `poem.md` back. Both must agree on the session dir.
+    const tool = await makeTool();
+    const body = 'a relative round-trip\n';
+    await tool.handler('write_file').execute({ path: 'developers-vs-ai.md', content: body }, ctx());
+
+    const r = (await tool.handler('read_file').execute(
+      { path: 'developers-vs-ai.md' },
+      ctx(),
+    )) as { content: string };
+    expect(r.content).toBe(body);
+  });
+
+  test('a session-written file is found by file_info, list_directory, and search by relative path', async () => {
+    const tool = await makeTool();
+    await tool.handler('write_file').execute({ path: 'note.md', content: 'x\n' }, ctx());
+
+    // file_info on the relative path resolves into the session dir.
+    const info = (await tool.handler('file_info').execute({ path: 'note.md' }, ctx())) as {
+      isFile: boolean;
+    };
+    expect(info.isFile).toBe(true);
+
+    // list_directory(".") lists the session dir (the agent's CWD), so its own
+    // file shows up.
+    const list = (await tool.handler('list_directory').execute({ path: '.' }, ctx())) as {
+      entries: { name: string }[];
+    };
+    expect(list.entries.some((e) => e.name === 'note.md')).toBe(true);
+
+    // search_files defaults to "." → the session dir → finds it.
+    const found = (await tool.handler('search_files').execute(
+      { pattern: 'note\\.md' },
+      ctx(),
+    )) as { results: string[] };
+    expect(found.results.length).toBeGreaterThan(0);
+  });
+
+  test('write by a workspace-ABSOLUTE path then read it back round-trips (session redirect)', async () => {
+    // write_file redirects an absolute path inside the workspace root into the
+    // session dir; a read of that SAME absolute path must follow the redirect,
+    // not resolve the bare flat path (which would ENOENT).
+    const tool = await makeTool();
+    const abs = join(perUserRoot(), 'absolute-note.md');
+    const body = 'written by absolute path\n';
+    const w = (await tool.handler('write_file').execute({ path: abs, content: body }, ctx())) as {
+      path: string;
+    };
+    // It landed under the session dir, not at the bare absolute path.
+    expect(w.path).not.toBe(abs);
+
+    const r = (await tool.handler('read_file').execute({ path: abs }, ctx())) as { content: string };
+    expect(r.content).toBe(body);
+  });
+
+  test('create_directory and write_file agree on the session dir for the same relative path', async () => {
+    const tool = await makeTool();
+    await tool.handler('create_directory').execute({ path: 'reports' }, ctx());
+    const w = (await tool.handler('write_file').execute(
+      { path: 'reports/q1.md', content: 'data\n' },
+      ctx(),
+    )) as { path: string };
+    // The file lands inside the dir we created (both under the session dir),
+    // and is readable back by the same relative path.
+    const r = (await tool.handler('read_file').execute({ path: 'reports/q1.md' }, ctx())) as {
+      content: string;
+    };
+    expect(r.content).toBe('data\n');
+    expect(w.path.includes(`${sep}reports${sep}`)).toBe(true);
+  });
+
+  test('relative read falls back to the workspace root when the file only exists there', async () => {
+    // Orchestrator-seeded files live at the per-user root, not the session
+    // dir. A relative read must still find them (session-dir miss → root).
+    mkdirSync(perUserRoot(), { recursive: true });
+    writeFileSync(join(perUserRoot(), 'seeded.md'), 'from the root\n');
+    const tool = await makeTool();
+    const r = (await tool.handler('read_file').execute({ path: 'seeded.md' }, ctx())) as {
+      content: string;
+    };
+    expect(r.content).toBe('from the root\n');
+  });
+
   test('parent traversal is rejected with the friendly message', async () => {
     const tool = await makeTool();
     await expect(

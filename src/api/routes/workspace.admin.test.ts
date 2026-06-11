@@ -1,14 +1,18 @@
 /**
  * workspace route admin gating.
  *
- * The workspace-config endpoints are operator actions on a shared instance:
+ * Two of the workspace-config endpoints are operator actions on a shared
+ * instance and stay admin-only:
  *  - PUT /workspace               repoints the global workspace root
  *  - POST /workspace/validate     existsSync/statSync on a caller path
  *                                 (host filesystem existence oracle)
- *  - POST /workspace/repositories mkdir + git init under the root
  *
- * A non-admin must get 403; an admin must clear the gate. No DB needed — the
- * admin check returns before any persistence/fs work.
+ * POST /workspace/repositories is NOT admin-gated: it scaffolds a repo inside
+ * the caller's OWN per-user workspace sandbox, so any authenticated user may
+ * use it. It is still name- and containment-validated.
+ *
+ * A non-admin must get 403 on the operator endpoints; an admin must clear the
+ * gate. No DB needed — the admin check returns before any persistence/fs work.
  */
 import { describe, expect, test } from 'bun:test';
 import { Elysia } from 'elysia';
@@ -49,9 +53,13 @@ describe('workspace routes — non-admin is forbidden', () => {
     expect(r.status).toBe(403);
   });
 
-  test('POST /workspace/repositories → 403', async () => {
-    const r = await req(await appFor(false), 'POST', '/api/workspace/repositories', { name: 'x' });
-    expect(r.status).toBe(403);
+  test('POST /workspace/repositories is NOT admin-gated (per-user sandbox)', async () => {
+    // A dot-only name fails *validation* (400) — proving the request cleared
+    // the auth gate rather than being rejected as a non-admin (would be 403).
+    // Using an invalid name avoids a real mkdir under the user's data root.
+    const r = await req(await appFor(false), 'POST', '/api/workspace/repositories', { name: '..' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/invalid repository name/i);
   });
 });
 

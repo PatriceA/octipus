@@ -5,7 +5,26 @@ import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
+
+/**
+ * The per-user workspace files root for `userId` — the SAME root the
+ * filesystem tool sandboxes an agent to (`WorkspaceFS.forAgent`). REST
+ * routes that surface or mutate a user's project files must anchor here, not
+ * on the flat `config.workspace.rootPath`: under multiuser those differ, so a
+ * repo created under the flat root is invisible to (and rejected by) the
+ * agent's sandbox — the QA "Path '…/.octipus/workspace' is outside allowed
+ * workspace directories" after a repo was created fine on disk.
+ *
+ * `ensureRootSync` materializes the dir so a first-time user gets an empty
+ * list instead of ENOENT.
+ */
+function userWorkspaceRoot(userId: string): string {
+  const fs = WorkspaceFS.forAgent({ userId });
+  fs.ensureRootSync();
+  return fs.root;
+}
 
 // System directories that must never be added as workspace paths
 const DENIED_PATHS = [
@@ -35,7 +54,10 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     }
     const config = getConfig();
     return {
-      rootPath: resolve(config.workspace.rootPath),
+      // Per-user nested root — the one the agent's filesystem sandbox uses —
+      // so "Projects are subfolders of your workspace root" matches what the
+      // agent can actually read/write.
+      rootPath: userWorkspaceRoot(user.id),
       additionalPaths: config.workspace.additionalPaths.map(p => resolve(p)),
     };
   }, { detail: { tags: ['workspace'] } })
@@ -153,8 +175,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const config = getConfig();
-    const rootPath = resolve(config.workspace.rootPath);
+    const rootPath = userWorkspaceRoot(user.id);
 
     if (!existsSync(rootPath)) {
       return { repositories: [] };
@@ -185,21 +206,27 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    // Creates a directory (and optionally `git init`s it) under the global
-    // workspace root — an operator action, not per-user data.
-    if (!user.isAdmin) {
-      set.status = 403;
-      return { error: 'Admin privileges required' };
-    }
+    // Creates a directory (and optionally `git init`s it) under the CALLER'S
+    // own per-user workspace root. This is per-user data confined to the
+    // user's sandbox (and name-validated below), so it no longer requires
+    // admin — every authenticated user may scaffold repos in their own space.
     const config = getConfig();
-    const rootPath = resolve(config.workspace.rootPath);
+    const rootPath = userWorkspaceRoot(user.id);
 
     // Resolve the parent directory the repo lands in. Defaults to the
     // workspace root; an explicit `parentPath` lets the user choose where the
     // repo goes (the QA: "Create new repository doesn't let me choose the
     // parent folder"). The parent must be the workspace root, an additional
     // path, or a directory underneath one of them — never an arbitrary path.
-    const allowedRoots = [rootPath, ...config.workspace.additionalPaths.map((p) => resolve(p))];
+    //
+    // `additionalPaths` are GLOBAL operator-configured roots (shared across
+    // users), so only admins may target them. A non-admin is confined to their
+    // own per-user root — otherwise de-admin-gating this route would let any
+    // user scaffold dirs in shared paths they don't own.
+    const allowedRoots = [
+      rootPath,
+      ...(user.isAdmin ? config.workspace.additionalPaths.map((p) => resolve(p)) : []),
+    ];
     let parentPath = rootPath;
     if (body.parentPath) {
       if (!existsSync(body.parentPath) || !statSync(body.parentPath).isDirectory()) {

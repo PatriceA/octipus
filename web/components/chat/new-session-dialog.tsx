@@ -283,17 +283,21 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                   {parentFolders.length > 1 && (
                     <div>
                       <label className="block text-[11px] text-on-surface-variant mb-1">Parent folder</label>
-                      <select
-                        value={repoParent}
-                        onChange={(e) => setRepoParent(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-outline-variant/10 rounded-lg text-sm text-on-surface focus:ring-2 focus:ring-primary"
-                      >
-                        {parentFolders.map((f) => (
-                          <option key={f.path} value={f.path}>
-                            {f.name} — {f.path}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative">
+                        <FolderOpen className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
+                        <select
+                          value={repoParent}
+                          onChange={(e) => setRepoParent(e.target.value)}
+                          className="w-full appearance-none pl-10 pr-8 py-2.5 bg-surface-container border border-outline-variant/10 rounded-lg text-sm text-on-surface cursor-pointer focus:ring-2 focus:ring-primary"
+                        >
+                          {parentFolders.map((f) => (
+                            <option key={f.path} value={f.path}>
+                              {f.name} — {f.path}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
+                      </div>
                     </div>
                   )}
 

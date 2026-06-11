@@ -91,28 +91,35 @@ function findProjectRoot(absPath: string, workspaceRoot: string): string | null 
 }
 
 /**
+ * Compute the session output directory path for an agent WITHOUT creating it.
+ * Format: {workspace}/sessions/{YYYY-MM-DD}-{topic}/
+ *
+ * Pure (no I/O) so read-like ops can anchor relative paths on the same dir
+ * `write_file` writes to — without the side effect of materializing an empty
+ * session folder just because something was read.
+ */
+function sessionDirPath(context: AgentContext | undefined, root: string): string | null {
+  const config = getConfig();
+  if (!config.workspace.sessionFolders) return null;
+  if (!context?.sessionId) return null;
+
+  const date = new Date().toISOString().slice(0, 10);
+  const topic = (context.topic || context.role || 'general')
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .slice(0, 40);
+  const shortId = context.sessionId.slice(0, 8);
+  const dirName = `${date}-${topic}-${shortId}`;
+  return join(root, 'sessions', dirName);
+}
+
+/**
  * Get or create the session output directory for an agent.
  * Format: {workspace}/sessions/{YYYY-MM-DD}-{topic}/
  */
 async function getSessionOutputDir(context: AgentContext | undefined, root: string): Promise<string | null> {
   try {
-    const config = getConfig();
-    if (!config.workspace.sessionFolders) {
-      coreLogger.debug('Session folders disabled in config');
-      return null;
-    }
-    if (!context?.sessionId) {
-      coreLogger.debug('No sessionId in context, skipping session folder');
-      return null;
-    }
-
-    const date = new Date().toISOString().slice(0, 10);
-    const topic = (context.topic || context.role || 'general')
-      .replace(/[^a-zA-Z0-9_-]/g, '-')
-      .slice(0, 40);
-    const shortId = context.sessionId.slice(0, 8);
-    const dirName = `${date}-${topic}-${shortId}`;
-    const sessionDir = join(root, 'sessions', dirName);
+    const sessionDir = sessionDirPath(context, root);
+    if (!sessionDir) return null;
 
     if (!existsSync(sessionDir)) {
       await mkdir(sessionDir, { recursive: true });
@@ -121,7 +128,10 @@ async function getSessionOutputDir(context: AgentContext | undefined, root: stri
 
     return sessionDir;
   } catch (err) {
-    coreLogger.debug({ err }, 'Failed to get session output dir');
+    // Don't let a session-dir failure block the write — fall back to the
+    // workspace root. But surface it: a swallowed ENOSPC/EACCES here silently
+    // scatters output into the root, so log at warn rather than debug.
+    coreLogger.warn({ err }, 'Failed to prepare session output dir; writing to workspace root');
     return null;
   }
 }
@@ -215,7 +225,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const filePath = this.resolveAndValidate(this.requireString(args, 'path'), context, fs);
+        const filePath = this.resolveSessionAware(this.requireString(args, 'path'), context, fs);
 
         const content = await readFile(filePath, { encoding: (args.encoding as BufferEncoding) || 'utf-8' });
         return { content, path: filePath, size: content.length };
@@ -250,43 +260,14 @@ export class FilesystemTool extends BaseTool {
         const projectPath = (context?.metadata as Record<string, unknown> | undefined)?.projectPath as string | undefined;
         const sessionDir = projectPath ? null : await getSessionOutputDir(context, root);
         if (sessionDir) {
-          if (!rawPath.startsWith('/')) {
-            // Relative path: by default resolve into session dir, BUT if the
-            // path's first segment matches a real project under workspace
-            // root (carries a project marker like `.git`/`package.json`),
-            // resolve against workspace root instead. Pipeline subagents
-            // routinely write `trivia_masters/server/src/foo.js` — without
-            // this branch every relative write lands in the session folder
-            // and the actual repo stays empty.
-            const firstSegment = rawPath.split(/[/\\]/, 1)[0];
-            const candidate = firstSegment ? resolve(root, firstSegment) : null;
-            if (candidate && candidate.startsWith(root) && existsSync(candidate) && findProjectRoot(candidate, root)) {
-              filePath = resolve(root, rawPath);
-            } else {
-              filePath = resolve(sessionDir, rawPath);
-            }
-          } else {
-            // Absolute path within workspace root: redirect to the session
-            // dir UNLESS the target lives inside a real project (marker dir
-            // like `.git`, `package.json`, etc.). Pipeline stages targeting
-            // an explicit repo had their writes silently sandboxed to
-            // `sessions/.../<repo>/...` — files never landed in the repo.
-            const resolved = resolve(rawPath);
-            const insideWorkspace = resolved.startsWith(root);
-            const inExcludedSubtree = resolved.includes('/sessions/')
-              || resolved.includes('/extensions/')
-              || resolved.includes('/.octipus/');
-            const projectRoot = insideWorkspace && !inExcludedSubtree
-              ? findProjectRoot(resolved, root)
-              : null;
-
-            if (insideWorkspace && !inExcludedSubtree && !projectRoot) {
-              const relFromRoot = relative(root, resolved);
-              filePath = resolve(sessionDir, relFromRoot);
-            } else {
-              filePath = resolved;
-            }
-          }
+          // Session agent: anchor on the session dir via the SHARED decision
+          // (`sessionResolve`) so reads round-trip with this write. Pipeline
+          // subagents writing `repo/src/foo.js` still hit the real repo via
+          // the first-segment project escape; absolute paths inside the
+          // workspace redirect into the session dir unless they target a real
+          // project or an excluded subtree. `preferExisting: false` — a fresh
+          // write's target need not already exist.
+          filePath = this.sessionResolve(rawPath, fs, sessionDir, false);
         } else if (projectPath && !rawPath.startsWith('/')) {
           // Project-scoped agent: relative paths resolve inside the project
           filePath = resolve(projectPath, rawPath);
@@ -351,7 +332,9 @@ export class FilesystemTool extends BaseTool {
       async (args, context) => {
         this.requireString(args, 'content');
         const fs = this.workspaceFor(context);
-        const filePath = this.resolveAndValidate(this.requireString(args, 'path'), context, fs);
+        // Append targets the file write_file would have created — session-aware
+        // so appending to a session-written file by relative path works.
+        const filePath = this.resolveSessionAware(this.requireString(args, 'path'), context, fs);
 
         return withFileMutationQueue(filePath, async () => {
           const existing = existsSync(filePath) ? await readFile(filePath, 'utf-8') : '';
@@ -384,7 +367,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const dirPath = this.resolveAndValidate((args.path as string) || '.', context, fs);
+        const dirPath = this.resolveSessionAware((args.path as string) || '.', context, fs);
 
         const entries = await this.listDir(dirPath, args.recursive as boolean, args.includeHidden as boolean, fs.root);
         return { path: dirPath, entries };
@@ -400,7 +383,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const filePath = this.resolveAndValidate(args.path as string, context, fs);
+        const filePath = this.resolveSessionAware(args.path as string, context, fs);
 
         const stats = await stat(filePath);
         return {
@@ -426,7 +409,10 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const dirPath = this.resolveAndValidate(args.path as string, context, fs);
+        // Mirror write_file's anchoring (preferExisting: false) so a dir made
+        // here and a file written into it via the same relative path agree on
+        // the session dir.
+        const dirPath = this.resolveSessionAware(args.path as string, context, fs, false);
 
         await mkdir(dirPath, { recursive: args.recursive !== false });
         return { success: true, path: dirPath };
@@ -443,7 +429,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const filePath = this.resolveAndValidate(args.path as string, context, fs);
+        const filePath = this.resolveSessionAware(args.path as string, context, fs);
 
         return withFileMutationQueue(filePath, async () => {
           await rm(filePath, { recursive: args.recursive as boolean, force: false });
@@ -462,8 +448,10 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const srcPath = this.resolveAndValidate(args.source as string, context, fs);
-        const destPath = this.resolveAndValidate(args.destination as string, context, fs);
+        const srcPath = this.resolveSessionAware(args.source as string, context, fs);
+        // Destination mirrors write_file (preferExisting: false) so a copy
+        // within a session lands in the session dir, not the workspace root.
+        const destPath = this.resolveSessionAware(args.destination as string, context, fs, false);
 
         return withFileMutationQueue(destPath, async () => {
           await copyFile(srcPath, destPath);
@@ -482,8 +470,10 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const srcPath = this.resolveAndValidate(args.source as string, context, fs);
-        const destPath = this.resolveAndValidate(args.destination as string, context, fs);
+        const srcPath = this.resolveSessionAware(args.source as string, context, fs);
+        // Destination mirrors write_file (preferExisting: false) so a move/rename
+        // within a session stays in the session dir, not the workspace root.
+        const destPath = this.resolveSessionAware(args.destination as string, context, fs, false);
 
         return withFileMutationQueue(destPath, async () => {
           await rename(srcPath, destPath);
@@ -503,7 +493,7 @@ export class FilesystemTool extends BaseTool {
       }),
       async (args, context) => {
         const fs = this.workspaceFor(context);
-        const dirPath = this.resolveAndValidate((args.path as string) || '.', context, fs);
+        const dirPath = this.resolveSessionAware((args.path as string) || '.', context, fs);
 
         const pattern = safeRegExp(args.pattern as string);
         if (!pattern) {
@@ -618,6 +608,104 @@ export class FilesystemTool extends BaseTool {
       candidate = projectPath ? resolve(projectPath, rawPath) : resolve(fs.root, rawPath);
     }
     return this.resolveSafe(fs, candidate);
+  }
+
+  /**
+   * THE single session-dir anchoring decision, shared by `write_file` and the
+   * read-side ops so they can never disagree about where a path lives (a
+   * relative or workspace-absolute path written via `write_file` is found
+   * again by `read_file`/`list`/`file_info`/`search`/move/etc.). Mirrors
+   * `write_file`'s two branches exactly:
+   *
+   *   relative path:
+   *     - first segment names a real project under the workspace root
+   *       (`.git`/`package.json`/…) → resolve under the root (project write);
+   *     - otherwise → resolve under the session dir.
+   *   absolute path inside the workspace root:
+   *     - in an excluded subtree (`/sessions/`, `/extensions/`, `/.octipus/`)
+   *       or inside a real project → keep as-is;
+   *     - otherwise → redirect the root-relative tail into the session dir.
+   *   absolute path outside the workspace root → keep as-is (the sandbox gate
+   *     then accepts or rejects it).
+   *
+   * `preferExisting` is the only read/write difference: read-side ops set it
+   * so that when the computed session target does not exist but the same path
+   * under the workspace root does, the root path is returned instead — keeping
+   * orchestrator-seeded and pre-existing root/project files reachable. Writes
+   * leave it false (the target need not exist yet).
+   *
+   * Returns a candidate path; callers still gate it through `resolveSafe`.
+   */
+  private sessionResolve(rawPath: string, fs: WorkspaceFS, sessionDir: string, preferExisting: boolean): string {
+    const root = fs.root;
+    if (!rawPath.startsWith('/')) {
+      if (this.isFirstSegmentProject(rawPath, root)) return resolve(root, rawPath);
+      const inSession = resolve(sessionDir, rawPath);
+      if (!preferExisting || existsSync(inSession)) return inSession;
+      const atRoot = resolve(root, rawPath);
+      return existsSync(atRoot) ? atRoot : inSession;
+    }
+    const resolved = resolve(rawPath);
+    const insideWorkspace = resolved.startsWith(root);
+    const inExcludedSubtree = resolved.includes('/sessions/')
+      || resolved.includes('/extensions/')
+      || resolved.includes('/.octipus/');
+    const projectRoot = insideWorkspace && !inExcludedSubtree
+      ? findProjectRoot(resolved, root)
+      : null;
+    if (insideWorkspace && !inExcludedSubtree && !projectRoot) {
+      const redirected = resolve(sessionDir, relative(root, resolved));
+      if (!preferExisting || existsSync(redirected)) return redirected;
+      return existsSync(resolved) ? resolved : redirected;
+    }
+    return resolved;
+  }
+
+  /**
+   * Whether `rawPath`'s first segment names a real project directory (carries
+   * a project marker like `.git`/`package.json`) directly under the workspace
+   * root — the escape hatch that routes `repo/src/foo.ts`-style relative paths
+   * to the real repo instead of the session dir. Extracted so `write_file` and
+   * `sessionResolve` share ONE copy and can't drift.
+   */
+  private isFirstSegmentProject(rawPath: string, root: string): boolean {
+    const firstSegment = rawPath.split(/[/\\]/, 1)[0];
+    const candidate = firstSegment ? resolve(root, firstSegment) : null;
+    return Boolean(
+      candidate
+        && candidate.startsWith(root)
+        && existsSync(candidate)
+        && findProjectRoot(candidate, root)
+    );
+  }
+
+  /**
+   * Resolve a path for read-like ops (read/list/info/search/append + the
+   * source side of copy/move/delete) so a relative path ROUND-TRIPS with
+   * `write_file`. Anchoring is delegated to `sessionResolve` (the shared
+   * decision); `preferExisting` defaults true for reads, false for write-like
+   * callers (e.g. `create_directory`) that mirror `write_file` exactly.
+   */
+  private resolveSessionAware(
+    rawPath: string,
+    context: AgentContext | undefined,
+    fs: WorkspaceFS,
+    preferExisting = true,
+  ): string {
+    const projectPath = (context?.metadata as Record<string, unknown> | undefined)
+      ?.projectPath as string | undefined;
+    if (rawPath.startsWith('/')) {
+      // Absolute paths only redirect into the session dir; project-scoped
+      // agents and non-session agents take them verbatim (gate decides).
+      const sessionDir = projectPath ? null : sessionDirPath(context, fs.root);
+      if (sessionDir) return this.resolveSafe(fs, this.sessionResolve(rawPath, fs, sessionDir, preferExisting));
+      return this.resolveSafe(fs, resolve(rawPath));
+    }
+    if (projectPath) return this.resolveSafe(fs, resolve(projectPath, rawPath));
+
+    const sessionDir = sessionDirPath(context, fs.root);
+    if (sessionDir) return this.resolveSafe(fs, this.sessionResolve(rawPath, fs, sessionDir, preferExisting));
+    return this.resolveSafe(fs, resolve(fs.root, rawPath));
   }
 
   private async listDir(
