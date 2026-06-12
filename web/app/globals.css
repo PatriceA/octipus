@@ -307,7 +307,11 @@ button, a { transition: all 0.12s ease; }
 /* Fade + slide-up entrance for a single element. */
 @keyframes enter-up {
   from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  /* End at `none`, not translateY(0): with fill-mode `both` the final frame
+     is retained forever, and a lingering transform turns this wrapper into the
+     containing block for `position: fixed` descendants — which de-centers every
+     modal/dialog rendered inside a page. */
+  to   { opacity: 1; transform: none; }
 }
 .animate-enter { animation: enter-up 0.32s cubic-bezier(0.33, 1, 0.68, 1) both; }
 

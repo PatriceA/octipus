@@ -5,6 +5,7 @@ import { Calendar, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Chevron
 import { useEffect, useState } from 'react';
 import { describeCron, SchedulePicker } from '@/components/schedule-picker';
 import { PageHeader } from '@/components/ui/page-header';
+import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -160,6 +161,7 @@ function ResultDialog({ result, hookName, onClose }: { result: Record<string, un
   const isPlainText = typeof responseText === 'string' && !responseText.startsWith('{');
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
@@ -185,6 +187,7 @@ function ResultDialog({ result, hookName, onClose }: { result: Record<string, un
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -483,6 +486,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface-container rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
@@ -763,6 +767,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -897,6 +902,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const inputCls = 'w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-surface-container rounded-xs shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
@@ -1115,6 +1121,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

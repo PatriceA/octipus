@@ -3,6 +3,7 @@
 import { X } from 'lucide-react';
 import { type ReactNode, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import { Portal } from './portal';
 
 interface ModalProps {
   open: boolean;
@@ -36,6 +37,7 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
   if (!open) return null;
 
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center font-mono">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div
@@ -64,5 +66,6 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
         <div className="p-4">{children}</div>
       </div>
     </div>
+    </Portal>
   );
 }
