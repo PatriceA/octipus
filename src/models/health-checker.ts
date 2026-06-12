@@ -242,6 +242,10 @@ export class HealthChecker {
    */
   private static SKIP_LITELLM_PROVIDERS = new Set([
     'cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'voyage', 'openrouter',
+    // Custom (per-model) providers use their free checkHealth() like the native
+    // ones — without this they got a real billed "Hi" completion every 60s.
+    // Per-model reachability still surfaces lazily via classifyError + circuit breaker.
+    'custom-openai', 'custom-anthropic', 'custom-gemini',
   ]);
 
   /**
