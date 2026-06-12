@@ -5,7 +5,6 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../../lit
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 import {
-  buildBlocksConfigEnvelope,
   buildStandardEnvelope,
   type GenericGeminiRequest,
 } from './gemini-envelope';
@@ -13,14 +12,10 @@ import {
 /**
  * Custom Gemini-compatible provider.
  *
- * Speaks native Google Gemini wire format (`candidates[].content.parts[]`) on
- * the response side. Request side supports two envelopes via metadata.customProvider.requestEnvelope:
- *
- *   - 'standard' (default): native Gemini API. Path defaults to
- *     /v1beta/models/{model}:generateContent (or :streamGenerateContent for SSE).
- *
- *   - 'gemini-blocks-config': bespoke envelope with Anthropic-style content
- *     blocks + camelCase config:{} wrapper. Single path, defaults to '/generate'.
+ * Speaks native Google Gemini wire format on both sides. Requests use the
+ * native Gemini API; the path defaults to /v1beta/models/{model}:generateContent
+ * (or :streamGenerateContent for SSE) and can be overridden via
+ * metadata.customProvider.pathOverride.
  */
 export class CustomGeminiCompatProvider extends BaseCustomProvider implements ModelProvider {
   readonly name = 'custom-gemini';
@@ -38,7 +33,7 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
     const { url, body, headers } = this.buildRequest(cfg, options, false);
 
     modelLogger.debug(
-      { model: (cfg.model?.modelId || options.model), url, envelope: cfg.custom.requestEnvelope || 'standard', provider: this.name },
+      { model: (cfg.model?.modelId || options.model), url, provider: this.name },
       'Sending completion request to custom-gemini',
     );
 
@@ -110,7 +105,6 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
     options: CompletionOptions,
     streaming: boolean,
   ): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
-    const envelope = cfg.custom.requestEnvelope || 'standard';
     const generic: GenericGeminiRequest = {
       model: (cfg.model?.modelId || options.model),
       messages: options.messages,
@@ -129,25 +123,22 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
         || (options.extraBody?.thinkingConfig as { thinkingBudget?: number } | undefined)?.thinkingBudget === 0,
     };
 
-    const body = envelope === 'gemini-blocks-config'
-      ? buildBlocksConfigEnvelope(generic)
-      : buildStandardEnvelope(generic);
+    const body = buildStandardEnvelope(generic);
 
-    if (options.extraBody && envelope === 'standard') {
+    if (options.extraBody) {
       // Allow callers to inject native Gemini fields (safetySettings, etc.)
       const { responseSchema, response_schema, responseMimeType, response_mime_type, think, disableThinking, thinkingConfig, ...rest } = options.extraBody;
       Object.assign(body, rest);
     }
 
-    const path = cfg.custom.pathOverride || this.defaultPath(envelope, (cfg.model?.modelId || options.model), streaming);
+    const path = cfg.custom.pathOverride || this.defaultPath((cfg.model?.modelId || options.model), streaming);
     const { headers, queryParams } = this.buildHeaders(cfg.custom, cfg.apiKey);
     const url = this.appendQuery(`${cfg.baseUrl}${path}`, queryParams);
 
     return { url, body, headers };
   }
 
-  private defaultPath(envelope: string, modelId: string, streaming: boolean): string {
-    if (envelope === 'gemini-blocks-config') return '/generate';
+  private defaultPath(modelId: string, streaming: boolean): string {
     const action = streaming ? 'streamGenerateContent' : 'generateContent';
     return `/v1beta/models/${encodeURIComponent(modelId)}:${action}`;
   }
@@ -176,23 +167,8 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
       }
     }
 
-    // Bespoke proxies (gemini-blocks-config envelope) encode past tool calls
-    // as `[tool_call name(json)]` text. The model learns that pattern and
-    // emits new tool calls the same way — so when no native functionCall
-    // parts came back, scan the text for the bracketed form and lift them
-    // out. Without this, the agent's "tool calls" arrive as prose, never
-    // execute, and the parent invents an answer from the prompt alone.
-    let combinedText = textParts.join('');
-    if (toolCalls.length === 0 && combinedText.includes('[tool_call ')) {
-      const { extracted, cleaned } = extractTextToolCalls(combinedText);
-      for (const tc of extracted) {
-        toolCalls.push({ id: `call_${toolCallIdx++}`, name: tc.name, arguments: tc.arguments });
-      }
-      combinedText = cleaned;
-    }
-
     const result: CompletionResult = {
-      content: combinedText,
+      content: textParts.join(''),
       finishReason: mapFinishReason(candidate.finishReason),
       usage: {
         inputTokens: data.usageMetadata?.promptTokenCount || 0,
@@ -215,85 +191,6 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
 
     return result;
   }
-}
-
-/**
- * Extract `[tool_call NAME(JSON_ARGS)]` patterns from text. Used to recover
- * tool calls from bespoke-proxy models that emit them as prose instead of
- * native function-call parts. Returns the parsed calls and the text with the
- * bracketed sections removed.
- *
- * Hand-rolled scanner because JSON args can contain nested braces, which a
- * naive regex would mishandle. Anything that fails to parse is left in the
- * text untouched.
- */
-function extractTextToolCalls(text: string): { extracted: Array<{ name: string; arguments: Record<string, unknown> }>; cleaned: string } {
-  const TAG = '[tool_call ';
-  const extracted: Array<{ name: string; arguments: Record<string, unknown> }> = [];
-  let out = '';
-  let i = 0;
-
-  while (i < text.length) {
-    const tagAt = text.indexOf(TAG, i);
-    if (tagAt === -1) {
-      out += text.slice(i);
-      break;
-    }
-    out += text.slice(i, tagAt);
-
-    // Read name (identifier chars up to '(')
-    const nameStart = tagAt + TAG.length;
-    let nameEnd = nameStart;
-    while (nameEnd < text.length && /[\w:.-]/.test(text[nameEnd])) nameEnd++;
-    const name = text.slice(nameStart, nameEnd);
-    if (!name || text[nameEnd] !== '(') {
-      // Not a real tool_call tag — keep as text and advance past `[`
-      out += text.slice(tagAt, tagAt + 1);
-      i = tagAt + 1;
-      continue;
-    }
-
-    // Read balanced parens for the args
-    let depth = 1;
-    let j = nameEnd + 1;
-    let inString = false;
-    let escape = false;
-    while (j < text.length && depth > 0) {
-      const ch = text[j];
-      if (escape) { escape = false; }
-      else if (ch === '\\') { escape = true; }
-      else if (inString) { if (ch === '"') inString = false; }
-      else if (ch === '"') { inString = true; }
-      else if (ch === '(') depth++;
-      else if (ch === ')') depth--;
-      j++;
-    }
-    if (depth !== 0 || text[j] !== ']') {
-      // Malformed — leave it as text and continue
-      out += text.slice(tagAt, tagAt + 1);
-      i = tagAt + 1;
-      continue;
-    }
-    const argsRaw = text.slice(nameEnd + 1, j - 1).trim();
-    let args: Record<string, unknown> = {};
-    if (argsRaw.length > 0) {
-      try {
-        const parsed = JSON.parse(argsRaw);
-        args = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-          ? parsed as Record<string, unknown>
-          : { value: parsed };
-      } catch {
-        // JSON didn't parse — skip extraction, keep as text
-        out += text.slice(tagAt, j + 1);
-        i = j + 1;
-        continue;
-      }
-    }
-    extracted.push({ name, arguments: args });
-    i = j + 1;
-  }
-
-  return { extracted, cleaned: out.replace(/\n{3,}/g, '\n\n').trim() };
 }
 
 // ── Wire types ──
