@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { AgentMessage } from '@/core/types';
 import {
-  buildBlocksConfigEnvelope,
   buildGeminiContents,
   buildStandardEnvelope,
   extractSystemInstruction,
@@ -168,85 +167,5 @@ describe('sanitizeSchemaForGemini', () => {
     const out = sanitizeSchemaForGemini(input) as any;
     expect((input as any).items).toBeUndefined();
     expect(out.items).toEqual({ type: 'string' });
-  });
-});
-
-describe('buildBlocksConfigEnvelope', () => {
-  const base: GenericGeminiRequest = {
-    model: 'gemini-3-flash-preview',
-    messages: [userMsg('hi')],
-    stream: false,
-  };
-
-  it('emits mode/messages/config wrapper with content blocks', () => {
-    const body = buildBlocksConfigEnvelope({ ...base, temperature: 0.7, maxTokens: 4096 });
-    expect(body).toEqual({
-      mode: 'text',
-      model: 'gemini-3-flash-preview',
-      stream: false,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
-      config: { temperature: 0.7, maxTokens: 4096 },
-    });
-  });
-
-  it('preserves system role as a message (not extracted)', () => {
-    const body = buildBlocksConfigEnvelope({ ...base, messages: [sysMsg('be brief'), userMsg('hi')] });
-    expect((body.messages as any[])[0]).toMatchObject({ role: 'system' });
-  });
-
-  it('camelCases maxTokens (not maxOutputTokens) and uses snake_case for response_schema', () => {
-    const body = buildBlocksConfigEnvelope({
-      ...base,
-      maxTokens: 50,
-      responseSchema: { type: 'OBJECT' },
-      responseMimeType: 'application/json',
-    });
-    expect(body.config).toMatchObject({
-      maxTokens: 50,
-      response_schema: { type: 'OBJECT' },
-      response_mime_type: 'application/json',
-    });
-  });
-
-  it('emits thinkingConfig.thinkingBudget=0 when disableThinking is true', () => {
-    const body = buildBlocksConfigEnvelope({ ...base, disableThinking: true });
-    expect((body.config as any).thinkingConfig).toEqual({ thinkingBudget: 0 });
-  });
-
-  it('sanitizes array params without `items` before sending', () => {
-    const body = buildBlocksConfigEnvelope({
-      ...base,
-      tools: [{
-        type: 'function',
-        function: {
-          name: 'create_live_artifact',
-          description: 'd',
-          parameters: {
-            type: 'object',
-            properties: {
-              sources: { type: 'array', description: 'srcs' },
-            },
-            required: [],
-          },
-        },
-      }],
-    });
-    const sources = ((body.config as any).tools[0].parameters as any).properties.sources;
-    expect(sources.items).toEqual({ type: 'string' });
-  });
-
-  it('flattens tools into config.tools (Gemini-style schema)', () => {
-    const body = buildBlocksConfigEnvelope({
-      ...base,
-      tools: [{
-        type: 'function',
-        function: { name: 'foo', description: 'd', parameters: { type: 'OBJECT' } },
-      }],
-    });
-    expect((body.config as any).tools).toEqual([{
-      name: 'foo',
-      description: 'd',
-      parameters: { type: 'OBJECT' },
-    }]);
   });
 });

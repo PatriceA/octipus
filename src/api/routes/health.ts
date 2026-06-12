@@ -50,15 +50,15 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
        * Only network errors (DNS, refused, timeout) mark the endpoint unhealthy.
        *
        * Probes each unique base URL across all configured custom-openai /
-       * custom-gemini models (so multiple models on the same host aren't
-       * probed N times).
+       * custom-anthropic / custom-gemini models (so multiple models on the same
+       * host aren't probed N times).
        */
       const customCheck = async () => {
         try {
           const registry = getModelRegistry();
           const models = await registry.getAllModels();
           const customModels = models.filter(
-            (m) => (m.provider === 'custom-openai' || m.provider === 'custom-gemini') && m.endpoint,
+            (m) => m.provider.startsWith('custom-') && m.endpoint,
           );
           if (customModels.length === 0) {
             return { service: 'custom', status: 'not_configured' as const, message: 'No custom endpoints registered', lastChecked: new Date() };

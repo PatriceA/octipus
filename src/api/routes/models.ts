@@ -10,6 +10,7 @@ import { getProviderRouter } from '@/models/providers';
 import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { coreLogger } from '@/utils/logger';
+import { fetchGuarded } from '@/utils/sanitize';
 
 /**
  * Resolve a custom-provider API key from an apiKeyRef.
@@ -264,7 +265,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           const reply = testData.message?.content || '';
           return { success: true, message: `Model responded: "${reply.slice(0, 100)}"` };
 
-        } else if (provider === 'custom-openai' || provider === 'custom-gemini') {
+        } else if (provider === 'custom-openai' || provider === 'custom-anthropic' || provider === 'custom-gemini') {
           // Custom providers — model row may not exist yet (test happens
           // before save). Resolve API key from apiKeyRef and call the provider
           // with a customProviderOverride so it skips the DB lookup.
@@ -988,6 +989,98 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       query: t.Object({
         q: t.Optional(t.String()),
         limit: t.Optional(t.String()),
+      }),
+      detail: { tags: ['models'] },
+    }
+  )
+
+  // Discover models from a custom endpoint (custom-openai / custom-anthropic /
+  // custom-gemini). The user supplies the endpoint + auth in the add-model form;
+  // we hit the gateway's list-models route so they don't have to type model ids
+  // by hand. OpenAI-standard `/v1/models` returns { data: [{ id, owned_by }] };
+  // native Gemini `/v1beta/models` returns { models: [{ name }] }. We accept
+  // either shape (the default path is chosen by flavor, overridable).
+  .post(
+    '/custom/discover-models',
+    async ({ user, body }) => {
+      // Model management is admin-only: this triggers an authenticated outbound
+      // fetch to a user-supplied URL, so it must not be reachable by non-admins.
+      if (!user?.isAdmin) return { configured: false, error: 'Admin access required', models: [] };
+
+      const endpoint = body.endpoint?.replace(/\/+$/, '');
+      if (!endpoint) return { configured: false, error: 'Endpoint URL is required', models: [] };
+
+      const path = body.path || (body.provider === 'custom-gemini' ? '/v1beta/models' : '/v1/models');
+
+      // Build auth — bearer (default), custom header, or query param. The key is
+      // optional: some gateways (e.g. TPG) leave the list-models route open.
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      const queryParams: Record<string, string> = {};
+      const apiKey = await resolveCustomApiKey(body.apiKeyRef, user.id);
+      if (apiKey) {
+        const authType = body.authType || 'bearer';
+        if (authType === 'bearer') headers.Authorization = `Bearer ${apiKey}`;
+        else if (authType === 'header' && body.headerName) headers[body.headerName] = apiKey;
+        else if (authType === 'query' && body.paramName) queryParams[body.paramName] = apiKey;
+      }
+      const qs = Object.keys(queryParams).length
+        ? (path.includes('?') ? '&' : '?') + new URLSearchParams(queryParams).toString()
+        : '';
+
+      try {
+        // fetchGuarded validates the scheme + resolves/pins the host through the
+        // SSRF guard (rejects private IPs, file://, cloud-metadata, etc.) so an
+        // admin-supplied endpoint can't be used to reach internal services.
+        const res = await fetchGuarded(`${endpoint}${path}${qs}`, {
+          headers,
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          return {
+            configured: true,
+            error: `Endpoint returned ${res.status}${txt ? `: ${txt.slice(0, 200)}` : ''}`,
+            models: [],
+          };
+        }
+        const json = await res.json() as {
+          data?: Array<{ id: string; owned_by?: string; displayName?: string }>;
+          models?: Array<{ name?: string; displayName?: string }>;
+        };
+
+        let models: Array<{ id: string; label: string; ownedBy?: string }> = [];
+        if (Array.isArray(json.data)) {
+          models = json.data.map((m) => ({ id: m.id, label: m.displayName || m.id, ownedBy: m.owned_by }));
+        } else if (Array.isArray(json.models)) {
+          // Native Gemini: name is "models/{id}" → strip the "models/" prefix.
+          models = json.models
+            .filter((m) => m.name)
+            .map((m) => {
+              const id = m.name!.replace(/^models\//, '');
+              return { id, label: m.displayName || id };
+            });
+        } else {
+          return { configured: true, error: 'Unrecognized model-list response shape', models: [] };
+        }
+
+        return { configured: true, models, total: models.length };
+      } catch (err) {
+        const e = err as Error;
+        const msg = e.name === 'TimeoutError' || e.name === 'AbortError'
+          ? 'Timed out reaching endpoint (10s)'
+          : `Failed to reach endpoint: ${e.message}`;
+        return { configured: true, error: msg, models: [] };
+      }
+    },
+    {
+      body: t.Object({
+        provider: t.Optional(t.String()),
+        endpoint: t.Optional(t.String()),
+        apiKeyRef: t.Optional(t.String()),
+        authType: t.Optional(t.Union([t.Literal('bearer'), t.Literal('header'), t.Literal('query')])),
+        headerName: t.Optional(t.String()),
+        paramName: t.Optional(t.String()),
+        path: t.Optional(t.String()),
       }),
       detail: { tags: ['models'] },
     }

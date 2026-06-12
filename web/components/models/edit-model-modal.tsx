@@ -59,7 +59,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     customAuthType: (customProvider?.auth?.type || 'bearer') as 'bearer' | 'header' | 'query',
     customAuthHeaderName: customProvider?.auth?.headerName || '',
     customAuthParamName: customProvider?.auth?.paramName || '',
-    customRequestEnvelope: (customProvider?.requestEnvelope || 'standard') as 'standard' | 'gemini-blocks-config',
     customPathOverride: customProvider?.pathOverride || '',
     customApiKeyRef: model.apiKeyRef || '',
   });
@@ -67,7 +66,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
 
   const isCli = model.provider === 'cli';
-  const isCustomProvider = model.provider === 'custom-openai' || model.provider === 'custom-gemini';
+  const isCustomProvider = model.provider.startsWith('custom-');
   const cliKind: CliKind = isCli ? detectCliKind(model.modelId) : null;
   const cliProvider = cliProviderForKind(cliKind);
 
@@ -129,9 +128,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           },
         };
         if (formData.customPathOverride) cp.pathOverride = formData.customPathOverride;
-        if (model.provider === 'custom-gemini' && formData.customRequestEnvelope !== 'standard') {
-          cp.requestEnvelope = formData.customRequestEnvelope;
-        }
         payload.metadata = {
           ...((payload.metadata as Record<string, unknown>) || model.metadata || {}),
           customProvider: cp,
@@ -353,7 +349,9 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           {isCustomProvider && (
             <div className="border border-outline-variant/20 rounded-lg p-4 space-y-3 bg-surface-container">
               <h3 className="text-sm font-semibold text-on-surface">
-                {model.provider === 'custom-openai' ? 'OpenAI-compatible Settings' : 'Gemini-compatible Settings'}
+                {model.provider === 'custom-openai' ? 'OpenAI-compatible Settings'
+                  : model.provider === 'custom-anthropic' ? 'Anthropic-compatible Settings'
+                  : 'Gemini-compatible Settings'}
               </h3>
 
               <div className="grid grid-cols-2 gap-3">
@@ -395,27 +393,17 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 )}
               </div>
 
-              {model.provider === 'custom-gemini' && (
-                <div>
-                  <label className="block text-xs font-medium text-on-surface-variant mb-1">Request Envelope</label>
-                  <select
-                    value={formData.customRequestEnvelope}
-                    onChange={(e) => setFormData({ ...formData, customRequestEnvelope: e.target.value as 'standard' | 'gemini-blocks-config' })}
-                    className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
-                  >
-                    <option value="standard">Standard (native Gemini /v1beta/models/&#123;model&#125;:generateContent)</option>
-                    <option value="gemini-blocks-config">Gemini Blocks + Config (Anthropic-style messages, /generate)</option>
-                  </select>
-                </div>
-              )}
-
               <div>
                 <label className="block text-xs font-medium text-on-surface-variant mb-1">Path Override (optional)</label>
                 <input
                   type="text"
                   value={formData.customPathOverride}
                   onChange={(e) => setFormData({ ...formData, customPathOverride: e.target.value })}
-                  placeholder={model.provider === 'custom-openai' ? '/v1/chat/completions (default)' : '/generate or /v1beta/models/{model}:generateContent'}
+                  placeholder={
+                    model.provider === 'custom-openai' ? '/v1/chat/completions (default)'
+                    : model.provider === 'custom-anthropic' ? '/v1/messages (default)'
+                    : '/v1beta/models/{model}:generateContent (default)'
+                  }
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
               </div>

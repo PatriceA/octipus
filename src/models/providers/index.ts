@@ -8,6 +8,7 @@ import { getRateLimitManager, } from '../rate-limiter';
 import { adjustMaxTokensForThinking, supportsThinking, type ThinkingLevel } from '../thinking-budget';
 import { AnthropicProvider } from './anthropic-provider';
 import { CLIProvider } from './cli-provider';
+import { CustomAnthropicCompatProvider } from './custom/anthropic-compat-provider';
 import { CustomGeminiCompatProvider } from './custom/gemini-compat-provider';
 import { CustomOpenAICompatProvider } from './custom/openai-compat-provider';
 import { DeepSeekProvider } from './deepseek-provider';
@@ -22,6 +23,7 @@ import { VoyageProvider } from './voyage-provider';
 
 export { AnthropicProvider } from './anthropic-provider';
 export { CLIProvider } from './cli-provider';
+export { CustomAnthropicCompatProvider } from './custom/anthropic-compat-provider';
 export { CustomGeminiCompatProvider } from './custom/gemini-compat-provider';
 export { CustomOpenAICompatProvider } from './custom/openai-compat-provider';
 export { DeepSeekProvider } from './deepseek-provider';
@@ -102,10 +104,12 @@ export class ProviderRouter {
     this.providers.push(new OpenRouterProvider());
     this.providers.push(new VoyageProvider()); // embeddings only
 
-    // Custom providers — routed by DB provider column ('custom-openai' / 'custom-gemini').
-    // supportsModel() returns false on these, so they only serve calls dispatched
-    // explicitly by name via resolveProvider() / getProviderByName().
+    // Custom providers — routed by DB provider column
+    // ('custom-openai' / 'custom-anthropic' / 'custom-gemini'). supportsModel()
+    // returns false on these, so they only serve calls dispatched explicitly by
+    // name via resolveProvider() / getProviderByName().
     this.providers.push(new CustomOpenAICompatProvider());
+    this.providers.push(new CustomAnthropicCompatProvider());
     this.providers.push(new CustomGeminiCompatProvider());
 
     // LiteLLM as catch-all fallback — only if configured

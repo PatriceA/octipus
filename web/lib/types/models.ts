@@ -42,7 +42,6 @@ export interface Model {
       };
       pathOverride?: string;
       extraHeaders?: Record<string, string>;
-      requestEnvelope?: 'standard' | 'gemini-blocks-config';
     };
   };
   health?: 'healthy' | 'unhealthy' | 'unknown';
@@ -133,6 +132,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   cli: 'CLI (Subscription)',
   litellm: 'LiteLLM Proxy',
   'custom-openai': 'Custom (OpenAI-compatible)',
+  'custom-anthropic': 'Custom (Anthropic-compatible)',
   'custom-gemini': 'Custom (Gemini-compatible)',
 };
 
@@ -147,5 +147,6 @@ export const PROVIDER_DEFAULTS: Record<string, { contextWindow: number; maxToken
   openrouter: { contextWindow: 128000, maxTokens: 16384, supportsVision: true, supportsTools: true },
   litellm: { contextWindow: 8192, maxTokens: 4096, supportsVision: false, supportsTools: true },
   'custom-openai': { contextWindow: 32000, maxTokens: 4096, supportsVision: false, supportsTools: true },
+  'custom-anthropic': { contextWindow: 200000, maxTokens: 8192, supportsVision: false, supportsTools: true },
   'custom-gemini': { contextWindow: 1000000, maxTokens: 8192, supportsVision: false, supportsTools: true },
 };
