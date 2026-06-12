@@ -530,7 +530,7 @@ export default function PromptInput({
         {isListening && mediaStream && (
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 rounded-lg bg-error/10 px-2 py-1">
-              <span className="h-2 w-2 rounded-full bg-error animate-pulse" />
+              <span className="dot dot-err dot-live text-error" />
               <AudioWaveform stream={mediaStream} className="h-8 w-32 opacity-80" />
             </div>
             <button
@@ -560,8 +560,8 @@ export default function PromptInput({
         {/* Transcribing indicator */}
         {isTranscribing && (
           <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-            <span className="text-xs text-primary animate-pulse">Transcribing...</span>
+            <span className="dot dot-live text-primary bg-primary h-1.5 w-1.5" />
+            <span className="text-xs text-accent animate-pulse">transcribing<span className="term-caret" /></span>
           </div>
         )}
 

@@ -135,7 +135,7 @@ export function SessionList({
     <div className="flex h-full flex-col bg-surface-container-lowest font-mono">
       <div className="flex items-center justify-between border-b border-outline-variant/60 px-3 py-2">
         <h2 className="text-[12px] uppercase tracking-wider text-on-surface flex items-center gap-1.5">
-          <span aria-hidden className="text-outline-variant">▸</span>
+          <span aria-hidden className="text-primary font-bold">&gt;</span>
           sessions
         </h2>
         <button
@@ -171,7 +171,7 @@ export function SessionList({
         {GROUP_ORDER.filter((g) => grouped[g]).map((group) => (
           <div key={group} className="mt-1 first:mt-0">
             <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-outline-variant flex items-center gap-1.5">
-              <span aria-hidden>▸</span>
+              <span aria-hidden>&gt;</span>
               {group.toLowerCase()}
             </div>
 

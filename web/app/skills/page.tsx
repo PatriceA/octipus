@@ -2,23 +2,21 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle,
   BookOpen,
   ChevronDown,
   ChevronRight,
   FileText,
-  Layers,
-  Lightbulb,
   List,
   Loader2,
   Pencil,
   Plus,
   Search,
-  ThumbsUp,
   Trash2,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -56,19 +54,19 @@ const CATEGORIES = [
 ];
 
 const CATEGORY_COLORS: Record<string, string> = {
-  coding: 'bg-blue-900/30 text-primary',
+  coding: 'bg-primary-container/60 text-primary',
   architecture: 'bg-sky-900/30 text-sky-300',
   review: 'bg-cyan-900/30 text-primary',
   qa: 'bg-teal-900/30 text-tertiary',
   research: 'bg-violet-900/30 text-primary',
   design: 'bg-purple-900/30 text-primary',
-  devops: 'bg-orange-900/30 text-warning',
-  security: 'bg-red-900/30 text-error',
-  data: 'bg-green-900/30 text-tertiary',
+  devops: 'bg-warning-container/60 text-warning',
+  security: 'bg-error-container/60 text-error',
+  data: 'bg-tertiary-container/60 text-tertiary',
   ai: 'bg-indigo-900/30 text-primary',
   finance: 'bg-emerald-900/30 text-tertiary',
   automation: 'bg-amber-900/30 text-warning',
-  pm: 'bg-yellow-900/30 text-warning',
+  pm: 'bg-warning-container/60 text-warning',
   writing: 'bg-rose-900/30 text-error',
   communication: 'bg-pink-900/30 text-error',
   general: 'bg-slate-900/30 text-slate-300',
@@ -256,7 +254,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-error-container/60 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -574,7 +572,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-error-container/60 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -719,7 +717,7 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
 
         <div className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-error-container/60 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -738,7 +736,7 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
             <button
               onClick={handleDelete}
               disabled={deleting}
-              className="px-4 py-2 text-sm bg-red-600 text-on-surface rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm border border-error/50 bg-error-container/60 text-error rounded-xs hover:bg-error-container disabled:opacity-50 cursor-pointer"
             >
               {deleting ? 'Deleting...' : 'Delete'}
             </button>
@@ -823,10 +821,7 @@ function SkillCard({
         <div className="border-t border-outline-variant/10 p-4 space-y-4">
           {skill.content?.trim() ? (
             <div>
-              <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-primary" />
-                Markdown Content
-              </h4>
+              <h4 className="section-label mb-2">Markdown Content</h4>
               <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
                 {skill.content}
               </pre>
@@ -835,10 +830,7 @@ function SkillCard({
             <>
               {skill.principles.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <Lightbulb className="w-4 h-4 text-warning" />
-                    Principles
-                  </h4>
+                  <h4 className="section-label mb-2">Principles</h4>
                   <ul className="space-y-1">
                     {skill.principles.map((p, i) => (
                       <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-warning">
@@ -851,10 +843,7 @@ function SkillCard({
 
               {skill.bestPractices.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <ThumbsUp className="w-4 h-4 text-tertiary" />
-                    Best Practices
-                  </h4>
+                  <h4 className="section-label mb-2">Best Practices</h4>
                   <ul className="space-y-1">
                     {skill.bestPractices.map((p, i) => (
                       <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-tertiary">
@@ -867,10 +856,7 @@ function SkillCard({
 
               {skill.antiPatterns.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-error" />
-                    Anti-Patterns
-                  </h4>
+                  <h4 className="section-label mb-2">Anti-Patterns</h4>
                   <ul className="space-y-1">
                     {skill.antiPatterns.map((p, i) => (
                       <li key={i} className="text-sm text-on-surface-variant pl-4 relative before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-error">
@@ -883,13 +869,10 @@ function SkillCard({
 
               {skill.frameworks.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-on-surface/80 mb-2 flex items-center gap-1.5">
-                    <Layers className="w-4 h-4 text-primary" />
-                    Frameworks
-                  </h4>
+                  <h4 className="section-label mb-2">Frameworks</h4>
                   <div className="flex flex-wrap gap-1.5">
                     {skill.frameworks.map((f, i) => (
-                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-900/20 text-primary">
+                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-primary-container/60 text-primary">
                         {f}
                       </span>
                     ))}
@@ -942,29 +925,24 @@ export default function SkillsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <BookOpen className="w-5 h-5 text-primary" />
-        </div>
-        <div className="flex-1">
-          <h1 className="text-xl text-on-surface">Skills</h1>
-          <p className="text-on-surface-variant">
-            Domain knowledge injected into agent prompts. Skills provide expertise in areas like software architecture, security practices, and API design.
-          </p>
-          <p className="text-sm text-on-surface-variant mt-1">
-            {skills.length} skills across {categories.length} categories
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Create Skill
-        </button>
-      </div>
-
-      {/* description already in header */}
+      <PageHeader
+        title="skills"
+        description="Domain knowledge injected into agent prompts. Skills provide expertise in areas like software architecture, security practices, and API design."
+        badge={
+          <StatusBadge variant="neutral">
+            {skills.length} skills · {categories.length} categories
+          </StatusBadge>
+        }
+        actions={
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Create Skill
+          </button>
+        }
+      />
 
       {/* Search + Category filter */}
       <div className="flex gap-3">
@@ -1011,16 +989,16 @@ export default function SkillsPage() {
       {isLoading ? (
         <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
-          Loading...
+          loading...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
-          <BookOpen className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
-          <p className="text-on-surface-variant">No skills found</p>
+        <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center animate-enter">
+          <p aria-hidden className="text-2xl text-outline-variant mb-2">[ ]</p>
+          <p className="text-on-surface-variant">no skills found</p>
           <p className="text-sm text-on-surface-variant mt-1">Click &quot;Create Skill&quot; to add domain knowledge that agents can use during conversations.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 stagger">
           {filtered.map((skill) => (
             <SkillCard
               key={skill.id}

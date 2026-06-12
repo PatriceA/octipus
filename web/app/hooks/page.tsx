@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Calendar, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Eye, Globe, History, Lightbulb, Loader2, Pencil, Plus, Save, ToggleLeft, ToggleRight, Trash2, Webhook, X, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { describeCron, SchedulePicker } from '@/components/schedule-picker';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -221,8 +222,8 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
   if (executions.length === 0) {
     return (
       <div className="text-center py-8 text-on-surface-variant">
-        <History className="w-8 h-8 mx-auto mb-2 opacity-50" />
-        <p>No executions yet</p>
+        <p aria-hidden className="text-2xl text-outline-variant mb-2">[ ]</p>
+        <p>no executions yet</p>
       </div>
     );
   }
@@ -230,7 +231,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
   return (
     <div className="space-y-2">
       {executions.map((exec) => (
-        <div key={exec.id} className="border border-outline-variant/10 rounded-lg overflow-hidden">
+        <div key={exec.id} className={cn('border rounded-lg overflow-hidden', exec.status === 'error' ? 'border-error/40' : 'border-outline-variant/10')}>
           <button
             onClick={() => setExpanded(expanded === exec.id ? null : exec.id)}
             className="w-full flex items-center gap-3 px-3 py-2 hover:bg-surface-container-high text-left cursor-pointer"
@@ -255,7 +256,7 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
                   <span className="text-xs text-on-surface-variant">{exec.triggerType}</span>
                 )}
                 {exec.actionType && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/30 text-tertiary">
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-tertiary-container/60 text-tertiary">
                     {exec.actionType}
                   </span>
                 )}
@@ -1191,24 +1192,19 @@ export default function HooksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Webhook className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-xl text-on-surface">Hooks & Tasks</h1>
-            <p className="text-on-surface-variant">Event-driven automation. Create hooks that trigger on messages, agent events, schedules, or incoming webhooks.</p>
-          </div>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          New Automation
-        </button>
-      </div>
+      <PageHeader
+        title="hooks"
+        description="Event-driven automation. Create hooks that trigger on messages, agent events, schedules, or incoming webhooks."
+        actions={
+          <button
+            onClick={() => setShowCreate(true)}
+            className="px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            New Automation
+          </button>
+        }
+      />
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-outline-variant/10">
@@ -1234,14 +1230,14 @@ export default function HooksPage() {
 
       {activeTab === 'executions' && (
         <div className="bg-surface-container rounded-xs p-4">
-          <h2 className="text-sm font-semibold text-on-surface mb-3">
-            {viewingExecutions ? 'Hook Executions' : 'All Recent Executions'}
+          <h2 className="section-label mb-3">
+            {viewingExecutions ? 'hook executions' : 'all recent executions'}
             {viewingExecutions && (
               <button
                 onClick={() => setViewingExecutions(null)}
-                className="ml-2 text-xs text-primary hover:underline cursor-pointer"
+                className="ml-2 text-xs text-primary hover:underline cursor-pointer normal-case tracking-normal"
               >
-                Show all
+                show all
               </button>
             )}
           </h2>
@@ -1370,7 +1366,7 @@ export default function HooksPage() {
                           className={cn(
                             'text-[11px] px-1.5 py-1 rounded cursor-pointer hover:brightness-110 truncate',
                             h.triggerConfig?.scheduledAt
-                              ? 'bg-blue-900/30 text-primary border border-blue-800/30'
+                              ? 'bg-primary-container/60 text-primary border border-primary/40'
                               : 'bg-primary/10 text-primary border border-primary/20',
                           )}
                           title={`${h.name}${h.time ? ` at ${h.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
@@ -1397,7 +1393,7 @@ export default function HooksPage() {
                 <span>Recurring (cron)</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="w-3 h-2 rounded bg-blue-900/50" />
+                <div className="w-3 h-2 rounded bg-primary-container/60" />
                 <span>One-time (datetime)</span>
               </div>
             </div>
@@ -1428,13 +1424,13 @@ export default function HooksPage() {
             return (
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Lightbulb className="w-5 h-5 text-primary" />
-                  <span className="text-lg font-bold text-on-surface">Ready-to-Use Automations</span>
+                  <Lightbulb className="w-4 h-4 text-primary" />
+                  <span className="section-label">ready-to-use automations</span>
                   <span className="text-xs text-on-surface-variant">One click to add. Enable when ready.</span>
                 </div>
                 {categoryOrder.filter(cat => grouped[cat]?.length).map(cat => (
                   <div key={cat}>
-                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2 px-1">{categoryLabels[cat] || cat}</h3>
+                    <h3 className="section-label mb-2 px-1">{categoryLabels[cat] || cat}</h3>
                     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {grouped[cat].map((s) => (
                         <div key={s.id} className="bg-surface-container rounded-lg p-3 border border-outline-variant/10 hover:border-primary/20 transition-colors">
@@ -1477,8 +1473,8 @@ export default function HooksPage() {
               </div>
             ) : hooks.filter(h => h.trigger === 'schedule').length === 0 ? (
               <div className="p-8 text-center text-on-surface-variant">
-                <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p>No scheduled tasks</p>
+                <p aria-hidden className="text-2xl text-outline-variant mb-2">[--]</p>
+                <p>no scheduled tasks</p>
                 <p className="text-sm mt-1">Create a hook with &quot;Schedule&quot; trigger to add a recurring task</p>
               </div>
             ) : (
@@ -1517,7 +1513,7 @@ export default function HooksPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 bg-green-900/30 text-tertiary text-xs rounded">
+                        <span className="px-2 py-0.5 bg-tertiary-container/60 text-tertiary text-xs rounded">
                           {hook.action}
                         </span>
                       </td>
@@ -1530,11 +1526,15 @@ export default function HooksPage() {
                       <td className="px-4 py-3 text-xs text-on-surface-variant">{hook.executionCount}</td>
                       <td className="px-4 py-3">
                         <span className={cn(
-                          'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-                          hook.isEnabled && !hook.lastError ? 'bg-green-900/20 text-tertiary' :
+                          'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium',
+                          hook.isEnabled && !hook.lastError ? 'bg-tertiary-container/60 text-tertiary' :
                           hook.lastError ? 'bg-error-dim/20 text-error' :
                           'bg-surface-container-high text-on-surface-variant',
                         )}>
+                          <span aria-hidden className={cn(
+                            'dot',
+                            !hook.isEnabled ? 'dot-idle' : hook.lastError ? 'dot-err' : 'dot-ok dot-live',
+                          )} />
                           {!hook.isEnabled ? 'paused' : hook.lastError ? 'error' : 'active'}
                         </span>
                       </td>
@@ -1593,7 +1593,7 @@ export default function HooksPage() {
                 <th className="px-4 py-3 text-left text-sm font-bold text-on-surface-variant uppercase">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="stagger">
               {isLoading ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-on-surface-variant">
@@ -1605,8 +1605,8 @@ export default function HooksPage() {
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-on-surface-variant">
                     <div className="flex flex-col items-center gap-2">
-                      <Webhook className="w-8 h-8 text-on-surface-variant" />
-                      <p>No event hooks configured</p>
+                      <p aria-hidden className="text-2xl text-outline-variant">[ ]</p>
+                      <p>no event hooks configured</p>
                       <p className="text-sm">Create a hook to automate actions based on events</p>
                     </div>
                   </td>
@@ -1626,10 +1626,10 @@ export default function HooksPage() {
                       <span className="px-2 py-1 bg-primary/10 text-primary text-xs rounded">{hook.trigger}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-1 bg-green-900/30 text-tertiary text-xs rounded">
+                      <span className="px-2 py-1 bg-tertiary-container/60 text-tertiary text-xs rounded">
                         {hook.action}
                         {Boolean(hook.actionConfig?.orchestrated) && (
-                          <span className="ml-1 text-orange-600" title="Orchestrated">*</span>
+                          <span className="ml-1 text-warning" title="Orchestrated">*</span>
                         )}
                       </span>
                     </td>

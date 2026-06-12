@@ -1,12 +1,13 @@
 'use client';
 
-import { Cpu, Plus, RefreshCw } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { AddModelModal } from '@/components/models/add-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';
 import { EditModelModal } from '@/components/models/edit-model-modal';
 import { ModelCard } from '@/components/models/model-card';
 import { RecommendedModelsPanel } from '@/components/models/recommended-models-panel';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import type { CLITool, Model } from '@/lib/types/models';
 
@@ -112,33 +113,28 @@ export default function ModelsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
-            <Cpu className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Models</h1>
-            <p className="text-on-surface-variant">Configure AI model providers and routing. Each model can be assigned to specific topics like coding, research, or orchestration.</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => { fetchModels(); fetchCLIStatus(); }}
-            className="px-3 py-2 border border-outline-variant/10 text-on-surface-variant rounded-full hover:bg-surface-container-high cursor-pointer"
-            title="Refresh"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
-          >
-            <Plus className="w-4 h-4" />
-            Add Model
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="models"
+        description="Configure AI model providers and routing. Each model can be assigned to specific topics like coding, research, or orchestration."
+        actions={
+          <>
+            <button
+              onClick={() => { fetchModels(); fetchCLIStatus(); }}
+              className="px-3 py-2 border border-outline-variant/10 text-on-surface-variant rounded-full hover:bg-surface-container-high cursor-pointer"
+              title="Refresh"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
+            >
+              <Plus className="w-4 h-4" />
+              Add Model
+            </button>
+          </>
+        }
+      />
 
       {error && (
         <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">
@@ -160,11 +156,11 @@ export default function ModelsPage() {
         }}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="stagger grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {models.length === 0 ? (
           <div className="col-span-full text-center py-8 text-on-surface-variant">
-            <Cpu className="w-12 h-12 mx-auto mb-3 text-outline-variant" />
-            <p>No models configured</p>
+            <p aria-hidden className="text-2xl text-outline-variant font-mono mb-3">[ ]</p>
+            <p>no models configured</p>
             <p className="text-sm mt-1">Click &quot;Add Model&quot; to register an LLM provider and assign it to topics for automatic routing.</p>
           </div>
         ) : (

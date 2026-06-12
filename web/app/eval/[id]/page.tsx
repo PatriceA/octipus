@@ -3,7 +3,6 @@
 import {
   ArrowLeft,
   CheckCircle,
-  FlaskConical,
   GitCompare,
   RefreshCw,
   XCircle,
@@ -118,7 +117,7 @@ export default function EvalDetailPage() {
           <ArrowLeft className="w-4 h-4" />
           Back to Evaluations
         </Link>
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
+        <div className="bg-error-container/60 border border-error/40 rounded-xl px-4 py-3 text-error text-sm">
           {error || 'Eval result not found'}
         </div>
       </div>
@@ -150,13 +149,8 @@ export default function EvalDetailPage() {
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-              <FlaskConical className="w-5 h-5 text-primary" />
-            </div>
             <div>
-              <h1 className="text-2xl font-bold text-on-surface">
-                {data.suites.length === 1 ? data.suites[0].suite : `Eval Run`}
-              </h1>
+              <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/eval/{data.suites.length === 1 ? data.suites[0].suite : 'run'}</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
               <p className="text-sm text-on-surface-variant" suppressHydrationWarning>
                 {formatDate(data.timestamp)}
               </p>
@@ -237,8 +231,8 @@ export default function EvalDetailPage() {
               <span className={cn(
                 'ml-2 text-xs px-1.5 py-0.5 rounded-full',
                 suite.failed > 0
-                  ? 'bg-red-950/30 text-error'
-                  : 'bg-green-950/30 text-tertiary'
+                  ? 'bg-error-container/60 text-error'
+                  : 'bg-tertiary-container/60 text-tertiary'
               )}>
                 {suite.passed}/{suite.totalTests}
               </span>

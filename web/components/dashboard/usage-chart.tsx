@@ -51,15 +51,15 @@ export function UsageChart() {
             <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               {/* Grid + axes in the new dim-blue palette so the chart reads
                   like an oscilloscope trace rather than a marketing graph. */}
-              <CartesianGrid strokeDasharray="2 4" stroke="#3A4250" strokeOpacity={0.5} />
+              <CartesianGrid strokeDasharray="2 4" stroke="#2A2A2A" strokeOpacity={0.7} />
               <XAxis
                 dataKey="date"
-                tick={{ fill: '#8A93A0', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}
+                tick={{ fill: '#8A8A8A', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}
                 tickLine={false}
-                axisLine={{ stroke: '#3A4250' }}
+                axisLine={{ stroke: '#2A2A2A' }}
               />
               <YAxis
-                tick={{ fill: '#8A93A0', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}
+                tick={{ fill: '#8A8A8A', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' }}
                 tickLine={false}
                 axisLine={false}
                 width={32}
@@ -67,25 +67,25 @@ export function UsageChart() {
               <Tooltip
                 formatter={(value) => [`${Number(value).toFixed(1)}K`, 'tokens']}
                 contentStyle={{
-                  background: '#161B22',
-                  border: '1px solid #3A4250',
+                  background: '#151515',
+                  border: '1px solid #2A2A2A',
                   borderRadius: 4,
-                  color: '#E6E6E6',
+                  color: '#FFFFFF',
                   fontSize: 11,
                   fontFamily: 'JetBrains Mono, monospace',
                   padding: '4px 8px',
                 }}
-                labelStyle={{ color: '#8A93A0', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}
-                itemStyle={{ color: '#7AA2D4' }}
-                cursor={{ stroke: '#5A6677', strokeDasharray: '2 4' }}
+                labelStyle={{ color: '#8A8A8A', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}
+                itemStyle={{ color: '#8CACFF' }}
+                cursor={{ stroke: '#767575', strokeDasharray: '2 4' }}
               />
               <Line
                 type="monotone"
                 dataKey="tokens"
-                stroke="#7AA2D4"
+                stroke="#8CACFF"
                 strokeWidth={1.5}
                 dot={false}
-                activeDot={{ r: 3, fill: '#7AA2D4', stroke: '#0F1216', strokeWidth: 2 }}
+                activeDot={{ r: 3, fill: '#8CACFF', stroke: '#0E0E0E', strokeWidth: 2 }}
               />
             </LineChart>
           </ResponsiveContainer>

@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 // ── Types (mirrored from /api/persona) ────────────────────────────
@@ -109,42 +110,40 @@ export default function PersonaPage() {
 
   if (personaQ.isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center text-zinc-400">
-        <Loader2 className="h-5 w-5 animate-spin" /> <span className="ml-2">Loading persona…</span>
+      <div className="flex h-screen items-center justify-center text-on-surface-variant font-mono">
+        <Loader2 className="h-5 w-5 animate-spin" /> <span className="ml-2">loading persona…</span>
       </div>
     );
   }
 
   if (personaQ.isError || !persona) {
     return (
-      <div className="p-8 text-red-400">
+      <div className="p-8 text-error">
         <p>Failed to load persona: {(personaQ.error as Error)?.message || 'unknown error'}</p>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 p-8 text-zinc-100">
-      <header>
-        <h1 className="text-2xl font-bold tracking-tight">Persona</h1>
-        <p className="mt-2 text-sm text-zinc-400">
-          The orchestrator&apos;s identity and voice. Per-user. Applies across every channel — TUI, web, Telegram, Slack. The base persona is <em>Octipus</em>, an octopus-machine collective that talks about itself in the third person and uses &quot;we&quot; for its swarm.
-        </p>
-      </header>
+    <div className="mx-auto max-w-3xl space-y-8 p-8 text-on-surface">
+      <PageHeader
+        title="persona"
+        description={'the orchestrator’s identity and voice. per-user, applied across every channel — tui, web, telegram, slack. the base persona is Octipus, an octopus-machine collective that talks about itself in the third person and uses "we" for its swarm.'}
+      />
 
       {error && (
-        <div className="rounded border border-red-700 bg-red-900/30 p-3 text-sm text-red-200">
+        <div className="rounded-xs border border-error/40 bg-error-container/40 p-3 text-sm text-error">
           {error}
         </div>
       )}
 
       {/* ── Identity ─────────────────────────────────────── */}
-      <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-zinc-400">Identity</h2>
+      <section className="rounded-xs term-frame p-5">
+        <h2 className="mb-4 section-label">Identity</h2>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="block">
-            <span className="text-xs text-zinc-400">Name</span>
+            <span className="text-xs text-on-surface-variant">Name</span>
             <input
               type="text"
               value={pendingName ?? persona.name}
@@ -155,19 +154,19 @@ export default function PersonaPage() {
                 }
                 setPendingName(null);
               }}
-              className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+              className="mt-1 w-full rounded-xs border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
               maxLength={40}
               placeholder="Octipus"
             />
-            <span className="mt-1 block text-[10px] text-zinc-500">Pronouns: {persona.pronouns}</span>
+            <span className="mt-1 block text-[10px] text-on-surface-variant">Pronouns: {persona.pronouns}</span>
           </label>
 
           <label className="block">
-            <span className="text-xs text-zinc-400">Tone</span>
+            <span className="text-xs text-on-surface-variant">Tone</span>
             <select
               value={persona.tone}
               onChange={e => void patch({ tone: e.target.value })}
-              className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+              className="mt-1 w-full rounded-xs border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
             >
               {TONES.map(t => (
                 <option key={t} value={t}>{t}</option>
@@ -176,27 +175,27 @@ export default function PersonaPage() {
           </label>
 
           <label className="block">
-            <span className="text-xs text-zinc-400">Narration volume</span>
+            <span className="text-xs text-on-surface-variant">Narration volume</span>
             <select
               value={persona.narration}
               onChange={e => void patch({ narration: e.target.value })}
-              className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+              className="mt-1 w-full rounded-xs border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
             >
               {NARRATIONS.map(n => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
-            <span className="mt-1 block text-[10px] text-zinc-500">
+            <span className="mt-1 block text-[10px] text-on-surface-variant">
               How chatty the live swarm narration is.
             </span>
           </label>
 
           <label className="block">
-            <span className="text-xs text-zinc-400">Active preset</span>
+            <span className="text-xs text-on-surface-variant">Active preset</span>
             <select
               value={persona.presetId}
               onChange={e => void patch({ presetId: e.target.value })}
-              className="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+              className="mt-1 w-full rounded-xs border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
             >
               {presets.map(p => (
                 <option key={p.id} value={p.id}>
@@ -204,7 +203,7 @@ export default function PersonaPage() {
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-[10px] text-zinc-500">
+            <span className="mt-1 block text-[10px] text-on-surface-variant">
               Switching keeps your custom name. Reset below if you want a clean slate.
             </span>
           </label>
@@ -212,31 +211,33 @@ export default function PersonaPage() {
       </section>
 
       {/* ── Self-facts ──────────────────────────────────── */}
-      <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-400">
+      <section className="rounded-xs term-frame p-5">
+        <h2 className="mb-2 section-label">
           Self-facts
         </h2>
-        <p className="mb-4 text-xs text-zinc-500">
+        <p className="mb-4 text-xs text-on-surface-variant">
           Free-form rules the orchestrator should follow about itself. Re-injected
           on every turn. Example: <em>&quot;Always summarize in bullets&quot;</em>,
           <em> &quot;Stop apologizing for slow responses&quot;</em>.
         </p>
 
         {persona.userFacts.length === 0 ? (
-          <p className="text-sm italic text-zinc-500">No self-facts set.</p>
+          <p className="text-[12px] font-mono text-on-surface-variant">
+            <span aria-hidden className="text-outline mr-2">[ ]</span>no self-facts set
+          </p>
         ) : (
           <ul className="space-y-2">
             {persona.userFacts.map((fact, idx) => (
               <li
                 key={`${idx}-${fact}`}
-                className="flex items-start justify-between gap-2 rounded border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
+                className="flex items-start justify-between gap-2 rounded-xs border border-outline-variant bg-surface-container-low px-3 py-2 text-sm"
               >
                 <span className="flex-1">{fact}</span>
                 <button
                   type="button"
                   aria-label="Remove fact"
                   onClick={() => void removeFact(idx)}
-                  className="text-zinc-500 transition hover:text-red-400"
+                  className="text-on-surface-variant transition hover:text-error"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -255,12 +256,12 @@ export default function PersonaPage() {
             }}
             placeholder="Add a self-fact (4–280 chars)…"
             maxLength={280}
-            className="flex-1 rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+            className="flex-1 rounded-xs border border-outline-variant bg-surface-container-low px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
           />
           <button
             type="button"
             onClick={() => void addFact()}
-            className="flex items-center gap-1 rounded bg-zinc-700 px-3 py-2 text-sm text-zinc-100 transition hover:bg-zinc-600"
+            className="flex items-center gap-1 rounded-xs border border-outline-variant bg-surface-container-high px-3 py-2 text-sm text-on-surface transition hover:border-outline"
           >
             <Plus className="h-4 w-4" /> Add
           </button>
@@ -268,8 +269,8 @@ export default function PersonaPage() {
       </section>
 
       {/* ── Preset gallery ──────────────────────────────── */}
-      <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-zinc-400">
+      <section className="rounded-xs term-frame p-5">
+        <h2 className="mb-4 section-label">
           Available presets
         </h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -284,11 +285,11 @@ export default function PersonaPage() {
             >
               <div className="flex items-center justify-between">
                 <span className="font-semibold">{p.displayName}</span>
-                <span className="text-[10px] uppercase tracking-wider text-zinc-500">{p.tone}</span>
+                <span className="text-[10px] uppercase tracking-wider text-on-surface-variant">{p.tone}</span>
               </div>
-              <div className="mt-1 text-xs text-zinc-500">id: {p.id}{p.isDefault ? ' · default' : ''}</div>
+              <div className="mt-1 text-xs text-on-surface-variant">id: {p.id}{p.isDefault ? ' · default' : ''}</div>
               {p.signaturePhrases.length > 0 && (
-                <div className="mt-2 text-xs italic text-zinc-400">
+                <div className="mt-2 text-xs italic text-on-surface-variant">
                   &ldquo;{p.signaturePhrases[0]}&rdquo;
                 </div>
               )}
@@ -311,7 +312,7 @@ export default function PersonaPage() {
         <button
           type="button"
           onClick={() => void reset()}
-          className="flex items-center gap-2 rounded border border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition hover:border-red-700 hover:text-red-300"
+          className="flex items-center gap-2 rounded border border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition hover:border-error/40 hover:text-error"
         >
           <RotateCcw className="h-4 w-4" /> Reset to Octipus default
         </button>

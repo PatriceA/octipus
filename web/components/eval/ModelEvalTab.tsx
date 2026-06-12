@@ -92,8 +92,8 @@ function ResultsDetail({ results }: { results: EvalResultItem[] }) {
             <div className="flex items-center gap-1 shrink-0">
               {r.scores.filter(s => s.status !== 'UNKNOWN').map(s => (
                 <span key={s.metric} className={`text-[10px] px-1.5 py-0.5 rounded ${
-                  s.status === 'PASS' ? 'bg-green-900/30 text-tertiary' :
-                  s.status === 'FAIL' ? 'bg-red-900/30 text-error' :
+                  s.status === 'PASS' ? 'bg-tertiary-container/60 text-tertiary' :
+                  s.status === 'FAIL' ? 'bg-error-container/60 text-error' :
                   'bg-gray-900/30 text-gray-400'
                 }`}>
                   {s.metric.slice(0, 3)} {Math.round(s.score * 100)}%
@@ -398,7 +398,7 @@ export function ModelEvalTab() {
                 onClick={runEval}
                 disabled={running || !selectedModel}
                 className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm cursor-pointer ${
-                  running ? 'bg-yellow-600 text-on-surface' :
+                  running ? 'bg-warning text-on-warning' :
                   !selectedModel ? 'bg-surface-container text-on-surface-variant cursor-not-allowed' :
                   'bg-primary text-on-surface hover:bg-primary-dim'
                 }`}
@@ -415,7 +415,7 @@ export function ModelEvalTab() {
       </Card>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
+        <div className="bg-error-container/60 border border-error/40 rounded-xl px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
@@ -448,7 +448,7 @@ export function ModelEvalTab() {
                   }}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <div className="w-8 h-8 rounded-lg bg-blue-950/30 flex items-center justify-center">
+                    <div className="w-8 h-8 rounded-lg bg-primary-container/60 flex items-center justify-center">
                       <BarChart3 className="w-4 h-4 text-primary" />
                     </div>
                     <ScoreBar score={score.mean} size="sm" />

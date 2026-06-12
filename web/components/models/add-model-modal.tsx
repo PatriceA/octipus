@@ -388,7 +388,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="animate-enter bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
           <div className="flex items-center gap-2">
             {backStep && (
@@ -469,8 +469,8 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               </div>
             ) : Object.keys(groupedModels).length === 0 ? (
               <div className="text-center py-8 text-on-surface-variant">
-                <Cpu className="w-8 h-8 mx-auto mb-2 text-outline-variant" />
-                <p className="text-sm">No models found in LiteLLM</p>
+                <p aria-hidden className="text-2xl text-outline-variant font-mono mb-2">[ ]</p>
+                <p className="text-sm">no models found in litellm</p>
                 <p className="text-xs text-on-surface-variant mt-1">Add models to your LiteLLM config.yaml and restart the proxy.</p>
               </div>
             ) : (

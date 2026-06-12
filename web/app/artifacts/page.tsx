@@ -54,8 +54,8 @@ export default function ArtifactsPage() {
     <div className="p-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold">
-            Live Artifacts
+          <h1 className="flex items-center gap-2 text-base font-semibold lowercase">
+            <span><span className="text-outline">octi:</span><span className="text-on-surface">~/artifacts</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></span>
             <span className="rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
               BETA
             </span>
@@ -70,7 +70,7 @@ export default function ArtifactsPage() {
         </div>
         <Link
           href="/artifacts/new"
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-primary"
+          className="rounded-xs bg-primary px-4 py-2 text-sm text-on-primary hover:bg-primary-dim"
         >
           New artifact
         </Link>
@@ -116,7 +116,7 @@ export default function ArtifactsPage() {
                   <span className="text-error">Delete?</span>
                   <button
                     onClick={() => del.mutate(a.id)}
-                    className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-error"
+                    className="rounded-xs border border-error/50 bg-error-container/60 px-2 py-1 text-error hover:bg-error-container"
                   >
                     Yes
                   </button>
@@ -130,7 +130,7 @@ export default function ArtifactsPage() {
               ) : (
                 <button
                   onClick={() => setConfirmId(a.id)}
-                  className="rounded p-1 text-on-surface-variant hover:bg-red-900/30 hover:text-error"
+                  className="rounded p-1 text-on-surface-variant hover:bg-error-container/60 hover:text-error"
                   title="Delete"
                 >
                   <Trash2 className="h-4 w-4" />

@@ -1,7 +1,8 @@
 'use client';
 
-import { Check, ListTodo, NotebookPen, Pencil, Plus, RefreshCw, Sparkles, Tag, Trash2 } from 'lucide-react';
+import { NotebookPen, Pencil, Plus, RefreshCw, Sparkles, Tag, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 interface Task {
@@ -24,10 +25,10 @@ type GroupBy = 'priority' | 'due' | 'category' | 'none';
 type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt'>>;
 
 function priorityClasses(p: number): string {
-  if (p >= 3) return 'bg-error/10 text-error';
-  if (p === 2) return 'bg-primary/10 text-primary';
-  if (p === 1) return 'bg-surface-container-high text-on-surface-variant';
-  return 'bg-surface-container-high text-on-surface-variant/60';
+  if (p >= 3) return 'text-error';
+  if (p === 2) return 'text-primary';
+  if (p === 1) return 'text-on-surface-variant';
+  return 'text-on-surface-variant/60';
 }
 
 /**
@@ -231,15 +232,10 @@ export default function TasksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
-          <ListTodo className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">To-Do</h1>
-          <p className="text-on-surface-variant">Your to-do list. Agents can add, complete, and surface to-do items here.</p>
-        </div>
-      </div>
+      <PageHeader
+        title="tasks"
+        description="your to-do list — agents can add, complete, and surface to-do items here"
+      />
 
       {error && (
         <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">
@@ -310,7 +306,10 @@ export default function TasksPage() {
       </div>
 
       {openTasks.length === 0 ? (
-        <p className="text-sm text-on-surface-variant/70">Nothing to do. Add a task above, or ask an agent to remind you.</p>
+        <div className="py-10 text-center font-mono animate-enter">
+          <p aria-hidden className="text-2xl text-on-surface-variant/40">[ ]</p>
+          <p className="mt-2 text-sm text-on-surface-variant/70">nothing to do — add a task above, or ask an agent to remind you</p>
+        </div>
       ) : (
         openGroups.map((g) => (
           <TaskGroup
@@ -361,8 +360,8 @@ function TaskGroup({
     setInlineTitle('');
   };
   return (
-    <div className="space-y-2">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-on-surface-variant">{title}</h2>
+    <div className="space-y-2 stagger">
+      <h2 className="section-label">{title}</h2>
       {tasks.map((task) => (
         <TaskRow key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} onUpdateNotes={onUpdateNotes} onUpdateFields={onUpdateFields} />
       ))}
@@ -433,9 +432,9 @@ function TaskRow({
         <button
           onClick={() => onToggle(task)}
           aria-label={task.status === 'done' ? 'Mark open' : 'Mark done'}
-          className={`shrink-0 w-5 h-5 rounded-full border flex items-center justify-center ${task.status === 'done' ? 'bg-primary border-primary text-on-primary' : 'border-outline-variant/40'}`}
+          className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : 'text-on-surface-variant/70 hover:text-primary'}`}
         >
-          {task.status === 'done' && <Check className="w-3.5 h-3.5" />}
+          {task.status === 'done' ? '[x]' : '[ ]'}
         </button>
         <div className="min-w-0 flex-1">
           <p className={`text-sm ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>
@@ -443,8 +442,8 @@ function TaskRow({
           </p>
           <div className="flex items-center gap-2 mt-0.5">
             {task.priority > 0 && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${priorityClasses(task.priority)}`}>
-                {PRIORITY[task.priority]}
+              <span title={PRIORITY[task.priority]} className={`text-[10px] font-mono font-semibold ${priorityClasses(task.priority)}`}>
+                P{task.priority}
               </span>
             )}
             {task.category && (

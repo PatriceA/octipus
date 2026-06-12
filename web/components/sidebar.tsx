@@ -136,16 +136,15 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* Navigation. Group labels prefixed with `▸` for a TUI tree feel.
+      {/* Navigation. Group labels use the `// label` section style.
           Active item uses a `❯` left-marker rendered via ::before in CSS
           (here just rendered inline so it's keyboard-readable). */}
       <nav className="flex-1 overflow-y-auto py-3 px-1.5 space-y-3">
         {groups.map((group) => (
           <div key={group.label}>
             {!collapsed && (
-              <div className="px-2 mb-1 flex items-center gap-1.5 text-[10px] text-outline tracking-[0.08em] uppercase">
-                <span className="text-outline-variant">▸</span>
-                <span>{group.label}</span>
+              <div className="px-2 mb-1 section-label text-[10px]">
+                {group.label}
               </div>
             )}
             <div>
@@ -165,8 +164,8 @@ export function Sidebar() {
                         ? 'justify-center px-2 py-2 rounded-xs'
                         : 'px-2 py-1.5 rounded-xs',
                       isActive
-                        ? 'text-primary bg-primary-container/40'
-                        : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
+                        ? 'text-primary bg-primary-container/40 border border-primary/30 glow-accent'
+                        : 'border border-transparent text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
                     )}
                   >
                     {/* TUI active marker — chevron in accent. Collapsed

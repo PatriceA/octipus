@@ -44,8 +44,8 @@ export function RecentSessions() {
       <CardContent className="p-0">
         {sessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-on-surface-variant">
-            <MessageSquare className="w-6 h-6 mb-2 opacity-40" />
-            <p className="text-[12px]">-- no sessions yet --</p>
+            <p aria-hidden className="text-[16px] text-outline mb-1">[--]</p>
+            <p className="text-[12px]">no sessions yet</p>
           </div>
         ) : (
           <div className="overflow-x-auto">

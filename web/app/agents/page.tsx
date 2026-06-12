@@ -1,11 +1,12 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Ban, Bot, CheckCircle, Clock, Loader2, Pause, Play, Square, Trash2, X, XCircle } from 'lucide-react';
+import { Bot, Loader2, Square, Trash2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
+import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
-import { cn } from '@/lib/utils';
 
 interface Agent {
   id: string;
@@ -19,22 +20,19 @@ interface Agent {
   iteration: number;
 }
 
-function StatusBadge({ status }: { status: Agent['status'] }) {
-  const config: Record<string, { color: string; icon: typeof Play }> = {
-    idle: { color: 'bg-on-surface-variant/10 text-on-surface-variant', icon: Clock },
-    running: { color: 'bg-tertiary-container/40 text-tertiary border border-tertiary/60', icon: Play },
-    paused: { color: 'bg-warning-container/40 text-warning border border-warning/60', icon: Pause },
-    stopped: { color: 'bg-on-surface-variant/10 text-on-surface-variant', icon: Ban },
-    completed: { color: 'bg-primary/10 text-primary', icon: CheckCircle },
-    failed: { color: 'bg-error/10 text-error', icon: XCircle },
+function AgentStatusBadge({ status }: { status: Agent['status'] }) {
+  const variants: Record<Agent['status'], StatusVariant> = {
+    idle: 'neutral',
+    running: 'success',
+    paused: 'warning',
+    stopped: 'neutral',
+    completed: 'info',
+    failed: 'danger',
   };
-  const { color, icon: Icon } = config[status] || config.idle;
-
   return (
-    <span className={cn('inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', color)}>
-      <Icon className="w-3 h-3" />
+    <StatusBadge variant={variants[status] ?? 'neutral'} dot pulse={status === 'running'}>
       {status}
-    </span>
+    </StatusBadge>
   );
 }
 
@@ -78,7 +76,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-on-surface">New Agent</h2>
+          <h2 className="text-lg font-semibold text-on-surface lowercase term-prompt">New Agent</h2>
           <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
@@ -198,24 +196,19 @@ export default function AgentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Agents</h1>
-            <p className="text-on-surface-variant">Monitor and manage running AI agents. View their status, tool calls, iterations, and results.</p>
-          </div>
-        </div>
-        <button
-          onClick={() => setShowNewAgent(true)}
-          className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
-        >
-          <Bot className="w-4 h-4" />
-          New Agent
-        </button>
-      </div>
+      <PageHeader
+        title="agents"
+        description="monitor and manage running ai agents — status, tool calls, iterations, results"
+        actions={
+          <button
+            onClick={() => setShowNewAgent(true)}
+            className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
+          >
+            <Bot className="w-4 h-4" />
+            New Agent
+          </button>
+        }
+      />
 
       <div className="bg-surface-container rounded-xs border border-outline-variant/10">
         <div className="overflow-x-auto">
@@ -231,7 +224,7 @@ export default function AgentsPage() {
                 <th className="px-4 py-3 text-left text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="stagger">
               {isLoading ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-on-surface-variant">
@@ -241,8 +234,11 @@ export default function AgentsPage() {
                 </tr>
               ) : agents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-on-surface-variant">
-                    No agents running. Click &quot;New Agent&quot; to spawn an AI agent with a specific task and role.
+                  <td colSpan={7} className="px-4 py-10 text-center font-mono">
+                    <span aria-hidden className="block text-lg text-outline mb-2">[ ]</span>
+                    <span className="text-[12px] text-on-surface-variant">
+                      no agents running — click &quot;New Agent&quot; to spawn one with a task and role
+                    </span>
                   </td>
                 </tr>
               ) : (
@@ -258,7 +254,7 @@ export default function AgentsPage() {
                         <span className="font-mono text-sm">{agent.id.slice(0, 8)}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3"><StatusBadge status={agent.status} /></td>
+                    <td className="px-4 py-3"><AgentStatusBadge status={agent.status} /></td>
                     <td className="px-4 py-3 text-sm capitalize">{agent.role}</td>
                     <td className="px-4 py-3 text-sm font-mono">{agent.model}</td>
                     <td className="px-4 py-3 text-sm">{agent.iteration}</td>

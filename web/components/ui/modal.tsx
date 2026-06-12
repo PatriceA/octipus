@@ -20,7 +20,7 @@ const maxWidthMap = {
 };
 
 /**
- * Terminal-UI modal — backdrop, framed surface, `▸ title` titlebar.
+ * Terminal-UI modal — backdrop, framed surface, `> title` titlebar.
  * Square corners, single-line dim border, JetBrains Mono throughout.
  */
 export function Modal({ open, onClose, children, className, title, maxWidth = 'md' }: ModalProps) {
@@ -41,7 +41,7 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
       <div
         className={cn(
           'relative w-full mx-4 bg-surface-container border border-outline-variant rounded-xs shadow-2xl',
-          'animate-in fade-in zoom-in-95 duration-150',
+          'animate-enter',
           maxWidthMap[maxWidth],
           className,
         )}
@@ -49,7 +49,7 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
         {title && (
           <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/60 bg-surface-container-low">
             <h3 className="text-[13px] text-on-surface flex items-center gap-1.5">
-              <span aria-hidden className="text-outline-variant">▸</span>
+              <span aria-hidden className="text-primary font-bold">&gt;</span>
               {title.toLowerCase()}
             </h3>
             <button

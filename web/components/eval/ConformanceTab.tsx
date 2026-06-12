@@ -276,7 +276,7 @@ export function ConformanceTab() {
           onClick={runConformance}
           disabled={running}
           className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm cursor-pointer ${
-            running ? 'bg-yellow-600 text-on-surface' : 'bg-primary text-on-surface hover:bg-primary-dim'
+            running ? 'bg-warning text-on-warning' : 'bg-primary text-on-surface hover:bg-primary-dim'
           }`}
         >
           {running ? (
@@ -296,7 +296,7 @@ export function ConformanceTab() {
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
+        <div className="bg-error-container/60 border border-error/40 rounded-xl px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>

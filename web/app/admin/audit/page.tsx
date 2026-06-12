@@ -35,7 +35,7 @@ export default function AdminAuditPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Audit log</h2>
+        <h2 className="section-label">audit log</h2>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -65,7 +65,7 @@ export default function AdminAuditPage() {
         </select>
       </div>
 
-      <div className="overflow-x-auto bg-surface-container rounded-lg">
+      <div className="overflow-x-auto term-frame rounded-xs">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-on-surface-variant">
             <tr className="border-b border-outline-variant/10">
@@ -76,12 +76,17 @@ export default function AdminAuditPage() {
               <th className="text-left px-4 py-2 font-medium">Details</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="stagger">
             {isLoading && (
               <tr><td colSpan={5} className="px-4 py-3 text-on-surface-variant">Loading…</td></tr>
             )}
             {!isLoading && entries.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-3 text-on-surface-variant">No matching entries.</td></tr>
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-on-surface-variant">
+                  <p aria-hidden className="text-[16px] text-outline mb-1">[--]</p>
+                  <p className="text-[12px]">no matching entries</p>
+                </td>
+              </tr>
             )}
             {entries.map((e) => (
               <tr key={e.id} className="border-b border-outline-variant/5 last:border-0 align-top">

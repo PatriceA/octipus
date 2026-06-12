@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
+import { PageHeader } from '@/components/ui/page-header';
 import { reorderStages } from '../../../src/core/orchestrator/pipeline-validation';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS } from '@/lib/types/models';
@@ -110,32 +111,27 @@ export default function PipelinesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
-            <GitBranch className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Pipelines</h1>
-            <p className="text-on-surface-variant">Multi-stage agent workflows. Chain specialist agents in sequence with approval gates and automatic QA retries.</p>
-          </div>
-        </div>
-        <button
-          onClick={handleCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 text-sm font-medium"
-        >
-          <Plus className="w-4 h-4" />
-          New Template
-        </button>
-      </div>
+      <PageHeader
+        title="pipelines"
+        description="multi-stage agent workflows — chain specialists in sequence with approval gates and automatic qa retries"
+        actions={
+          <button
+            onClick={handleCreate}
+            className="flex items-center gap-2 px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary cursor-pointer rounded-full hover:opacity-90 text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" />
+            New Template
+          </button>
+        }
+      />
 
       {/* Template list */}
       {templates.length === 0 ? (
-        <div className="text-center py-16 bg-surface-container rounded-xs border border-outline-variant/10">
-          <GitBranch className="w-12 h-12 mx-auto text-on-surface-variant mb-4" />
-          <h3 className="text-lg font-medium text-on-surface mb-2">No pipeline templates</h3>
-          <p className="text-sm text-on-surface-variant mb-4">
-            Create a template to chain multiple specialist agents in sequence. Each step can have its own topic, prompt, and approval gate.
+        <div className="text-center py-16 bg-surface-container rounded-xs border border-outline-variant/10 font-mono">
+          <span aria-hidden className="block text-lg text-outline mb-3">[--]</span>
+          <h3 className="text-sm text-on-surface mb-2 lowercase">no pipeline templates</h3>
+          <p className="text-[12px] text-on-surface-variant mb-4">
+            create a template to chain specialist agents in sequence — each step gets its own topic, prompt, and approval gate
           </p>
           <button
             onClick={handleCreate}
@@ -146,7 +142,7 @@ export default function PipelinesPage() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-4 stagger">
           {templates.map(template => (
             <TemplateCard
               key={template.id}
@@ -389,7 +385,7 @@ function TemplateEditor({
       <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-on-surface">
+          <h2 className="text-lg font-semibold text-on-surface lowercase term-prompt">
             {template ? 'Edit Template' : 'New Template'}
           </h2>
           <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
@@ -431,7 +427,7 @@ function TemplateEditor({
           {/* Steps */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-on-surface-variant">Steps</label>
+              <label className="block section-label">Steps</label>
               <div className="flex items-center gap-2">
                 <div className="flex items-center bg-surface-container-high rounded-full p-0.5">
                   <button
@@ -480,8 +476,9 @@ function TemplateEditor({
                 </p>
               </div>
             ) : steps.length === 0 ? (
-              <div className="text-center py-8 border-2 border-dashed border-outline-variant/10 rounded-lg">
-                <p className="text-sm text-on-surface-variant mb-2">No steps yet</p>
+              <div className="text-center py-8 border-2 border-dashed border-outline-variant/10 rounded-lg font-mono">
+                <span aria-hidden className="block text-lg text-outline mb-1">[ ]</span>
+                <p className="text-[12px] text-on-surface-variant mb-2">no steps yet</p>
                 <button
                   onClick={addStep}
                   className="text-sm text-primary hover:text-primary-container"

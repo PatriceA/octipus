@@ -45,8 +45,8 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
             <div className={cn(
               'w-8 h-8 rounded-lg flex items-center justify-center',
               allPassed
-                ? 'bg-green-950/30'
-                : 'bg-red-950/30'
+                ? 'bg-tertiary-container/60'
+                : 'bg-error-container/60'
             )}>
               {allPassed ? (
                 <CheckCircle className="w-4 h-4 text-tertiary" />

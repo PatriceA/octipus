@@ -45,21 +45,21 @@ interface DocumentsResponse {
 
 const CATEGORY_COLORS: Record<string, string> = {
   invoices: 'bg-emerald-900/30 text-tertiary',
-  contracts: 'bg-blue-900/30 text-primary',
+  contracts: 'bg-primary-container/60 text-primary',
   reports: 'bg-purple-900/30 text-primary',
-  correspondence: 'bg-yellow-900/30 text-warning',
+  correspondence: 'bg-warning-container/60 text-warning',
   technical: 'bg-indigo-900/30 text-primary',
-  receipts: 'bg-orange-900/30 text-warning',
-  legal: 'bg-red-900/30 text-error',
+  receipts: 'bg-warning-container/60 text-warning',
+  legal: 'bg-error-container/60 text-error',
   medical: 'bg-pink-900/30 text-error',
   financial: 'bg-teal-900/30 text-tertiary',
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  queued: 'bg-yellow-900/30 text-warning',
-  processing: 'bg-blue-900/30 text-primary animate-pulse',
-  completed: 'bg-green-900/30 text-tertiary',
-  failed: 'bg-red-900/30 text-error',
+  queued: 'bg-warning-container/60 text-warning',
+  processing: 'bg-primary-container/40 text-primary dot-live',
+  completed: 'bg-tertiary-container/60 text-tertiary',
+  failed: 'bg-error-container/60 text-error',
 };
 
 function getCategoryColor(category: string): string {
@@ -163,7 +163,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
 
         <div className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-error-container/60 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -403,7 +403,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
             {data && (data.status === 'queued' || data.status === 'processing') && (
               <button
                 onClick={() => { onCancel(documentId); onClose(); }}
-                className="px-3 py-1.5 text-xs font-medium text-warning bg-orange-900/30 rounded-lg hover:bg-orange-900/50 cursor-pointer flex items-center gap-1"
+                className="px-3 py-1.5 text-xs font-medium text-warning bg-warning-container/60 rounded-lg hover:bg-warning-container/60 cursor-pointer flex items-center gap-1"
               >
                 <Square className="w-3.5 h-3.5" />
                 Cancel
@@ -411,7 +411,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
             )}
             <button
               onClick={() => { onDelete(documentId); onClose(); }}
-              className="px-3 py-1.5 text-xs font-medium text-error bg-red-900/30 rounded-lg hover:bg-red-900/50 cursor-pointer flex items-center gap-1"
+              className="px-3 py-1.5 text-xs font-medium text-error bg-error-container/60 rounded-lg hover:bg-error-container/60 cursor-pointer flex items-center gap-1"
             >
               <Trash2 className="w-3.5 h-3.5" />
               Delete
@@ -703,11 +703,8 @@ export default function DocumentsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <FileText className="w-5 h-5 text-primary" />
-        </div>
         <div className="flex-1">
-          <h1 className="text-xl text-on-surface">Documents</h1>
+          <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/documents</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
           <p className="text-on-surface-variant">
             Upload and manage documents. Files are processed with OCR, categorized by AI, and indexed into the knowledge base for retrieval.
           </p>
@@ -726,7 +723,7 @@ export default function DocumentsPage() {
 
       {/* Queue status banner */}
       {(queue.queueLength > 0 || queue.isProcessing) && (
-        <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-900/20 text-primary rounded-lg text-sm">
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-primary-container/60 text-primary rounded-lg text-sm">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>
             Processing: {queue.queueLength} queued{queue.isProcessing ? ', 1 in progress' : ''}

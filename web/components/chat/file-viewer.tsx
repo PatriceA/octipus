@@ -173,7 +173,7 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
           {dirty && <span className="text-[10px] text-warning">● unsaved</span>}
           {justUpdated && !editing && (
             <span className="flex items-center gap-1 text-[10px] text-primary" aria-live="polite">
-              <span className="h-1.5 w-1.5 rounded-full bg-primary motion-safe:animate-pulse" /> updated
+              <span className="dot dot-live text-primary bg-primary h-1.5 w-1.5" /> updated
             </span>
           )}
 

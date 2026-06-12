@@ -94,6 +94,10 @@ export function HealthStatus({ health, isFetching }: HealthStatusProps) {
                 className={cn(
                   'flex items-center gap-2.5 px-3 py-2 border-t border-r border-outline-variant/40 border-l-2',
                   rowAccent(service?.status),
+                  hasData &&
+                    service?.status !== undefined &&
+                    !['healthy', 'degraded', 'not_configured'].includes(service.status) &&
+                    'glow-err',
                   idx < 4 && 'border-t-0',
                   '[&:nth-child(4n)]:border-r-0',
                 )}

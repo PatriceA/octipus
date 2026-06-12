@@ -11,8 +11,9 @@ export default function PermissionsPage() {
   }, [router]);
 
   return (
-    <div className="flex items-center justify-center h-64 text-on-surface-variant">
-      Redirecting to Tools & Permissions...
+    <div className="flex items-center justify-center h-64 text-on-surface-variant font-mono text-[13px]">
+      <span className="term-shell">redirecting to ~/tools</span>
+      <span aria-hidden className="term-caret" />
     </div>
   );
 }

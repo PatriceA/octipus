@@ -97,17 +97,18 @@ function PermissionBanner({
     : [];
 
   return (
-    <div className="mx-4 mb-4 rounded-xl border border-yellow-800/40 bg-surface-container shadow-lg shadow-black/30 overflow-hidden">
+    <div className="mx-4 mb-4 rounded-xs border border-warning/40 bg-surface-container glow-warn overflow-hidden font-mono">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
-          <div className="shrink-0 w-8 h-8 rounded-lg bg-yellow-600/20 flex items-center justify-center">
-            <Shield className="w-4 h-4 text-warning" />
+          <div className="shrink-0 w-8 h-8 rounded-xs border border-warning/40 bg-warning-container/40 flex items-center justify-center text-warning">
+            <span aria-hidden className="dot dot-warn dot-live" />
+            <Shield className="sr-only w-4 h-4" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-yellow-200">Permission Required</span>
+              <span className="text-[12px] font-bold uppercase tracking-[0.12em] text-warning">permission request</span>
               {totalCount > 1 && (
-                <span className="text-xs text-on-surface-variant bg-surface-container-highest px-1.5 py-0.5 rounded-full">
+                <span className="text-[10px] text-on-surface-variant bg-surface-container-highest border border-outline-variant/60 px-1.5 py-0.5 rounded-xs">
                   +{totalCount - 1} more
                 </span>
               )}
@@ -124,7 +125,7 @@ function PermissionBanner({
           {argsEntries.length > 0 && (
             <button
               onClick={onToggleExpand}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-md hover:bg-surface-container-highest transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-xs hover:bg-surface-container-highest transition-colors cursor-pointer"
             >
               {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
               Details
@@ -132,13 +133,13 @@ function PermissionBanner({
           )}
           <button
             onClick={onAllow}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-600 text-on-surface rounded-lg hover:bg-green-700 transition-colors cursor-pointer"
+            className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold bg-primary text-on-primary rounded-xs hover:bg-primary-dim transition-colors cursor-pointer"
           >
             <CheckCircle className="w-4 h-4" /> Allow
           </button>
           <button
             onClick={onDeny}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error text-on-surface rounded-lg hover:bg-error/80 transition-colors cursor-pointer"
+            className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold border border-error/50 text-error bg-error-container/30 rounded-xs hover:bg-error-container/60 transition-colors cursor-pointer"
           >
             <XCircle className="w-4 h-4" /> Deny
           </button>
@@ -178,17 +179,18 @@ function ApprovalBanner({
   onDeny: () => void;
 }) {
   return (
-    <div className="mx-4 mb-4 rounded-xl border border-orange-800/40 bg-surface-container shadow-lg shadow-black/30 overflow-hidden">
+    <div className="mx-4 mb-4 rounded-xs border border-warning/40 bg-surface-container glow-warn overflow-hidden font-mono">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
-          <div className="shrink-0 w-8 h-8 rounded-lg bg-orange-600/20 flex items-center justify-center">
-            <Clock className="w-4 h-4 text-warning" />
+          <div className="shrink-0 w-8 h-8 rounded-xs border border-warning/40 bg-warning-container/40 flex items-center justify-center text-warning">
+            <span aria-hidden className="dot dot-warn dot-live" />
+            <Clock className="sr-only w-4 h-4" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-orange-200">Approval Required</span>
+              <span className="text-[12px] font-bold uppercase tracking-[0.12em] text-warning">approval request</span>
               {totalCount > 1 && (
-                <span className="text-xs text-on-surface-variant bg-surface-container-highest px-1.5 py-0.5 rounded-full">
+                <span className="text-[10px] text-on-surface-variant bg-surface-container-highest border border-outline-variant/60 px-1.5 py-0.5 rounded-xs">
                   +{totalCount - 1} more
                 </span>
               )}
@@ -201,7 +203,7 @@ function ApprovalBanner({
           {approval.question && (
             <button
               onClick={onToggleExpand}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-md hover:bg-surface-container-highest transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface rounded-xs hover:bg-surface-container-highest transition-colors cursor-pointer"
             >
               {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
               Details
@@ -214,14 +216,14 @@ function ApprovalBanner({
                 <button
                   key={i}
                   onClick={() => onApprove(option)}
-                  className="px-3 py-1.5 text-sm font-medium bg-surface-container-highest border border-outline-variant/10 rounded-lg hover:bg-surface-container-high text-on-surface transition-colors cursor-pointer"
+                  className="px-3 py-1.5 text-[13px] font-medium bg-surface-container-highest border border-outline-variant/60 rounded-xs hover:border-primary/50 hover:bg-surface-container-high text-on-surface transition-colors cursor-pointer"
                 >
                   {option}
                 </button>
               ))}
               <button
                 onClick={onDeny}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error/20 border border-error/30 rounded-lg hover:bg-error/30 text-error transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold border border-error/50 text-error bg-error-container/30 rounded-xs hover:bg-error-container/60 transition-colors cursor-pointer"
               >
                 <Square className="w-3 h-3" /> Stop
               </button>
@@ -230,13 +232,13 @@ function ApprovalBanner({
             <>
               <button
                 onClick={() => onApprove()}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-green-600 text-on-surface rounded-lg hover:bg-green-700 transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold bg-primary text-on-primary rounded-xs hover:bg-primary-dim transition-colors cursor-pointer"
               >
                 <CheckCircle className="w-4 h-4" /> Approve
               </button>
               <button
                 onClick={onDeny}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-error text-on-surface rounded-lg hover:bg-error/80 transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 text-[13px] font-semibold border border-error/50 text-error bg-error-container/30 rounded-xs hover:bg-error-container/60 transition-colors cursor-pointer"
               >
                 <Square className="w-3 h-3" /> Stop
               </button>

@@ -267,9 +267,9 @@ export function PipelineGraph({
             }
           }
 
-          const fill = step.stageType === 'qa_validation' ? '#1e3a5f' : '#1f2937';
+          const fill = step.stageType === 'qa_validation' ? '#1F2A4A' : '#1C1C1C';
           const isSelected = i === selectedIndex;
-          const stroke = isSelected ? '#73ffe3' : step.requiresApproval ? '#f97316' : '#374151';
+          const stroke = isSelected ? '#8CACFF' : step.requiresApproval ? '#FFD37A' : '#2A2A2A';
           const strokeWidth = isSelected ? 2.5 : step.requiresApproval ? 2 : 1;
 
           const isDraggingThis = drag?.from === i;
@@ -370,7 +370,7 @@ export function PipelineGraph({
             x2={PAD_X + BOX_W + 4}
             y1={PAD_Y + drag.targetIdx * ROW_H + BOX_H / 2}
             y2={PAD_Y + drag.targetIdx * ROW_H + BOX_H / 2}
-            stroke="#73ffe3"
+            stroke="#8CACFF"
             strokeWidth="3"
             strokeLinecap="round"
             opacity="0.9"

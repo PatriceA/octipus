@@ -95,7 +95,7 @@ export default function ArtifactDetailPage() {
       <main>
         <header className="mb-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">{a.title}</h1>
+            <h1 className="text-lg font-semibold"><span className="text-outline text-sm">~/artifacts/ </span>{a.title}</h1>
             <div className="text-xs text-on-surface-variant">
               {a.type} · {a.visibility} · /{a.slug}
             </div>
@@ -111,7 +111,7 @@ export default function ArtifactDetailPage() {
             </a>
             <button
               onClick={() => refresh.mutate()}
-              className="rounded bg-blue-600 px-3 py-1 text-sm text-on-surface hover:bg-primary"
+              className="rounded-xs bg-primary px-3 py-1 text-sm text-on-primary hover:bg-primary-dim"
             >
               {refresh.isPending ? 'Refreshing…' : 'Refresh now'}
             </button>
@@ -121,7 +121,7 @@ export default function ArtifactDetailPage() {
                 <button
                   onClick={() => del.mutate()}
                   disabled={del.isPending}
-                  className="rounded bg-red-600 px-2 py-1 text-on-surface hover:bg-error"
+                  className="rounded-xs border border-error/50 bg-error-container/60 px-2 py-1 text-error hover:bg-error-container"
                 >
                   Yes
                 </button>
@@ -135,7 +135,7 @@ export default function ArtifactDetailPage() {
             ) : (
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="rounded border border-red-900 px-3 py-1 text-sm text-error hover:bg-red-900/20"
+                className="rounded border border-error/40 px-3 py-1 text-sm text-error hover:bg-error-container/60"
               >
                 Delete
               </button>
@@ -195,7 +195,7 @@ export default function ArtifactDetailPage() {
             Mint share link
           </button>
           {mintLink.data && (
-            <div className="break-all rounded bg-yellow-900/20 p-2 text-[10px] text-warning">
+            <div className="break-all rounded bg-warning-container/60 p-2 text-[10px] text-warning">
               token: {mintLink.data.token}
             </div>
           )}

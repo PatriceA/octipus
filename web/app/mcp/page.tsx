@@ -20,6 +20,7 @@ import {
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { PageHeader } from '@/components/ui/page-header';
 import { ConnectorsTab } from '@/components/mcp/connectors-tab';
 
 interface MCPServer {
@@ -317,13 +318,13 @@ function ServerToolList({ serverId }: { serverId: string }) {
   const tools = data?.tools || [];
 
   if (tools.length === 0) {
-    return <p className="py-3 px-4 text-sm text-on-surface-variant">No tools available</p>;
+    return <p className="py-3 px-4 text-sm text-on-surface-variant">no tools available</p>;
   }
 
   return (
     <div className="space-y-1 px-4 py-3">
-      <p className="text-[10px] font-medium text-on-surface-variant uppercase tracking-wider mb-2">
-        Available Tools ({tools.length})
+      <p className="section-label mb-2">
+        available tools ({tools.length})
       </p>
       {tools.map((tool) => (
         <div key={tool.name} className="flex items-start gap-2 px-2.5 py-1.5 bg-surface-container-low rounded-lg">
@@ -420,31 +421,36 @@ export default function MCPPage() {
   const statusColor = (status: string) => {
     switch (status) {
       case 'connected':
-        return 'bg-green-900/30 text-tertiary';
+        return 'border-tertiary/60 text-tertiary bg-tertiary-container/40';
       case 'connecting':
-        return 'bg-yellow-900/30 text-warning';
+        return 'border-warning/60 text-warning bg-warning-container/40';
       case 'error':
-        return 'bg-red-900/30 text-error';
+        return 'border-error/60 text-error bg-error-container/40';
       default:
-        return 'bg-surface-container-high text-on-surface-variant';
+        return 'border-outline-variant text-on-surface-variant bg-surface-container-high';
+    }
+  };
+
+  // Live glow only for an actually-active (or pending) connection.
+  const statusDot = (status: string) => {
+    switch (status) {
+      case 'connected':
+        return 'dot-ok dot-live';
+      case 'connecting':
+        return 'dot-warn dot-live';
+      case 'error':
+        return 'dot-err';
+      default:
+        return 'dot-idle';
     }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Cable className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-xl text-on-surface">MCP &amp; Connectors</h1>
-            <p className="text-on-surface-variant">
-              Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients.
-            </p>
-          </div>
-        </div>
-        {activeTab === 'servers' && (
+      <PageHeader
+        title="mcp"
+        description="Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients."
+        actions={activeTab === 'servers' ? (
           <button
             onClick={() => setShowAdd(true)}
             className="px-4 py-2 bg-primary text-on-surface cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
@@ -452,8 +458,8 @@ export default function MCPPage() {
             <Plus className="w-4 h-4" />
             Add Server
           </button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <div className="flex gap-1 border-b border-outline-variant/20">
         {([
@@ -478,7 +484,7 @@ export default function MCPPage() {
 
       {activeTab === 'connectors' && <ConnectorsTab />}
 
-      {activeTab === 'servers' && <div className="space-y-3">
+      {activeTab === 'servers' && <div className="space-y-3 stagger">
         {isLoading ? (
           <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
             <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
@@ -486,8 +492,8 @@ export default function MCPPage() {
           </div>
         ) : servers.length === 0 ? (
           <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
-            <Cable className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
-            <p className="text-on-surface-variant">No MCP servers configured</p>
+            <p aria-hidden className="text-2xl text-outline-variant mb-2">[ ]</p>
+            <p className="text-on-surface-variant">no mcp servers configured</p>
             <p className="text-sm text-on-surface-variant mt-1">
               Click &quot;Add Server&quot; to connect an MCP-compatible service like n8n, Brave Search, or any custom MCP server.
             </p>
@@ -496,7 +502,10 @@ export default function MCPPage() {
           servers.map((server) => (
             <div
               key={server.id}
-              className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10"
+              className={cn(
+                'bg-surface-container rounded-xs ring-1',
+                server.status === 'error' ? 'ring-error/40 glow-err' : 'ring-outline-variant/10',
+              )}
             >
               <div className="p-4">
                 <div className="flex items-center justify-between">
@@ -514,7 +523,8 @@ export default function MCPPage() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <h3 className="font-medium text-on-surface truncate">{server.name}</h3>
-                        <span className={cn('px-2 py-0.5 text-[10px] font-medium rounded-full shrink-0', statusColor(server.status))}>
+                        <span className={cn('inline-flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] font-mono border rounded-xs leading-none shrink-0', statusColor(server.status))}>
+                          <span aria-hidden className={cn('dot', statusDot(server.status))} />
                           {server.status}
                         </span>
                         <span className="px-1.5 py-0.5 text-[10px] text-on-surface-variant bg-surface-container-high rounded font-mono shrink-0">
@@ -554,7 +564,7 @@ export default function MCPPage() {
                           className={cn(
                             'p-1.5 rounded-lg transition-colors cursor-pointer',
                             server.isEnabled
-                              ? 'text-green-600 hover:bg-green-900/20'
+                              ? 'text-tertiary hover:bg-tertiary-container/60'
                               : 'text-on-surface-variant hover:bg-surface-container'
                           )}
                           title={server.isEnabled ? 'Disable' : 'Enable'}
@@ -566,7 +576,7 @@ export default function MCPPage() {
                         {server.isEnabled && server.status !== 'connected' && server.status !== 'connecting' && (
                           <button
                             onClick={() => handleConnect(server.id)}
-                            className="p-1.5 text-blue-600 hover:bg-blue-900/20 rounded-lg cursor-pointer"
+                            className="p-1.5 text-primary hover:bg-primary-container/60 rounded-lg cursor-pointer"
                             title="Connect"
                           >
                             <Power className="w-4 h-4" />
@@ -587,7 +597,7 @@ export default function MCPPage() {
                         {/* Delete */}
                         <button
                           onClick={() => handleDelete(server.id)}
-                          className="p-1.5 text-on-surface-variant hover:text-error hover:bg-red-900/20 rounded-lg cursor-pointer"
+                          className="p-1.5 text-on-surface-variant hover:text-error hover:bg-error-container/60 rounded-lg cursor-pointer"
                           title="Delete"
                         >
                           <Trash2 className="w-4 h-4" />

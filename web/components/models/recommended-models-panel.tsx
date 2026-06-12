@@ -302,7 +302,10 @@ function ModelRow({
             <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
               <div className="h-full bg-primary transition-all" style={{ width: `${job.percent}%` }} />
             </div>
-            <span className="text-xs text-on-surface-variant capitalize">{job.status} {job.percent}%</span>
+            <span className="text-xs text-on-surface-variant capitalize flex items-center gap-1.5">
+              <span aria-hidden className="dot dot-live bg-primary text-primary" />
+              {job.status} {job.percent}%
+            </span>
           </div>
         ) : (
           <button

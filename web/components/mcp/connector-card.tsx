@@ -99,7 +99,7 @@ export function ConnectorCard({
             <div className="flex items-center gap-2">
               <h3 className="font-medium text-on-surface">{name}</h3>
               {connected && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-green-900/30 text-tertiary">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-tertiary-container/60 text-tertiary">
                   <CheckCircle className="w-3 h-3" />
                   connected
                 </span>
@@ -115,7 +115,7 @@ export function ConnectorCard({
           ) : connected ? (
             <button
               onClick={handleDisconnect}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-on-surface-variant hover:text-error hover:bg-red-900/20 rounded-lg cursor-pointer transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-on-surface-variant hover:text-error hover:bg-error-container/60 rounded-lg cursor-pointer transition-colors"
             >
               <Unplug className="w-3.5 h-3.5" />
               Disconnect

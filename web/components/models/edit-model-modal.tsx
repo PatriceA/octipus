@@ -189,7 +189,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-container rounded-[1rem] shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="animate-enter bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
           <div>
             <h2 className="text-lg font-semibold text-on-surface">Edit Model</h2>
@@ -438,10 +438,10 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
 
           {/* CLI Agent Settings */}
           {isCli && (
-            <div className="border border-violet-500/20 rounded-lg p-4 space-y-3">
+            <div className="border border-accent/20 rounded-lg p-4 space-y-3">
               <div className="flex items-center gap-2 mb-1">
-                <Terminal className="w-4 h-4 text-primary" />
-                <h3 className="text-sm font-semibold text-primary">CLI Agent Settings</h3>
+                <Terminal className="w-4 h-4 text-accent" />
+                <h3 className="text-sm font-semibold text-accent">CLI Agent Settings</h3>
               </div>
               <p className="text-xs text-on-surface-variant">
                 CLI models run as autonomous sub-agents with their own tools and agent loop.

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Gauge, Pencil, RotateCcw, X } from 'lucide-react';
+import { Pencil, RotateCcw, X } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 
@@ -62,7 +62,7 @@ function pct(current: number, max: number): number {
 
 function MeterCell({ current, max, ovrd }: { current: number; max: number; ovrd: boolean }) {
   const p = pct(current, max);
-  const tone = p >= 90 ? 'bg-red-600' : p >= 70 ? 'bg-warning' : 'bg-primary';
+  const tone = p >= 90 ? 'bg-error' : p >= 70 ? 'bg-warning' : 'bg-primary';
   return (
     <div className="space-y-1">
       <div className="text-xs text-on-surface-variant tabular-nums">
@@ -109,18 +109,17 @@ export default function AdminQuotasPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <Gauge className="w-5 h-5 text-primary" />
-        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Quotas</h2>
+        <h2 className="section-label">quotas</h2>
         <span className="text-xs text-on-surface-variant">
           (* indicates a per-user override; everything else inherits the global default)
         </span>
       </div>
 
       {error && (
-        <div className="p-2 bg-error-dim/10 border border-error-dim/20 rounded text-sm text-error">{error}</div>
+        <div className="p-2 bg-error-container/40 border border-error/60 rounded-xs text-sm text-error">! {error}</div>
       )}
 
-      <div className="overflow-x-auto bg-surface-container rounded-lg">
+      <div className="overflow-x-auto term-frame rounded-xs">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-on-surface-variant">
             <tr className="border-b border-outline-variant/10">
@@ -131,7 +130,7 @@ export default function AdminQuotasPage() {
               <th className="text-right px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="stagger">
             {isLoading && (
               <tr><td colSpan={5} className="px-4 py-3 text-on-surface-variant">Loading…</td></tr>
             )}
@@ -240,10 +239,13 @@ function EditModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="bg-surface-container rounded-2xl p-6 max-w-md w-full space-y-4 border border-primary/20">
+      <div className="term-frame rounded-xs p-6 max-w-md w-full space-y-4 border-primary/40 animate-enter">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-extrabold tracking-tighter text-on-surface">Quotas — {row.username}</h3>
+            <h3 className="text-[13px] text-on-surface font-mono">
+              <span aria-hidden className="text-primary font-bold">&gt; </span>
+              quotas — {row.username}
+            </h3>
             <p className="text-sm text-on-surface-variant mt-1">
               Leave a field blank to inherit the global default. Set a positive integer to override.
             </p>
@@ -276,7 +278,7 @@ function EditModal({
             type="button"
             onClick={handleSave}
             disabled={isSaving}
-            className="px-3 py-2 bg-primary text-[#0e0e0e] rounded-lg text-sm font-medium disabled:opacity-50 cursor-pointer"
+            className="px-3 py-2 bg-primary text-on-primary rounded-xs text-sm font-medium hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
           >
             {isSaving ? 'Saving…' : 'Save'}
           </button>

@@ -137,7 +137,7 @@ export function MobileTab() {
 
             <div className="flex items-center justify-center gap-2 mb-4">
               <span className={`text-xs font-mono px-2 py-1 rounded ${
-                secondsLeft < 60 ? 'bg-red-900/20 text-error' : 'bg-surface-container-highest text-on-surface-variant'
+                secondsLeft < 60 ? 'bg-error-container/60 text-error' : 'bg-surface-container-highest text-on-surface-variant'
               }`}>
                 Expires in {minutes}:{seconds.toString().padStart(2, '0')}
               </span>
@@ -163,7 +163,7 @@ export function MobileTab() {
         )}
 
         {error && (
-          <div className="mt-4 p-3 bg-red-900/10 border border-red-900/20 rounded-lg">
+          <div className="mt-4 p-3 bg-error-container/60 border border-error/40 rounded-lg">
             <p className="text-sm text-error">{error}</p>
           </div>
         )}

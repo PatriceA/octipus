@@ -2,10 +2,11 @@
 
 import { useQuery } from '@tanstack/react-query';
 import {
-  ArrowLeft, Bot, Clock, Cpu, Hash, Loader2, Square, Trash2,
+  ArrowLeft, Loader2, Square, Trash2,
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { AgentTimeline } from '@/components/agent-timeline';
+import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { PipelineView } from '@/components/pipeline-view';
 import { useAgentEvents } from '@/hooks/useAgentEvents';
 import { api } from '@/lib/api';
@@ -116,7 +117,10 @@ export default function AgentDetailPage() {
           <ArrowLeft className="w-4 h-4" />
           Back to Agents
         </button>
-        <div className="text-center py-12 text-on-surface-variant">Agent not found</div>
+        <div className="text-center py-12 font-mono">
+          <span aria-hidden className="block text-lg text-outline mb-2">?</span>
+          <span className="text-[12px] text-on-surface-variant">agent not found</span>
+        </div>
       </div>
     );
   }
@@ -135,34 +139,42 @@ export default function AgentDetailPage() {
             <ArrowLeft className="w-4 h-4" />
             Back to Agents
           </button>
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface flex items-center gap-3">
-            <Bot className="w-6 h-6" />
-            Agent {agentId.slice(0, 8)}
+          <h1 className="text-base font-semibold lowercase font-mono animate-enter">
+            <span className="text-outline font-semibold">octi:</span>
+            <span className="text-on-surface">~/agents/{agentId.slice(0, 8)}</span>
+            <span className="text-primary font-bold"> $</span>
+            <span aria-hidden className="term-caret" />
           </h1>
-          <div className="flex items-center gap-4 mt-2 text-sm text-on-surface-variant">
-            <span className="flex items-center gap-1">
-              <Cpu className="w-4 h-4" />
-              {agent.model}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-[12px] font-mono">
+            <span>
+              <span className="text-on-surface-variant">model </span>
+              <span className="text-on-surface">{agent.model}</span>
             </span>
-            <span className="flex items-center gap-1">
-              <Hash className="w-4 h-4" />
-              {agent.topic}
+            <span>
+              <span className="text-on-surface-variant">topic </span>
+              <span className="text-on-surface">{agent.topic}</span>
             </span>
-            <span className="flex items-center gap-1">
-              <Clock className="w-4 h-4" />
-              {new Date(agent.createdAt).toLocaleString()}
+            <span>
+              <span className="text-on-surface-variant">created </span>
+              <span className="text-on-surface">{new Date(agent.createdAt).toLocaleString()}</span>
             </span>
-            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-              isRunning ? 'bg-tertiary-container/40 text-tertiary border border-tertiary/60' :
-              agent.status === 'completed' ? 'bg-primary/10 text-primary' :
-              agent.status === 'failed' ? 'bg-error/10 text-error' :
-              'bg-on-surface-variant/10 text-on-surface-variant'
-            }`}>
-              {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
+            <StatusBadge
+              variant={
+                (isRunning
+                  ? 'success'
+                  : agent.status === 'completed'
+                    ? 'info'
+                    : agent.status === 'failed'
+                      ? 'danger'
+                      : 'neutral') satisfies StatusVariant
+              }
+              dot
+              pulse={isRunning}
+            >
               {agent.status}
-            </span>
+            </StatusBadge>
             {events.length > 0 && (
-              <span className="text-xs text-on-surface-variant">
+              <span className="text-on-surface-variant">
                 {events.length} events
               </span>
             )}
@@ -190,9 +202,9 @@ export default function AgentDetailPage() {
       {/* Pipeline stepper (if applicable) */}
       {pipelineData?.pipeline && pipelineData.stages && (
         <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
-          <h2 className="text-sm font-semibold text-on-surface-variant mb-3">
-            Pipeline: {pipelineData.pipeline.title}
-            <span className="ml-2 text-xs text-on-surface-variant">({pipelineData.pipeline.type})</span>
+          <h2 className="section-label mb-3">
+            pipeline: {pipelineData.pipeline.title}
+            <span className="ml-2 normal-case tracking-normal">({pipelineData.pipeline.type})</span>
           </h2>
           <PipelineView
             stages={pipelineData.stages.map(s => ({
@@ -210,9 +222,9 @@ export default function AgentDetailPage() {
       {/* Event Timeline */}
       <div className="bg-surface-container rounded-xs border border-outline-variant/10">
         <div className="px-4 py-3 border-b border-outline-variant/10">
-          <h2 className="text-sm font-semibold text-on-surface-variant">
-            Event Timeline
-            <span className="ml-2 text-xs text-on-surface-variant font-normal">
+          <h2 className="section-label">
+            event timeline
+            <span className="ml-2 normal-case tracking-normal font-normal">
               {events.length} events
             </span>
           </h2>
