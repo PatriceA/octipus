@@ -173,11 +173,18 @@ export class ProviderRouter {
     // strip thinking blocks) before sending to the target provider.
     options = { ...options, messages: transformMessagesForProvider(options.messages, provider.name) };
 
-    modelLogger.debug({
-      model: options.model,
-      provider: provider.name,
-      rateLimitKey,
-    }, 'Routing completion request');
+    // Mirror litellm-client.complete()'s logging so model usage is visible
+    // uniformly regardless of dispatch path (this one is used by the eval
+    // command). Log only the direct-provider branch — the litellm path (and the
+    // rate-limit/circuit-open fallback below) reaches completeViaProxy, which
+    // logs itself; gating here avoids double logging.
+    const logsHere = provider.name !== 'litellm';
+    if (logsHere) {
+      modelLogger.info(
+        { model: options.model, provider: provider.name, messageCount: options.messages.length },
+        'LLM request',
+      );
+    }
 
     // Check circuit breaker
     const circuitBreakers = getCircuitBreakerRegistry();
@@ -207,6 +214,22 @@ export class ProviderRouter {
 
       token.reportSuccess(latencyMs, result.usage.totalTokens);
       circuitBreakers.recordSuccess(rateLimitKey);
+
+      if (logsHere) {
+        modelLogger.info(
+          {
+            model: result.model || options.model,
+            provider: provider.name,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            totalTokens: result.usage.totalTokens,
+            latencyMs: result.latencyMs ?? latencyMs,
+            hasToolCalls: !!result.toolCalls?.length,
+            finishReason: result.finishReason,
+          },
+          'LLM completion',
+        );
+      }
 
       return result;
     } catch (error) {

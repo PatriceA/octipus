@@ -252,6 +252,8 @@ export class LiteLLMClient {
         { model: resolvedModel, provider: 'litellm' },
         'Routing completion through LiteLLM proxy',
       );
+      // completeViaProxy logs its own LLM request/completion — it also has
+      // direct callers (evaluators, red-team) that never pass through here.
       return this.completeViaProxy({ ...options, model: resolvedModel });
     }
 
@@ -262,11 +264,31 @@ export class LiteLLMClient {
     // here so every caller benefits; explicit options still win.
     const enriched = await this.applyModelOverrides({ ...options, model: resolvedModel });
 
-    modelLogger.debug(
-      { model: resolvedModel, provider: provider.name, endpoint: enriched.endpoint },
-      'Routing completion through direct provider',
+    // Log the direct-provider path here (Ollama, OpenAI, custom-openai/
+    // anthropic/gemini). The proxy path is logged inside completeViaProxy, so
+    // logging only the direct branch gives exactly-once coverage with no
+    // double logging. Before this, the direct branch was silent, so a research
+    // run on a custom-openai model produced no "LLM request" line at all.
+    modelLogger.info(
+      { model: resolvedModel, provider: provider.name, messageCount: options.messages.length },
+      'LLM request',
     );
-    return provider.complete(enriched);
+    const startTime = Date.now();
+    const result = await provider.complete(enriched);
+    modelLogger.info(
+      {
+        model: result.model || resolvedModel,
+        provider: provider.name,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        totalTokens: result.usage.totalTokens,
+        latencyMs: result.latencyMs ?? Date.now() - startTime,
+        hasToolCalls: !!result.toolCalls?.length,
+        finishReason: result.finishReason,
+      },
+      'LLM completion',
+    );
+    return result;
   }
 
   /**
@@ -332,7 +354,7 @@ export class LiteLLMClient {
       Object.assign(params, options.extraBody);
     }
 
-    modelLogger.info({ model: params.model, messageCount: options.messages.length }, 'LLM request');
+    modelLogger.info({ model: params.model, provider: 'litellm', messageCount: options.messages.length }, 'LLM request');
 
     try {
       const response = await this.client.chat.completions.create(params);
@@ -439,6 +461,7 @@ export class LiteLLMClient {
       modelLogger.info(
         {
           model: response.model,
+          provider: 'litellm',
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
           totalTokens: result.usage.totalTokens,
@@ -468,9 +491,9 @@ export class LiteLLMClient {
       const router = getProviderRouter();
       const provider = router.getProvider(resolvedModel);
       if (provider.name !== 'litellm') {
-        modelLogger.debug(
-          { model: resolvedModel, provider: provider.name },
-          'Routing stream through direct provider'
+        modelLogger.info(
+          { model: resolvedModel, provider: provider.name, messageCount: options.messages.length, stream: true },
+          'LLM request',
         );
         yield* router.stream({ ...options, model: resolvedModel });
         return;
@@ -479,6 +502,10 @@ export class LiteLLMClient {
       // Fall through to LiteLLM proxy path
     }
 
+    modelLogger.info(
+      { model: resolvedModel, provider: 'litellm', messageCount: options.messages.length, stream: true },
+      'LLM request',
+    );
     yield* this.streamViaProxy({ ...options, model: resolvedModel });
   }
 
