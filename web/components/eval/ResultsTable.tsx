@@ -76,8 +76,8 @@ function ExpandedRow({ result }: { result: EvalResult }) {
                   className={cn(
                     'flex items-start gap-3 px-3 py-2 rounded-lg text-sm',
                     a.passed
-                      ? 'bg-green-950/20'
-                      : 'bg-red-950/20'
+                      ? 'bg-tertiary-container/60'
+                      : 'bg-error-container/60'
                   )}
                 >
                   {a.passed ? (
@@ -179,8 +179,8 @@ export function ResultsTable({ results, filter = 'all', assertionTypeFilter }: R
                         <span className={cn(
                           'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
                           result.passed
-                            ? 'bg-green-950/30 text-tertiary'
-                            : 'bg-red-950/30 text-error'
+                            ? 'bg-tertiary-container/60 text-tertiary'
+                            : 'bg-error-container/60 text-error'
                         )}>
                           {result.passed ? (
                             <><CheckCircle className="w-3 h-3" /> Pass</>

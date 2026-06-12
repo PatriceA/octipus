@@ -1,7 +1,7 @@
 'use client';
 
-import { KeyRound } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { ALL_VAULT_KEYS, type Credential } from '@/lib/vault-config';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -56,21 +56,12 @@ export default function SecretsPage() {
   }
 
   return (
-    <div className="space-y-8 max-w-5xl">
+    <div className="space-y-8 max-w-5xl font-mono">
       {/* Page header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <KeyRound className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-xl text-on-surface">
-            Secrets & Credentials
-          </h1>
-          <p className="text-on-surface-variant">
-            Manage API keys and provider credentials. All secrets are stored with AES-256-GCM encryption.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="secrets"
+        description="manage API keys and provider credentials. all secrets are stored with AES-256-GCM encryption."
+      />
 
       {/* Provider Quick Setup */}
       <ProviderCards statuses={statuses} onStatusChange={fetchAll} />

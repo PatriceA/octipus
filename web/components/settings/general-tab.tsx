@@ -46,8 +46,8 @@ export function GeneralTab() {
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full ${
                     svc.status === 'healthy'
-                      ? 'bg-green-900/30 text-tertiary'
-                      : 'bg-red-900/30 text-error'
+                      ? 'bg-tertiary-container/60 text-tertiary'
+                      : 'bg-error-container/60 text-error'
                   }`}
                 >
                   {svc.status}

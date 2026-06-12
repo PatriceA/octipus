@@ -62,9 +62,9 @@ interface MCPTool {
 type PermissionLevel = 'ALLOW' | 'ASK' | 'DENY';
 
 const LEVEL_STYLES: Record<PermissionLevel, { active: string; label: string; icon: typeof Check }> = {
-  ALLOW: { active: 'bg-green-600 text-on-surface', label: 'Allow', icon: Check },
+  ALLOW: { active: 'bg-tertiary text-on-tertiary', label: 'Allow', icon: Check },
   ASK: { active: 'bg-warning text-on-surface', label: 'Ask', icon: HelpCircle },
-  DENY: { active: 'bg-red-600 text-on-surface', label: 'Deny', icon: X },
+  DENY: { active: 'bg-error-container text-error border border-error/50', label: 'Deny', icon: X },
 };
 
 function PermissionToggle({
@@ -181,7 +181,7 @@ function ToolModuleCard({
               : 'no capabilities'}
           </span>
           {overrideCount > 0 && (
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-900/30 text-primary">
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-primary-container/60 text-primary">
               {overrideCount} custom
             </span>
           )}
@@ -206,7 +206,7 @@ function ToolModuleCard({
             className={cn(
               'px-2 py-0.5 text-xs rounded-full',
               module.status === 'active'
-                ? 'bg-green-900/30 text-tertiary'
+                ? 'bg-tertiary-container/60 text-tertiary'
                 : module.status === 'degraded'
                 ? 'bg-amber-900/30 text-warning'
                 : 'bg-surface-container-high text-on-surface-variant'
@@ -255,7 +255,7 @@ function ToolModuleCard({
                 className={cn(
                   'flex items-center justify-between py-2 px-3 rounded-lg',
                   isOverride
-                    ? 'bg-blue-900/10 ring-1 ring-blue-800'
+                    ? 'bg-primary-container/60 ring-1 ring-blue-800'
                     : 'bg-surface-container-low'
                 )}
               >
@@ -265,7 +265,7 @@ function ToolModuleCard({
                       {permission.action}
                     </span>
                     {permission.dangerous && (
-                      <span className="px-1 py-0.5 bg-red-900/30 text-error text-[10px] rounded font-medium">
+                      <span className="px-1 py-0.5 bg-error-container/60 text-error text-[10px] rounded font-medium">
                         dangerous
                       </span>
                     )}
@@ -430,11 +430,8 @@ export default function ToolsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-          <Wrench className="w-5 h-5 text-primary" />
-        </div>
         <div className="flex-1">
-          <h1 className="text-xl text-on-surface">Tools & Permissions</h1>
+          <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/tools</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
           <p className="text-on-surface-variant">
             Executable capabilities available to agents — filesystem, shell, git, browser, email, and more. Each tool has configurable permissions.
           </p>
@@ -458,7 +455,7 @@ export default function ToolsPage() {
       {/* Permission legend */}
       <div className="flex gap-4 text-xs text-on-surface-variant">
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-green-600 text-on-surface"><Check className="w-3 h-3" /></span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded-xs bg-tertiary text-on-tertiary"><Check className="w-3 h-3" /></span>
           <span>Allow — executes without confirmation</span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -466,7 +463,7 @@ export default function ToolsPage() {
           <span>Ask — requires your confirmation</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-red-600 text-on-surface"><X className="w-3 h-3" /></span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded-xs border border-error/50 bg-error-container text-error"><X className="w-3 h-3" /></span>
           <span>Deny — blocked</span>
         </div>
       </div>

@@ -140,11 +140,8 @@ export default function ComparePage() {
         </Link>
 
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-            <GitCompare className="w-5 h-5 text-primary" />
-          </div>
           <div>
-            <h1 className="text-2xl font-bold text-on-surface">Compare Evaluations</h1>
+            <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/eval/compare</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
             <p className="text-sm text-on-surface-variant">
               Select 2-5 eval runs to compare side by side
             </p>
@@ -153,7 +150,7 @@ export default function ComparePage() {
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
+        <div className="bg-error-container/60 border border-error/40 rounded-xl px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
@@ -278,10 +275,10 @@ export default function ComparePage() {
                           className={cn(
                             'px-4 py-2.5 text-center',
                             cell.passed
-                              ? 'bg-green-950/10'
+                              ? 'bg-tertiary-container/60'
                               : regression
-                                ? 'bg-yellow-950/10'
-                                : 'bg-red-950/10'
+                                ? 'bg-warning-container/60'
+                                : 'bg-error-container/60'
                           )}
                         >
                           <div className="flex flex-col items-center gap-1">

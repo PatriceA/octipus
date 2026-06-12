@@ -26,9 +26,9 @@ const STATUS_CONFIG: Record<string, {
 }> = {
   pending: { icon: Clock, color: 'text-on-surface-variant', bgColor: 'bg-surface-container-high', ringColor: 'ring-outline-variant' },
   running: { icon: Loader2, color: 'text-primary', bgColor: 'bg-primary/10', ringColor: 'ring-primary' },
-  awaiting_approval: { icon: Shield, color: 'text-warning', bgColor: 'bg-orange-500/10', ringColor: 'ring-orange-400' },
-  approved: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary/10', ringColor: 'ring-emerald-400' },
-  completed: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary/10', ringColor: 'ring-emerald-500' },
+  awaiting_approval: { icon: Shield, color: 'text-warning', bgColor: 'bg-warning-container/40', ringColor: 'ring-warning' },
+  approved: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary/10', ringColor: 'ring-tertiary' },
+  completed: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary/10', ringColor: 'ring-tertiary' },
   failed: { icon: XCircle, color: 'text-error', bgColor: 'bg-error/10', ringColor: 'ring-error' },
   skipped: { icon: SkipForward, color: 'text-on-surface-variant', bgColor: 'bg-surface-container', ringColor: 'ring-outline-variant' },
 };
@@ -47,6 +47,13 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
             <div className="flex flex-col items-center">
               <div
                 className={cn(
+                  'rounded-full',
+                  isActive && 'glow-accent',
+                  stage.status === 'awaiting_approval' && 'glow-warn',
+                )}
+              >
+              <div
+                className={cn(
                   'w-10 h-10 rounded-full flex items-center justify-center ring-2',
                   config.bgColor,
                   config.ringColor,
@@ -54,6 +61,7 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
                 )}
               >
                 <Icon className={cn('w-5 h-5', config.color, isActive && 'animate-spin')} />
+              </div>
               </div>
               <span className={cn(
                 'mt-1 text-xs font-medium whitespace-nowrap',
@@ -65,7 +73,7 @@ export function PipelineView({ stages, currentStageIndex, onApprove, className }
               {stage.status === 'awaiting_approval' && onApprove && (
                 <button
                   onClick={() => onApprove(stage.id)}
-                  className="mt-1 px-2 py-0.5 text-xs bg-orange-500 text-on-surface rounded-full hover:bg-orange-600"
+                  className="mt-1 px-2 py-0.5 text-xs bg-warning text-on-warning rounded-full hover:bg-warning-dim glow-warn"
                 >
                   Approve
                 </button>

@@ -87,12 +87,12 @@ export interface TeamState {
 
 const ROLE_COLORS: Record<string, string> = {
   orchestrator: 'border-purple-400 bg-purple-900/20',
-  research: 'border-blue-400 bg-blue-900/20',
-  coding: 'border-green-400 bg-green-900/20',
-  review: 'border-yellow-400 bg-yellow-900/20',
+  research: 'border-accent/60 bg-accent-container/60',
+  coding: 'border-tertiary/60 bg-tertiary-container/60',
+  review: 'border-warning/60 bg-warning-container/60',
   design: 'border-pink-400 bg-pink-900/20',
-  devops: 'border-orange-400 bg-orange-900/20',
-  security: 'border-red-400 bg-red-900/20',
+  devops: 'border-warning/60 bg-warning-container/60',
+  security: 'border-error/60 bg-error-container/60',
   data: 'border-cyan-400 bg-cyan-900/20',
   ai: 'border-indigo-400 bg-indigo-900/20',
   qa: 'border-teal-400 bg-teal-900/20',
@@ -106,12 +106,12 @@ const ROLE_COLORS: Record<string, string> = {
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
   orchestrator: 'bg-purple-900/40 text-primary',
-  research: 'bg-blue-900/40 text-primary',
-  coding: 'bg-green-900/40 text-tertiary',
-  review: 'bg-yellow-900/40 text-warning',
+  research: 'bg-primary-container/60 text-primary',
+  coding: 'bg-tertiary-container/60 text-tertiary',
+  review: 'bg-warning-container/60 text-warning',
   design: 'bg-pink-900/40 text-error',
-  devops: 'bg-orange-900/40 text-warning',
-  security: 'bg-red-900/40 text-error',
+  devops: 'bg-warning-container/60 text-warning',
+  security: 'bg-error-container/60 text-error',
   data: 'bg-cyan-900/40 text-primary',
   ai: 'bg-indigo-900/40 text-primary',
   qa: 'bg-teal-900/40 text-tertiary',
@@ -320,8 +320,8 @@ function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPrevi
         <div className="mt-1">
           {(result.added > 0 || result.removed > 0) && (
             <div className="mb-0.5 flex gap-2 px-1 font-mono text-[10px]">
-              <span className="text-green-400">+{result.added}</span>
-              <span className="text-red-400">−{result.removed}</span>
+              <span className="text-tertiary">+{result.added}</span>
+              <span className="text-error">−{result.removed}</span>
             </div>
           )}
           <DiffView patch={result.patch} className="max-h-40 py-1" />
@@ -574,12 +574,12 @@ function FileDiffView({ change }: { change: FileChange }) {
     return (
       <div className="mt-1 rounded bg-[#0d1117] border border-white/10 overflow-auto max-h-48 text-xs font-mono">
         {oldLines.map((line, i) => (
-          <div key={`old-${i}`} className="px-2 py-px bg-red-950/40 text-error whitespace-pre">
+          <div key={`old-${i}`} className="px-2 py-px bg-error-container/60 text-error whitespace-pre">
             <span className="select-none text-error/60 mr-2">-</span>{line}
           </div>
         ))}
         {newLines.map((line, i) => (
-          <div key={`new-${i}`} className="px-2 py-px bg-green-950/40 text-tertiary whitespace-pre">
+          <div key={`new-${i}`} className="px-2 py-px bg-tertiary-container/60 text-tertiary whitespace-pre">
             <span className="select-none text-tertiary/60 mr-2">+</span>{line}
           </div>
         ))}
@@ -593,7 +593,7 @@ function FileDiffView({ change }: { change: FileChange }) {
     return (
       <div className="mt-1 rounded bg-[#0d1117] border border-white/10 overflow-auto max-h-48 text-xs font-mono">
         {lines.map((line, i) => (
-          <div key={i} className="px-2 py-px bg-green-950/30 text-tertiary whitespace-pre">
+          <div key={i} className="px-2 py-px bg-tertiary-container/60 text-tertiary whitespace-pre">
             <span className="select-none text-tertiary/60 mr-2">+</span>{line}
           </div>
         ))}
@@ -870,7 +870,7 @@ export default function MessageTimeline({
           <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
             <Loader2 className="h-4 w-4 text-on-primary animate-spin" />
           </div>
-          <span className="text-sm text-on-surface-variant animate-pulse">
+          <span className="text-sm text-accent animate-pulse">
             {statusMessage || 'Thinking...'}
           </span>
         </div>

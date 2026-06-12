@@ -2,6 +2,7 @@
 
 import { Archive, FileText, Loader2, Mail, RefreshCw, Send, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 interface Addr { name?: string; email: string }
@@ -23,6 +24,13 @@ const priorityBadge: Record<string, string> = {
   high: 'bg-error/10 text-error',
   normal: 'bg-surface-container-high text-on-surface-variant',
   low: 'bg-surface-container-high text-on-surface-variant/60',
+};
+
+/** Triage priority rail — 3px left border, same idiom as the mobile inbox. */
+const priorityRail: Record<string, string> = {
+  high: 'border-l-error',
+  normal: 'border-l-transparent',
+  low: 'border-l-outline-variant',
 };
 
 export default function EmailPage() {
@@ -185,25 +193,20 @@ export default function EmailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center"><Mail className="w-5 h-5 text-primary" /></div>
-          <div>
-            <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Email</h1>
-            <p className="text-on-surface-variant">Triage assistant — read, summarize, draft replies, archive. Sends always ask first.</p>
-          </div>
-        </div>
-        {provider && (
+      <PageHeader
+        title="email"
+        description="triage assistant — read, summarize, draft replies, archive. sends always ask first"
+        actions={provider ? (
           <button
             onClick={triage}
             disabled={triaging}
             title="Use AI to sort the inbox into high / normal / low priority. Reads only sender, subject and snippet — never full bodies."
             className="px-3 py-2 text-sm border border-outline-variant/20 rounded-full hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface disabled:opacity-50"
           >
-            {triaging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-primary" />} Triage inbox
+            {triaging ? <Loader2 className="w-4 h-4 animate-spin text-accent" /> : <Sparkles className="w-4 h-4 text-accent" />} Triage inbox
           </button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {error && <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">{error}<button onClick={() => setError('')} className="ml-2 underline">dismiss</button></div>}
       {notice && <div className="bg-primary/10 border border-primary/20 rounded-xs px-4 py-2 text-primary text-sm">{notice}<button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button></div>}
@@ -217,7 +220,7 @@ export default function EmailPage() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-[24rem_1fr] gap-4 items-start">
           {/* Inbox list */}
-          <div className="space-y-1">
+          <div className="space-y-1 stagger">
             {/* Filter bar — counts reflect the loaded page; "Load more" pulls the rest. */}
             <div className="flex flex-wrap gap-1.5 pb-2">
               {([
@@ -240,7 +243,12 @@ export default function EmailPage() {
                 </button>
               ))}
             </div>
-            {items.length === 0 && <p className="text-sm text-on-surface-variant">Inbox empty.</p>}
+            {items.length === 0 && (
+              <div className="py-10 text-center font-mono">
+                <p aria-hidden className="text-2xl text-on-surface-variant/40">@</p>
+                <p className="mt-2 text-sm text-on-surface-variant">inbox empty</p>
+              </div>
+            )}
             {items.length > 0 && visibleItems.length === 0 && (
               <p className="text-sm text-on-surface-variant">No messages match this filter.</p>
             )}
@@ -248,7 +256,7 @@ export default function EmailPage() {
               <button
                 key={it.id}
                 onClick={() => open(it.id)}
-                className={`w-full text-left px-3 py-2.5 rounded-xs border ${openMsg?.id === it.id ? 'border-primary/40 bg-primary-container/20' : 'border-outline-variant/10 bg-surface hover:bg-surface-container-low'}`}
+                className={`w-full text-left px-3 py-2.5 rounded-xs border border-l-[3px] ${priorityRail[it.triage?.priority ?? 'normal'] ?? 'border-l-transparent'} ${openMsg?.id === it.id ? 'border-primary/40 bg-primary-container/20' : 'border-outline-variant/10 bg-surface hover:bg-surface-container-low'}`}
               >
                 <div className="flex items-center gap-2">
                   {it.unread && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
@@ -292,7 +300,12 @@ export default function EmailPage() {
                   <ActionBtn onClick={archive} busy={busy === 'archive'} icon={Archive}>Archive</ActionBtn>
                 </div>
 
-                {summary && <div className="text-sm bg-surface-container-low rounded-xs p-3 text-on-surface whitespace-pre-wrap">{summary}</div>}
+                {summary && (
+                  <div className="text-sm border border-accent/30 bg-accent-container/30 rounded-xs p-3 text-on-surface whitespace-pre-wrap">
+                    <p className="text-[10px] uppercase tracking-widest font-semibold text-accent mb-1.5">ai summary</p>
+                    {summary}
+                  </div>
+                )}
 
                 {/* Email body — render sanitized HTML when present (most mail is
                     HTML); fall back to plain text. The body is the important
@@ -311,7 +324,7 @@ export default function EmailPage() {
                 {/* Reply directions — the user chooses before a draft is written. */}
                 {replyOpts && (
                   <div className="space-y-2 border-t border-outline-variant/10 pt-3">
-                    <p className="text-xs uppercase tracking-wide text-on-surface-variant">How do you want to reply?</p>
+                    <p className="text-xs uppercase tracking-wide text-accent">How do you want to reply?</p>
                     <div className="flex flex-wrap gap-2">
                       {replyOpts.map((opt) => (
                         <button
@@ -330,9 +343,9 @@ export default function EmailPage() {
 
                 {draft && (
                   <div className="space-y-2 border-t border-outline-variant/10 pt-3">
-                    <p className="text-xs uppercase tracking-wide text-on-surface-variant">Draft reply to {draft.to}</p>
-                    <input value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} className="w-full rounded-xs border border-outline-variant/20 bg-surface px-2 py-1.5 text-sm text-on-surface" />
-                    <textarea value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} rows={6} className="w-full rounded-xs border border-outline-variant/20 bg-surface px-2 py-1.5 text-sm text-on-surface resize-y" />
+                    <p className="text-xs uppercase tracking-wide text-accent">Draft reply to {draft.to}</p>
+                    <input value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} className="w-full rounded-xs border border-accent/30 bg-surface px-2 py-1.5 text-sm text-on-surface" />
+                    <textarea value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} rows={6} className="w-full rounded-xs border border-accent/30 bg-surface px-2 py-1.5 text-sm text-on-surface resize-y" />
                     <div className="flex gap-2">
                       <button onClick={send} disabled={busy === 'send'} className="px-3 py-1.5 text-sm bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5">
                         <Send className="w-3.5 h-3.5" /> Send

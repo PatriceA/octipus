@@ -8,6 +8,7 @@ import { HealthStatus } from '@/components/dashboard/health-status';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
 import { UsageChart } from '@/components/dashboard/usage-chart';
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 
@@ -98,29 +99,26 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 font-mono">
-      {/* Page header — TUI-style title row: `❯ dashboard` + status. */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="text-primary text-lg font-bold" aria-hidden>❯</span>
-          <h1 className="text-xl text-on-surface">dashboard</h1>
+      {/* Page header — shared `octi:~/dashboard $` path prompt + status. */}
+      <PageHeader
+        title="dashboard"
+        description="live overview · agents · sessions · token usage · system health"
+        badge={
           <StatusBadge variant={statusVariant} dot pulse={runningAgents > 0}>
             {statusLabel}
           </StatusBadge>
-        </div>
-        <p className="text-[12px] text-on-surface-variant">
-          live overview · agents · sessions · token usage · system health
-        </p>
-      </div>
+        }
+      />
 
-      {/* Stat counters. Big mono number, label as `▸ name` so they
+      {/* Stat counters. Big mono number, label as `> name` so they
           read like ticker rows rather than marketing cards. */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 stagger">
         {stats.map((stat) => (
           <Card key={stat.name} variant="default" className="p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-on-surface-variant">
-                  <span aria-hidden className="text-outline-variant">▸</span>
+                  <span aria-hidden className="text-primary font-bold">&gt;</span>
                   {stat.name}
                 </p>
                 <p className="mt-2 text-3xl text-on-surface tabular-nums">

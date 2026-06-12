@@ -1,8 +1,9 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Network } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 interface GraphNode { type: string; id: string; slug?: string; label?: string; kind?: string }
@@ -102,14 +103,17 @@ export default function GraphPage() {
 
   return (
     <div className="p-6 h-full overflow-auto">
-      <h1 className="text-xl font-semibold flex items-center gap-2 mb-4"><Network size={20} /> Knowledge Graph</h1>
+      <PageHeader title="graph" description="knowledge graph — notes linked by [[wikilinks]]" />
       {graph.isLoading && <Loader2 className="animate-spin" size={18} />}
       {graph.data && graph.data.nodes.length === 0 && (
-        <p className="text-muted-foreground">No notes yet — create some notes with [[wikilinks]] to grow the graph.</p>
+        <div className="text-center py-12 font-mono">
+          <span aria-hidden className="block text-lg text-outline mb-2">[ ]</span>
+          <p className="text-[12px] text-on-surface-variant">no notes yet — create notes with [[wikilinks]] to grow the graph</p>
+        </div>
       )}
       {graph.data && graph.data.nodes.length > 0 && (
         <div className="flex gap-6">
-          <svg viewBox={`0 0 ${layout.W} ${layout.H}`} className="border border-border rounded bg-card flex-1 max-w-4xl">
+          <svg viewBox={`0 0 ${layout.W} ${layout.H}`} className="term-frame rounded-xs flex-1 max-w-4xl">
             <title>Knowledge graph</title>
             {edges.map((e) => {
               const fromKey = `${e.from.type}:${e.from.id}`;
@@ -125,7 +129,7 @@ export default function GraphPage() {
                 <line
                   key={e.id}
                   x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                  stroke={incident ? '#6366f1' : 'currentColor'}
+                  stroke={incident ? '#8CACFF' : 'currentColor'}
                   strokeOpacity={opacity}
                   strokeWidth={incident ? 1.5 : 1}
                 />
@@ -137,18 +141,19 @@ export default function GraphPage() {
               const key = `${n.type}:${n.id}`;
               return (
                 <g key={key} transform={`translate(${p.x},${p.y})`} className="cursor-pointer" onClick={() => setSelected(key)}>
-                  <circle r={selected === key ? 8 : 5} fill={n.kind === 'daily' ? '#22c55e' : n.kind === 'moc' ? '#f59e0b' : '#6366f1'} />
+                  <circle r={selected === key ? 8 : 5} fill={n.kind === 'daily' ? '#8CE8B0' : n.kind === 'moc' ? '#FFD37A' : '#8CACFF'} />
                   <text x={9} y={4} fontSize={10} fill="currentColor" className="select-none">{n.label?.slice(0, 24)}</text>
                 </g>
               );
             })}
           </svg>
-          <aside className="w-64 text-sm">
-            <p className="text-muted-foreground mb-2">{graph.data.nodes.length} nodes · {edges.length} resolved edges</p>
-            <ul className="space-y-1">
-              <li><span className="inline-block w-3 h-3 rounded-full align-middle mr-1" style={{ background: '#6366f1' }} /> note</li>
-              <li><span className="inline-block w-3 h-3 rounded-full align-middle mr-1" style={{ background: '#22c55e' }} /> daily</li>
-              <li><span className="inline-block w-3 h-3 rounded-full align-middle mr-1" style={{ background: '#f59e0b' }} /> moc / review</li>
+          <aside className="w-64 text-sm font-mono">
+            <p className="section-label mb-2">legend</p>
+            <p className="text-on-surface-variant text-[12px] mb-2">{graph.data.nodes.length} nodes · {edges.length} resolved edges</p>
+            <ul className="space-y-1 text-[12px]">
+              <li><span className="dot align-middle mr-1.5 bg-primary" /> note</li>
+              <li><span className="dot dot-ok align-middle mr-1.5" /> daily</li>
+              <li><span className="dot dot-warn align-middle mr-1.5" /> moc / review</li>
             </ul>
           </aside>
         </div>

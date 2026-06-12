@@ -195,7 +195,7 @@ function CollapsibleSection({
         className="flex w-full items-center justify-between px-3 py-1.5 bg-surface-container-low/60 hover:bg-surface-container transition-colors cursor-pointer"
       >
         <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-on-surface-variant">
-          <span aria-hidden className="text-outline-variant">▸</span>
+          <span aria-hidden className="text-primary font-bold">&gt;</span>
           <Icon className="h-3 w-3" />
           {title}
         </span>
@@ -326,7 +326,7 @@ export default function SidePanel({
 
   const connectionDot: Record<string, string> = {
     connected: 'dot dot-ok',
-    connecting: 'dot dot-warn animate-pulse',
+    connecting: 'dot dot-warn dot-live text-warning',
     disconnected: 'dot dot-err',
   };
 

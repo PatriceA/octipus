@@ -25,20 +25,25 @@ export default async function SetupRedirectPage() {
     redirect('/chat');
   }
   return (
-    <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center gap-4 p-8 text-center">
-      <h1 className="text-2xl font-semibold">Set up Octipus from your terminal</h1>
-      <p className="text-muted-foreground">
-        First-run setup happens in the CLI now. Run{' '}
-        <code className="rounded bg-muted px-1.5 py-0.5">octi setup</code> on the
+    <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center gap-4 p-8 text-center font-mono animate-enter">
+      <h1 className="text-base font-semibold lowercase">
+        <span className="text-outline font-semibold">octi:</span>
+        <span className="text-on-surface">~/setup</span>
+        <span className="text-primary font-bold"> $</span>
+        <span aria-hidden className="term-caret" />
+      </h1>
+      <p className="text-[13px] text-on-surface-variant">
+        first-run setup happens in the CLI now. run{' '}
+        <code className="term-shell rounded-xs bg-surface-container-high px-1.5 py-0.5 text-on-surface">octi setup</code> on the
         host, then refresh this page or open{' '}
-        <a className="underline" href="/chat">
+        <a className="text-primary hover:underline" href="/chat">
           /chat
         </a>{' '}
         once it finishes.
       </p>
-      <p className="text-sm text-muted-foreground">
-        Configure providers, channels, and workspace settings from{' '}
-        <a className="underline" href="/secrets">
+      <p className="text-[12px] text-on-surface-variant">
+        configure providers, channels, and workspace settings from{' '}
+        <a className="text-primary hover:underline" href="/secrets">
           /secrets
         </a>{' '}
         after you log in.

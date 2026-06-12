@@ -1,8 +1,9 @@
 'use client';
 
-import { Loader2, Telescope } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { Markdown } from '@/components/ui/markdown-renderer';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 interface Source { id: string; url: string; title: string; retrievedAt: string }
@@ -92,15 +93,18 @@ export default function ResearchPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
-          <Telescope className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Research</h1>
-          <p className="text-on-surface-variant">Ask a question — get a structured, cited report from a multi-source investigation.</p>
-        </div>
-      </div>
+      <PageHeader
+        title="research"
+        description="ask a question — get a structured, cited report from a multi-source investigation"
+        badge={
+          running ? (
+            <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 border border-accent/50 bg-accent-container/40 rounded-xs text-[10px] uppercase tracking-wider text-accent">
+              <span className="dot dot-live bg-accent text-accent w-1.5 h-1.5" />
+              running
+            </span>
+          ) : undefined
+        }
+      />
 
       <div className="space-y-2">
         <textarea
@@ -108,23 +112,29 @@ export default function ResearchPage() {
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="e.g. What are the trade-offs between pgvector and a dedicated vector database?"
           rows={2}
-          className="w-full rounded-xs border border-outline-variant/20 bg-surface px-4 py-3 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary resize-none"
+          className="w-full rounded-xs border border-outline-variant bg-surface-container px-4 py-3 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-accent resize-none"
         />
-        <div className="flex items-center gap-2">
-          <select
-            value={depth}
-            onChange={(e) => setDepth(e.target.value)}
-            disabled={running}
-            className="rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface"
-          >
-            {DEPTHS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
-          </select>
+        <div className="flex flex-wrap items-center gap-2">
+          {DEPTHS.map((d) => (
+            <button
+              key={d.value}
+              onClick={() => setDepth(d.value)}
+              disabled={running}
+              className={`px-2.5 py-1.5 text-[12px] rounded-xs border transition-colors cursor-pointer disabled:opacity-50 ${
+                depth === d.value
+                  ? 'border-accent/50 bg-accent-container/40 text-accent font-semibold'
+                  : 'border-outline-variant text-on-surface-variant hover:text-on-surface'
+              }`}
+            >
+              --{d.value}
+            </button>
+          ))}
           <button
             onClick={start}
             disabled={running}
-            className="px-5 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 font-medium"
+            className="ml-auto px-5 py-2 bg-accent text-on-accent rounded-xs hover:bg-accent-dim disabled:opacity-50 font-semibold text-[13px]"
           >
-            {running ? 'Researching…' : 'Research'}
+            {running ? 'researching…' : 'execute'}
           </button>
         </div>
       </div>
@@ -137,15 +147,16 @@ export default function ResearchPage() {
       )}
 
       {running && (
-        <div className="flex items-center gap-2 text-on-surface-variant text-sm">
-          <Loader2 className="w-4 h-4 animate-spin text-primary" />
-          {STAGE_LABEL[job!.stage] ?? job!.stage}
+        <div className="flex items-center gap-2 text-on-surface-variant text-sm border border-accent/40 bg-surface-container glow-pink rounded-xs px-4 py-3 animate-enter">
+          <Loader2 className="w-4 h-4 animate-spin text-accent" />
+          <span className="text-accent">{STAGE_LABEL[job!.stage] ?? job!.stage}</span>
+          <span aria-hidden className="term-caret" />
           {job!.detail && <span className="opacity-60 truncate max-w-md">· {job!.detail}</span>}
         </div>
       )}
 
       {report && (
-        <article className="max-w-3xl space-y-6">
+        <article className="max-w-3xl space-y-6 stagger">
           <header>
             <h2 className="text-3xl font-bold tracking-tight text-on-surface">{report.question}</h2>
             <p className="text-sm text-on-surface-variant mt-1">
@@ -162,25 +173,25 @@ export default function ResearchPage() {
 
           {report.sections.map((sec, i) => (
             <section key={i} className="space-y-2">
-              <h3 className="text-xl font-semibold text-on-surface">{sec.heading}</h3>
+              <h3 className="text-base font-semibold text-on-surface"><span aria-hidden className="text-accent/70">{'// '}</span>{sec.heading}</h3>
               <Markdown content={sec.markdown} className="text-on-surface" />
               {sec.citations.length > 0 && (
                 <p className="text-xs text-on-surface-variant">
                   {sec.citations.map((id) => sourceNum.get(id)).filter(Boolean).map((n) => (
-                    <a key={n} href={`#src-${n}`} className="text-primary mr-1">[{n}]</a>
+                    <a key={n} href={`#src-${n}`} className="text-accent mr-1">[{n}]</a>
                   ))}
                 </p>
               )}
             </section>
           ))}
 
-          <section className="rounded-xs border border-outline-variant/10 bg-surface-container-low p-3">
-            <h3 className="text-sm font-semibold text-on-surface-variant uppercase tracking-wide mb-1">Limitations</h3>
+          <section className="rounded-xs border border-warning/30 bg-surface-container-low p-3">
+            <h3 className="section-label mb-1">limitations</h3>
             <Markdown content={report.limitations} className="text-on-surface" />
           </section>
 
           <section>
-            <h3 className="text-sm font-semibold text-on-surface-variant uppercase tracking-wide mb-2">Sources</h3>
+            <h3 className="section-label mb-2">sources</h3>
             <ol className="space-y-1 list-decimal pl-5">
               {report.sources.map((s, i) => (
                 <li key={s.id} id={`src-${i + 1}`} className="text-sm">

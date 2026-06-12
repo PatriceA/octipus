@@ -109,8 +109,11 @@ export default function LoginPage() {
   const labelClass = 'block text-[10px] uppercase tracking-wider text-outline-variant mb-1';
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4 crt-scanlines font-mono">
-      <div className="w-full max-w-md">
+    <div className="relative min-h-screen bg-background flex items-center justify-center p-4 font-mono overflow-hidden">
+      {/* CRT backdrop layers — dotted neural grid under a scanline wash. */}
+      <div aria-hidden className="absolute inset-0 neural-grid" />
+      <div aria-hidden className="absolute inset-0 crt-scanlines" />
+      <div className="relative w-full max-w-md animate-enter">
         {/* Boot-style banner. ASCII frame around the title so the login
             page introduces the design language up-front. */}
         <pre className="text-primary text-[10px] leading-tight mb-3 select-none" aria-hidden>
@@ -119,16 +122,19 @@ export default function LoginPage() {
 │  multi-channel · multi-provider         │
 └─────────────────────────────────────────┘`}
         </pre>
-        <div className="flex items-center gap-2 mb-6 text-on-surface-variant text-[12px]">
-          <span className="text-primary">❯</span>
-          <span>
+        {/* Path-style brand — `octi:~ $▍` plus the current auth mode. */}
+        <div className="mb-6 text-[13px]">
+          <span className="text-outline font-semibold">octi:</span>
+          <span className="text-on-surface">~</span>
+          <span className="text-primary font-bold"> $</span>
+          <span className="ml-2 text-on-surface-variant">
             {totpRequired ? 'two-factor verification' : isLogin ? 'sign in' : 'register'}
-            <span className="term-caret" />
           </span>
+          <span aria-hidden className="term-caret" />
         </div>
 
         {totpRequired ? (
-          <div className="term-frame p-4 space-y-3">
+          <div className="term-frame glow-accent p-4 space-y-3">
             <p className="text-[12px] text-on-surface-variant">
               enter the 6-digit code from your authenticator app.
             </p>
@@ -164,7 +170,7 @@ export default function LoginPage() {
             </form>
           </div>
         ) : (
-          <div className="term-frame">
+          <div className="term-frame glow-accent">
             {/* Sign in / register tabs as bordered top-row buttons —
                 terminal-app modal style. */}
             <div className="flex border-b border-outline-variant/60">

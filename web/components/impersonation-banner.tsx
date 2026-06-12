@@ -55,7 +55,7 @@ export function ImpersonationBanner() {
     // background (no glass / blur) — the bar is a stop-the-world warning,
     // not decoration. z-50 keeps it above any sticky pickers / overlays in
     // the page body if a route ever escapes the AppShell flow.
-    <div className="relative z-50 w-full bg-warning text-[#0e0e0e] px-4 py-2 text-sm font-medium shadow-md border-b border-yellow-700">
+    <div className="relative z-50 w-full bg-warning text-[#0e0e0e] px-4 py-2 text-sm font-medium shadow-md border-b border-warning/40">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">
           <Eye className="w-4 h-4 shrink-0" />
@@ -68,7 +68,7 @@ export function ImpersonationBanner() {
           type="button"
           onClick={() => stopMutation.mutate()}
           disabled={stopMutation.isPending}
-          className="px-3 py-1 bg-background text-yellow-200 rounded text-xs font-bold uppercase tracking-wide hover:bg-black disabled:opacity-50 cursor-pointer shrink-0"
+          className="px-3 py-1 bg-background text-warning rounded text-xs font-bold uppercase tracking-wide hover:bg-black disabled:opacity-50 cursor-pointer shrink-0"
         >
           {stopMutation.isPending ? 'Stopping…' : 'Stop'}
         </button>

@@ -164,7 +164,7 @@ function WorkspaceSection() {
       </div>
 
       {error && (
-        <div className="mt-2 flex items-center gap-1.5 text-sm text-red-600">
+        <div className="mt-2 flex items-center gap-1.5 text-sm text-error">
           <XCircle className="w-4 h-4" />
           {error}
         </div>
@@ -240,7 +240,7 @@ function CLIIntegrationsSection() {
                   <span
                     className={`px-2 py-0.5 text-xs rounded-full ${
                       tool.status?.configured
-                        ? 'bg-green-900/30 text-tertiary'
+                        ? 'bg-tertiary-container/60 text-tertiary'
                         : tool.status?.available
                           ? 'bg-amber-900/30 text-warning'
                           : 'bg-surface-container-high text-on-surface-variant'

@@ -32,7 +32,7 @@ export default function NewArtifactPage() {
 
   return (
     <div className="mx-auto max-w-2xl p-6">
-      <h1 className="mb-6 text-2xl font-semibold">New Live Artifact</h1>
+      <h1 className="mb-6 text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/artifacts/new</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
       <div className="space-y-4">
         <Field label="Slug">
           <input
@@ -62,11 +62,11 @@ export default function NewArtifactPage() {
             ))}
           </select>
         </Field>
-        {error && <div className="rounded bg-red-900/30 p-3 text-sm text-error">{error}</div>}
+        {error && <div className="rounded bg-error-container/60 p-3 text-sm text-error">{error}</div>}
         <button
           disabled={!slug || !title || submitting}
           onClick={submit}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-on-surface hover:bg-primary disabled:opacity-50"
+          className="rounded-xs bg-primary px-4 py-2 text-sm text-on-primary hover:bg-primary-dim disabled:opacity-50"
         >
           {submitting ? 'Creating…' : 'Create'}
         </button>

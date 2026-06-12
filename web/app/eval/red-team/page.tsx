@@ -75,10 +75,10 @@ const CATEGORY_CONFIG: Record<AttackCategory, { label: string; icon: typeof Shie
 };
 
 const SEVERITY_CONFIG: Record<Severity, { label: string; color: string; bg: string }> = {
-  critical: { label: 'Critical', color: 'text-error', bg: 'bg-red-950/30' },
-  high: { label: 'High', color: 'text-warning', bg: 'bg-orange-950/30' },
-  medium: { label: 'Medium', color: 'text-warning', bg: 'bg-yellow-950/30' },
-  low: { label: 'Low', color: 'text-primary', bg: 'bg-blue-950/30' },
+  critical: { label: 'Critical', color: 'text-error', bg: 'bg-error-container/60' },
+  high: { label: 'High', color: 'text-warning', bg: 'bg-warning-container/60' },
+  medium: { label: 'Medium', color: 'text-warning', bg: 'bg-warning-container/60' },
+  low: { label: 'Low', color: 'text-primary', bg: 'bg-primary-container/60' },
 };
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -194,18 +194,18 @@ export default function RedTeamPage() {
         </Link>
 
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-red-950/40 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xs border border-error/40 bg-error-container/40 flex items-center justify-center">
             <ShieldAlert className="w-5 h-5 text-error" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-on-surface">Red Team Results</h1>
-            <p className="text-sm text-on-surface-variant">Security and safety evaluation results</p>
+            <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/eval/red-team</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
+            <p className="text-sm text-on-surface-variant">security and safety evaluation results</p>
           </div>
         </div>
       </div>
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3 text-error text-sm">
+        <div className="bg-error-container/40 border border-error/40 rounded-xs px-4 py-3 text-error text-sm">
           {error}
         </div>
       )}
@@ -318,7 +318,7 @@ export default function RedTeamPage() {
                             {/* Attack prompt */}
                             <div>
                               <p className="text-xs font-medium text-on-surface-variant mb-1">Attack Prompt</p>
-                              <pre className="text-sm text-on-surface/80 whitespace-pre-wrap bg-red-950/10 rounded-lg p-3 border border-red-900/30 max-h-40 overflow-y-auto">
+                              <pre className="text-sm text-on-surface/80 whitespace-pre-wrap bg-error-container/60 rounded-lg p-3 border border-error/40 max-h-40 overflow-y-auto">
                                 {test.input}
                               </pre>
                             </div>

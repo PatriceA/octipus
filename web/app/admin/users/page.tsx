@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ShieldCheck, UserPlus } from 'lucide-react';
 import { useState } from 'react';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -73,19 +74,19 @@ export default function AdminUsersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Users</h2>
+        <h2 className="section-label">users</h2>
         <button
           type="button"
           onClick={() => { setShowCreate(true); setError(null); }}
-          className="px-3 py-2 bg-primary text-[#0e0e0e] rounded-lg text-sm font-medium hover:bg-primary-container flex items-center gap-2 cursor-pointer"
+          className="px-3 py-2 bg-primary text-on-primary rounded-xs text-sm font-medium hover:bg-primary-dim flex items-center gap-2 cursor-pointer"
         >
           <UserPlus className="w-4 h-4" /> New user
         </button>
       </div>
 
       {showCreate && (
-        <div className="p-4 bg-surface-container rounded-lg space-y-3 border border-primary/20">
-          <h3 className="font-medium text-on-surface text-sm">Create user</h3>
+        <div className="p-4 term-frame rounded-xs space-y-3 border-primary/40 animate-enter">
+          <h3 className="section-label">create user</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               type="text"
@@ -122,7 +123,7 @@ export default function AdminUsersPage() {
               type="button"
               onClick={handleCreate}
               disabled={!createName.trim() || createMutation.isPending}
-              className="px-3 py-2 bg-primary text-[#0e0e0e] rounded-lg text-sm font-medium disabled:opacity-50 cursor-pointer"
+              className="px-3 py-2 bg-primary text-on-primary rounded-xs text-sm font-medium hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
             >
               {createMutation.isPending ? 'Creating…' : 'Create'}
             </button>
@@ -138,10 +139,10 @@ export default function AdminUsersPage() {
       )}
 
       {error && (
-        <div className="p-2 bg-error-dim/10 border border-error-dim/20 rounded text-sm text-error">{error}</div>
+        <div className="p-2 bg-error-container/40 border border-error/60 rounded-xs text-sm text-error">! {error}</div>
       )}
 
-      <div className="overflow-hidden bg-surface-container rounded-lg">
+      <div className="overflow-hidden term-frame rounded-xs">
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-on-surface-variant">
             <tr className="border-b border-outline-variant/10">
@@ -153,7 +154,7 @@ export default function AdminUsersPage() {
               <th className="text-right px-4 py-2 font-medium">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="stagger">
             {isLoading && (
               <tr><td colSpan={6} className="px-4 py-3 text-on-surface-variant">Loading…</td></tr>
             )}
@@ -168,13 +169,9 @@ export default function AdminUsersPage() {
                   <td className="px-4 py-3 text-on-surface-variant">{u.email ?? '—'}</td>
                   <td className="px-4 py-3 text-on-surface-variant">{u.isAdmin ? 'Admin' : 'User'}</td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 text-xs rounded-full ${
-                      u.isActive
-                        ? 'bg-green-900/30 text-tertiary'
-                        : 'bg-surface-container-high text-on-surface-variant'
-                    }`}>
-                      {u.isActive ? 'Active' : 'Disabled'}
-                    </span>
+                    <StatusBadge variant={u.isActive ? 'success' : 'neutral'} dot>
+                      {u.isActive ? 'active' : 'disabled'}
+                    </StatusBadge>
                   </td>
                   <td className="px-4 py-3 text-on-surface-variant">{formatRelative(u.lastLoginAt)}</td>
                   <td className="px-4 py-3 text-right space-x-2">
@@ -182,7 +179,7 @@ export default function AdminUsersPage() {
                       type="button"
                       disabled={isSelf || patchMutation.isPending}
                       onClick={() => patchMutation.mutate({ id: u.id, body: { isActive: !u.isActive } })}
-                      className="px-2 py-1 text-xs bg-surface-container-high rounded hover:bg-[#333] text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      className="px-2 py-1 text-xs bg-surface-container-high border border-outline-variant/60 rounded-xs hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                       title={isSelf ? 'You cannot disable yourself' : (u.isActive ? 'Disable user' : 'Re-enable user')}
                     >
                       {u.isActive ? 'Disable' : 'Enable'}
@@ -191,7 +188,7 @@ export default function AdminUsersPage() {
                       type="button"
                       disabled={isSelf || patchMutation.isPending}
                       onClick={() => patchMutation.mutate({ id: u.id, body: { isAdmin: !u.isAdmin } })}
-                      className="px-2 py-1 text-xs bg-surface-container-high rounded hover:bg-[#333] text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      className="px-2 py-1 text-xs bg-surface-container-high border border-outline-variant/60 rounded-xs hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                       title={isSelf ? 'You cannot demote yourself' : (u.isAdmin ? 'Revoke admin' : 'Grant admin')}
                     >
                       {u.isAdmin ? 'Revoke admin' : 'Grant admin'}
@@ -209,7 +206,7 @@ export default function AdminUsersPage() {
                           .then(() => { window.location.href = '/'; })
                           .catch((err: Error) => alert(err.message));
                       }}
-                      className="px-2 py-1 text-xs bg-yellow-700/40 rounded hover:bg-yellow-700/60 text-yellow-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      className="px-2 py-1 text-xs bg-warning-container/60 border border-warning/40 rounded-xs hover:bg-warning-container text-warning disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                       title={isSelf ? 'You cannot impersonate yourself' : !u.isActive ? 'Cannot impersonate a disabled user' : 'Start impersonation (audited)'}
                     >
                       Act as

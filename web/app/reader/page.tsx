@@ -1,7 +1,8 @@
 'use client';
 
-import { Clock, FileText, Languages, Loader2, Newspaper, Sparkles, Wand2, ListChecks, HelpCircle } from 'lucide-react';
+import { Clock, FileText, Languages, Loader2, Sparkles, Wand2, ListChecks, HelpCircle } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 interface ReaderDoc {
@@ -87,15 +88,10 @@ export default function ReaderPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xs bg-primary/10 flex items-center justify-center">
-          <Newspaper className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface">Reader</h1>
-          <p className="text-on-surface-variant">Paste a link for a clean, distraction-free read — then summarize, simplify, translate, or ask.</p>
-        </div>
-      </div>
+      <PageHeader
+        title="reader"
+        description="paste a link for a clean, distraction-free read — then summarize, simplify, translate, or ask"
+      />
 
       <div className="flex gap-2">
         <input
@@ -104,14 +100,14 @@ export default function ReaderPage() {
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && read()}
           placeholder="https://example.com/article"
-          className="flex-1 rounded-full border border-outline-variant/20 bg-surface px-4 py-2 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
+          className="flex-1 rounded-xs border border-outline-variant bg-surface-container px-4 py-2 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary"
         />
         <button
           onClick={read}
           disabled={loading}
-          className="px-5 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 font-medium"
+          className="px-5 py-2 bg-primary text-on-primary rounded-xs hover:bg-primary-dim disabled:opacity-50 font-semibold text-[13px]"
         >
-          {loading ? 'Reading…' : 'Read'}
+          {loading ? 'reading…' : 'read'}
         </button>
       </div>
 
@@ -146,7 +142,7 @@ export default function ReaderPage() {
           <aside className="lg:sticky lg:top-4 space-y-3">
             <div className="rounded-xs border border-outline-variant/10 bg-surface-container-low p-3 space-y-2">
               <h3 className="text-sm font-semibold text-on-surface flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-primary" /> AI actions
+                <Sparkles className="w-4 h-4 text-accent" /> ai actions
               </h3>
               <div className="grid grid-cols-2 gap-2">
                 {ACTIONS.map(({ kind, label, icon: Icon, needsArg }) => (

@@ -1,7 +1,6 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Bot } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
@@ -36,9 +35,10 @@ export function ActiveAgents() {
   });
 
   const agents: Agent[] = Array.isArray(data) ? data : ((data as { agents: Agent[] })?.agents || []);
+  const anyRunning = agents.some((a) => a.status === 'running');
 
   return (
-    <Card>
+    <Card glow={anyRunning ? 'ok' : undefined}>
       <CardHeader>
         <CardTitle>active agents</CardTitle>
         <span className="ml-auto text-[10px] uppercase tracking-wider text-outline-variant">
@@ -48,8 +48,8 @@ export function ActiveAgents() {
       <CardContent className="p-0">
         {agents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-on-surface-variant">
-            <Bot className="w-6 h-6 mb-2 opacity-40" />
-            <p className="text-[12px]">-- no active agents --</p>
+            <p aria-hidden className="text-[16px] text-outline mb-1">[ ]</p>
+            <p className="text-[12px]">no active agents</p>
           </div>
         ) : (
           <div className="divide-y divide-outline-variant/40">
@@ -61,7 +61,7 @@ export function ActiveAgents() {
                 <div className="flex items-center gap-2.5 min-w-0">
                   <span
                     aria-hidden
-                    className={`dot ${agent.status === 'running' ? 'dot-ok' : agent.status === 'paused' ? 'dot-warn' : 'dot-idle'}`}
+                    className={`dot ${agent.status === 'running' ? 'dot-ok dot-live text-tertiary' : agent.status === 'paused' ? 'dot-warn' : 'dot-idle'}`}
                   />
                   <div className="min-w-0">
                     <p className="text-[13px] text-on-surface truncate">

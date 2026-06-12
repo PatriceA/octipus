@@ -1,9 +1,10 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Link2, Trash2 } from 'lucide-react';
+import { CheckCircle2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -77,16 +78,16 @@ export default function LinkAccountPage() {
     onSuccess: () => refetch(),
   });
 
-  if (isLoading) return <div className="p-8 text-on-surface-variant">Loading…</div>;
+  if (isLoading) return <div className="p-8 text-on-surface-variant font-mono">loading…</div>;
   if (!isAuthenticated) {
     return (
-      <div className="max-w-xl mx-auto p-8 space-y-3">
-        <h1 className="text-2xl font-extrabold tracking-tighter text-on-surface">Link account</h1>
-        <p className="text-on-surface-variant">
-          Sign in first, then return to this page to enter the code from your channel.
-        </p>
-        <a href="/login" className="inline-block px-4 py-2 bg-primary text-[#0e0e0e] rounded-lg font-medium">
-          Go to sign in
+      <div className="max-w-xl mx-auto p-8 space-y-3 font-mono">
+        <PageHeader
+          title="link-account"
+          description="sign in first, then return to this page to enter the code from your channel."
+        />
+        <a href="/login" className="inline-block px-4 py-2 bg-primary text-on-primary rounded-xs text-[13px] hover:bg-primary-dim">
+          ❯ go to sign in
         </a>
       </div>
     );
@@ -99,21 +100,14 @@ export default function LinkAccountPage() {
   };
 
   return (
-    <div className="max-w-xl mx-auto p-8 space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <Link2 className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tighter text-on-surface">Link a channel</h1>
-          <p className="text-on-surface-variant text-sm">
-            Connect a Telegram chat, Slack DM, WhatsApp number, or Teams account to this user.
-          </p>
-        </div>
-      </div>
+    <div className="max-w-xl mx-auto p-8 space-y-6 font-mono">
+      <PageHeader
+        title="link-account"
+        description="connect a telegram chat, slack dm, whatsapp number, or teams account to this user."
+      />
 
-      <div className="bg-surface-container rounded-2xl p-5 space-y-4">
-        <h2 className="font-medium text-on-surface">Enter the code from your channel</h2>
+      <div className="term-frame rounded-xs p-5 space-y-4">
+        <h2 className="section-label">enter the code from your channel</h2>
         <p className="text-xs text-on-surface-variant">
           The channel sent you a 6-character code along with this page. Codes expire after 15 minutes.
         </p>
@@ -133,10 +127,10 @@ export default function LinkAccountPage() {
           {redeemMutation.isPending ? 'Linking…' : 'Link this channel'}
         </button>
         {error && (
-          <div className="p-2 bg-error-dim/10 border border-error-dim/20 rounded text-sm text-error">{error}</div>
+          <div className="p-2 bg-error-container/40 border border-error/60 rounded-xs text-sm text-error">! {error}</div>
         )}
         {success && (
-          <div className="p-3 bg-green-900/20 border border-green-700/30 rounded-lg text-sm text-green-200 flex items-center gap-2">
+          <div className="p-3 bg-tertiary-container/40 border border-tertiary/60 rounded-xs text-sm text-tertiary flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4" />
             <span>
               Linked <code className="font-mono">{success.channelType}</code>:
@@ -147,11 +141,11 @@ export default function LinkAccountPage() {
       </div>
 
       {data && data.bindings.length > 0 && (
-        <div className="bg-surface-container rounded-2xl p-5 space-y-3">
-          <h2 className="font-medium text-on-surface text-sm">Linked channels</h2>
-          <div className="space-y-2">
+        <div className="term-frame rounded-xs p-5 space-y-3">
+          <h2 className="section-label">linked channels</h2>
+          <div className="space-y-2 stagger">
             {data.bindings.map((b) => (
-              <div key={b.id} className="flex items-center justify-between p-3 bg-surface-container-low rounded-lg">
+              <div key={b.id} className="flex items-center justify-between p-3 bg-surface-container-low border border-outline-variant/40 rounded-xs">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-on-surface capitalize">{b.channelType}</span>

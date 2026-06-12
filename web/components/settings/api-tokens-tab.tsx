@@ -208,7 +208,7 @@ export function ApiTokensTab() {
                   type="button"
                   onClick={() => revokeMutation.mutate(t.id)}
                   disabled={revokeMutation.isPending}
-                  className="px-3 py-1.5 text-xs bg-red-600 text-on-surface rounded-lg hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                  className="px-3 py-1.5 text-xs border border-error/50 bg-error-container/60 text-error rounded-xs hover:bg-error-container disabled:opacity-50 cursor-pointer"
                 >
                   Confirm
                 </button>
@@ -290,7 +290,7 @@ export function ApiTokensTab() {
                   onClick={handleCopy}
                   className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 cursor-pointer ${
                     copied
-                      ? 'bg-green-600 text-on-surface'
+                      ? 'bg-tertiary text-on-tertiary'
                       : 'bg-primary text-[#0e0e0e] hover:bg-primary-container'
                   }`}
                 >

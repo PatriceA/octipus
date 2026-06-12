@@ -56,7 +56,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-6'
             )}
           >
-            {children}
+            {pathname === '/chat' ? (
+              children
+            ) : (
+              // Re-keying on navigation gives every page the same quick
+              // fade/slide entrance the mobile app uses.
+              <div key={pathname} className="animate-enter">
+                {children}
+              </div>
+            )}
           </main>
         </div>
         {/* On /chat the page renders its own banner just above the

@@ -65,11 +65,11 @@ export default function AdminOrgsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Organizations</h2>
+        <h2 className="section-label">organizations</h2>
         <button
           type="button"
           onClick={() => { setShowCreate(true); setError(null); }}
-          className="px-3 py-2 bg-primary text-[#0e0e0e] rounded-lg text-sm font-medium hover:bg-primary-container flex items-center gap-2 cursor-pointer"
+          className="px-3 py-2 bg-primary text-on-primary rounded-xs text-sm font-medium hover:bg-primary-dim flex items-center gap-2 cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           New org
@@ -77,8 +77,8 @@ export default function AdminOrgsPage() {
       </div>
 
       {showCreate && (
-        <div className="bg-surface-container-low border border-outline-variant/10 rounded-2xl p-4 space-y-3">
-          <div className="text-sm font-bold text-on-surface">New organization</div>
+        <div className="term-frame rounded-xs border-primary/40 p-4 space-y-3 animate-enter">
+          <div className="section-label">new organization</div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">Slug</label>
@@ -101,7 +101,7 @@ export default function AdminOrgsPage() {
               />
             </div>
           </div>
-          {error && <p className="text-xs text-error">{error}</p>}
+          {error && <p className="text-xs text-error">! {error}</p>}
           <div className="flex justify-end gap-2">
             <button
               onClick={() => { setShowCreate(false); setError(null); }}
@@ -112,7 +112,7 @@ export default function AdminOrgsPage() {
             <button
               onClick={handleCreate}
               disabled={createMutation.isPending || !createSlug || !createName}
-              className="px-3 py-1.5 text-sm bg-primary text-[#0e0e0e] font-bold rounded-lg disabled:opacity-50 cursor-pointer"
+              className="px-3 py-1.5 text-sm bg-primary text-on-primary font-bold rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
             >
               {createMutation.isPending ? 'Creating…' : 'Create'}
             </button>
@@ -123,11 +123,12 @@ export default function AdminOrgsPage() {
       {isLoading ? (
         <div className="p-8 text-center text-on-surface-variant">Loading…</div>
       ) : orgs.length === 0 ? (
-        <div className="p-8 text-center text-on-surface-variant border border-outline-variant/10 rounded-2xl border-dashed">
-          No organizations yet.
+        <div className="p-8 text-center text-on-surface-variant border border-outline-variant/40 rounded-xs border-dashed">
+          <p aria-hidden className="text-[16px] text-outline mb-1">[ ]</p>
+          <p className="text-[12px]">no organizations yet</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 stagger">
           {orgs.map((o) => (
             <OrgRow
               key={o.id}
@@ -197,7 +198,7 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
   };
 
   return (
-    <div className="bg-surface-container-low border border-outline-variant/10 rounded-2xl overflow-hidden">
+    <div className="term-frame rounded-xs overflow-hidden">
       <button
         onClick={onToggle}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-container cursor-pointer transition-colors text-left"
@@ -212,9 +213,9 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
       {expanded && (
         <div className="border-t border-outline-variant/10 p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+            <div className="section-label flex items-center gap-2">
               <Users className="w-3 h-3" />
-              Members
+              members
             </div>
             <div className="flex items-center gap-3">
               <button
@@ -266,19 +267,19 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
                   type="button"
                   onClick={handleAdd}
                   disabled={!addUserId || addMutation.isPending}
-                  className="px-3 py-1.5 text-sm bg-primary text-[#0e0e0e] font-bold rounded disabled:opacity-50 cursor-pointer"
+                  className="px-3 py-1.5 text-sm bg-primary text-on-primary font-bold rounded-xs hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
                 >
                   {addMutation.isPending ? 'Adding…' : 'Add'}
                 </button>
               </div>
-              {addError && <p className="text-xs text-error">{addError}</p>}
+              {addError && <p className="text-xs text-error">! {addError}</p>}
             </div>
           )}
 
           {isLoading ? (
             <p className="text-sm text-on-surface-variant">Loading…</p>
           ) : (data?.members ?? []).length === 0 ? (
-            <p className="text-sm text-on-surface-variant">No members.</p>
+            <p className="text-sm text-on-surface-variant"><span aria-hidden className="text-outline">[ ]</span> no members</p>
           ) : (
             <ul className="space-y-1">
               {(data?.members ?? []).map((m) => (

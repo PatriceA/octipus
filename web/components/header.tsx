@@ -243,7 +243,7 @@ export function Header() {
           )}
 
           {showResults && (
-            <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50">
+            <div className="absolute top-full mt-1 w-full max-h-96 overflow-y-auto bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50 animate-enter">
               {searchResults.length === 0 && !isSearching ? (
                 <div className="px-3 py-6 text-center text-[12px] text-on-surface-variant">
                   -- no matches --
@@ -255,10 +255,9 @@ export function Header() {
                   const Icon = meta.icon;
                   return (
                     <div key={type}>
-                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-outline-variant px-3 py-1.5 border-b border-outline-variant/30 bg-surface-container-low">
-                        <span>▸</span>
-                        <span>{meta.label}</span>
-                        <span className="ml-auto">{items.length}</span>
+                      <div className="flex items-center px-3 py-1.5 border-b border-outline-variant/30 bg-surface-container-low">
+                        <span className="section-label text-[10px]">{meta.label}</span>
+                        <span className="ml-auto text-[10px] text-outline-variant">{items.length}</span>
                       </div>
                       {items.map((result) => (
                         <button
@@ -301,12 +300,9 @@ export function Header() {
           </button>
 
           {isNotifOpen && (
-            <div className="absolute right-0 mt-1 w-80 bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50 max-h-96 flex flex-col overflow-hidden">
+            <div className="absolute right-0 mt-1 w-80 bg-surface-container border border-outline-variant rounded-xs shadow-xl z-50 max-h-96 flex flex-col overflow-hidden animate-enter">
               <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/60 bg-surface-container-low">
-                <span className="text-[12px] text-on-surface flex items-center gap-1.5">
-                  <span className="text-outline-variant">▸</span>
-                  notifications
-                </span>
+                <span className="section-label text-[10px]">notifications</span>
                 {unreadCount > 0 && (
                   <button
                     onClick={markAllRead}
@@ -336,7 +332,7 @@ export function Header() {
                           aria-hidden
                           className={cn(
                             'mt-1.5 shrink-0 dot',
-                            !notif.read ? 'dot-ok' : 'dot-idle'
+                            !notif.read ? 'dot-ok dot-live text-tertiary' : 'dot-idle'
                           )}
                         />
                         <div className="flex-1 min-w-0">
@@ -388,7 +384,7 @@ export function Header() {
           </button>
 
           {isProfileOpen && (
-            <div className="absolute right-0 mt-1 w-52 bg-surface-container border border-outline-variant rounded-xs shadow-xl py-1 z-50">
+            <div className="absolute right-0 mt-1 w-52 bg-surface-container border border-outline-variant rounded-xs shadow-xl py-1 z-50 animate-enter">
               {user ? (
                 <>
                   <div className="px-3 py-2 border-b border-outline-variant/60 flex items-center gap-2">

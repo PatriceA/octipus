@@ -15,9 +15,9 @@ export default function DiffView({ patch, className }: { patch: string; classNam
         const sign = line.charAt(0);
         const cls =
           sign === '+'
-            ? 'bg-green-500/15 text-green-300'
+            ? 'bg-tertiary-container/60 text-tertiary'
             : sign === '-'
-              ? 'bg-red-500/15 text-red-300'
+              ? 'bg-error-container/60 text-error'
               : 'text-on-surface-variant';
         return (
           <div key={`${i}:${line}`} className={`whitespace-pre px-2 ${cls}`}>

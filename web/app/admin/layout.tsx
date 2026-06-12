@@ -1,10 +1,10 @@
 'use client';
 
-import { Shield } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { useAuth } from '@/lib/auth-context';
 
 /**
@@ -31,7 +31,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }, [isLoading, isAuthenticated, user, router]);
 
   if (isLoading || !user?.isAdmin) {
-    return <div className="p-8 text-on-surface-variant">Checking permissions…</div>;
+    return <div className="p-8 text-on-surface-variant font-mono">checking permissions…</div>;
   }
 
   const tabs = [
@@ -42,18 +42,13 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   ];
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <Shield className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-xl text-on-surface">Admin console</h1>
-          <p className="text-on-surface-variant">Manage users and inspect the audit log.</p>
-        </div>
-      </div>
+    <div className="space-y-6 max-w-6xl font-mono">
+      <PageHeader
+        title="admin"
+        description="manage users, orgs, quotas, and inspect the audit log."
+      />
 
-      <div className="flex gap-2 border-b border-outline-variant/10">
+      <div className="flex gap-2 border-b border-outline-variant/60">
         {tabs.map((t) => {
           const active = pathname === t.href || pathname.startsWith(t.href + '/');
           return (

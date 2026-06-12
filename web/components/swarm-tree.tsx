@@ -111,16 +111,16 @@ function statusBadge(status: string): {
   Icon: React.ComponentType<{ className?: string }>;
 } {
   const map: Record<string, { label: string; cls: string; Icon: React.ComponentType<{ className?: string }> }> = {
-    running: { label: 'running', cls: 'bg-blue-900/40 text-primary', Icon: Loader2 },
-    completed: { label: 'ok', cls: 'bg-green-900/40 text-tertiary', Icon: CheckCircle2 },
+    running: { label: 'running', cls: 'bg-primary-container/60 text-primary', Icon: Loader2 },
+    completed: { label: 'ok', cls: 'bg-tertiary-container/60 text-tertiary', Icon: CheckCircle2 },
     cache_hit: { label: 'cache', cls: 'bg-emerald-900/40 text-tertiary', Icon: CheckCircle2 },
     budget: { label: 'budget', cls: 'bg-amber-900/40 text-warning', Icon: XCircle },
     timeout: { label: 'timeout', cls: 'bg-amber-900/40 text-warning', Icon: Clock },
-    denied: { label: 'denied', cls: 'bg-red-900/40 text-error', Icon: XCircle },
-    tool_error: { label: 'error', cls: 'bg-red-900/40 text-error', Icon: XCircle },
-    provider_error: { label: 'error', cls: 'bg-red-900/40 text-error', Icon: XCircle },
+    denied: { label: 'denied', cls: 'bg-error-container/60 text-error', Icon: XCircle },
+    tool_error: { label: 'error', cls: 'bg-error-container/60 text-error', Icon: XCircle },
+    provider_error: { label: 'error', cls: 'bg-error-container/60 text-error', Icon: XCircle },
     cancelled: { label: 'cancelled', cls: 'bg-surface-container-highest text-on-surface-variant', Icon: XCircle },
-    concurrency_limit: { label: 'throttled', cls: 'bg-orange-900/40 text-warning', Icon: XCircle },
+    concurrency_limit: { label: 'throttled', cls: 'bg-warning-container/60 text-warning', Icon: XCircle },
   };
   return map[status] ?? map.running;
 }
@@ -685,7 +685,7 @@ function TreeNode({
           {isRunning && (
             <button
               onClick={() => onCancel(node)}
-              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-error hover:bg-red-900/30 cursor-pointer"
+              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-error hover:bg-error-container/60 cursor-pointer"
               title={isRoot ? 'Cancel swarm (cascades to all children)' : 'Cancel this node + descendants'}
             >
               <StopCircle className="w-2.5 h-2.5" />

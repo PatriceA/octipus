@@ -12,6 +12,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
@@ -38,16 +39,11 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <Settings className="w-5 h-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-xl text-on-surface">Settings</h1>
-          <p className="text-on-surface-variant">System configuration — workspace paths, model routing, channel integrations, security, and notifications.</p>
-        </div>
-      </div>
+    <div className="space-y-6 max-w-5xl font-mono">
+      <PageHeader
+        title="settings"
+        description="system configuration — workspace paths, model routing, channel integrations, security, and notifications."
+      />
 
       <div className="flex gap-6">
         <div className="w-48 space-y-0.5 shrink-0">

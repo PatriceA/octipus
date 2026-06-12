@@ -99,7 +99,7 @@ export function ChannelsTab() {
         {linkResult && (
           <div
             className={`mt-2 flex items-center gap-1.5 text-sm ${
-              linkResult.success ? 'text-green-600' : 'text-red-600'
+              linkResult.success ? 'text-tertiary' : 'text-error'
             }`}
           >
             {linkResult.success ? (
@@ -155,8 +155,8 @@ export function ChannelsTab() {
                 <span
                   className={`px-2 py-0.5 text-xs rounded-full ${
                     binding.isVerified
-                      ? 'bg-green-900/30 text-tertiary'
-                      : 'bg-yellow-900/30 text-warning'
+                      ? 'bg-tertiary-container/60 text-tertiary'
+                      : 'bg-warning-container/60 text-warning'
                   }`}
                 >
                   {binding.isVerified ? 'Verified' : 'Pending'}
@@ -217,9 +217,9 @@ function ChannelStatusList() {
             <span
               className={`px-2 py-0.5 text-xs rounded-full ${
                 connected
-                  ? 'bg-green-900/30 text-tertiary'
+                  ? 'bg-tertiary-container/60 text-tertiary'
                   : registered
-                  ? 'bg-yellow-900/30 text-warning'
+                  ? 'bg-warning-container/60 text-warning'
                   : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >

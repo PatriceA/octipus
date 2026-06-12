@@ -56,9 +56,9 @@ interface ToolResult<T = unknown> {
 // --- Constants ---
 
 const CATEGORY_COLORS: Record<string, string> = {
-  person: 'bg-blue-900/30 text-primary',
+  person: 'bg-primary-container/60 text-primary',
   organization: 'bg-purple-900/30 text-primary',
-  pet: 'bg-orange-900/30 text-warning',
+  pet: 'bg-warning-container/60 text-warning',
 };
 
 const CATEGORY_ICONS: Record<string, typeof User> = {
@@ -71,9 +71,9 @@ const RELATIONSHIP_COLORS: Record<string, string> = {
   self: 'bg-primary/20 text-primary',
   mother: 'bg-pink-900/30 text-error',
   father: 'bg-indigo-900/30 text-primary',
-  partner: 'bg-red-900/30 text-error',
-  friend: 'bg-green-900/30 text-tertiary',
-  colleague: 'bg-yellow-900/30 text-warning',
+  partner: 'bg-error-container/60 text-error',
+  friend: 'bg-tertiary-container/60 text-tertiary',
+  colleague: 'bg-warning-container/60 text-warning',
   boss: 'bg-amber-900/30 text-warning',
   sibling: 'bg-teal-900/30 text-tertiary',
 };
@@ -305,7 +305,7 @@ function CreateProfileDialog({
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-error-container/60 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
@@ -587,7 +587,7 @@ function EditProfileDialog({
 
         {/* Error */}
         {error && (
-          <div className="mx-4 mt-4 text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+          <div className="mx-4 mt-4 text-sm text-error bg-error-container/60 rounded-lg px-3 py-2">
             {error}
           </div>
         )}
@@ -778,7 +778,7 @@ export default function ProfilesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-xl text-on-surface">People & Profiles</h1>
+        <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/profiles</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
         <p className="text-on-surface-variant mt-2">
           Store information about people, organizations, and relationships. Your own profile is automatically shared with agents for personalized responses.
         </p>

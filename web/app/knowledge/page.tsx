@@ -2,7 +2,6 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Brain,
   ChevronDown,
   Code,
   Database,
@@ -16,6 +15,8 @@ import {
   X,
 } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -71,8 +72,8 @@ interface KBReadiness {
 // --- Constants ---
 
 const PURPOSE_COLORS: Record<string, string> = {
-  document: 'bg-blue-900/30 text-primary',
-  code: 'bg-green-900/30 text-tertiary',
+  document: 'bg-primary-container/60 text-primary',
+  code: 'bg-tertiary-container/60 text-tertiary',
   message: 'bg-purple-900/30 text-primary',
   image_description: 'bg-amber-900/30 text-amber-300',
   knowledge_artifact: 'bg-pink-900/30 text-pink-300',
@@ -157,7 +158,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
         ) : entry ? (
           <div className="p-4 space-y-4">
             {error && (
-              <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+              <div className="text-sm text-error bg-error-container/40 border border-error/40 rounded-xs px-3 py-2">
                 {error}
               </div>
             )}
@@ -165,7 +166,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
             {/* Abstract */}
             {entry.abstract && (
               <div>
-                <h4 className="text-sm font-medium text-on-surface/80 mb-1">Abstract</h4>
+                <h4 className="section-label mb-1">Abstract</h4>
                 <p className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">
                   {entry.abstract}
                 </p>
@@ -174,7 +175,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
 
             {/* Content */}
             <div>
-              <h4 className="text-sm font-medium text-on-surface/80 mb-1">Content</h4>
+              <h4 className="section-label mb-1">Content</h4>
               <pre className="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
                 {entry.content}
               </pre>
@@ -182,7 +183,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
 
             {/* Metadata table */}
             <div>
-              <h4 className="text-sm font-medium text-on-surface/80 mb-1">Metadata</h4>
+              <h4 className="section-label mb-1">Metadata</h4>
               <div className="bg-surface-container-low rounded-lg overflow-hidden">
                 <table className="w-full text-sm">
                   <tbody>
@@ -247,8 +248,8 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
                 className={cn(
                   'px-4 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-50',
                   confirmDelete
-                    ? 'bg-red-600 text-on-surface hover:bg-red-700'
-                    : 'bg-red-900/30 text-error hover:bg-red-900/50'
+                    ? 'border border-error/50 bg-error-container/60 text-error hover:bg-error-container'
+                    : 'bg-error-container/60 text-error hover:bg-error-container/60'
                 )}
               >
                 {deleting ? 'Deleting...' : confirmDelete ? 'Confirm Delete' : 'Delete'}
@@ -320,12 +321,13 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {error && (
-            <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+            <div className="text-sm text-error bg-error-container/40 border border-error/40 rounded-xs px-3 py-2">
               {error}
             </div>
           )}
           {success && (
-            <div className="text-sm text-tertiary bg-green-900/20 rounded-lg px-3 py-2">
+            <div className="flex items-center gap-2 text-sm text-tertiary bg-tertiary-container/40 border border-tertiary/40 rounded-xs px-3 py-2 glow-accent">
+              <span aria-hidden className="dot dot-ok dot-live shrink-0" />
               {success}
             </div>
           )}
@@ -544,34 +546,34 @@ export default function KnowledgePage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-          <Brain className="w-5 h-5 text-primary" />
-        </div>
-        <div className="flex-1">
-          <h1 className="text-xl text-on-surface">Knowledge Base</h1>
-          <p className="text-on-surface-variant">
-            RAG knowledge base powered by pgvector. Search indexed documents, code, and conversation messages using hybrid semantic + keyword search.
-          </p>
-          <p className="text-sm text-on-surface-variant mt-1">
-            {stats?.total ?? 0} entries indexed across {Object.keys(stats?.byPurpose || {}).length} source types
-          </p>
-        </div>
-        <button
-          onClick={() => setShowIndexDialog(true)}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
-          disabled={!!kbNotReadyMessage}
-          title={kbNotReadyMessage ? 'Knowledge base is not ready — fix configuration below' : undefined}
-        >
-          <FolderUp className="w-4 h-4" />
-          Index Files
-        </button>
-      </div>
+      <PageHeader
+        title="knowledge"
+        description="RAG knowledge base powered by pgvector. Search indexed documents, code, and conversation messages using hybrid semantic + keyword search."
+        badge={
+          <StatusBadge variant="primary" dot>
+            {stats?.total ?? 0} entries / {Object.keys(stats?.byPurpose || {}).length} types
+          </StatusBadge>
+        }
+        actions={
+          <button
+            onClick={() => setShowIndexDialog(true)}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
+            disabled={!!kbNotReadyMessage}
+            title={kbNotReadyMessage ? 'Knowledge base is not ready — fix configuration below' : undefined}
+          >
+            <FolderUp className="w-4 h-4" />
+            Index Files
+          </button>
+        }
+      />
 
       {/* KB readiness / stats error banner — matches existing error-display pattern */}
       {kbNotReadyMessage && (
-        <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2 border border-red-900/40">
-          <div className="font-medium">Knowledge base is not ready</div>
+        <div className="text-sm text-error bg-error-container/40 rounded-xs px-3 py-2 border border-error/40 glow-err">
+          <div className="font-medium flex items-center gap-2">
+            <span aria-hidden className="dot dot-err shrink-0" />
+            Knowledge base is not ready
+          </div>
           <div className="text-xs mt-1 opacity-90 wrap-break-word">{kbNotReadyMessage}</div>
           {readiness && (
             <ul className="text-xs mt-2 space-y-0.5 list-disc list-inside opacity-90">
@@ -583,22 +585,22 @@ export default function KnowledgePage() {
         </div>
       )}
       {statsError instanceof Error && !kbNotReadyMessage && (
-        <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+        <div className="text-sm text-error bg-error-container/40 border border-error/40 rounded-xs px-3 py-2">
           Failed to load stats: {statsError.message}
         </div>
       )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-container border border-outline-variant/60 rounded-xs p-4">
           <p className="text-2xl font-bold text-on-surface">{stats?.total ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Total Entries</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-container border border-outline-variant/60 rounded-xs p-4">
           <p className="text-2xl font-bold text-primary">{stats?.byPurpose?.document ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Documents</p>
         </div>
-        <div className="bg-surface-variant/60 backdrop-blur-sm rounded-2xl border border-outline-variant/10 shadow-[0_0_30px_-12px_rgba(115,255,227,0.12)] p-4">
+        <div className="bg-surface-container border border-outline-variant/60 rounded-xs p-4">
           <p className="text-2xl font-bold text-tertiary">{stats?.byPurpose?.code ?? 0}</p>
           <p className="text-xs text-on-surface-variant">Code</p>
         </div>
@@ -679,7 +681,7 @@ export default function KnowledgePage() {
 
       {/* Search error */}
       {searchError && (
-        <div className="text-sm text-error bg-red-900/20 rounded-lg px-3 py-2">
+        <div className="text-sm text-error bg-error-container/40 border border-error/40 rounded-xs px-3 py-2">
           {searchError}
         </div>
       )}
@@ -687,13 +689,13 @@ export default function KnowledgePage() {
       {/* Search results */}
       {searchResults !== null ? (
         <div className="space-y-3">
-          <h3 className="text-sm font-medium text-on-surface/80">
+          <h3 className="section-label">
             {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &ldquo;{activeSearch}&rdquo;
           </h3>
           {searchResults.length === 0 ? (
             <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
-              <Search className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
-              <p className="text-on-surface-variant">No results found</p>
+              <p aria-hidden className="text-2xl text-outline-variant mb-2">[ ]</p>
+              <p className="text-on-surface-variant">no results found</p>
             </div>
           ) : (
             searchResults.map((result) => (
@@ -728,7 +730,7 @@ export default function KnowledgePage() {
         </div>
       ) : (
         /* Browse section */
-        <div className="space-y-3">
+        <div className="space-y-3 stagger">
           {browseLoading && browseOffset === 0 ? (
             <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
               <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
@@ -736,8 +738,8 @@ export default function KnowledgePage() {
             </div>
           ) : displayedEntries.length === 0 ? (
             <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
-              <Brain className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
-              <p className="text-on-surface-variant">No knowledge entries found</p>
+              <p aria-hidden className="text-2xl text-outline-variant mb-2">[--]</p>
+              <p className="text-on-surface-variant">no knowledge entries found</p>
               <p className="text-xs text-on-surface-variant mt-1">Click &quot;Index Files&quot; to add documents or code to the knowledge base for semantic retrieval.</p>
             </div>
           ) : (

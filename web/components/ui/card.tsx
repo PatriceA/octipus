@@ -2,12 +2,15 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type CardVariant = 'default' | 'glass' | 'bento';
+type CardGlow = 'primary' | 'ok' | 'warn' | 'err' | 'pink';
 
 interface CardProps {
   children: ReactNode;
   className?: string;
   hover?: boolean;
   variant?: CardVariant;
+  /** Soft outer glow — reserve for live things (running jobs, pending approvals). */
+  glow?: CardGlow;
 }
 
 /**
@@ -30,9 +33,24 @@ const hoverClasses: Record<CardVariant, string> = {
   bento: 'hover:border-primary hover:bg-surface-container-high transition-colors cursor-pointer',
 };
 
-export function Card({ children, className, hover, variant = 'default' }: CardProps) {
+const glowClasses: Record<CardGlow, string> = {
+  primary: 'glow-accent border-primary/40',
+  ok: 'glow-ok border-tertiary/40',
+  warn: 'glow-warn border-warning/40',
+  err: 'glow-err border-error/40',
+  pink: 'glow-pink border-accent/40',
+};
+
+export function Card({ children, className, hover, variant = 'default', glow }: CardProps) {
   return (
-    <div className={cn(variantClasses[variant], hover && hoverClasses[variant], className)}>
+    <div
+      className={cn(
+        variantClasses[variant],
+        hover && hoverClasses[variant],
+        glow && glowClasses[glow],
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -59,8 +77,8 @@ export function CardTitle({ children, className }: Omit<CardProps, 'hover' | 'va
         className,
       )}
     >
-      <span aria-hidden className="text-outline-variant">
-        ▸
+      <span aria-hidden className="text-primary font-bold">
+        &gt;
       </span>
       {children}
     </h3>

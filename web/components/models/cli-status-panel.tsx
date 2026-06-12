@@ -87,7 +87,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
       ? 'bg-tertiary-container/40 text-tertiary border border-tertiary/60'
       : mode === 'api-key'
         ? 'bg-warning-container/40 text-warning border border-warning/60'
-        : 'bg-sky-500/10 text-sky-400';
+        : 'bg-primary/10 text-primary';
     const label = mode === 'subscription' ? 'Subscription' : mode === 'api-key' ? 'API key' : 'Mixed';
     return <span className={`text-[10px] px-2 py-0.5 rounded ${cls}`}>{label}</span>;
   };
@@ -113,8 +113,8 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
             <div key={tool.name} className="space-y-2 border-b border-outline-variant/5 pb-3 last:border-0 last:pb-0">
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    !tool.available ? 'bg-on-surface-variant' : registered ? 'bg-tertiary' : 'bg-warning'
+                  <span className={`dot shrink-0 ${
+                    !tool.available ? 'dot-idle' : registered ? 'dot-ok' : 'dot-warn'
                   }`} />
                   <span className="text-on-surface truncate">{tool.name}</span>
                   {tool.billingInfo && billingBadge(tool.billingInfo.billingMode)}
@@ -137,7 +137,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                     <button
                       onClick={() => handleQuickAdd(tool)}
                       disabled={adding === tool.name}
-                      className="text-xs px-2 py-1 bg-violet-600 text-on-surface rounded-full hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1"
+                      className="text-xs px-2 py-1 bg-primary text-on-primary rounded-full hover:opacity-90 disabled:opacity-50 flex items-center gap-1"
                     >
                       <Plus className="w-3 h-3" />
                       {adding === tool.name ? 'Adding...' : 'Add'}

@@ -105,7 +105,7 @@ export function WorkspacePicker() {
           {transferTarget ? (
             <div className="p-3 space-y-2.5">
               <div className="text-[12px] text-on-surface flex items-center gap-1.5">
-                <span className="text-outline-variant">▸</span> transfer workspace
+                <span className="text-primary font-bold">&gt;</span> transfer workspace
               </div>
               <p className="text-[11px] text-on-surface-variant leading-snug">
                 hand <span className="text-primary">{transferTarget.slug}</span> to another
@@ -144,7 +144,7 @@ export function WorkspacePicker() {
           ) : !showCreate ? (
             <>
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-outline-variant px-3 pt-2 pb-1 border-b border-outline-variant/40 bg-surface-container-low">
-                <span>▸</span><span>workspaces</span>
+                <span className="text-primary/70">{"// "}</span><span>workspaces</span>
                 <span className="ml-auto normal-case text-outline-variant">{workspaces.length}</span>
               </div>
               <div className="text-[10px] text-outline px-3 py-1.5 leading-snug">
@@ -222,7 +222,7 @@ export function WorkspacePicker() {
           ) : (
             <div className="p-3 space-y-2.5">
               <div className="text-[12px] text-on-surface flex items-center gap-1.5">
-                <span className="text-outline-variant">▸</span> new workspace
+                <span className="text-primary font-bold">&gt;</span> new workspace
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-outline-variant">slug</label>

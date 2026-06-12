@@ -1,8 +1,9 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Brain, ChevronDown, Loader2, Trash2, X } from 'lucide-react';
+import { ChevronDown, Loader2, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
 interface MemoryRow {
@@ -57,16 +58,10 @@ export default function MemoryPage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <header className="mb-6">
-        <h1 className="text-2xl font-mono flex items-center gap-2">
-          <Brain className="w-6 h-6" />
-          Memory
-        </h1>
-        <p className="text-sm opacity-70 mt-1">
-          Long-term facts extracted from your conversations. Soft-delete (set valid_until) leaves the audit trail
-          intact; the LLM judge can still see the row when deciding future ADD/UPDATE actions.
-        </p>
-      </header>
+      <PageHeader
+        title="memory"
+        description="long-term facts extracted from your conversations — soft-delete (set valid_until) keeps the audit trail intact for the llm judge's future add/update decisions"
+      />
 
       <div className="flex gap-3 items-center mb-4 text-sm">
         <label className="flex items-center gap-2">
@@ -93,19 +88,22 @@ export default function MemoryPage() {
       </div>
 
       {list.error && (
-        <div className="border border-red-500/40 bg-red-500/10 p-3 rounded mb-4 text-sm">
+        <div className="border border-error/40 bg-error-container/40 text-error p-3 rounded-xs mb-4 text-sm">
           Failed to load memories: {(list.error as Error).message}
         </div>
       )}
 
       {list.data && list.data.memories.length === 0 && (
-        <div className="text-sm opacity-60 border border-dashed p-6 rounded text-center">
-          No memories yet. Memories are extracted automatically after each turn (when an embedding + extractor
-          model is configured) or written explicitly by an agent via the <code>remember_this</code> tool.
+        <div className="border border-dashed border-outline-variant p-6 rounded-xs text-center font-mono">
+          <span aria-hidden className="block text-lg text-outline mb-2">[--]</span>
+          <p className="text-[12px] text-on-surface-variant">
+            no memories yet — extracted automatically after each turn (when an embedding + extractor
+            model is configured) or written explicitly by an agent via the <code>remember_this</code> tool
+          </p>
         </div>
       )}
 
-      <ul className="space-y-2">
+      <ul className="space-y-2 stagger">
         {list.data?.memories.map((m) => {
           const isExpired = m.validUntil && new Date(m.validUntil) < new Date();
           const isSuperseded = !!m.supersededBy;
@@ -123,8 +121,8 @@ export default function MemoryPage() {
                     {m.confidence < 0.9 && (
                       <span className="border px-1.5 rounded opacity-70">p≈{m.confidence.toFixed(2)}</span>
                     )}
-                    {isSuperseded && <span className="border px-1.5 rounded text-amber-500">superseded</span>}
-                    {isExpired && <span className="border px-1.5 rounded text-red-500">expired</span>}
+                    {isSuperseded && <span className="border border-warning/60 px-1.5 rounded-xs text-warning">superseded</span>}
+                    {isExpired && <span className="border border-error/60 px-1.5 rounded-xs text-error">expired</span>}
                     <span className="opacity-50">
                       {m.accessCount} reads · {new Date(m.updatedAt).toLocaleDateString()}
                     </span>
@@ -160,7 +158,7 @@ export default function MemoryPage() {
 
               {expandedId === m.id && chain.data && (
                 <div className="mt-3 pl-4 border-l-2 border-foreground/20 text-xs space-y-1">
-                  <div className="opacity-60 font-mono">Update chain (oldest → newest):</div>
+                  <div className="section-label">update chain (oldest → newest)</div>
                   {chain.data.chain.slice().reverse().map((row, i) => (
                     <div key={row.id} className="flex gap-2">
                       <span className="opacity-50 font-mono">v{i + 1}</span>
@@ -177,7 +175,7 @@ export default function MemoryPage() {
       </ul>
 
       {del.error && (
-        <div className="fixed bottom-4 right-4 border border-red-500/40 bg-red-500/10 p-3 rounded flex items-center gap-2 text-sm">
+        <div className="fixed bottom-4 right-4 border border-error/40 bg-error-container/80 text-error glow-err p-3 rounded-xs flex items-center gap-2 text-sm animate-slide-up">
           Delete failed: {(del.error as Error).message}
           <button type="button" onClick={() => del.reset()}>
             <X className="w-4 h-4" />

@@ -80,15 +80,15 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
         <Link href="/admin/orgs" className="text-on-surface-variant hover:text-on-surface">
           <ArrowLeft className="w-4 h-4" />
         </Link>
-        <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">SSO + SCIM</h2>
-        {savedToast && <span className="text-xs text-primary">Saved</span>}
+        <h2 className="section-label">sso + scim</h2>
+        {savedToast && <span className="text-xs text-tertiary">saved ✓</span>}
       </div>
 
       {/* SAML */}
-      <section className="bg-surface-container-low border border-outline-variant/10 rounded-2xl p-5 space-y-4">
+      <section className="term-frame rounded-xs p-5 space-y-4">
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-on-surface-variant" />
-          <h3 className="text-sm font-bold text-on-surface">SAML 2.0</h3>
+          <h3 className="text-[13px] text-on-surface"><span aria-hidden className="text-primary font-bold">&gt; </span>SAML 2.0</h3>
           <label className="ml-auto flex items-center gap-2 text-sm text-on-surface-variant">
             <input
               type="checkbox"
@@ -148,10 +148,10 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
       </section>
 
       {/* SCIM */}
-      <section className="bg-surface-container-low border border-outline-variant/10 rounded-2xl p-5 space-y-4">
+      <section className="term-frame rounded-xs p-5 space-y-4">
         <div className="flex items-center gap-2">
           <KeyRound className="w-4 h-4 text-on-surface-variant" />
-          <h3 className="text-sm font-bold text-on-surface">SCIM 2.0 inbound provisioning</h3>
+          <h3 className="text-[13px] text-on-surface"><span aria-hidden className="text-primary font-bold">&gt; </span>SCIM 2.0 inbound provisioning</h3>
           <label className="ml-auto flex items-center gap-2 text-sm text-on-surface-variant">
             <input
               type="checkbox"
@@ -189,13 +189,13 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
         />
       </section>
 
-      {error && <p className="text-xs text-error">{error}</p>}
+      {error && <p className="text-xs text-error">! {error}</p>}
 
       <div className="flex justify-end gap-2">
         <button
           onClick={() => { setError(null); saveMutation.mutate(draft); }}
           disabled={saveMutation.isPending}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-[#0e0e0e] rounded-lg text-sm font-medium hover:bg-primary-container disabled:opacity-50 cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-xs text-sm font-medium hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
         >
           <Save className="w-4 h-4" />
           {saveMutation.isPending ? 'Saving…' : 'Save'}

@@ -77,7 +77,7 @@ export function SecurityTab() {
             <span
               className={`px-2 py-0.5 text-xs rounded-full ${
                 profile?.totpEnabled
-                  ? 'bg-green-900/30 text-tertiary'
+                  ? 'bg-tertiary-container/60 text-tertiary'
                   : 'bg-surface-container-high text-on-surface-variant'
               }`}
             >
@@ -135,7 +135,7 @@ export function SecurityTab() {
                 <button
                   onClick={handleVerify}
                   disabled={loading || verifyCode.length !== 6}
-                  className="px-4 py-2 bg-green-600 text-on-surface rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  className="px-4 py-2 border border-tertiary/50 bg-tertiary-container/60 text-tertiary rounded-xs hover:bg-tertiary-container disabled:opacity-50"
                 >
                   Verify
                 </button>
@@ -165,7 +165,7 @@ export function SecurityTab() {
               <button
                 onClick={handleDisable}
                 disabled={loading || disableCode.length !== 6}
-                className="px-4 py-2 bg-red-600 text-on-surface rounded-lg hover:bg-red-700 disabled:opacity-50"
+                className="px-4 py-2 border border-error/50 bg-error-container/60 text-error rounded-xs hover:bg-error-container disabled:opacity-50"
               >
                 Disable
               </button>

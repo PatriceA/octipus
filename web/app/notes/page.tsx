@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bold, Code, Eye, Hash, Heading1, Heading2, Italic, Link2, List, Loader2,
-  NotebookPen, Pencil, Plus, Quote, Save, Sparkles, Trash2, X,
+  Pencil, Plus, Quote, Save, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Markdown } from '@/components/ui/markdown-renderer';
@@ -170,8 +170,13 @@ export default function NotesPage() {
       {/* List */}
       <aside className="w-72 border-r border-border overflow-y-auto p-3 shrink-0">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold flex items-center gap-2"><NotebookPen size={16} /> Notes</h2>
-          <button type="button" onClick={openNew} className="p-1 rounded hover:bg-accent" title="New note">
+          <h2 className="text-sm font-semibold lowercase font-mono">
+            <span className="text-outline">octi:</span>
+            <span className="text-on-surface">~/notes</span>
+            <span className="text-primary font-bold"> $</span>
+            <span aria-hidden className="term-caret" />
+          </h2>
+          <button type="button" onClick={openNew} className="p-1 rounded hover:bg-surface-container-high" title="New note">
             <Plus size={16} />
           </button>
         </div>
@@ -194,7 +199,7 @@ export default function NotesPage() {
                 key={t}
                 type="button"
                 onClick={() => setTagFilter(t)}
-                className="text-[11px] px-1.5 py-0.5 rounded-full bg-accent text-muted-foreground hover:text-on-surface inline-flex items-center gap-0.5"
+                className="text-[11px] px-1.5 py-0.5 rounded-full bg-surface-container-high text-muted-foreground hover:text-on-surface inline-flex items-center gap-0.5"
               >
                 <Hash size={9} />{t}
               </button>
@@ -203,13 +208,13 @@ export default function NotesPage() {
         )}
 
         {list.isLoading && <Loader2 className="animate-spin" size={16} />}
-        <ul className="space-y-1">
+        <ul className="space-y-1 stagger">
           {list.data?.notes.map((n) => (
             <li key={n.id}>
               <button
                 type="button"
                 onClick={() => openNote(n)}
-                className={`w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent ${selectedId === n.id ? 'bg-accent' : ''}`}
+                className={`w-full text-left px-2 py-1.5 rounded text-sm hover:bg-surface-container-high ${selectedId === n.id ? 'bg-primary-container/40' : ''}`}
               >
                 <div className="font-medium truncate">{n.title}</div>
                 <div className="text-xs text-muted-foreground truncate">{n.slug} · {n.noteKind}</div>
@@ -233,7 +238,10 @@ export default function NotesPage() {
             </li>
           ))}
           {list.data?.notes.length === 0 && (
-            <li className="text-sm text-muted-foreground">{tagFilter ? `No notes tagged #${tagFilter}.` : 'No notes yet.'}</li>
+            <li className="py-8 text-center font-mono">
+              <p aria-hidden className="text-2xl text-on-surface-variant/40">#</p>
+              <p className="mt-2 text-sm text-muted-foreground">{tagFilter ? `no notes tagged #${tagFilter}` : 'no notes yet'}</p>
+            </li>
           )}
         </ul>
       </aside>
@@ -252,14 +260,14 @@ export default function NotesPage() {
           <button
             type="button"
             onClick={() => setMode('edit')}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${mode === 'edit' ? 'bg-accent' : 'hover:bg-accent'}`}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${mode === 'edit' ? 'bg-primary-container/40 text-primary' : 'hover:bg-surface-container-high'}`}
           >
             <Pencil size={12} /> Edit
           </button>
           <button
             type="button"
             onClick={() => setMode('preview')}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${mode === 'preview' ? 'bg-accent' : 'hover:bg-accent'}`}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${mode === 'preview' ? 'bg-primary-container/40 text-primary' : 'hover:bg-surface-container-high'}`}
           >
             <Eye size={12} /> Preview
           </button>
@@ -317,7 +325,7 @@ export default function NotesPage() {
             <button
               type="button"
               onClick={() => del.mutate(selectedId)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-sm hover:bg-accent ml-auto"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-border text-sm hover:bg-surface-container-high ml-auto"
             >
               <Trash2 size={14} /> Archive
             </button>
@@ -327,7 +335,7 @@ export default function NotesPage() {
         {selectedId && detail.data && (
           <div className="mt-6 grid grid-cols-2 gap-6 text-sm">
             <section>
-              <h3 className="font-semibold mb-2">Backlinks</h3>
+              <h3 className="section-label mb-2">Backlinks</h3>
               {detail.data.backlinks.length === 0 && <p className="text-muted-foreground">None.</p>}
               <ul className="space-y-1">
                 {detail.data.backlinks.map((b) => (
@@ -336,7 +344,7 @@ export default function NotesPage() {
               </ul>
             </section>
             <section>
-              <h3 className="font-semibold mb-2 flex items-center gap-1.5"><Sparkles size={14} /> Suggested connections</h3>
+              <h3 className="section-label mb-2 flex items-center gap-1.5"><Sparkles size={14} className="text-accent" /> Suggested connections</h3>
               {suggestions.isLoading && <Loader2 className="animate-spin" size={14} />}
               {suggestions.data?.suggestions.length === 0 && <p className="text-muted-foreground">No suggestions.</p>}
               <ul className="space-y-1">
@@ -351,7 +359,7 @@ export default function NotesPage() {
                         disabled={linked}
                         onClick={() => addLink(s)}
                         title={linked ? 'Already linked' : 'Add as a link'}
-                        className="shrink-0 p-0.5 rounded hover:bg-accent text-primary disabled:opacity-30"
+                        className="shrink-0 p-0.5 rounded hover:bg-surface-container-high text-accent disabled:opacity-30"
                       >
                         <Plus size={13} />
                       </button>
@@ -383,7 +391,7 @@ function ToolBtn({ title, onClick, children }: { title: string; onClick: () => v
       // toolbar acts on it (a click would otherwise blur + collapse it).
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className="p-1.5 rounded text-muted-foreground hover:bg-accent hover:text-on-surface"
+      className="p-1.5 rounded text-muted-foreground hover:bg-surface-container-high hover:text-on-surface"
     >
       {children}
     </button>

@@ -31,10 +31,10 @@ function ProviderBadge({ provider }: { provider: string }) {
   const colors: Record<string, string> = {
     ollama: 'bg-tertiary-container/40 text-tertiary border border-tertiary/60',
     openai: 'bg-tertiary/10 text-tertiary',
-    anthropic: 'bg-orange-500/10 text-warning',
+    anthropic: 'bg-warning/10 text-warning',
     gemini: 'bg-primary/10 text-primary',
-    deepseek: 'bg-teal-500/10 text-tertiary',
-    cli: 'bg-violet-500/10 text-primary',
+    deepseek: 'bg-tertiary/10 text-tertiary',
+    cli: 'bg-accent/10 text-accent',
     openrouter: 'bg-primary/10 text-primary',
     custom: 'bg-surface-container-high text-on-surface-variant',
   };
@@ -52,10 +52,8 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
   return (
     <div
       className={`bg-surface-container rounded-xs border ${
-        model.isEnabled
-          ? 'border-outline-variant/10'
-          : 'border-outline-variant/10 opacity-60'
-      } p-4 relative group`}
+        model.isDefault ? 'border-primary/40' : 'border-outline-variant/10'
+      }${model.isEnabled ? '' : ' opacity-60'} p-4 relative group`}
     >
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         {!model.isDefault && (
@@ -160,7 +158,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
           <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Stream</span>
         )}
         {model.provider === 'cli' && (
-          <span className="px-2 py-0.5 bg-violet-500/10 text-primary text-xs rounded">Sub-Agent</span>
+          <span className="px-2 py-0.5 bg-accent/10 text-accent text-xs rounded">Sub-Agent</span>
         )}
       </div>
 

@@ -44,12 +44,12 @@ const EVENT_CONFIG: Record<string, {
   label: string;
 }> = {
   thought: { icon: Brain, color: 'text-on-surface-variant', bgColor: 'bg-surface-container-high', label: 'Thought' },
-  action: { icon: Wrench, color: 'text-primary', bgColor: 'bg-blue-900/20', label: 'Action' },
-  observation: { icon: Eye, color: 'text-tertiary', bgColor: 'bg-green-900/20', label: 'Result' },
-  error: { icon: AlertCircle, color: 'text-error', bgColor: 'bg-red-900/20', label: 'Error' },
-  complete: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-green-900/20', label: 'Complete' },
-  status_change: { icon: Loader2, color: 'text-warning', bgColor: 'bg-yellow-900/20', label: 'Status' },
-  permission_request: { icon: Shield, color: 'text-warning', bgColor: 'bg-orange-900/20', label: 'Permission' },
+  action: { icon: Wrench, color: 'text-primary', bgColor: 'bg-primary-container/60', label: 'Action' },
+  observation: { icon: Eye, color: 'text-tertiary', bgColor: 'bg-tertiary-container/60', label: 'Result' },
+  error: { icon: AlertCircle, color: 'text-error', bgColor: 'bg-error-container/60', label: 'Error' },
+  complete: { icon: CheckCircle, color: 'text-tertiary', bgColor: 'bg-tertiary-container/60', label: 'Complete' },
+  status_change: { icon: Loader2, color: 'text-warning', bgColor: 'bg-warning-container/60', label: 'Status' },
+  permission_request: { icon: Shield, color: 'text-warning', bgColor: 'bg-warning-container/60', label: 'Permission' },
 };
 
 interface TimelineCardProps {
@@ -93,7 +93,7 @@ function TimelineCard({ event }: TimelineCardProps) {
           </span>
         </div>
         {actionHeadline && !expanded && (
-          <div className="text-xs text-blue-200 font-mono mb-1 break-all">{actionHeadline}</div>
+          <div className="text-xs text-primary font-mono mb-1 break-all">{actionHeadline}</div>
         )}
         <pre className="text-xs text-on-surface/80 whitespace-pre-wrap font-mono break-all">
           {expanded ? dataStr : (actionHeadline ? '' : preview)}
@@ -101,7 +101,7 @@ function TimelineCard({ event }: TimelineCardProps) {
         {hasMore && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 mt-1 text-xs text-primary hover:text-blue-600"
+            className="flex items-center gap-1 mt-1 text-xs text-primary hover:text-primary"
           >
             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             {expanded ? 'Collapse' : 'Show more'}
