@@ -43,6 +43,22 @@ interface Props {
   getTags: () => TagCount[];
 }
 
+/**
+ * Client mirror of `slugify()` in src/core/knowledge/wikilink.ts — used only to
+ * decide whether `[[Title]]` already resolves to a note's slug (root note) or
+ * whether we must insert the slug explicitly (foldered note).
+ */
+function slugifyClient(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9/_-]/g, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/\/{2,}/g, '/')
+    .replace(/^[-/]+|[-/]+$/g, '');
+}
+
 /** Completion source for `[[wikilinks]]`. */
 function wikilinkSource(getNotes: () => NoteIndexEntry[]) {
   return (context: CompletionContext): CompletionResult | null => {
@@ -55,12 +71,16 @@ function wikilinkSource(getNotes: () => NoteIndexEntry[]) {
     const hasClose = context.state.sliceDoc(context.pos, context.pos + 2) === ']]';
     const q = typed.trim().toLowerCase();
 
-    const insertLink = (title: string) => (view: EditorView, _c: Completion, a: number, b: number) => {
-      const insert = hasClose ? title : `${title}]]`;
+    // `linkText` is what goes inside `[[ ]]`. Wikilinks resolve by SLUG, so for
+    // a foldered note (slug !== slugify(title)) we must insert the slug, with
+    // the title as a display alias: `[[projects/octipus/specs|Specs]]`. A root
+    // note (slug === slugify(title)) stays the clean `[[Specs]]`.
+    const insertLink = (linkText: string) => (view: EditorView, _c: Completion, a: number, b: number) => {
+      const insert = hasClose ? linkText : `${linkText}]]`;
       view.dispatch({
         changes: { from: a, to: b, insert },
         // Land the caret after the closing `]]` either way.
-        selection: { anchor: a + title.length + 2 },
+        selection: { anchor: a + linkText.length + 2 },
       });
     };
 
@@ -68,7 +88,10 @@ function wikilinkSource(getNotes: () => NoteIndexEntry[]) {
     const options: Completion[] = notes
       .filter((n) => !q || n.title.toLowerCase().includes(q) || n.slug.toLowerCase().includes(q))
       .slice(0, 50)
-      .map((n) => ({ label: n.title, detail: n.slug, type: 'class', apply: insertLink(n.title) }));
+      .map((n) => {
+        const linkText = slugifyClient(n.title) === n.slug ? n.title : `${n.slug}|${n.title}`;
+        return { label: n.title, detail: n.slug, type: 'class', apply: insertLink(linkText) };
+      });
 
     // Offer to create a new note when the typed text isn't an existing title.
     if (q && !notes.some((n) => n.title.toLowerCase() === q)) {
