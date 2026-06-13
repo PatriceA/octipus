@@ -361,6 +361,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'ORCHESTRATOR_LITE_MAX_PARAMS',
   },
   {
+    key: 'orchestrator.smallModelMaxTools',
+    category: 'orchestrator',
+    valueType: 'number',
+    defaultValue: 7,
+    description:
+      'Max tools handed to a worker whose bound model is in the small (router) tier; trims the tool surface for weak local models',
+    isSecret: false,
+    envVar: 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS',
+  },
+  {
     key: 'orchestrator.piiFilterEnabled',
     category: 'orchestrator',
     valueType: 'boolean',

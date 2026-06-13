@@ -18,6 +18,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
+import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
@@ -234,7 +235,7 @@ export async function spawnWorker(
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
-  const roleTools = getToolsForRole(agentRole);
+  let roleTools = getToolsForRole(agentRole);
 
   if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
     try {
@@ -247,6 +248,32 @@ export async function spawnWorker(
   }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
+
+  // Resolve the worker's model up front so we know whether it's in the small
+  // (router) tier before assembling the prompt. The orchestrator already
+  // shrinks itself for small models (router/lite/full); this is the mirror
+  // image for workers — trim the expert scaffold and cap the tool surface so a
+  // weak local model isn't handed a 14-tool list and a multi-section prompt it
+  // can't drive. Smallness is derived from the *topic* model (what runs in the
+  // single-model / router case); an explicit expert modelPreference is a rare
+  // override and still benefits from a leaner prompt.
+  const routing = await deps.modelSelector.selectForWorker(
+    roleConfig.defaultTopic,
+    roleTools.length > 0,
+  );
+  const orchCfg = getConfig().orchestrator;
+  let isSmall = false;
+  if (routing.model) {
+    try {
+      const topicMeta = await getModelRegistry().getModelByModelId(routing.model);
+      isSmall = isSmallModel({ modelId: routing.model, metadata: topicMeta?.metadata }, orchCfg.routerSmallModelMaxParams);
+    } catch (err) {
+      coreLogger.debug({ err, model: routing.model }, 'small-model tier check skipped (non-fatal)');
+    }
+  }
+  if (isSmall) {
+    coreLogger.info({ role: agentRole, model: routing.model }, 'Worker model is small-tier — trimming prompt + tools');
+  }
 
   // Auto-select a matching expert for this role
   let expertPrompt: string | undefined;
@@ -273,13 +300,17 @@ export async function spawnWorker(
             criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
         }
 
+        // Deliverable template + success metrics are quality scaffolding that
+        // helps larger models structure output but bloats the prompt for small
+        // ones (and weak models follow them poorly anyway). Skip both in the
+        // small tier; critical rules stay because they're short and behavioral.
         const deliverableTemplate = matchingExpert.deliverableTemplate;
-        if (deliverableTemplate) {
+        if (deliverableTemplate && !isSmall) {
           expertPrompt = (expertPrompt || '') + '\n\n# Deliverable Template\nStructure your output as follows:\n' + deliverableTemplate;
         }
 
         const successMetrics = (matchingExpert.successMetrics as string[]) || [];
-        if (successMetrics.length > 0) {
+        if (successMetrics.length > 0 && !isSmall) {
           expertPrompt = (expertPrompt || '') + '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
             successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
         }
@@ -356,14 +387,17 @@ export async function spawnWorker(
     );
   }
 
-  const routing = await deps.modelSelector.selectForWorker(
-    roleConfig.defaultTopic,
-    roleTools.length > 0,
-  );
-
   const finalModel = overrides?.model || expertModel || routing.model;
   if (!finalModel) {
     return { error: 'No model configured. Please add one in the Models page.' };
+  }
+
+  // Small-tier worker: cap the tool surface. Role tool lists are
+  // priority-ordered so the core tools survive; the long tail (and MCP
+  // meta-tools / connector handlers appended above) is dropped. Skipped for
+  // larger models, which keep the full surface.
+  if (isSmall) {
+    roleTools = applyToolCap(roleTools, orchCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
   }
 
   const startTime = Date.now();
@@ -551,7 +585,10 @@ If you cannot write files (e.g., read-only environment), include the summary con
 - **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
 - **Documents**: Upload and index documents (octipus_upload_document)
 Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
-  } else {
+  } else if (!isSmall) {
+    // Small-tier models can't reliably drive the mcp_list_tools → mcp_call_tool
+    // meta-tool indirection, and their mcp handlers are usually capped away —
+    // so skip the guidance rather than advertise tools they'll misuse.
     systemPrompt += `\n\nEXTERNAL TOOLS VIA MCP: You can access external tools from the "octipus" MCP server.
 To use them, first call mcp_list_tools() to discover available tools and their parameters.
 Then call mcp_call_tool(server_id: "octipus", tool_name: "<tool>", arguments: {...}) to invoke one.

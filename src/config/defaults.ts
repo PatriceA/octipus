@@ -76,6 +76,7 @@ export const defaultConfig: Partial<Config> = {
     liteMaxIterations: 3,
     routerSmallModelMaxParams: 10_000_000_000,
     liteModelMaxParams: 24_000_000_000,
+    smallModelMaxTools: 7,
     piiFilterEnabled: true,
     maxPipelineStages: 10,
     approvalTimeoutMs: 3600000,
