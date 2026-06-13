@@ -118,6 +118,51 @@ export class NoteRepository {
       .limit(opts.limit ?? 100);
   }
 
+  /**
+   * Lightweight title/slug index for the active notes — the data source
+   * for the `[[wikilink]]` autocomplete. Only the columns the picker needs,
+   * so it stays cheap to refetch as the vault grows.
+   */
+  async listIndex(userId: string): Promise<Array<{ id: string; title: string; slug: string; noteKind: string }>> {
+    return this.db
+      .select({ id: notes.id, title: notes.title, slug: notes.slug, noteKind: notes.noteKind })
+      .from(notes)
+      .where(and(eq(notes.userId, userId), isNull(notes.archivedAt)))
+      .orderBy(notes.title)
+      .limit(2000);
+  }
+
+  /**
+   * Tag → count across the user's active notes — powers the tag tree and
+   * the `#tag` autocomplete (so we suggest existing tags and stop spawning
+   * near-duplicate spellings). Aggregated in app code rather than via
+   * `unnest`/`GROUP BY` so it behaves identically on Postgres and the
+   * embedded PGlite driver. Vaults are bounded, so this is cheap.
+   */
+  async tagCounts(userId: string): Promise<Array<{ tag: string; count: number }>> {
+    const rows = await this.db
+      .select({ tags: notes.tags })
+      .from(notes)
+      .where(and(eq(notes.userId, userId), isNull(notes.archivedAt)));
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      for (const tag of row.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }
+
+  /** Toggle the pin flag. Returns the updated row (null if not owned). */
+  async setPinned(userId: string, id: string, pinned: boolean): Promise<Note | null> {
+    const result = await this.db
+      .update(notes)
+      .set({ pinned, updatedAt: new Date() })
+      .where(and(eq(notes.id, id), eq(notes.userId, userId)))
+      .returning();
+    return result[0] ?? null;
+  }
+
   /** Soft delete — notes archive, they don't vanish. */
   async archive(userId: string, id: string): Promise<boolean> {
     const result = await this.db

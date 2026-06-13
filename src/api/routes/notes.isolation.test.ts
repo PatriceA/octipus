@@ -60,6 +60,12 @@ async function del(app: ElysiaLike, path: string) {
   const res = await app.handle(new Request(`http://localhost${path}`, { method: 'DELETE' }));
   return { status: res.status, body: (await res.json()) as any };
 }
+async function patch(app: ElysiaLike, path: string, body: unknown) {
+  const res = await app.handle(new Request(`http://localhost${path}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }));
+  return { status: res.status, body: (await res.json()) as any };
+}
 
 describe('Notes API', () => {
   test('create + read + list', async () => {
@@ -71,7 +77,10 @@ describe('Notes API', () => {
 
     const read = await get(aliceApp, `/api/notes/${aliceNoteId}`);
     expect(read.body.title).toBe('Alpha');
-    expect(read.body.outgoing.length).toBe(2);
+    // `#x` is a tag (surfaced via the tag list), so only [[Beta]] is an
+    // outgoing *link*. Beta doesn't exist yet → a ghost edge carrying the ref.
+    expect(read.body.outgoing.length).toBe(1);
+    expect(read.body.outgoing[0].endpoint).toMatchObject({ ref: 'beta', resolved: false });
 
     const list = await get(aliceApp, '/api/notes');
     expect(list.body.notes.some((n: any) => n.id === aliceNoteId)).toBe(true);
@@ -107,5 +116,49 @@ describe('Notes API', () => {
     expect(d.body).toEqual({ deleted: true, hard: false });
     const list = await get(aliceApp, '/api/notes');
     expect(list.body.notes.find((n: any) => n.id === id)).toBeUndefined();
+  });
+});
+
+describe('Notes workspace endpoints', () => {
+  test('GET /notes/index returns the caller’s notes, scoped', async () => {
+    const r = await get(aliceApp, '/api/notes/index');
+    expect(r.status).toBe(200);
+    expect(r.body.notes.some((n: any) => n.id === aliceNoteId)).toBe(true);
+    expect(r.body.notes[0]).toHaveProperty('slug');
+    expect(r.body.notes[0]).toHaveProperty('title');
+    const b = await get(bobApp, '/api/notes/index');
+    expect(b.body.notes.find((n: any) => n.id === aliceNoteId)).toBeUndefined();
+  });
+
+  test('GET /notes/tags aggregates counts, sorted desc', async () => {
+    await post(aliceApp, '/api/notes', { title: 'Tagged one', body: '#alpha #shared' });
+    await post(aliceApp, '/api/notes', { title: 'Tagged two', body: '#shared' });
+    const r = await get(aliceApp, '/api/notes/tags');
+    expect(r.status).toBe(200);
+    const shared = r.body.tags.find((t: any) => t.tag === 'shared');
+    expect(shared.count).toBeGreaterThanOrEqual(2);
+    const counts = r.body.tags.map((t: any) => t.count);
+    expect(counts).toEqual([...counts].sort((a: number, b: number) => b - a));
+  });
+
+  test('PATCH /notes/:id/pin toggles, 404 cross-tenant', async () => {
+    const pin = await patch(aliceApp, `/api/notes/${aliceNoteId}/pin`, { pinned: true });
+    expect(pin.status).toBe(200);
+    expect(pin.body.pinned).toBe(true);
+    const list = await get(aliceApp, '/api/notes');
+    expect(list.body.notes.find((n: any) => n.id === aliceNoteId).pinned).toBe(true);
+    const cross = await patch(bobApp, `/api/notes/${aliceNoteId}/pin`, { pinned: false });
+    expect(cross.status).toBe(404);
+  });
+
+  test('backlinks resolve to real titles', async () => {
+    const target = await post(aliceApp, '/api/notes', { title: 'Target Note', slug: 'target-note' });
+    const targetId = target.body.note.id;
+    await post(aliceApp, '/api/notes', { title: 'Source Note', body: 'see [[target-note]]' });
+    const read = await get(aliceApp, `/api/notes/${targetId}`);
+    expect(read.body.backlinks.length).toBeGreaterThanOrEqual(1);
+    const bl = read.body.backlinks.find((b: any) => b.endpoint.title === 'Source Note');
+    expect(bl).toBeDefined();
+    expect(bl.endpoint.resolved).toBe(true);
   });
 });
