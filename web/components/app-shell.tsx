@@ -41,6 +41,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Full-bleed pages manage their own layout/scroll edge-to-edge (no page
+  // padding, no entrance wrapper) — chat and the notes workspace.
+  const fullBleed = pathname === '/chat' || pathname.startsWith('/notes');
+
   return (
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-mono">
       <ImpersonationBanner />
@@ -53,10 +57,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             aria-label="Page content"
             className={cn(
               'flex-1 overflow-hidden bg-background',
-              pathname === '/chat' ? 'p-0' : 'overflow-y-auto p-6'
+              fullBleed ? 'p-0' : 'overflow-y-auto p-6'
             )}
           >
-            {pathname === '/chat' ? (
+            {fullBleed ? (
               children
             ) : (
               // Re-keying on navigation gives every page the same quick
@@ -67,10 +71,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </main>
         </div>
-        {/* On /chat the page renders its own banner just above the
-            prompt input — the floating one would leave a huge gap
-            between the chat content and the viewport bottom. */}
-        {pathname !== '/chat' && <GlobalPermissionBanner />}
+        {/* Full-bleed pages (chat, notes) render their own UI edge-to-edge;
+            the floating permission banner would leave a gap, so skip it. */}
+        {!fullBleed && <GlobalPermissionBanner />}
       </div>
     </div>
   );

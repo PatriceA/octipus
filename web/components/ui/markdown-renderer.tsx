@@ -2,8 +2,9 @@
 
 import { Check, Copy } from 'lucide-react';
 import { useCallback, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { remarkWikilink } from '@/lib/remark-wikilink';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -51,11 +52,29 @@ export function CodeBlock({ language, code }: { language: string; code: string }
  * can tune spacing/typography for their surface (e.g. a denser chat bubble vs
  * a roomier document preview).
  */
-export function Markdown({ content, className }: { content: string; className?: string }) {
+export function Markdown({
+  content,
+  className,
+  onWikilink,
+  onTag,
+}: {
+  content: string;
+  className?: string;
+  /** When set, `[[wikilinks]]` render as clickable links that open a note by slug. */
+  onWikilink?: (slug: string) => void;
+  /** When set, inline `#tags` render as clickable chips. */
+  onTag?: (tag: string) => void;
+}) {
+  const enableInline = !!(onWikilink || onTag);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={enableInline ? [remarkGfm, remarkWikilink] : [remarkGfm]}
+        urlTransform={
+          enableInline
+            ? (url) => (url.startsWith('wikilink:') || url.startsWith('tag:') ? url : defaultUrlTransform(url))
+            : undefined
+        }
         components={{
           code({ inline, className: codeClassName, children, ...props }: {
             inline?: boolean;
@@ -130,6 +149,32 @@ export function Markdown({ content, className }: { content: string; className?: 
             return <td className="border border-outline-variant/20 px-2 py-1 align-top">{children}</td>;
           },
           a({ href, children }) {
+            // In-app wikilink — open the note by slug.
+            if (onWikilink && href?.startsWith('wikilink:')) {
+              const slug = href.slice('wikilink:'.length);
+              return (
+                <button
+                  type="button"
+                  onClick={() => onWikilink(slug)}
+                  className="text-primary underline decoration-dotted underline-offset-2 hover:opacity-80"
+                >
+                  {children}
+                </button>
+              );
+            }
+            // Inline tag chip — filter by tag.
+            if (onTag && href?.startsWith('tag:')) {
+              const tag = href.slice('tag:'.length);
+              return (
+                <button
+                  type="button"
+                  onClick={() => onTag(tag)}
+                  className="inline-flex items-center rounded bg-primary-container/40 px-1 text-[0.85em] text-primary hover:bg-primary-container/70"
+                >
+                  {children}
+                </button>
+              );
+            }
             return (
               <a
                 href={href ?? '#'}

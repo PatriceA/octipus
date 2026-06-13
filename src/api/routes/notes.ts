@@ -107,6 +107,28 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
     },
   )
 
+  // Lightweight {id,title,slug,kind} index — the source for `[[` autocomplete.
+  .get(
+    '/index',
+    async ({ user, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const notes = await getNoteRepository().listIndex(user.id);
+      return { notes };
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
+  // Tag → count across active notes — powers the tag tree + `#tag` autocomplete.
+  .get(
+    '/tags',
+    async ({ user, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const tags = await getNoteRepository().tagCounts(user.id);
+      return { tags };
+    },
+    { detail: { tags: ['notes'] } },
+  )
+
   .post(
     '/capture',
     async ({ user, body, set }) => {
@@ -128,9 +150,49 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       const note = await getNoteService().getById(user.id, params.id);
       if (!note) { set.status = 404; return { error: 'Note not found' }; }
-      const backlinks = await getKnowledgeLinkRepository().getBacklinks(user.id, 'note', note.id);
-      const outgoing = await getKnowledgeLinkRepository().getOutgoing(user.id, 'note', note.id);
-      return { ...note, backlinks, outgoing };
+      const links = getKnowledgeLinkRepository();
+      const backlinks = await links.getBacklinks(user.id, 'note', note.id);
+      // `tagged` edges are shown via the tag list, not the outgoing-links list.
+      const outgoing = (await links.getOutgoing(user.id, 'note', note.id)).filter((e) => e.linkType !== 'tagged');
+
+      // Resolve note endpoints to real titles/slugs in one batch so the UI
+      // renders "← Roadmap" (clickable) instead of "← note:1a2b3c4".
+      const noteIds = new Set<string>();
+      for (const e of backlinks) if (e.fromType === 'note') noteIds.add(e.fromId);
+      for (const e of outgoing) if (e.toType === 'note' && e.toId) noteIds.add(e.toId);
+      const titleRows = await getNoteRepository().getByIds(user.id, [...noteIds]);
+      const titleMap = new Map(titleRows.map((r) => [r.id, { title: r.title, slug: r.slug }]));
+
+      // `resolved` means "a note we loaded a title for" (i.e. clickable). A
+      // real but non-note endpoint (document/memory) is shown by type:id, not
+      // as a ghost — only true ghost edges (a ref with no bound id) are ghosts.
+      const backlinksView = backlinks.map((e) => ({
+        id: e.id,
+        linkType: e.linkType,
+        label: e.label,
+        origin: e.origin,
+        endpoint: { type: e.fromType, id: e.fromId, resolved: e.fromType === 'note' && titleMap.has(e.fromId), ...(titleMap.get(e.fromId) ?? {}) },
+      }));
+      const outgoingView = outgoing.map((e) => {
+        if (e.toId) {
+          return {
+            id: e.id,
+            linkType: e.linkType,
+            label: e.label,
+            origin: e.origin,
+            endpoint: { type: e.toType ?? 'note', id: e.toId, resolved: e.toType === 'note' && titleMap.has(e.toId), ...(titleMap.get(e.toId) ?? {}) },
+          };
+        }
+        // Ghost edge — the target note doesn't exist yet; show the ref.
+        return {
+          id: e.id,
+          linkType: e.linkType,
+          label: e.label,
+          origin: e.origin,
+          endpoint: { type: e.toType ?? 'note', ref: e.toRef, resolved: false },
+        };
+      });
+      return { ...note, backlinks: backlinksView, outgoing: outgoingView };
     },
     { detail: { tags: ['notes'] } },
   )
@@ -148,6 +210,17 @@ export const noteRoutes = new Elysia({ prefix: '/notes' })
       }
     },
     { detail: { tags: ['notes'] } },
+  )
+
+  .patch(
+    '/:id/pin',
+    async ({ user, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const updated = await getNoteRepository().setPinned(user.id, params.id, body.pinned);
+      if (!updated) { set.status = 404; return { error: 'Note not found' }; }
+      return { id: updated.id, pinned: updated.pinned };
+    },
+    { body: t.Object({ pinned: t.Boolean() }), detail: { tags: ['notes'] } },
   )
 
   .delete(
