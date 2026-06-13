@@ -155,6 +155,11 @@ export function NotesWorkspace() {
     if (view !== 'list') changeView('list');
   }
 
+  function openSlug(slug: string) {
+    const target = notes.find((n) => n.slug === slug) ?? noteIndex.find((n) => n.slug === slug);
+    if (target) selectNote(target.id);
+  }
+
   function openNew(folder?: string) {
     if (!confirmDiscard()) return;
     setSelectedId(null);
@@ -309,6 +314,8 @@ export function NotesWorkspace() {
               onArchive={() => selectedId && del.mutate(selectedId)}
               noteIndex={noteIndex}
               tags={tags}
+              onOpenSlug={openSlug}
+              onTagClick={(t) => { setActiveTag(t); setFilter('all'); }}
             />
           </main>
 

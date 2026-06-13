@@ -36,6 +36,10 @@ interface EditorProps {
   onArchive: () => void;
   noteIndex: NoteIndexEntry[];
   tags: TagCount[];
+  /** Open a linked note from a `[[wikilink]]` in the preview. */
+  onOpenSlug?: (slug: string) => void;
+  /** Filter by an inline `#tag` clicked in the preview. */
+  onTagClick?: (tag: string) => void;
 }
 
 const KINDS = ['note', 'daily', 'moc', 'literature'];
@@ -73,7 +77,7 @@ export function NoteEditor(props: EditorProps) {
   const {
     selectedId, draftTitle, setDraftTitle, draftBody, setDraftBody, draftTags, setDraftTags,
     draftKind, setDraftKind, draftFolder, setDraftFolder, slug, noteDate, pinned, onTogglePin,
-    mode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags,
+    mode, setMode, dirty, saving, onSave, onArchive, noteIndex, tags, onOpenSlug, onTagClick,
   } = props;
 
   const editorRef = useRef<MarkdownEditorHandle>(null);
@@ -98,7 +102,7 @@ export function NoteEditor(props: EditorProps) {
   );
 
   const preview = draftBody.trim() ? (
-    <Markdown content={draftBody} className="max-w-none px-1" />
+    <Markdown content={draftBody} className="max-w-none px-1" onWikilink={onOpenSlug} onTag={onTagClick} />
   ) : (
     <p className="text-[13px] text-on-surface-variant/60">Nothing to preview yet — switch to Edit to start writing.</p>
   );
