@@ -3,6 +3,7 @@ import { getDb } from '@/db/postgres';
 import { RedisCache } from '@/db/redis';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
+import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { getUserOrgIds } from '@/services/org-membership';
 import { modelLogger } from '@/utils/logger';
 
@@ -326,16 +327,12 @@ export class ModelRegistry {
   private async invalidateCache(name: string): Promise<void> {
     await this.cacheDelete(`model:${name}`);
     await this.cacheDelete('model:default');
-    // Clear all topic caches (simplified - in production you'd track these)
-    const topics = [
-      'general', 'coding', 'research', 'architecture', 'communication',
-      'chat', 'embedding', 'ocr', 'vision', 'data', 'design', 'devops', 'security',
-      'ai', 'finance', 'automation', 'qa', 'pm', 'writing', 'review', 'voice', 'local', 'simple',
-      // Memory-redesign Phase D — extractor/judge bind here. Cheap
-      // model is fine: this runs per turn so latency matters more than
-      // raw capability.
-      'memory_extraction',
-    ];
+    // Clear all topic caches. Built from the canonical single-model text-topic
+    // set (the source of truth that includes memory_extraction / knowledge_review
+    // / evaluation) plus the non-text model classes, so adding a topic in one
+    // place keeps invalidation correct — previously this hardcoded list silently
+    // omitted knowledge_review and evaluation, leaking their stale bindings.
+    const topics = [...SINGLE_MODEL_CHAT_TOPICS, 'embedding', 'ocr', 'vision'];
     for (const topic of topics) {
       await this.cacheDelete(`model:topic:${topic}`);
       await this.cacheDelete(`model:topic:backup:${topic}`);

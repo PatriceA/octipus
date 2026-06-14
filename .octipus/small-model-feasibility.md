@@ -165,6 +165,19 @@ Fixed at the source:
 This is the reusable engine the eventual config-profile UI/API (plan #1) will
 call; the binding logic now exists and is tested independent of any UI.
 
+## Status — gap #1 increment 2: adopt the single-model setup on an existing install
+
+- **`POST /api/models/:name/use-for-all-topics`** (admin) — binds an existing
+  model to all text topics via `singleModelTopicBindings()` and makes it the
+  default. The one-click "run everything on this one model" action. Response
+  flags `embedding`/`ocr`/`vision` as still unbound so the caller can prompt for
+  them. (Backend only; a Models-page button is the remaining UI bit of #1.)
+- **Registry cache-invalidation fix** — `ModelRegistry.invalidateCache` hardcoded
+  its topic list and silently omitted `knowledge_review` and `evaluation`, so
+  rebinding those leaked stale cache entries. Rebuilt from
+  `SINGLE_MODEL_CHAT_TOPICS` + the non-text classes, so the vocabulary has one
+  source of truth.
+
 ### Deliberately not done yet (follow-ups)
 - Smallness (gap #2) is derived from the **topic** model. An expert with an
   explicit big `modelPreference` over a small topic model would still be trimmed

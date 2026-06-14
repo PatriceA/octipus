@@ -9,6 +9,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
 import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { getQuotaTracker } from '@/models/quota-tracker';
+import { singleModelTopicBindings } from '@/models/single-model-binding';
 import { coreLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
 
@@ -577,6 +578,44 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       const success = await registry.setDefaultModel(params.name);
 
       return { success };
+    },
+    {
+      params: t.Object({
+        name: t.String(),
+      }),
+      detail: { tags: ['models'] },
+    }
+  )
+
+  // Bind a model to every text topic and make it the default — the one-click
+  // "run everything on this single model" action for small / local setups.
+  // embedding/ocr/vision are intentionally left unbound (different model
+  // classes); the response flags that so the caller can prompt for them.
+  .post(
+    '/:name/use-for-all-topics',
+    async ({ user, params, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+
+      const registry = getModelRegistry();
+      const model = await registry.getModel(params.name);
+      if (!model) {
+        set.status = 404;
+        return { error: `Model "${params.name}" not found` };
+      }
+
+      const { topics, topicRoles } = singleModelTopicBindings();
+      const updated = await registry.updateModel(params.name, { topics, topicRoles });
+      await registry.setDefaultModel(params.name);
+
+      return {
+        success: !!updated,
+        topics,
+        unbound: ['embedding', 'ocr', 'vision'],
+        note: 'Bound to all text topics and set as default. embedding/ocr/vision stay unbound — add an embedding model for RAG + memory, and a vision model for document/image features.',
+      };
     },
     {
       params: t.Object({
