@@ -100,6 +100,25 @@ export async function handleExpertMessage(
   await messageRepository.create({ sessionId, role: 'user', content: message });
   await sessionRepository.incrementMessageCount(sessionId);
 
+  // Small-model tier for this expert's worker. spawnWorker handles the tool cap
+  // and MCP-guidance skip for any worker, but the deliverable/metrics/response
+  // scaffold below is assembled here and passed as a systemPrompt override, so
+  // it must be trimmed here too. Tier is the expert's modelPreference if set,
+  // else the role's topic model — matching what spawnWorker will actually run.
+  const orchCfg = getConfig().orchestrator;
+  let isSmall = false;
+  try {
+    const registry = getModelRegistry();
+    const tierModel = expert.modelPreference
+      ? await registry.getModelByModelId(expert.modelPreference)
+      : await registry.getModelForTopic(roleConfig.defaultTopic);
+    if (tierModel) {
+      isSmall = isSmallModel({ modelId: tierModel.modelId, metadata: tierModel.metadata }, orchCfg.routerSmallModelMaxParams);
+    }
+  } catch (err) {
+    coreLogger.debug({ err, expertId, role: agentRole }, 'expert small-model tier check skipped (non-fatal)');
+  }
+
   try {
     // Build expert identity prompt — role config as base, then expert-specific overrides
     let expertPrompt = SECURITY_PREAMBLE;
@@ -119,26 +138,35 @@ export async function handleExpertMessage(
         criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
     }
 
-    // Deliverable template
-    if (expert.deliverableTemplate) {
+    // Deliverable template + success metrics: quality scaffolding for larger
+    // models, prompt bloat that weak models follow poorly. Skip in the small tier.
+    if (expert.deliverableTemplate && !isSmall) {
       expertPrompt += '\n\n# Deliverable Template\nStructure your output as follows:\n' + expert.deliverableTemplate;
     }
 
-    // Success metrics
     const successMetrics = (expert.successMetrics as string[]) || [];
-    if (successMetrics.length > 0) {
+    if (successMetrics.length > 0 && !isSmall) {
       expertPrompt += '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
         successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
     }
 
-    // Expert-specific tool guidance — prevents looping and over-engineering
-    expertPrompt += '\n\n# Response Guidelines\n'
-      + '- For conversational messages (greetings, "what can you do", introductions): respond directly with text. Do NOT call any tools.\n'
-      + '- Only use tools when the task genuinely requires external data, file operations, or actions.\n'
-      + '- Think step-by-step before deciding whether to use a tool. If you can answer from your domain knowledge, do so directly.\n'
-      + '- Never call the same tool twice with identical arguments.\n'
-      + '- After at most 5 tool calls, synthesize your findings and respond.\n'
-      + '- PREFER built-in tools over writing code/scripts. For recurring tasks use the scheduling tool (create_hook). For notifications use the messaging tool (send_message). Do NOT create standalone scripts, plugins, or services when a built-in tool exists.';
+    // Expert-specific tool guidance — prevents looping and over-engineering.
+    // Small models get a compact version (the long form's nuances are lost on
+    // them and cost ~180 tokens better spent on the task).
+    if (isSmall) {
+      expertPrompt += '\n\n# Response Guidelines\n'
+        + '- Greetings / "what can you do": reply in plain text, no tools.\n'
+        + '- Use a tool only when the task needs external data, files, or actions; otherwise answer directly.\n'
+        + '- Never repeat a tool call with identical arguments. After at most 5 tool calls, stop and answer.';
+    } else {
+      expertPrompt += '\n\n# Response Guidelines\n'
+        + '- For conversational messages (greetings, "what can you do", introductions): respond directly with text. Do NOT call any tools.\n'
+        + '- Only use tools when the task genuinely requires external data, file operations, or actions.\n'
+        + '- Think step-by-step before deciding whether to use a tool. If you can answer from your domain knowledge, do so directly.\n'
+        + '- Never call the same tool twice with identical arguments.\n'
+        + '- After at most 5 tool calls, synthesize your findings and respond.\n'
+        + '- PREFER built-in tools over writing code/scripts. For recurring tasks use the scheduling tool (create_hook). For notifications use the messaging tool (send_message). Do NOT create standalone scripts, plugins, or services when a built-in tool exists.';
+    }
 
     if (guardFlags.length > 0) {
       expertPrompt += buildSecurityReminder(guardFlags);
@@ -166,9 +194,15 @@ export async function handleExpertMessage(
           'Expert lists skillIds missing from registry — expert worker runs with partial domain knowledge',
         );
       }
-      const fragment = await skillReg.buildPromptFragment(skillIds);
-      if (fragment) {
-        expertPrompt += `\n\n# Domain Knowledge\n${fragment}`;
+      // Small tier: inject the index (name + 1-line description) instead of the
+      // full skill bodies — multi-skill experts otherwise dump tens of k tokens
+      // a small model can't use. Larger models get the full fragment.
+      if (isSmall) {
+        const summary = await skillReg.buildPromptSummary(skillIds);
+        if (summary) expertPrompt += `\n\n# Domain Knowledge (index)\n${summary}`;
+      } else {
+        const fragment = await skillReg.buildPromptFragment(skillIds);
+        if (fragment) expertPrompt += `\n\n# Domain Knowledge\n${fragment}`;
       }
     }
 
