@@ -1,7 +1,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { randomBytes } from 'node:crypto';
 import { RedisCache } from '@/db/redis';
 import { initializeStorage } from '@/db/storage';
 import { getHealthChecker, HealthChecker } from './health-checker';
+
+// checkProvider('litellm', …) reaches getConfig() for the proxy URL/key, which
+// validates the full config schema (security secrets ≥32 chars). Seed them like
+// the other suites do so the LiteLLM branch can resolve config under `bun test`.
+const rand = (n: number) => randomBytes(n).toString('hex');
+process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
+process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
+process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
+process.env.LOG_LEVEL ??= 'error';
 
 /**
  * Health-checker tests focused on the LiteLLM-routed branch.
