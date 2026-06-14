@@ -18,6 +18,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
+import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
@@ -99,6 +100,25 @@ export async function handleExpertMessage(
   await messageRepository.create({ sessionId, role: 'user', content: message });
   await sessionRepository.incrementMessageCount(sessionId);
 
+  // Small-model tier for this expert's worker. spawnWorker handles the tool cap
+  // and MCP-guidance skip for any worker, but the deliverable/metrics/response
+  // scaffold below is assembled here and passed as a systemPrompt override, so
+  // it must be trimmed here too. Tier is the expert's modelPreference if set,
+  // else the role's topic model — matching what spawnWorker will actually run.
+  const orchCfg = getConfig().orchestrator;
+  let isSmall = false;
+  try {
+    const registry = getModelRegistry();
+    const tierModel = expert.modelPreference
+      ? await registry.getModelByModelId(expert.modelPreference)
+      : await registry.getModelForTopic(roleConfig.defaultTopic);
+    if (tierModel) {
+      isSmall = isSmallModel({ modelId: tierModel.modelId, metadata: tierModel.metadata }, orchCfg.routerSmallModelMaxParams);
+    }
+  } catch (err) {
+    coreLogger.debug({ err, expertId, role: agentRole }, 'expert small-model tier check skipped (non-fatal)');
+  }
+
   try {
     // Build expert identity prompt — role config as base, then expert-specific overrides
     let expertPrompt = SECURITY_PREAMBLE;
@@ -118,26 +138,35 @@ export async function handleExpertMessage(
         criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
     }
 
-    // Deliverable template
-    if (expert.deliverableTemplate) {
+    // Deliverable template + success metrics: quality scaffolding for larger
+    // models, prompt bloat that weak models follow poorly. Skip in the small tier.
+    if (expert.deliverableTemplate && !isSmall) {
       expertPrompt += '\n\n# Deliverable Template\nStructure your output as follows:\n' + expert.deliverableTemplate;
     }
 
-    // Success metrics
     const successMetrics = (expert.successMetrics as string[]) || [];
-    if (successMetrics.length > 0) {
+    if (successMetrics.length > 0 && !isSmall) {
       expertPrompt += '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
         successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
     }
 
-    // Expert-specific tool guidance — prevents looping and over-engineering
-    expertPrompt += '\n\n# Response Guidelines\n'
-      + '- For conversational messages (greetings, "what can you do", introductions): respond directly with text. Do NOT call any tools.\n'
-      + '- Only use tools when the task genuinely requires external data, file operations, or actions.\n'
-      + '- Think step-by-step before deciding whether to use a tool. If you can answer from your domain knowledge, do so directly.\n'
-      + '- Never call the same tool twice with identical arguments.\n'
-      + '- After at most 5 tool calls, synthesize your findings and respond.\n'
-      + '- PREFER built-in tools over writing code/scripts. For recurring tasks use the scheduling tool (create_hook). For notifications use the messaging tool (send_message). Do NOT create standalone scripts, plugins, or services when a built-in tool exists.';
+    // Expert-specific tool guidance — prevents looping and over-engineering.
+    // Small models get a compact version (the long form's nuances are lost on
+    // them and cost ~180 tokens better spent on the task).
+    if (isSmall) {
+      expertPrompt += '\n\n# Response Guidelines\n'
+        + '- Greetings / "what can you do": reply in plain text, no tools.\n'
+        + '- Use a tool only when the task needs external data, files, or actions; otherwise answer directly.\n'
+        + '- Never repeat a tool call with identical arguments. After at most 5 tool calls, stop and answer.';
+    } else {
+      expertPrompt += '\n\n# Response Guidelines\n'
+        + '- For conversational messages (greetings, "what can you do", introductions): respond directly with text. Do NOT call any tools.\n'
+        + '- Only use tools when the task genuinely requires external data, file operations, or actions.\n'
+        + '- Think step-by-step before deciding whether to use a tool. If you can answer from your domain knowledge, do so directly.\n'
+        + '- Never call the same tool twice with identical arguments.\n'
+        + '- After at most 5 tool calls, synthesize your findings and respond.\n'
+        + '- PREFER built-in tools over writing code/scripts. For recurring tasks use the scheduling tool (create_hook). For notifications use the messaging tool (send_message). Do NOT create standalone scripts, plugins, or services when a built-in tool exists.';
+    }
 
     if (guardFlags.length > 0) {
       expertPrompt += buildSecurityReminder(guardFlags);
@@ -165,9 +194,18 @@ export async function handleExpertMessage(
           'Expert lists skillIds missing from registry — expert worker runs with partial domain knowledge',
         );
       }
-      const fragment = await skillReg.buildPromptFragment(skillIds);
-      if (fragment) {
-        expertPrompt += `\n\n# Domain Knowledge\n${fragment}`;
+      // Small tier: inject the index (name + 1-line description) instead of the
+      // full skill bodies — multi-skill experts otherwise dump tens of k tokens
+      // a small model can't use. Larger models get the full fragment here: a
+      // direct `/expert` invocation is an explicit, focused request, so we keep
+      // full fidelity (unlike auto-spawned experts in spawnWorker, which always
+      // use the index because the orchestrator may fan out to several).
+      if (isSmall) {
+        const summary = await skillReg.buildPromptSummary(skillIds);
+        if (summary) expertPrompt += `\n\n# Domain Knowledge (index)\n${summary}`;
+      } else {
+        const fragment = await skillReg.buildPromptFragment(skillIds);
+        if (fragment) expertPrompt += `\n\n# Domain Knowledge\n${fragment}`;
       }
     }
 
@@ -234,7 +272,7 @@ export async function spawnWorker(
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
-  const roleTools = getToolsForRole(agentRole);
+  let roleTools = getToolsForRole(agentRole);
 
   if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
     try {
@@ -247,6 +285,32 @@ export async function spawnWorker(
   }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
+
+  // Resolve the worker's model up front so we know whether it's in the small
+  // (router) tier before assembling the prompt. The orchestrator already
+  // shrinks itself for small models (router/lite/full); this is the mirror
+  // image for workers — trim the expert scaffold and cap the tool surface so a
+  // weak local model isn't handed a 14-tool list and a multi-section prompt it
+  // can't drive. Smallness is derived from the *topic* model (what runs in the
+  // single-model / router case); an explicit expert modelPreference is a rare
+  // override and still benefits from a leaner prompt.
+  const routing = await deps.modelSelector.selectForWorker(
+    roleConfig.defaultTopic,
+    roleTools.length > 0,
+  );
+  const orchCfg = getConfig().orchestrator;
+  let isSmall = false;
+  if (routing.model) {
+    try {
+      const topicMeta = await getModelRegistry().getModelByModelId(routing.model);
+      isSmall = isSmallModel({ modelId: routing.model, metadata: topicMeta?.metadata }, orchCfg.routerSmallModelMaxParams);
+    } catch (err) {
+      coreLogger.debug({ err, model: routing.model }, 'small-model tier check skipped (non-fatal)');
+    }
+  }
+  if (isSmall) {
+    coreLogger.info({ role: agentRole, model: routing.model }, 'Worker model is small-tier — trimming prompt + tools');
+  }
 
   // Auto-select a matching expert for this role
   let expertPrompt: string | undefined;
@@ -273,13 +337,17 @@ export async function spawnWorker(
             criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
         }
 
+        // Deliverable template + success metrics are quality scaffolding that
+        // helps larger models structure output but bloats the prompt for small
+        // ones (and weak models follow them poorly anyway). Skip both in the
+        // small tier; critical rules stay because they're short and behavioral.
         const deliverableTemplate = matchingExpert.deliverableTemplate;
-        if (deliverableTemplate) {
+        if (deliverableTemplate && !isSmall) {
           expertPrompt = (expertPrompt || '') + '\n\n# Deliverable Template\nStructure your output as follows:\n' + deliverableTemplate;
         }
 
         const successMetrics = (matchingExpert.successMetrics as string[]) || [];
-        if (successMetrics.length > 0) {
+        if (successMetrics.length > 0 && !isSmall) {
           expertPrompt = (expertPrompt || '') + '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
             successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
         }
@@ -356,14 +424,17 @@ export async function spawnWorker(
     );
   }
 
-  const routing = await deps.modelSelector.selectForWorker(
-    roleConfig.defaultTopic,
-    roleTools.length > 0,
-  );
-
   const finalModel = overrides?.model || expertModel || routing.model;
   if (!finalModel) {
     return { error: 'No model configured. Please add one in the Models page.' };
+  }
+
+  // Small-tier worker: cap the tool surface. Role tool lists are
+  // priority-ordered so the core tools survive; the long tail (and MCP
+  // meta-tools / connector handlers appended above) is dropped. Skipped for
+  // larger models, which keep the full surface.
+  if (isSmall) {
+    roleTools = applyToolCap(roleTools, orchCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
   }
 
   const startTime = Date.now();
@@ -551,7 +622,10 @@ If you cannot write files (e.g., read-only environment), include the summary con
 - **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
 - **Documents**: Upload and index documents (octipus_upload_document)
 Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
-  } else {
+  } else if (!isSmall) {
+    // Small-tier models can't reliably drive the mcp_list_tools → mcp_call_tool
+    // meta-tool indirection, and their mcp handlers are usually capped away —
+    // so skip the guidance rather than advertise tools they'll misuse.
     systemPrompt += `\n\nEXTERNAL TOOLS VIA MCP: You can access external tools from the "octipus" MCP server.
 To use them, first call mcp_list_tools() to discover available tools and their parameters.
 Then call mcp_call_tool(server_id: "octipus", tool_name: "<tool>", arguments: {...}) to invoke one.

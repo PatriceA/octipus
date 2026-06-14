@@ -120,9 +120,12 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
-    // Ollama's /v1 endpoint doesn't properly support think:false — use native /api/chat
-    // when thinking is disabled (with or without tools)
-    if (options.extraBody?.think === false) {
+    // Ollama's /v1 endpoint doesn't properly honor think:false OR
+    // response_format:json_object — both are reliable only on the native
+    // /api/chat endpoint (think:false flag, format:'json' field). Route there
+    // when either is requested so small local models actually return parseable
+    // JSON instead of prose the caller has to repair.
+    if (options.extraBody?.think === false || options.responseFormat?.type === 'json_object') {
       return this.completeNative(options);
     }
 
@@ -260,6 +263,9 @@ export class OllamaProvider implements ModelProvider {
       messages,
       stream: false,
       think: false,
+      // Native JSON mode: constrains decoding to valid JSON. This is Ollama's
+      // real structured-output lever (the /v1 response_format is unreliable).
+      ...(options.responseFormat?.type === 'json_object' ? { format: 'json' } : {}),
       options: {
         temperature: options.temperature,
         num_predict: options.maxTokens,

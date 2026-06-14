@@ -39,7 +39,6 @@ function splitTags(value: string): MdNode[] {
   let last = 0;
   const re = new RegExp(TAG_RE.source, 'g');
   let m: RegExpExecArray | null;
-  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
   while ((m = re.exec(value))) {
     const boundary = m[1] ?? '';
     const tag = m[2];
@@ -58,7 +57,6 @@ function splitInline(value: string): MdNode[] {
   let last = 0;
   const re = new RegExp(WIKILINK_RE.source, 'g');
   let m: RegExpExecArray | null;
-  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
   while ((m = re.exec(value))) {
     if (m.index > last) out.push(...splitTags(value.slice(last, m.index)));
     let rest = m[1];

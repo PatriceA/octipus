@@ -216,6 +216,14 @@ export const orchestratorConfigSchema = z.object({
   routerSmallModelMaxParams: z.number().default(10_000_000_000),
   /** auto: models with fewer params than this (and ≥ router threshold) run in lite mode. */
   liteModelMaxParams: z.number().default(24_000_000_000),
+  /**
+   * Max tools handed to a worker whose bound model is in the small (router)
+   * tier. Small local models lose track of large tool surfaces and emit
+   * malformed tool-call JSON; capping the list improves reliability and cuts
+   * prompt size. Role tool lists are priority-ordered, so the cap keeps the
+   * core tools. Does not affect workers on larger models.
+   */
+  smallModelMaxTools: z.number().min(1).max(50).default(7),
   piiFilterEnabled: z.boolean().default(true),
   maxPipelineStages: z.number().min(1).max(20).default(10),
   approvalTimeoutMs: z.number().min(0).default(3600000), // 1 hour

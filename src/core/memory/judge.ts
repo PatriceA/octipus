@@ -104,6 +104,9 @@ async function decide(candidate: CandidateFact, closest: Memory | null, userId: 
       ],
       temperature: 0,
       maxTokens: 50,
+      // Strict-JSON prompt; request JSON mode for reliable parsing on small
+      // local models (falls back to NOOP if the model ignores it).
+      responseFormat: { type: 'json_object' },
       userId,
     });
     return parseJudgeAction(result.content ?? '') ?? 'NOOP';

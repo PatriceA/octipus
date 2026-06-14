@@ -1,6 +1,7 @@
 import { count } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
+import { singleModelTopicBindings } from '@/models/single-model-binding';
 import { getVault } from '@/security/vault';
 import { logger } from '@/utils/logger';
 
@@ -66,14 +67,21 @@ export async function bootstrapDefaultModel(): Promise<void> {
   const friendlyName = `${provider} ${modelId}`;
   const endpoint = baseUrl || null;
 
+  // Bind the single bootstrap model to every text topic, not just `general`.
+  // Worker topics are fail-loud (no default fallback), so binding only `general`
+  // would break the moment the router routes to any other specialist. This makes
+  // a one-model install work end-to-end; embedding/ocr/vision stay unbound (the
+  // user adds those model classes separately).
+  const { topics, topicRoles } = singleModelTopicBindings();
+
   const row: NewModelConfigEntry = {
     name: friendlyName,
     provider,
     modelId,
     endpoint,
     apiKeyRef,
-    topics: ['general'],
-    topicRoles: { general: 'primary' },
+    topics,
+    topicRoles,
     isEnabled: true,
     isDefault: true,
   };
