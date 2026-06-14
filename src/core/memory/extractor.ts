@@ -146,6 +146,9 @@ export async function extractFacts(input: ExtractorInput): Promise<CandidateFact
       ],
       temperature: 0,
       maxTokens: 600,
+      // The prompt demands strict JSON; request JSON mode so small local models
+      // emit parseable output rather than prose we fall back to dropping.
+      responseFormat: { type: 'json_object' },
       userId: input.userId,
     });
   } catch (err) {

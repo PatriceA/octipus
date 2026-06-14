@@ -6,6 +6,8 @@ import { getCapabilitiesForModel } from '@/models/capabilities';
 import { getCostTracker } from '@/models/cost-tracker';
 import { getHealthChecker } from '@/models/health-checker';
 import { getModelRegistry } from '@/models/model-registry';
+import { checkModelCapabilities } from '@/models/capability-gate';
+import { getLiteLLMClient } from '@/models/litellm-client';
 import { getProviderRouter } from '@/models/providers';
 import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { getQuotaTracker } from '@/models/quota-tracker';
@@ -616,6 +618,43 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         unbound: ['embedding', 'ocr', 'vision'],
         note: 'Bound to all text topics and set as default. embedding/ocr/vision stay unbound — add an embedding model for RAG + memory, and a vision model for document/image features.',
       };
+    },
+    {
+      params: t.Object({
+        name: t.String(),
+      }),
+      detail: { tags: ['models'] },
+    }
+  )
+
+  // Capability gate: run the tool-calling + JSON conformance subset against one
+  // model and return a verdict. Use before relying on a small/local model for
+  // agent work. Live test — issues a couple of real completions to the model.
+  .post(
+    '/:name/check-capabilities',
+    async ({ user, params, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+
+      const registry = getModelRegistry();
+      const model = await registry.getModel(params.name);
+      if (!model) {
+        set.status = 404;
+        return { error: `Model "${params.name}" not found` };
+      }
+
+      try {
+        const client = getLiteLLMClient();
+        const providers = new Map(getProviderRouter().getAllProviders().map((p) => [p.name, p]));
+        const verdict = await checkModelCapabilities(client, model, providers, { userId: user.id });
+        return verdict;
+      } catch (err) {
+        coreLogger.error({ err, model: params.name }, 'capability check failed');
+        set.status = 500;
+        return { error: `Capability check failed: ${(err as Error).message}` };
+      }
     },
     {
       params: t.Object({

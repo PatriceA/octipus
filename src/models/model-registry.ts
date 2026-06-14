@@ -223,6 +223,19 @@ export class ModelRegistry {
     const result = await this.db.insert(modelConfig).values(data).returning();
     modelLogger.info({ model: data.name, provider: data.provider }, 'Model registered');
 
+    // Non-blocking: flag likely-weak models (small local, known-unreliable id)
+    // so ops sees it without a network probe gating the insert. Dynamic import
+    // avoids a module cycle (capability-gate → conformance → litellm-client →
+    // this registry).
+    import('./capability-gate')
+      .then(({ staticCapabilityWarnings }) => {
+        const warnings = staticCapabilityWarnings(data);
+        if (warnings.length > 0) {
+          modelLogger.warn({ model: data.name, provider: data.provider, warnings }, 'Registered model may be unreliable for agent work');
+        }
+      })
+      .catch((err) => modelLogger.debug({ err, model: data.name }, 'capability warning check skipped'));
+
     // Clear relevant caches
     await this.invalidateCache(data.name);
 

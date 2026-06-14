@@ -178,15 +178,33 @@ call; the binding logic now exists and is tested independent of any UI.
   `SINGLE_MODEL_CHAT_TOPICS` + the non-text classes, so the vocabulary has one
   source of truth.
 
-### Deliberately not done yet (follow-ups)
+## Status — plan #1 surface, #3, #4, #5 (done)
+
+- **#1 surface** — Models page **"Use for all topics"** button + handler
+  (`web/components/models/model-card.tsx`, `web/app/models/page.tsx`) calling
+  `POST /api/models/:name/use-for-all-topics`.
+- **#3 enforce JSON** — the structured automated tasks now request JSON mode:
+  `responseFormat: { type: 'json_object' }` in `memory/extractor.ts`,
+  `memory/judge.ts`, and the research deps (`research/service.ts`). The Ollama
+  provider honors it by routing to native `/api/chat` with the top-level
+  `format: 'json'` field (the /v1 `response_format` is unreliable). Test:
+  `providers/ollama-json-mode.test.ts`.
+- **#4 capability gate** — `src/models/capability-gate.ts`:
+  `staticCapabilityWarnings()` (network-free; flags small-local + qwen3, logged
+  non-blocking at `registerModel`) and `checkModelCapabilities()` (runs the
+  tool-calling + structured-output conformance subset on demand), exposed at
+  `POST /api/models/:name/check-capabilities`. Test: `capability-gate.test.ts`.
+- **#5 user guide** — `docs/SMALL-MODELS.md` (+ README docs table): realistic
+  minimum, tool-call reliability, setup, the adapt-by-size behavior, and the
+  works/degrades matrix.
+
+### Deliberately not done (follow-ups)
 - Smallness (gap #2) is derived from the **topic** model. An expert with an
   explicit big `modelPreference` over a small topic model would still be trimmed
   (rare; system experts ship without `modelPreference`). Revisit if it bites.
 - Trimming role base prompts / a `prompt.lite.md` per role: low leverage and
   higher risk (the role body is the actual instructions, ~500–900 tok; the big
   bloat was tools + scaffold + skills, all now handled). De-prioritized.
-- The config-profile **surface** (API/UI to re-bind an existing model to the
-  single-model set, plus the degraded-feature warnings) — the engine exists; the
-  surface + UX is the remaining part of plan #1.
-- Plan items #3 (enforce JSON for structured tasks), #4 (capability gate at bind
-  time), #5 (user guide) — unstarted.
+- Pre-existing `web` eslint backlog (~45 React-Compiler/next-lint errors across
+  the UI) is unrelated to this work and a separate refactor; the canonical root
+  biome lint + web typecheck are clean.

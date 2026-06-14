@@ -92,6 +92,21 @@ export default function ModelsPage() {
     }
   };
 
+  const handleUseForAllTopics = async (name: string) => {
+    if (!confirm(`Use "${name}" for all text topics and make it the default?\n\nThis is the single-model setup for small/local installs. Embedding, OCR and vision stay unbound — add those model classes separately.`)) {
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await api.post(`/models/${encodeURIComponent(name)}/use-for-all-topics`);
+      await fetchModels();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleToggleEnabled = async (model: Model) => {
     try {
       await api.patch(`/models/${encodeURIComponent(model.name)}`, {
@@ -169,6 +184,7 @@ export default function ModelsPage() {
               key={model.id}
               model={model}
               onSetDefault={handleSetDefault}
+              onUseForAllTopics={handleUseForAllTopics}
               onEdit={setEditingModel}
               onToggleEnabled={handleToggleEnabled}
               onDelete={handleDeleteModel}

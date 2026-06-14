@@ -161,6 +161,10 @@ export function defaultResearchDeps(userId: string): ResearchDeps {
         ],
         temperature: 0.2,
         maxTokens: 2000,
+        // Both research prompts (plan queries, synthesize) demand JSON. Request
+        // JSON mode so small local models return parseable output instead of
+        // prose the citation parser then rejects.
+        responseFormat: { type: 'json_object' },
         userId,
       });
       return result.content ?? '';
