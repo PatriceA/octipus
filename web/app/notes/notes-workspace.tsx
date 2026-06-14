@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Network, PanelRight, ScrollText } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { CTX_MAX, CTX_MIN, NAV_MAX, NAV_MIN, useNotesUiStore } from '@/lib/notes-ui-store';
 import { cn } from '@/lib/utils';
