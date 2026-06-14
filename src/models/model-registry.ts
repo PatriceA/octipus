@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { RedisCache } from '@/db/redis';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
@@ -229,7 +230,7 @@ export class ModelRegistry {
     // this registry).
     import('./capability-gate')
       .then(({ staticCapabilityWarnings }) => {
-        const warnings = staticCapabilityWarnings(data);
+        const warnings = staticCapabilityWarnings(data, getConfig().orchestrator.routerSmallModelMaxParams);
         if (warnings.length > 0) {
           modelLogger.warn({ model: data.name, provider: data.provider, warnings }, 'Registered model may be unreliable for agent work');
         }

@@ -196,7 +196,10 @@ export async function handleExpertMessage(
       }
       // Small tier: inject the index (name + 1-line description) instead of the
       // full skill bodies — multi-skill experts otherwise dump tens of k tokens
-      // a small model can't use. Larger models get the full fragment.
+      // a small model can't use. Larger models get the full fragment here: a
+      // direct `/expert` invocation is an explicit, focused request, so we keep
+      // full fidelity (unlike auto-spawned experts in spawnWorker, which always
+      // use the index because the orchestrator may fan out to several).
       if (isSmall) {
         const summary = await skillReg.buildPromptSummary(skillIds);
         if (summary) expertPrompt += `\n\n# Domain Knowledge (index)\n${summary}`;

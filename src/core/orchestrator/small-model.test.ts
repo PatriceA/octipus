@@ -43,23 +43,47 @@ describe('isSmallModel', () => {
 });
 
 describe('capToolsForSmallModel', () => {
+  // Each entry is its own group (no toolId) — keeps the first N.
   const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `tool${i}` }));
 
-  test('keeps the first N tools in order and reports the dropped tail', () => {
+  test('keeps the first N groups in order and reports the dropped tail', () => {
     const { tools, dropped } = capToolsForSmallModel(mk(14), 7);
     expect(tools.map((t) => t.name)).toEqual(['tool0', 'tool1', 'tool2', 'tool3', 'tool4', 'tool5', 'tool6']);
     expect(dropped).toEqual(['tool7', 'tool8', 'tool9', 'tool10', 'tool11', 'tool12', 'tool13']);
   });
 
-  test('no-op when already within the cap', () => {
-    const six = mk(6);
-    const { tools, dropped } = capToolsForSmallModel(six, 7);
-    expect(tools).toBe(six);
-    expect(dropped).toEqual([]);
+  test('caps by tool GROUP (toolId), not handler count — keeps whole tools', () => {
+    // Mirrors a real role: filesystem expands to many handlers, then shell, git.
+    const handlers = [
+      { name: 'filesystem__read_file', toolId: 'filesystem' },
+      { name: 'filesystem__write_file', toolId: 'filesystem' },
+      { name: 'filesystem__list_directory', toolId: 'filesystem' },
+      { name: 'shell__run', toolId: 'shell' },
+      { name: 'git__status', toolId: 'git' },
+      { name: 'git__commit', toolId: 'git' },
+    ];
+    // Cap to 2 groups → ALL filesystem + ALL shell handlers kept, git dropped.
+    const { tools, dropped } = capToolsForSmallModel(handlers, 2);
+    expect(tools.map((t) => t.name)).toEqual([
+      'filesystem__read_file',
+      'filesystem__write_file',
+      'filesystem__list_directory',
+      'shell__run',
+    ]);
+    expect(dropped).toEqual(['git__status', 'git__commit']);
+    // No tool group is partially included.
+    const keptGroups = new Set(tools.map((t) => t.toolId));
+    const droppedGroups = new Set(handlers.filter((h) => dropped.includes(h.name)).map((h) => h.toolId));
+    for (const g of droppedGroups) expect(keptGroups.has(g)).toBe(false);
   });
 
-  test('no-op when exactly at the cap', () => {
-    const { dropped } = capToolsForSmallModel(mk(7), 7);
+  test('no-op when group count is within the cap', () => {
+    const handlers = [
+      { name: 'filesystem__read', toolId: 'filesystem' },
+      { name: 'filesystem__write', toolId: 'filesystem' },
+      { name: 'shell__run', toolId: 'shell' },
+    ];
+    const { dropped } = capToolsForSmallModel(handlers, 7);
     expect(dropped).toEqual([]);
   });
 

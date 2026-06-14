@@ -6,6 +6,7 @@
  * is a cheap, network-free heuristic used to warn at register time; the live
  * check runs the real conformance subset on demand.
  */
+import { getConfig } from '@/config';
 import { deriveParamCount } from '@/core/orchestrator/mode-selector';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { LiteLLMClient } from './litellm-client';
@@ -36,16 +37,21 @@ export interface CapabilityVerdict {
  * Cheap, deterministic warnings derived from the model row alone — no network.
  * Used at register time to flag likely-weak models without blocking the insert.
  */
-export function staticCapabilityWarnings(model: {
-  provider: string;
-  modelId: string;
-  metadata?: ModelConfigEntry['metadata'];
-}): string[] {
+export function staticCapabilityWarnings(
+  model: {
+    provider: string;
+    modelId: string;
+    metadata?: ModelConfigEntry['metadata'];
+  },
+  /** Same threshold the worker/orchestrator small tier uses, so the warning and
+   *  the actual behavior agree. Defaults to 10B when no config is threaded in. */
+  routerMaxParams = 10_000_000_000,
+): string[] {
   const warnings: string[] = [];
   const isLocal = model.provider === 'ollama';
   const params = deriveParamCount(model.modelId, model.metadata ?? undefined);
 
-  if (isLocal && params !== undefined && params < 10_000_000_000) {
+  if (isLocal && params !== undefined && params < routerMaxParams) {
     warnings.push(
       `Small local model (~${Math.round(params / 1e9)}B): tool-calling and JSON output are often unreliable below ~10B. ` +
         'Run a capability check (POST /api/models/:name/check-capabilities) before relying on it for agent work.',
@@ -88,11 +94,18 @@ export async function checkModelCapabilities(
   const toolCalling = mapResult(report.results.find((r) => r.test === 'tool-calling'));
   const structuredOutput = mapResult(report.results.find((r) => r.test === 'structured-output'));
 
-  const statuses = [toolCalling.status, structuredOutput.status];
+  // Tool-calling is the thing this gate exists to verify ("can it drive the
+  // swarm"). Only claim `capable` once tool-calling actually PASSED — a skipped
+  // tool-calling test (capability flags say N/A, or no live model) proves
+  // nothing, so it's `unknown`, not `capable`.
   let verdict: CapabilityVerdict['verdict'];
-  if (statuses.includes('failed')) verdict = 'incapable';
-  else if (statuses.includes('passed')) verdict = 'capable';
-  else verdict = 'unknown';
+  if (toolCalling.status === 'failed' || structuredOutput.status === 'failed') {
+    verdict = 'incapable';
+  } else if (toolCalling.status === 'passed') {
+    verdict = 'capable';
+  } else {
+    verdict = 'unknown';
+  }
 
   return {
     model: model.modelId,
@@ -100,6 +113,6 @@ export async function checkModelCapabilities(
     verdict,
     toolCalling,
     structuredOutput,
-    warnings: staticCapabilityWarnings(model),
+    warnings: staticCapabilityWarnings(model, getConfig().orchestrator.routerSmallModelMaxParams),
   };
 }

@@ -43,28 +43,43 @@ export function isSmallModel(model: SmallModelMeta, routerMaxParams: number): bo
 }
 
 /**
- * Cap a worker's tool list for a small model. Role tool lists are authored in
- * rough priority order (most-essential first), so slicing keeps the core tools
- * and drops the long tail. Returns the kept tools plus the names dropped (for
- * logging / observability). No-op when already within the cap.
+ * Cap a worker's tool list for a small model. The list is *flat function
+ * handlers* — one tool (e.g. `filesystem`) expands into many handlers
+ * (`read_file`, `write_file`, …) that all share a `toolId`. We must cap by
+ * tool *group* (toolId), keeping every handler of the first N groups, not by
+ * handler count — otherwise we'd keep a partial `filesystem` and drop `shell`
+ * and `git` wholesale, breaking the worker. Roles list their tools in rough
+ * priority order, so the first N groups are the core ones. Returns the kept
+ * handlers plus the names dropped (for logging). No-op when within the cap.
  */
-export function capToolsForSmallModel<T extends { name: string }>(
+export function capToolsForSmallModel<T extends { name: string; toolId?: string }>(
   tools: T[],
   maxTools: number,
 ): { tools: T[]; dropped: string[] } {
-  if (maxTools <= 0 || tools.length <= maxTools) {
+  if (maxTools <= 0) {
     return { tools, dropped: [] };
   }
-  const kept = tools.slice(0, maxTools);
-  const dropped = tools.slice(maxTools).map((t) => t.name);
-  return { tools: kept, dropped };
+  const keptGroups = new Set<string>();
+  const kept: T[] = [];
+  const dropped: string[] = [];
+  for (const t of tools) {
+    const group = t.toolId ?? t.name;
+    if (keptGroups.has(group) || keptGroups.size < maxTools) {
+      keptGroups.add(group);
+      kept.push(t);
+    } else {
+      dropped.push(t.name);
+    }
+  }
+  // Return the original reference when nothing was dropped (no needless copy).
+  return dropped.length === 0 ? { tools, dropped } : { tools: kept, dropped };
 }
 
 /**
  * Convenience wrapper: cap and log in one call. Keeps `worker-spawner` tidy and
  * makes the "we dropped tools because the model is small" decision auditable.
  */
-export function applyToolCap<T extends { name: string }>(
+export function applyToolCap<T extends { name: string; toolId?: string }>(
   tools: T[],
   maxTools: number,
   ctx: { role: string; modelId: string },
