@@ -131,12 +131,49 @@ A worker-side small-model tier, the mirror of the orchestrator mode selector:
 - **Tests** — `small-model.test.ts` (size banding, MoE, unknown-size guard,
   custom threshold, tool-cap edges).
 
-### Deliberately not in this increment (follow-ups for gap #2)
-- `handleExpertMessage` (the explicit `/expert` path) is left at full fidelity —
-  an explicit expert pick is a deliberate user action. Apply the same trim there
-  once the worker path is proven.
-- Smallness is derived from the **topic** model. An expert with an explicit big
-  `modelPreference` over a small topic model would still be trimmed (rare; system
-  experts ship without `modelPreference`). Revisit if it bites.
-- Trimming role base prompts / a `prompt.lite.md` per role is a larger follow-up;
-  this increment trims the assembled scaffold + tools, not the role bodies.
+## Status — gap #2 increment 2: the explicit `/expert` path
+
+`handleExpertMessage` builds the expert prompt itself and passes it to
+`spawnWorker` as a `systemPrompt` override, so the auto-path trim didn't reach
+it (only the tool cap + MCP-skip, which apply to any worker). Mirrored the trim
+so an explicitly invoked `/expert` on a small model gets the same lean prompt:
+
+- tier detected from the expert's `modelPreference` (if set) else the role topic
+  model;
+- deliverable template + success metrics skipped when small;
+- compact Response Guidelines (~180 tok → 3 lines);
+- skills injected as the **index summary**, not full bodies (the main win for
+  multi-skill experts).
+
+## Status — gap #1 increment 1: a single model now binds all text topics
+
+Worker topics are fail-loud (`getModelForTopic` has no default fallback), but
+the first-boot bootstrap bound only `general` — so a one-model install broke the
+moment the router routed to any other specialist (`coding`, `research`, …).
+Fixed at the source:
+
+- **`src/models/single-model-binding.ts`** — `SINGLE_MODEL_CHAT_TOPICS` (the 16
+  role topics + `chat`/`simple`/`local`/`voice` + `memory_extraction`/
+  `knowledge_review`/`evaluation`; excludes `embedding`/`ocr`/`vision`) and
+  `singleModelTopicBindings()`.
+- **`bootstrap-model.ts`** binds the single bootstrap model to all of them.
+  `embedding`/`ocr`/`vision` stay unbound on purpose — the user adds those model
+  classes separately, and the dependent features fail loud / degrade as designed.
+- **Tests** — bindings + a drift guard that cross-checks the role subset against
+  the live role registry, so a newly added role can't silently end up unbound.
+
+This is the reusable engine the eventual config-profile UI/API (plan #1) will
+call; the binding logic now exists and is tested independent of any UI.
+
+### Deliberately not done yet (follow-ups)
+- Smallness (gap #2) is derived from the **topic** model. An expert with an
+  explicit big `modelPreference` over a small topic model would still be trimmed
+  (rare; system experts ship without `modelPreference`). Revisit if it bites.
+- Trimming role base prompts / a `prompt.lite.md` per role: low leverage and
+  higher risk (the role body is the actual instructions, ~500–900 tok; the big
+  bloat was tools + scaffold + skills, all now handled). De-prioritized.
+- The config-profile **surface** (API/UI to re-bind an existing model to the
+  single-model set, plus the degraded-feature warnings) — the engine exists; the
+  surface + UX is the remaining part of plan #1.
+- Plan items #3 (enforce JSON for structured tasks), #4 (capability gate at bind
+  time), #5 (user guide) — unstarted.
