@@ -1,31 +1,38 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, type Mock, spyOn, test } from 'bun:test';
-import { EmbeddingService, type SearchResult } from '@/core/rag/embeddings';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, type Mock, mock, spyOn, test } from 'bun:test';
+import * as embeddings from '@/core/rag/embeddings';
+import type { EmbeddingService, SearchResult } from '@/core/rag/embeddings';
 import './docs'; // self-registers the /docs command
 import { getCommand } from './registry';
 
 /**
- * Tests for the `/docs` command. We spy on EmbeddingService.prototype rather
- * than mock.module (which is process-wide in bun and would leak into other
- * suites), so no DB or embedding provider is touched.
- *
- * The command delegates to `searchGlobalDocs`, which hard-scopes the query to
- * the GLOBAL product-docs corpus IN SQL (`user_id IS NULL AND
+ * Tests for the `/docs` command. The command resolves the embedding service via
+ * `getEmbeddingService()` and calls `searchGlobalDocs`, which hard-scopes the
+ * query to the GLOBAL product-docs corpus IN SQL (`user_id IS NULL AND
  * metadata->>'source' = 'octipus-docs'`). That cross-tenant exclusion is proven
  * end-to-end against a real PGlite DB in `embeddings-scope.test.ts`; here we
- * spy at the service-method layer (matching the rest of this suite) and assert
- * the command relies on that scoping rather than re-filtering in JS.
+ * assert the command delegates to that scoped method (with a sane limit) and
+ * renders whatever it returns rather than re-filtering in JS.
  *
- * The spy is installed in beforeAll and RESTORED in afterAll: a prototype spy
- * left in place leaks process-wide and breaks other suites (e.g.
- * embeddings-scope.test.ts) that call the real method on a real DB.
+ * We own the service at the `getEmbeddingService` layer (a spyOn RESTORED in
+ * afterAll), NOT via a prototype spy. Other suites call
+ * `mock.module('@/core/rag/embeddings', …)` — process-wide and persistent in
+ * bun — which replaces `getEmbeddingService` with a stub that has no
+ * `searchGlobalDocs`. A prototype spy would then never fire (the command's
+ * `getEmbeddingService()` returns the leaked stub, not a real instance) and the
+ * command would hit its catch path. Injecting our own service here keeps the
+ * test hermetic regardless of which suites loaded first.
  */
 
 let docsSpy: Mock<EmbeddingService['searchGlobalDocs']>;
+let getServiceSpy: Mock<typeof embeddings.getEmbeddingService>;
 
 beforeAll(() => {
-  docsSpy = spyOn(EmbeddingService.prototype, 'searchGlobalDocs');
+  docsSpy = mock(async () => [] as SearchResult[]);
+  getServiceSpy = spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+    searchGlobalDocs: docsSpy,
+  } as unknown as EmbeddingService);
 });
-afterAll(() => docsSpy.mockRestore());
+afterAll(() => getServiceSpy.mockRestore());
 
 function ctx(args: string) {
   return { sessionId: 'sess-1', userId: 'user-1', args };
@@ -44,7 +51,13 @@ function hit(over: Partial<SearchResult>): SearchResult {
   };
 }
 
-beforeEach(() => docsSpy.mockReset());
+beforeEach(() => {
+  docsSpy.mockReset();
+  docsSpy.mockResolvedValue([]);
+  // Re-assert the injection each test, in case another suite's process-wide
+  // mock.module re-ran and clobbered the binding between tests.
+  getServiceSpy.mockReturnValue({ searchGlobalDocs: docsSpy } as unknown as EmbeddingService);
+});
 afterEach(() => docsSpy.mockReset());
 
 describe('/docs command', () => {
