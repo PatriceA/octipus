@@ -7,12 +7,11 @@ import { registerCommand } from './registry';
  * `/docs <query>` — search Octipus's own product documentation (indexed into
  * the knowledge base by `src/db/seed-docs.ts`) and return the top matching
  * sections directly. No LLM call: this is a deterministic lookup over the
- * `document` rows tagged `source = 'octipus-docs'`, so it works even when no
- * chat model is configured.
+ * GLOBAL `document` rows tagged `source = 'octipus-docs'`, so it works even
+ * when no chat model is configured.
  */
 
 const RESULT_LIMIT = 8;
-const DOCS_SOURCE = 'octipus-docs';
 
 registerCommand({
   name: 'docs',
@@ -27,13 +26,13 @@ registerCommand({
 
     try {
       const service = getEmbeddingService();
-      // Over-fetch then filter to the product-docs corpus: hybridSearch has no
-      // metadata.source predicate, so pull a wider candidate set across all
-      // `document` rows and keep the octipus-docs ones.
-      const hits = await service.hybridSearch(query, RESULT_LIMIT * 3, 'document');
-      const docHits = hits
-        .filter((h) => h.metadata.source === DOCS_SOURCE)
-        .slice(0, RESULT_LIMIT);
+      // Hard-scoped in SQL to the GLOBAL product-docs corpus
+      // (`user_id IS NULL AND metadata->>'source' = 'octipus-docs'`). This app
+      // is always multi-user, so an unscoped `document` search would also match
+      // every other tenant's private uploads — leaking them as a ranking signal
+      // and letting a tenant with many private docs crowd the docs chunks out
+      // of the fetch window. Scoping in SQL means no over-fetch + post-filter.
+      const docHits = await service.searchGlobalDocs(query, RESULT_LIMIT);
 
       if (docHits.length === 0) {
         return {

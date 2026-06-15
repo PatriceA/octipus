@@ -14,7 +14,14 @@ const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 let cronTimer: Timer | null = null;
 let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
-let lastDocsReindex = 0;
+// Seed to boot time, NOT 0: the boot sequence already runs `indexProductDocs()`
+// (src/index.ts) before the cron loop starts, so the immediate first tick must
+// NOT re-run it. The first cron refresh fires one DOCS_REINDEX_INTERVAL_MS
+// later; the first-install / KB-not-ready-at-boot case is still handled because
+// the boot pass bailed and subsequent ticks (every 6h) will land the docs once
+// an embedding model is bound. (Session/knowledge cleanup init to 0 on purpose
+// — they have no boot-time pass, so they SHOULD run on the first tick.)
+let lastDocsReindex = Date.now();
 
 /**
  * Parse a simple cron expression and compute the next run date.

@@ -51,8 +51,8 @@ export interface IndexProductDocsDeps {
   isReady?: () => boolean;
   /** Defaults to the real EmbeddingService singleton. */
   service?: {
-    isFileIndexed(purpose: EmbeddingPurpose, sourceId: string, fileContent: string): Promise<boolean>;
-    deleteBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number>;
+    isFileIndexed(purpose: EmbeddingPurpose, sourceId: string, fileContent: string, globalOnly?: boolean): Promise<boolean>;
+    deleteBySource(purpose: EmbeddingPurpose, sourceId: string, globalOnly?: boolean): Promise<number>;
     indexText(
       purpose: EmbeddingPurpose,
       sourceId: string,
@@ -147,16 +147,19 @@ export async function indexProductDocs(deps: IndexProductDocsDeps = {}): Promise
         const fileSha = sha256Hex(content);
 
         // Skip the expensive re-embed when the file is byte-for-byte unchanged
-        // since the last index (fileSha stamped on its chunks).
-        if (await service.isFileIndexed(DOC_PURPOSE, absPath, content)) {
+        // since the last index (fileSha stamped on its chunks). `globalOnly`
+        // restricts the check to GLOBAL rows so a per-user document at the same
+        // path can't mask the global file as already-indexed.
+        if (await service.isFileIndexed(DOC_PURPOSE, absPath, content, true)) {
           result.filesSkipped++;
           continue;
         }
 
         // Content changed (or first index) — drop stale chunks for this file
         // so an edit that shrinks the doc doesn't leave orphan chunks, then
-        // re-index. Rows are GLOBAL (indexText default ownerUserId = null).
-        await service.deleteBySource(DOC_PURPOSE, absPath);
+        // re-index. Rows are GLOBAL (indexText default ownerUserId = null), and
+        // `globalOnly` keeps this purge from touching any per-user row.
+        await service.deleteBySource(DOC_PURPOSE, absPath, true);
         const chunks = await service.indexText(DOC_PURPOSE, absPath, content, {
           filePath: absPath,
           language: 'markdown',
