@@ -50,19 +50,19 @@ export class TelegramChannel extends BaseChannel {
       this.emitError(err.error as Error);
     });
 
-    // Start the bot
-    try {
-      // Use polling
-      this.bot.start({
-        onStart: (botInfo) => {
-          channelLogger.info({ username: botInfo.username }, 'Telegram bot started');
-          this.setConnected(true);
-        },
-      });
-    } catch (error) {
+    // Start polling. grammY's bot.start() resolves only when polling STOPS, so
+    // we must NOT await it — but we MUST attach a .catch, or an auth failure
+    // (e.g. a bad/expired token returning 401) is dropped silently and the
+    // channel never connects with no error surfaced (House Rule #1, fail loud).
+    this.bot.start({
+      onStart: (botInfo) => {
+        channelLogger.info({ username: botInfo.username }, 'Telegram bot started');
+        this.setConnected(true);
+      },
+    }).catch((error) => {
+      channelLogger.error({ err: error }, 'Telegram polling failed — check that the bot token is valid');
       this.emitError(error as Error);
-      throw error;
-    }
+    });
   }
 
   async disconnect(): Promise<void> {
