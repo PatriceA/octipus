@@ -1,4 +1,5 @@
 import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sessions } from './sessions';
 import { users } from './users';
 
 export const triggerTypeEnum = pgEnum('trigger_type', [
@@ -47,6 +48,13 @@ export const hooks = pgTable('hooks', {
   // Schedule-specific (for schedule trigger)
   nextRunAt: timestamp('next_run_at', { withTimezone: true }),
   lastError: text('last_error'),
+  /**
+   * Reused chat session for this hook. NULL until the first spawn_agent run,
+   * then populated so every later run appends to the SAME session instead of
+   * spawning a new one each time (which spammed sessions). FK ON DELETE SET
+   * NULL: deleting the session lets the next run start a fresh one.
+   */
+  sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
   // Metadata
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

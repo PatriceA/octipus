@@ -135,15 +135,59 @@ async function executeNotify(
   };
 }
 
+/**
+ * Resolve which chat session a `spawn_agent` action should run in.
+ *
+ * Precedence:
+ *  1. An inbound trigger session (message_received / agent_* events carry the
+ *     originating session) — per-trigger, never persisted.
+ *  2. The hook's own persisted `sessionId` — so scheduled/webhook hooks (which
+ *     have no inbound session) append to ONE session across every run instead
+ *     of spawning a brand-new session each time.
+ *  3. A freshly minted id — the first run of such a hook.
+ *
+ * `minted` is true only when a new id was generated for a hook; the caller
+ * persists it back to the hook row so subsequent runs reuse it.
+ */
+export function resolveHookSessionId(
+  context: TriggerContext,
+  hook?: Hook,
+): { sessionId: string; minted: boolean } {
+  // metadata is Record<string, unknown>, so guard the type rather than casting —
+  // a non-string sessionId must not be treated as a usable session id.
+  const msgSession = context.message?.metadata?.sessionId;
+  const fromTrigger =
+    (typeof msgSession === 'string' ? msgSession : undefined) || context.agent?.sessionId || undefined;
+  if (fromTrigger) return { sessionId: fromTrigger, minted: false };
+  if (hook?.sessionId) return { sessionId: hook.sessionId, minted: false };
+  return { sessionId: crypto.randomUUID(), minted: Boolean(hook) };
+}
+
+/** Persist a freshly-minted session id back to the hook so later runs reuse it. */
+async function persistHookSessionId(hookId: string, sessionId: string): Promise<void> {
+  const { getDb } = await import('@/db/postgres');
+  const { hooks: hooksTable } = await import('@/db/schema/hooks');
+  const { eq } = await import('drizzle-orm');
+  await getDb().update(hooksTable).set({ sessionId }).where(eq(hooksTable.id, hookId));
+}
+
 async function executeSpawnAgent(
   config: Hook['actionConfig'],
   context: TriggerContext,
   hook?: Hook,
 ): Promise<ActionResult> {
-  // Get session info from context — generate a UUID for hook-triggered sessions
-  const sessionId = (context.message?.metadata?.sessionId as string | undefined) ||
-                    context.agent?.sessionId ||
-                    crypto.randomUUID();
+  // Reuse the hook's session across runs (see resolveHookSessionId) so a
+  // scheduled/webhook hook appends to one session instead of spawning a new
+  // one every run. A freshly minted id is persisted back to the hook row.
+  const { sessionId, minted } = resolveHookSessionId(context, hook);
+  if (minted && hook) {
+    hook.sessionId = sessionId; // keep this run consistent with what we persist
+    try {
+      await persistHookSessionId(hook.id, sessionId);
+    } catch (err) {
+      coreLogger.error({ err, hookId: hook.id }, 'Failed to persist reusable hook sessionId; this run still proceeds');
+    }
+  }
   // Use the hook owner's userId so notifications and permissions resolve correctly
   const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
 
