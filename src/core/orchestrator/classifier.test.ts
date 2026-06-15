@@ -53,3 +53,19 @@ describe('classifyMessage — existing behavior unchanged', () => {
     expect(classifyMessage('approve').type).toBe('approval');
   });
 });
+
+describe('classifyMessage — review routing (push-review hooks)', () => {
+  test('a guideline-review prompt routes to review, not research', () => {
+    const input =
+      'Review the changes against our repo guidelines (Design.md, Contribution.md, Security.md) and give a summary.';
+    expect(classifyMessage(input)).toMatchObject({ type: 'task', topic: 'review' });
+  });
+
+  test('"code review this PR" routes to review', () => {
+    expect(classifyMessage('Please do a code review of this pull request').topic).toBe('review');
+  });
+
+  test('a plain research request still routes to research', () => {
+    expect(classifyMessage('Research the best caching strategies and summarize the tradeoffs').topic).toBe('research');
+  });
+});

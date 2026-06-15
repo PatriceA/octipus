@@ -2,6 +2,35 @@ import { spawn } from 'child_process';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
+/**
+ * Build a validated `repos/<owner>/<name>/contents/<path>` gh-api endpoint.
+ * `repo` and `path` are model-provided and interpolated into the endpoint, so
+ * they are strictly validated: without this, a `path` like `../../user/repos`
+ * would let the tool read arbitrary GitHub API endpoints under the host's gh
+ * token. Path segments are percent-encoded and `.`/`..`/empty segments rejected.
+ */
+export function buildContentsEndpoint(repo: string, path: string, ref?: string): string {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+    throw new Error(`Invalid repo '${repo}' — expected owner/name`);
+  }
+  const segments = path.replace(/^\/+/, '').split('/');
+  if (segments.some((s) => s === '' || s === '.' || s === '..')) {
+    throw new Error(`Invalid file path '${path}'`);
+  }
+  const safePath = segments.map(encodeURIComponent).join('/');
+  return `repos/${repo}/contents/${safePath}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
+}
+
+/** Whether a file-content URL points at a GitHub-owned host (SSRF guard). */
+export function isAllowedGitHubHost(urlStr: string): boolean {
+  try {
+    const host = new URL(urlStr).hostname;
+    return host === 'api.github.com' || host === 'github.com' || host.endsWith('.githubusercontent.com');
+  } catch {
+    return false;
+  }
+}
+
 export class GitHubTool extends BaseTool {
   readonly id = 'github';
   readonly name = 'GitHub';
@@ -49,6 +78,38 @@ export class GitHubTool extends BaseTool {
       repo: { type: 'string', description: 'Repository (owner/name)', required: true },
     }), async (args) => {
       return JSON.parse(await this.gh(['repo', 'view', args.repo as string, '--json', 'name,owner,description,url,defaultBranchRef,stargazerCount,forkCount,issues,pullRequests']));
+    }, { permissionAction: 'read' });
+
+    this.registerTool('get_file', "Read a file's contents from a GitHub repo at an optional ref (branch, tag, or commit SHA). Use this to review files like DESIGN.md or src/index.ts without cloning.", createParameterSchema({
+      repo: { type: 'string', description: 'Repository (owner/name)', required: true },
+      path: { type: 'string', description: 'File path within the repo, e.g. DESIGN.md or src/core/index.ts', required: true },
+      ref: { type: 'string', description: 'Branch, tag, or commit SHA. Defaults to the repo default branch.' },
+    }), async (args) => {
+      const repo = args.repo as string;
+      const rawPath = (args.path as string).replace(/^\/+/, '');
+      const ref = args.ref as string | undefined;
+      const endpoint = buildContentsEndpoint(repo, args.path as string, ref);
+      const data = JSON.parse(await this.gh(['api', endpoint])) as {
+        type?: string; content?: string; encoding?: string; size?: number; download_url?: string;
+      };
+      if (data.type && data.type !== 'file') {
+        throw new Error(`'${rawPath}' is a ${data.type}, not a file`);
+      }
+      let content: string;
+      if (data.content && data.encoding === 'base64') {
+        content = Buffer.from(data.content, 'base64').toString('utf-8');
+      } else if (data.download_url) {
+        // Files over ~1MB omit inline content; fetch the raw blob — but only
+        // from GitHub's own hosts (the URL comes from the API response; guard
+        // against a crafted/redirected value pointing elsewhere).
+        if (!isAllowedGitHubHost(data.download_url)) {
+          throw new Error('Refusing to fetch file content from a non-GitHub host');
+        }
+        content = await this.gh(['api', data.download_url]);
+      } else {
+        throw new Error(`No readable content returned for '${rawPath}'`);
+      }
+      return { repo, path: rawPath, ref: ref ?? null, size: data.size ?? content.length, content };
     }, { permissionAction: 'read' });
 
     this.registerTool('repo_create', 'Create a new GitHub repository', createParameterSchema({
