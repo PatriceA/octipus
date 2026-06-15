@@ -1,4 +1,6 @@
 import { describe, test, expect } from 'bun:test';
+import type { ChannelResponse, ChannelType } from '@/core/types';
+import { BaseChannel, UnifiedMessageInterface } from './interface';
 
 // Note: Channel interface tests require full channel implementation
 // These are unit tests for message structures
@@ -152,5 +154,37 @@ describe('Channel Interface (Unit)', () => {
       expect(mentions).toContain('user1');
       expect(mentions).toContain('user2');
     });
+  });
+});
+
+class TestChannel extends BaseChannel {
+  readonly type = 'webchat' as ChannelType;
+  readonly name = 'Test';
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  async send(_channelId: string, _response: ChannelResponse): Promise<string> {
+    return '';
+  }
+  emitTestError(e: Error): void {
+    this.emitError(e);
+  }
+}
+
+describe('channel error isolation', () => {
+  test('UMI emitting an error event with no external listener does not throw', () => {
+    // EventEmitter throws on an unlistened 'error' event; the UMI's default
+    // listener must prevent one channel error from crashing the process.
+    const umi = new UnifiedMessageInterface();
+    expect(() => umi.emit('error', 'webchat' as ChannelType, new Error('boom'))).not.toThrow();
+  });
+
+  test('channel emitError does not throw before or after registration', () => {
+    const ch = new TestChannel();
+    // Before register: BaseChannel's own default 'error' listener prevents a throw.
+    expect(() => ch.emitTestError(new Error('pre-register'))).not.toThrow();
+    // After register: the forward to umi.emit('error', …) is also safe.
+    const umi = new UnifiedMessageInterface();
+    umi.register(ch);
+    expect(() => ch.emitTestError(new Error('post-register'))).not.toThrow();
   });
 });
