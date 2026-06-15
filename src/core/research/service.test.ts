@@ -71,4 +71,22 @@ describe('runResearch', () => {
     await runResearch('Q?', 'quick', deps);
     expect(searches).toBe(1); // quick depth plans a single query
   });
+
+  test("injects today's date into the planning and synthesis prompts", async () => {
+    const systems: string[] = [];
+    const deps = fakeDeps({
+      complete: async (system, user) => {
+        systems.push(system);
+        if (user.startsWith('Return a JSON array')) return '["q1", "q2"]';
+        const id = user.match(/id="(s[0-9a-f]{8})"/)?.[1] ?? 'sUNKNOWN';
+        return JSON.stringify({ sections: [{ heading: 'A', markdown: 'x', citations: [id] }], limitations: '' });
+      },
+    });
+    // standard depth = 2 queries, so planning calls the model too (not just synthesis).
+    await runResearch('What happened today?', 'standard', deps);
+    // NOW is 2026; without the date injection the model would assume its training cutoff.
+    expect(systems.length).toBeGreaterThanOrEqual(2);
+    expect(systems.every((s) => s.includes('2026'))).toBe(true);
+    expect(systems.some((s) => s.includes('June'))).toBe(true);
+  });
 });
