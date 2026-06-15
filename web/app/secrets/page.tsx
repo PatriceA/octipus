@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
-import { ALL_VAULT_KEYS, type Credential } from '@/lib/vault-config';
+import { ALL_VAULT_KEYS, CHANNEL_KEY_GROUPS, type Credential } from '@/lib/vault-config';
 import { useWorkspace } from '@/lib/workspace-context';
 
 const MANAGED_NAMES = new Set(ALL_VAULT_KEYS.map((k) => k.vaultName));
@@ -68,6 +68,10 @@ export default function SecretsPage() {
 
       {/* OAuth Credentials */}
       <OAuthCards statuses={statuses} onStatusChange={fetchAll} />
+
+      {/* Channel bot tokens — stored system-wide via the settings endpoint
+          (hot-reloaded). Admin-only; non-admins get "Admin access required". */}
+      <ProviderCards groups={CHANNEL_KEY_GROUPS} statuses={statuses} onStatusChange={fetchAll} />
 
       {/* Divider */}
       <hr className="border-outline-variant/10" />

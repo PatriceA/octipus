@@ -321,18 +321,24 @@ export async function initializeChannels(): Promise<void> {
 
   const { discoverChannels } = await import('./discovery');
   const discovered = await discoverChannels();
-  for (const { folder, channel } of discovered) {
-    if (channel.isEnabled(config)) {
-      umi.register(channel);
-      channelLogger.debug({ folder, type: channel.type }, 'Channel registered (auto-discovered)');
-    } else {
-      channelLogger.debug({ folder, type: channel.type }, 'Channel skipped (isEnabled=false)');
-    }
+  const enabled = discovered.filter((d) => d.channel.isEnabled(config));
+  const skipped = discovered.filter((d) => !d.channel.isEnabled(config));
+  for (const { folder, channel } of enabled) {
+    umi.register(channel);
+    channelLogger.debug({ folder, type: channel.type }, 'Channel registered (auto-discovered)');
   }
-  const registered = discovered.filter(d => d.channel.isEnabled(config)).length;
+  // Surface skipped channels at info level. A channel is skipped when its
+  // (system-scoped) secret is missing — previously this was debug-only, so a
+  // mis-scoped token left the channel silently dead with no signal.
   channelLogger.info(
-    { discovered: discovered.length, registered },
-    'Channels initialized (auto-discovered)',
+    {
+      discovered: discovered.length,
+      registered: enabled.map((d) => d.channel.type),
+      skipped: skipped.map((d) => d.channel.type),
+    },
+    skipped.length
+      ? 'Channels initialized — skipped channels are not configured (set their system-scoped secret on the Secrets page)'
+      : 'Channels initialized (auto-discovered)',
   );
 
   // Connect all registered channels

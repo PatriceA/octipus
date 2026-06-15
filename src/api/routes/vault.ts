@@ -47,9 +47,17 @@ export const vaultRoutes = new Elysia({ prefix: '/vault' })
   // Create credential
   .post(
     '/',
-    async ({ user, body }) => {
+    async ({ user, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
+      }
+
+      // System-scoped secrets are instance-wide (channel bot tokens, provider
+      // keys). Only admins may write them — otherwise any user could create or
+      // overwrite e.g. telegram_bot_token. Reads are already admin-only.
+      if ((body.systemLevel || body.scope === 'system') && !user.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required to write a system-scoped secret' };
       }
 
       const vault = getVault();

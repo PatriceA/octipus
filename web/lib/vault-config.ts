@@ -86,9 +86,52 @@ export const OAUTH_KEY_GROUPS: VaultKeyGroup[] = [
   },
 ];
 
+/**
+ * Channel bot secrets. Each is read **system-scoped** by the backend
+ * (`getSystemSecret`) — one bot per instance, with end-users linking their own
+ * chat via `/link`. They use `settingsKey` so a save goes through
+ * `PUT /api/settings/<key>`, which stores them system-scoped AND hot-reloads
+ * the channel (a raw user-scoped vault write is invisible to the channel — the
+ * exact foot-gun that left Telegram unable to connect). Admin-only.
+ */
+export const CHANNEL_KEY_GROUPS: VaultKeyGroup[] = [
+  {
+    title: 'Telegram Bot',
+    description: 'Bot token from @BotFather. Stored system-wide; users link their own chat with /link.',
+    keys: [
+      { label: 'Bot Token', vaultName: 'telegram_bot_token', settingsKey: 'telegram.botToken', placeholder: '123456:ABC-DEF...' },
+    ],
+  },
+  {
+    title: 'Slack App',
+    description: 'Credentials from your Slack app (Socket Mode). Stored system-wide; users link their Slack account with /link.',
+    keys: [
+      { label: 'Bot Token', vaultName: 'slack_bot_token', settingsKey: 'slack.botToken', placeholder: 'xoxb-...' },
+      { label: 'App Token', vaultName: 'slack_app_token', settingsKey: 'slack.appToken', placeholder: 'xapp-...' },
+      { label: 'Signing Secret', vaultName: 'slack_signing_secret', settingsKey: 'slack.signingSecret' },
+    ],
+  },
+  {
+    title: 'Microsoft Teams',
+    description: 'Bot app password (client secret). App ID and Tenant ID are set under Settings → Channels. Stored system-wide.',
+    keys: [
+      { label: 'App Password', vaultName: 'teams_app_password', settingsKey: 'teams.appPassword' },
+    ],
+  },
+  {
+    title: 'WhatsApp Business',
+    description: 'Cloud API credentials. Phone number ID and verify token are set under Settings → Channels. Stored system-wide.',
+    keys: [
+      { label: 'Access Token', vaultName: 'whatsapp_access_token', settingsKey: 'whatsapp.accessToken' },
+      { label: 'App Secret', vaultName: 'whatsapp_app_secret', settingsKey: 'whatsapp.appSecret' },
+    ],
+  },
+];
+
 export const ALL_VAULT_KEYS = [
   ...PROVIDER_KEY_GROUPS.flatMap((g) => g.keys),
   ...OAUTH_KEY_GROUPS.flatMap((g) => g.keys),
+  ...CHANNEL_KEY_GROUPS.flatMap((g) => g.keys),
 ];
 
 /**

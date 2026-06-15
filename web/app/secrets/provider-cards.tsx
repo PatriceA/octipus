@@ -3,17 +3,19 @@
 import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { PROVIDER_KEY_GROUPS, } from '@/lib/vault-config';
+import { PROVIDER_KEY_GROUPS, type VaultKeyGroup } from '@/lib/vault-config';
 
 interface ProviderCardsProps {
   statuses: Record<string, boolean>;
   onStatusChange: () => void;
+  /** Key groups to render. Defaults to the LLM provider groups. */
+  groups?: VaultKeyGroup[];
 }
 
-export function ProviderCards({ statuses, onStatusChange }: ProviderCardsProps) {
+export function ProviderCards({ statuses, onStatusChange, groups = PROVIDER_KEY_GROUPS }: ProviderCardsProps) {
   return (
     <div className="space-y-6">
-      {PROVIDER_KEY_GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.title}>
           <h2 className="text-base font-extrabold tracking-tighter text-on-surface mb-1">
             {group.title}
