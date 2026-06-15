@@ -25,6 +25,17 @@ export abstract class BaseChannel extends EventEmitter {
 
   protected connected = false;
 
+  constructor() {
+    super();
+    // EventEmitter throws if 'error' is emitted with no listener. Guarantee one
+    // so a channel error (emitError) can never crash the process — the UMI also
+    // attaches its own forwarding listener in register(). `this.type` is read at
+    // emit time, by which point the subclass field is initialized.
+    this.on('error', (err: Error) => {
+      channelLogger.error({ channel: this.type, err }, 'Channel error');
+    });
+  }
+
   /**
    * Initialize and connect the channel
    */
@@ -197,6 +208,16 @@ export abstract class BaseChannel extends EventEmitter {
  */
 export class UnifiedMessageInterface extends EventEmitter {
   private channels: Map<ChannelType, BaseChannel> = new Map();
+
+  constructor() {
+    super();
+    // Channel errors are forwarded here in register(); EventEmitter throws if
+    // 'error' is emitted with no listener, so register a default one. A single
+    // channel error must never crash the whole process.
+    this.on('error', (channelType: ChannelType, err: Error) => {
+      channelLogger.error({ channelType, err }, 'Channel error (UMI)');
+    });
+  }
 
   /**
    * Register a channel

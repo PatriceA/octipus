@@ -61,6 +61,14 @@ export class SlackChannel extends BaseChannel {
       signingSecret: config.slack.signingSecret,
     });
 
+    // Contain listener errors. Without a global error handler, an error thrown
+    // while Bolt processes an event (e.g. invalid_auth on a stale bot token)
+    // surfaces as an unhandled error — which during this project wedged the
+    // whole backend. Log it (fail-loud) and keep the channel alive.
+    this.app.error(async (error) => {
+      channelLogger.error({ err: error, channel: 'slack' }, 'Slack Bolt error (contained)');
+    });
+
     // ONE message listener. Bolt invokes EVERY matching listener for an event,
     // so the old setup (a catch-all `app.message()` PLUS `app.event('message')`
     // for DMs PLUS a separate `app.event('app_mention')`) fired handleMessage

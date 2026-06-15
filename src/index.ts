@@ -324,6 +324,19 @@ async function main() {
 
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
+
+    // Last-resort guards: a stray rejection/exception from any channel, tool, or
+    // background task must NOT silently wedge or kill the process — there is no
+    // external supervisor to restart it. Log loudly (fail-loud) and stay up.
+    process.on('unhandledRejection', (reason) => {
+      logger.error(
+        { reason: reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason },
+        'Unhandled promise rejection — process kept alive',
+      );
+    });
+    process.on('uncaughtException', (error) => {
+      logger.error({ error: { message: error.message, stack: error.stack } }, 'Uncaught exception — process kept alive');
+    });
   } catch (error) {
     logger.error(
       {
