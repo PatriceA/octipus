@@ -57,19 +57,29 @@ Make and receive actual phone calls through telephony providers. Octipus uses th
 
 #### 1. Store provider credentials in the vault
 
-Go to **Settings > Vault** in the web UI, or use the API:
+Go to **Settings > Vault** in the web UI, or use the API.
+
+> **Token:** these calls use a real API credential — create a Personal Access
+> Token under **Settings → API Tokens** (or use a login JWT) and export it as
+> `OCTIPUS_API_TOKEN`. (`MASTER_KEY` is the vault *encryption* key, not an API
+> credential — it will 401.) The token must belong to an **admin** user to
+> write system-scoped secrets.
+
+> **Store at system scope:** telephony reads credentials from the **system**
+> scope first, then falls back to the admin user. Pass `"systemLevel": true`
+> so the credential lands at system scope (admin token required).
 
 ```bash
 # Twilio example
 curl -X POST http://localhost:3005/api/vault \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"key": "twilio_account_sid", "value": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'
+  -d '{"key": "twilio_account_sid", "value": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "systemLevel": true}'
 
 curl -X POST http://localhost:3005/api/vault \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"key": "twilio_auth_token", "value": "your_auth_token"}'
+  -d '{"key": "twilio_auth_token", "value": "your_auth_token", "systemLevel": true}'
 ```
 
 The phone number is **auto-detected** from your Twilio account — no need to configure it separately.
@@ -79,13 +89,13 @@ The phone number is **auto-detected** from your Twilio account — no need to co
 ```bash
 # Enable Twilio
 curl -X PUT http://localhost:3005/api/settings/voice.telephonyProvider \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"value": "twilio"}'
 
 # Set your public webhook URL (ngrok, Cloudflare Tunnel, etc.)
 curl -X PUT http://localhost:3005/api/settings/voice.publicUrl \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"value": "https://abc123.ngrok.io"}'
 ```
@@ -136,7 +146,7 @@ Set the voice language in octipus settings (default: `en-US`):
 
 ```bash
 curl -X PUT http://localhost:3005/api/settings/voice.language \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"value": "en-US"}'
 ```
@@ -206,11 +216,11 @@ Disabled by default. Enable with:
 ```bash
 # Allow calls from specific numbers
 curl -X PUT http://localhost:3005/api/settings/voice.inboundPolicy \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -d '{"value": "allowlist"}'
 
 curl -X PUT http://localhost:3005/api/settings/voice.inboundAllowFrom \
-  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -d '{"value": ["+1234567890", "+0987654321"]}'
 ```
 

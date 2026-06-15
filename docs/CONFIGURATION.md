@@ -61,14 +61,13 @@ AGENT_MAX_TOKEN_BUDGET=100000         # Per-agent token limit (0 = unlimited)
 AGENT_DEFAULT_TIMEOUT=300000          # Per-agent timeout in ms (default: 5min)
 AGENT_MAX_ITERATIONS=50               # Max iterations per agent loop
 
-ENABLED_SKILLS=filesystem,shell,git,browser,websearch,docker
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
 
 # ─── Integrations (optional) ─────────────────────────────────
 N8N_URL=http://localhost:5678
 N8N_API_KEY=
-MCP_GATEWAY_URL=http://localhost:8811
+MCP_SERVERS_CONFIG=./mcp-servers.json     # Path to MCP client server config (see MCP-INTEGRATION.md)
 
 # ─── Migrations ──────────────────────────────────────────────
 SKIP_MIGRATIONS=false                  # Set to true for production deploys

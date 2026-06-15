@@ -4,6 +4,20 @@ All endpoints are under `/api` with JWT Bearer authentication (except health and
 
 Interactive documentation available at `http://localhost:3005/swagger`.
 
+## Getting an API token
+
+Every authenticated endpoint expects an `Authorization: Bearer <token>` header. Throughout these docs the placeholder is `$OCTIPUS_API_TOKEN`. There are two ways to get a token:
+
+- **Login JWT** — `POST /api/auth/login` returns a session JWT. Good for short-lived / interactive use; it expires.
+- **Personal Access Token** — create a long-lived token under **Settings → API Tokens** in the web UI (or `POST /api/api-tokens`). Best for scripts, cron, and webhooks. Manage them via the [API Tokens](#api-tokens) endpoints; revoke with `DELETE /api/api-tokens/:id`.
+
+Admin-only endpoints (anything marked *admin*, plus system-scoped vault writes) require a token belonging to an admin user. Export it once:
+
+```bash
+export OCTIPUS_API_TOKEN="<your-token>"
+curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/auth/me
+```
+
 ## Health
 
 | Method | Endpoint | Auth | Description |

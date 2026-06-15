@@ -4,7 +4,7 @@
 
 ```
 octipus/
-├── bin/                    # CLI scripts (octipus start/stop)
+├── bin/                    # CLI scripts (octi start/stop)
 ├── src/
 │   ├── api/                # REST API & WebSocket
 │   │   ├── routes/         # Endpoint handlers
