@@ -72,7 +72,7 @@ Via API:
 
 ```bash
 curl -X POST http://localhost:3005/api/hooks \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "GitHub Notifications",
@@ -132,7 +132,7 @@ gh api repos/OWNER/REPO/hooks/<hook-id>/deliveries \
 
 # Octipus execution log
 curl http://localhost:3005/api/hooks/<hook-id>/executions \
-  -H "Authorization: Bearer <token>" | jq '.executions[0]'
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" | jq '.executions[0]'
 ```
 
 ## Setup Guide: GitLab

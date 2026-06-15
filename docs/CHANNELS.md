@@ -2,6 +2,16 @@
 
 Octipus supports multiple messaging channels so you can interact with your agents from wherever you work. All channels are optional except WebChat, which is always available.
 
+## Where settings live
+
+Every channel setting lands in one of three places — know which before you go looking:
+
+- **Secrets** (bot tokens, app/client secrets, signing secrets) → the **encrypted vault**, at **system scope**. Set them on the **Settings → Channels** page (or the **Secrets** page); never paste them into a config file. The vault is the source of truth for credentials.
+- **Non-secret settings** (allowed-users lists, webhook URLs, polling timeouts, tenant IDs) → the **DB `settings` table**. Edit them in the Settings UI or via `PUT /api/settings/:key`.
+- **`.env`** → a **first-boot seed only**. On first boot the values below are migrated into the DB/vault once; after that the **DB wins** and editing `.env` does nothing. Use the UI to change anything at runtime.
+
+The env vars listed in each table below are therefore bootstrap hints, not the live config. See [CONFIGURATION-PRECEDENCE.md](CONFIGURATION-PRECEDENCE.md) for the full precedence rules.
+
 ## Architecture
 
 Every channel extends `BaseChannel` and plugs into the **Unified Message Interface (UMI)**. The UMI normalizes messages from all channels into a common `UnifiedMessage` format and routes them to the orchestrator. Replies flow back through the same channel.
@@ -14,7 +24,7 @@ User ─── WhatsApp ──┤
 User ─── WebChat ───┘
 ```
 
-Channels are registered at startup in `src/channels/index.ts` and support **hot-reload** — change a setting in the web UI and the channel reconnects automatically.
+Channels are registered at startup in `src/channels/index.ts` and **hot-reload on save** — change a setting in the web UI and the channel picks it up without a full restart. If a channel doesn't reconnect after a token change, restart the backend.
 
 ### Attachment Processing
 
@@ -59,12 +69,14 @@ Once linked, your channel identity is bound to your web account. This enables sh
 
 ### Configuration
 
-| Setting | Env Var | Description |
-|---------|---------|-------------|
-| `telegram.botToken` | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather (stored in vault) |
-| `telegram.allowedUsers` | `TELEGRAM_ALLOWED_USERS` | Comma-separated Telegram user IDs to allow (empty = all) |
-| `telegram.webhookUrl` | `TELEGRAM_WEBHOOK_URL` | Webhook URL (leave empty for polling mode) |
-| `telegram.pollingTimeout` | `TELEGRAM_POLLING_TIMEOUT` | Polling timeout in seconds (default: 30) |
+| Setting | Env Var | Store | Description |
+|---------|---------|-------|-------------|
+| `telegram.botToken` | `TELEGRAM_BOT_TOKEN` | Vault | Bot token from BotFather (secret, stored in vault) |
+| `telegram.allowedUsers` | `TELEGRAM_ALLOWED_USERS` | DB-settings | Comma-separated Telegram user IDs to allow (empty = all) |
+| `telegram.webhookUrl` | `TELEGRAM_WEBHOOK_URL` | DB-settings | Webhook URL (leave empty for polling mode) |
+| `telegram.pollingTimeout` | `TELEGRAM_POLLING_TIMEOUT` | DB-settings | Polling timeout in seconds (default: 30) |
+
+> **Finding your numeric Telegram user ID** (for `telegram.allowedUsers`): message [@userinfobot](https://t.me/userinfobot) — it replies with your numeric ID. Alternatively, send `/start` to your own bot and read the backend logs (`tail -f ~/.octipus/backend.log`); the incoming update logs the sender's numeric `id`. Telegram IDs are numbers, not @usernames.
 
 ### Bot Commands
 
@@ -117,18 +129,18 @@ Once linked, your channel identity is bound to your web account. This enables sh
 7. (Optional) Under **Slash Commands**, create `/link` (the Request URL field is ignored in Socket Mode — put any placeholder). Octipus also accepts the plain message `link`. Requires the `commands` scope.
 8. **Install / Reinstall to Workspace.**
 
-> ⚠️ **The `xoxb-…` token is only valid after the app is installed to the workspace.** After installing, copy the **Bot User OAuth Token** from *OAuth & Permissions* and save it as the Slack Bot Token secret (system-scoped). If the bot fails every event with `invalid_auth` (Bolt authorizes each event via `auth.test`) and silently never replies, the loaded token is wrong/stale — re-copy and re-save, then restart so it's re-read. Verify the value you save:
+> ⚠️ **The `xoxb-…` token is only valid after the app is installed to the workspace.** After installing, copy the **Bot User OAuth Token** from *OAuth & Permissions* and save it as the Slack Bot Token secret (system-scoped). If the bot fails every event with `invalid_auth` (Bolt authorizes each event via `auth.test`) and silently never replies, the loaded token is wrong/stale — re-copy and re-save. The save hot-reloads the token; if Slack still doesn't reconnect, restart the backend so it's re-read. Verify the value you save:
 > ```
 > curl -H "Authorization: Bearer xoxb-…" https://slack.com/api/auth.test   # expect "ok":true
 > ```
 
 ### Configuration
 
-| Setting | Env Var | Description |
-|---------|---------|-------------|
-| `slack.botToken` | `SLACK_BOT_TOKEN` | Bot token (`xoxb-...`) (stored in vault) |
-| `slack.appToken` | `SLACK_APP_TOKEN` | App-level token (`xapp-...`) (stored in vault) |
-| `slack.signingSecret` | `SLACK_SIGNING_SECRET` | Signing secret from app settings (stored in vault) |
+| Setting | Env Var | Store | Description |
+|---------|---------|-------|-------------|
+| `slack.botToken` | `SLACK_BOT_TOKEN` | Vault | Bot token (`xoxb-...`) (secret, stored in vault) |
+| `slack.appToken` | `SLACK_APP_TOKEN` | Vault | App-level token (`xapp-...`) (secret, stored in vault) |
+| `slack.signingSecret` | `SLACK_SIGNING_SECRET` | Vault | Signing secret from app settings (secret, stored in vault) |
 
 ### Features
 
@@ -157,11 +169,11 @@ Once linked, your channel identity is bound to your web account. This enables sh
 
 ### Configuration
 
-| Setting | Env Var | Description |
-|---------|---------|-------------|
-| `teams.appId` | `TEAMS_APP_ID` | Microsoft App ID from Azure |
-| `teams.appPassword` | `TEAMS_APP_PASSWORD` | Client secret (stored in vault) |
-| `teams.tenantId` | `TEAMS_TENANT_ID` | Azure AD tenant ID (optional, for single-tenant) |
+| Setting | Env Var | Store | Description |
+|---------|---------|-------|-------------|
+| `teams.appId` | `TEAMS_APP_ID` | DB-settings | Microsoft App ID from Azure |
+| `teams.appPassword` | `TEAMS_APP_PASSWORD` | Vault | Client secret (secret, stored in vault) |
+| `teams.tenantId` | `TEAMS_TENANT_ID` | DB-settings | Azure AD tenant ID (optional, for single-tenant) |
 
 ### Features
 
@@ -222,13 +234,13 @@ The temporary token expires after 24 hours. For production:
 
 ### Configuration
 
-| Setting | Env Var | Description |
-|---------|---------|-------------|
-| `whatsapp.accessToken` | `WHATSAPP_ACCESS_TOKEN` | Cloud API access token (stored in vault) |
-| `whatsapp.phoneNumberId` | `WHATSAPP_PHONE_NUMBER_ID` | Phone Number ID from Meta dashboard |
-| `whatsapp.verifyToken` | `WHATSAPP_VERIFY_TOKEN` | Webhook verification token (default: `octipus-whatsapp-verify`) |
-| `whatsapp.appSecret` | `WHATSAPP_APP_SECRET` | Meta App Secret for signature verification (stored in vault) |
-| `whatsapp.businessAccountId` | `WHATSAPP_BUSINESS_ACCOUNT_ID` | WhatsApp Business Account ID (optional) |
+| Setting | Env Var | Store | Description |
+|---------|---------|-------|-------------|
+| `whatsapp.accessToken` | `WHATSAPP_ACCESS_TOKEN` | Vault | Cloud API access token (secret, stored in vault) |
+| `whatsapp.phoneNumberId` | `WHATSAPP_PHONE_NUMBER_ID` | DB-settings | Phone Number ID from Meta dashboard |
+| `whatsapp.verifyToken` | `WHATSAPP_VERIFY_TOKEN` | DB-settings | Webhook verification token (default: `octipus-whatsapp-verify`) |
+| `whatsapp.appSecret` | `WHATSAPP_APP_SECRET` | Vault | Meta App Secret for signature verification (secret, stored in vault) |
+| `whatsapp.businessAccountId` | `WHATSAPP_BUSINESS_ACCOUNT_ID` | DB-settings | WhatsApp Business Account ID (optional) |
 
 ### Bot Commands
 
@@ -280,6 +292,8 @@ The built-in WebSocket chat is always available and is the primary interface thr
 
 ## Environment Variable Quick Reference
 
+These are **first-boot seeds only** (see [Where settings live](#where-settings-live)) — set them before the first start, then manage everything from **Settings → Channels** afterward. Secrets seeded here are migrated into the vault on first boot.
+
 ```env
 # ─── Telegram ────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN=                    # From @BotFather
@@ -328,3 +342,11 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=         # Business Account ID (optional)
 ### Permission requests in channels
 
 When an agent needs permission (e.g., to run a shell command), the request is forwarded to the channel where the conversation originated. Reply `yes` or `no` directly in the channel to approve or deny.
+
+---
+
+## Related
+
+- [CONFIGURATION-PRECEDENCE.md](CONFIGURATION-PRECEDENCE.md) — how env, DB settings, and the vault interact (env is a first-boot seed; DB/vault win at runtime)
+- [CONFIGURATION.md](CONFIGURATION.md) — full environment-variable reference, ports, and services
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — diagnosing connection, auth, and delivery problems

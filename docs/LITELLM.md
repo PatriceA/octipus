@@ -23,8 +23,14 @@ Two settings drive everything:
 
 | Setting key | Vault / env | Secret? | Purpose |
 |---|---|---|---|
-| `litellm.proxyUrl` | env `LITELLM_URL` (also `LITELLM_PROXY_URL`) | no | Base URL of the proxy, e.g. `http://localhost:4000` |
+| `litellm.proxyUrl` | env `LITELLM_URL` | no | Base URL of the proxy, e.g. `http://localhost:4000` |
 | `litellm.apiKey` | vault `litellm_api_key`, env `LITELLM_API_KEY` | **yes** | Bearer key sent to the proxy |
+
+> **`LITELLM_URL` is the canonical env var** — it's the one the settings
+> registry reads and migrates into the DB on first boot. `LITELLM_PROXY_URL`
+> is **legacy-only**: it's honored solely by the legacy bootstrap loader
+> (`src/config/legacy-loader.ts`) as a fallback and does **not** migrate into
+> the DB. Prefer `LITELLM_URL` (or just set the URL in the UI).
 
 At call time Octipus resolves the key as:
 
@@ -90,13 +96,13 @@ automatically (`src/api/routes/settings.ts`). Admin token required:
 ```bash
 # Set the proxy URL
 curl -X PUT http://localhost:3005/api/settings/litellm.proxyUrl \
-  -H "Authorization: Bearer $OCTIPUS_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"value":"http://localhost:4000"}'
 
 # Set the master key (stored in vault as litellm_api_key)
 curl -X PUT http://localhost:3005/api/settings/litellm.apiKey \
-  -H "Authorization: Bearer $OCTIPUS_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"value":"sk-your-master-key"}'
 ```
@@ -130,7 +136,7 @@ To browse what the proxy actually exposes:
 
 ```bash
 curl http://localhost:3005/api/models/providers/litellm/models \
-  -H "Authorization: Bearer $OCTIPUS_ADMIN_TOKEN"
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN"
 ```
 
 This proxies `/model/info` on LiteLLM and returns `{ id, provider, litellmModel }`
@@ -164,8 +170,10 @@ docker run -p 4000:4000 \
 Health check: `curl http://localhost:4000/health/liveliness`.
 List models: `curl -H "Authorization: Bearer sk-your-master-key" http://localhost:4000/v1/models`.
 
-Octipus's own `docker-compose.yml` wires the app's `LITELLM_PROXY_URL` and a
-`MASTER_KEY`; point them at your proxy.
+Octipus's own `docker-compose.yml` still wires the app's `LITELLM_PROXY_URL`
+and a `MASTER_KEY`; point them at your proxy. Note `LITELLM_PROXY_URL` is the
+legacy var (read only by the bootstrap loader, doesn't migrate into the DB) —
+for a fresh setup prefer `LITELLM_URL`.
 
 ---
 

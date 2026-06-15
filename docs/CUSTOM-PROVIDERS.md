@@ -8,6 +8,7 @@ the upstream wire format:
 |---|---|---|---|
 | **Custom OpenAI-compatible** | `custom-openai` | OpenAI `/v1/chat/completions` | vLLM, Together, Groq, Fireworks, DeepInfra, internal OpenAI-shaped proxies |
 | **Custom Gemini-compatible** | `custom-gemini` | Native Google Gemini (`candidates[].content.parts[]`) | Vertex AI, Google AI Studio (native), Gemini-fronting proxies |
+| **Custom Anthropic-compatible** | `custom-anthropic` | Native Anthropic Messages (`POST /v1/messages`, `content[]` blocks) | Self-hosted / proxied Anthropic-shaped endpoints, Bedrock-style Messages gateways |
 
 Both are stateless — configuration lives entirely on the `model_config` row
 and is loaded per call. Add as many models against the same upstream as needed;
@@ -121,9 +122,8 @@ on the way in.
 ## What's NOT supported (yet)
 
 - Image / multi-modal input — text only for now
-- Embeddings — neither custom flavor implements `embed()`
+- Embeddings — no custom flavor implements `embed()`
 - Batch / parallel mode (proxy-specific feature)
-- Anthropic-flavored custom provider — defer until needed
 
 ## Adding a new envelope
 

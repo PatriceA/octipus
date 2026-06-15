@@ -192,7 +192,7 @@ Replace `<your-path>` with the path from the MCP Server Trigger node, and `<your
 ### Step 7: Restart Octipus
 
 ```bash
-octipus restart
+octi restart
 ```
 
 Octipus will auto-connect to n8n on startup. Verify with:
@@ -239,10 +239,10 @@ Behaviour:
 
 ```bash
 # Inspect breakers
-curl -H "Authorization: Bearer $TOKEN" http://localhost:3005/api/mcp/circuit
+curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/mcp/circuit
 
 # Force-reset a stuck breaker
-curl -X POST -H "Authorization: Bearer $TOKEN" \
+curl -X POST -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   http://localhost:3005/api/mcp/circuit/n8n/reset
 ```
 
