@@ -105,14 +105,22 @@ Once linked, your channel identity is bound to your web account. This enables sh
    - `users:read` — Read user profile info
    - `files:read` — Access shared files
    - `app_mentions:read` — Listen for @mentions
-4. Under **Socket Mode**, enable it and generate an **App-Level Token** with `connections:write` scope
-5. Under **Event Subscriptions**, enable events and subscribe to:
+   - `commands` — only needed if you add the `/link` slash command (step 7)
+4. Under **Socket Mode**, enable it and generate an **App-Level Token** (`xapp-…`) with `connections:write` scope. With Socket Mode on, Event Subscriptions and Interactivity are delivered over the WebSocket — **no Request URL / event endpoint is configured anywhere** (that's why Octipus settings don't ask for one; the bot connects outbound).
+5. Under **Event Subscriptions**, enable events and subscribe to these **bot events**:
    - `message.channels`
    - `message.groups`
    - `message.im`
    - `message.mpim`
    - `app_mention`
-6. Install the app to your workspace
+6. Under **App Home**, enable the **Messages Tab** and check "Allow users to send Slash commands and messages from the messages tab" — required for users to DM the bot.
+7. (Optional) Under **Slash Commands**, create `/link` (the Request URL field is ignored in Socket Mode — put any placeholder). Octipus also accepts the plain message `link`. Requires the `commands` scope.
+8. **Install / Reinstall to Workspace.**
+
+> ⚠️ **The `xoxb-…` token is only valid after the app is installed to the workspace.** After installing, copy the **Bot User OAuth Token** from *OAuth & Permissions* and save it as the Slack Bot Token secret (system-scoped). If the bot fails every event with `invalid_auth` (Bolt authorizes each event via `auth.test`) and silently never replies, the loaded token is wrong/stale — re-copy and re-save, then restart so it's re-read. Verify the value you save:
+> ```
+> curl -H "Authorization: Bearer xoxb-…" https://slack.com/api/auth.test   # expect "ok":true
+> ```
 
 ### Configuration
 
