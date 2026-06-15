@@ -142,6 +142,21 @@ async function main() {
     await registerBuiltinTools();
     logger.info('Tools registered');
 
+    // Auto-index Octipus's own product docs into the knowledge base so users
+    // can ask "how do I set up Telegram / a model provider / X?" and get an
+    // answer grounded in the shipped manual. Must run AFTER runtime config is
+    // loaded (the embedding provider needs vault-resolved credentials, or the
+    // embed call 401s) — it is here, after registerBuiltinTools() and the
+    // loadRuntimeConfig()/resetLiteLLMClient() above. Non-fatal and idempotent
+    // (skips unchanged files); the cron refresh retries if the embedding model
+    // is only bound after first boot.
+    try {
+      const { indexProductDocs } = await import('@/db/seed-docs');
+      await indexProductDocs();
+    } catch (err) {
+      logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues');
+    }
+
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the orchestrator can
     // gate agent dispatch on tool availability. Non-fatal — if probing

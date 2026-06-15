@@ -9,10 +9,12 @@ import { coreLogger } from '@/utils/logger';
 const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
 const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
+const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 
 let cronTimer: Timer | null = null;
 let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
+let lastDocsReindex = 0;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -122,10 +124,32 @@ async function maybeCleanupKnowledge(): Promise<void> {
   }
 }
 
+async function maybeReindexDocs(): Promise<void> {
+  const now = Date.now();
+  if (now - lastDocsReindex < DOCS_REINDEX_INTERVAL_MS) return;
+  lastDocsReindex = now;
+
+  try {
+    // Refresh the product-docs corpus in the KB. Idempotent — unchanged files
+    // are skipped, so this is cheap. Also covers first-install where the
+    // embedding model is bound AFTER boot: the boot-time index found the KB
+    // not-ready and bailed, and this is what actually lands the docs once a
+    // model is assigned.
+    const { indexProductDocs } = await import('@/db/seed-docs');
+    const res = await indexProductDocs();
+    if (res.filesIndexed > 0) {
+      coreLogger.info(res, 'Docs reindex: refreshed product docs in the knowledge base');
+    }
+  } catch (err) {
+    coreLogger.error({ err }, 'Docs reindex failed');
+  }
+}
+
 async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
     await maybeCleanupKnowledge();
+    await maybeReindexDocs();
     const db = getDb();
     const now = new Date();
 

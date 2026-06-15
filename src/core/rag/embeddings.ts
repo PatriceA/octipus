@@ -826,6 +826,36 @@ export class EmbeddingService {
     return r[0]?.c ?? 0;
   }
 
+  /**
+   * Has this exact source FILE already been indexed for `(purpose, sourceId)`?
+   * Compares the SHA-256 of the whole file against the `metadata.fileSha`
+   * stamped on prior chunks by an idempotent re-indexer (see
+   * `src/db/seed-docs.ts`). A `true` means the file is unchanged since its
+   * last index, so the caller can skip re-embedding entirely — `indexText`
+   * would otherwise embed every chunk before the per-chunk dedup upsert
+   * short-circuits, which is the expensive part we want to avoid.
+   *
+   * Note this is keyed on the FULL-file sha (chunk rows each hash only their
+   * own chunk in `content_sha256`, so that column can't answer "is the source
+   * file unchanged"). Returns false when no chunk carries a `fileSha`, so the
+   * first index of pre-existing rows written without the stamp re-indexes
+   * once and then becomes idempotent.
+   */
+  async isFileIndexed(purpose: EmbeddingPurpose, sourceId: string, fileContent: string): Promise<boolean> {
+    const db = getDb();
+    const sha = sha256Hex(fileContent);
+    const r = await db
+      .select({ id: embeddings.id })
+      .from(embeddings)
+      .where(and(
+        eq(embeddings.purpose, purpose),
+        eq(embeddings.sourceId, sourceId),
+        sql`${embeddings.metadata}->>'fileSha' = ${sha}`,
+      ))
+      .limit(1);
+    return r.length > 0;
+  }
+
   // ── Deletion ──────────────────────────────────────────────────────
 
   async deleteById(id: string): Promise<boolean> {
