@@ -257,6 +257,8 @@ export interface Hook {
   executionCount: number;
   cooldownMs: number | null;
   lastExecutedAt: Date | null;
+  /** Reused chat session so repeated runs append to one session, not a new one each time. */
+  sessionId: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
