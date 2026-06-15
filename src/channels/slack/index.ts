@@ -61,54 +61,33 @@ export class SlackChannel extends BaseChannel {
       signingSecret: config.slack.signingSecret,
     });
 
-    // Handle messages
+    // ONE message listener. Bolt invokes EVERY matching listener for an event,
+    // so the old setup (a catch-all `app.message()` PLUS `app.event('message')`
+    // for DMs PLUS a separate `app.event('app_mention')`) fired handleMessage
+    // two or three times for a single message → duplicate orchestrator runs and
+    // duplicate replies. `app.message()` already receives message events across
+    // every channel type the bot can see (DMs, channels, groups), so it is the
+    // single entry point; mentions in joined channels arrive as message events
+    // too, so `app_mention` is redundant.
     this.app.message(async ({ message, say, client }) => {
-      await this.handleMessage(message as SlackMessage, say as SayFn, client);
-    });
-
-    // Handle app mentions
-    this.app.event('app_mention', async ({ event, say, client }) => {
-      await this.handleMention(event as SlackMessage, say as SayFn, client);
-    });
-
-    // Handle "link" keyword for account linking
-    this.app.message(/^link$/i, async ({ message, say }) => {
       const msg = message as SlackMessage;
-      const slackUserId = msg.user;
-
-      // Check if already linked (Phase 2e: scoped O(1) lookup on
-      // `channel_identities`, with JSONB fallback for legacy bindings).
-      const { getChannelBindingManager } = await import('@/security/channel-bindings');
-      const existing = await getChannelBindingManager().findUserRecordByExternalId('slack', slackUserId);
-      if (existing) {
-        await (say as SayFn)({ text: 'Your account is already linked!', thread_ts: msg.thread_ts });
+      if (msg.bot_id || msg.subtype === 'bot_message') return; // ignore the bot's own posts
+      // Strip a leading bot @mention so "@octipus hi" reads as "hi".
+      const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/gi, '').trim();
+      // `link` keyword shortcut (the `/link` slash command does the same).
+      if (/^link$/i.test(text)) {
+        await (say as SayFn)({ text: await this.linkReplyText(msg.user), thread_ts: msg.thread_ts });
         return;
       }
-
-      let userName = slackUserId;
-      try {
-        const userInfo = await this.app!.client.users.info({ user: slackUserId });
-        userName = userInfo.user?.real_name || userInfo.user?.name || slackUserId;
-      } catch { /* ignore */ }
-
-      const code = await generateLinkCode({
-        channelType: 'slack',
-        channelUserId: slackUserId,
-        channelUserName: userName,
-      });
-
-      await (say as SayFn)({
-        text: `Your link code: *${code}*\nEnter this code in the web UI at POST /api/auth/link within 5 minutes.`,
-        thread_ts: msg.thread_ts,
-      });
+      await this.handleMessage({ ...msg, text }, say as SayFn, client);
     });
 
-    // Handle DMs
-    this.app.event('message', async ({ event, say, client }) => {
-      const msg = event as SlackMessage;
-      if (msg.channel_type === 'im') {
-        await this.handleMessage(msg, say as SayFn, client);
-      }
+    // `/link` slash command — Slack intercepts messages starting with `/`, so a
+    // user who types `/link` never reaches the message listener above. Delivered
+    // over Socket Mode (no Request URL). Requires the `commands` scope.
+    this.app.command('/link', async ({ command, ack, respond }) => {
+      await ack(); // Slack requires an ack within 3s
+      await respond({ text: await this.linkReplyText(command.user_id), response_type: 'ephemeral' });
     });
 
     try {
@@ -266,19 +245,21 @@ export class SlackChannel extends BaseChannel {
     this.emitMessage(unifiedMessage);
   }
 
-  private async handleMention(event: SlackMessage, say: SayFn, client: WebClient): Promise<void> {
-    // Remove the bot mention from the text
-    const text = (event.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
+  /** Build the reply for a link request: a fresh code, or an already-linked notice. */
+  private async linkReplyText(slackUserId: string): Promise<string> {
+    // Scoped O(1) lookup on `channel_identities`, JSONB fallback for legacy rows.
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const existing = await getChannelBindingManager().findUserRecordByExternalId('slack', slackUserId);
+    if (existing) return 'Your account is already linked!';
 
-    // Create a synthetic message event
-    await this.handleMessage(
-      {
-        ...event,
-        text,
-      },
-      say,
-      client
-    );
+    let userName = slackUserId;
+    try {
+      const userInfo = await this.app!.client.users.info({ user: slackUserId });
+      userName = userInfo.user?.real_name || userInfo.user?.name || slackUserId;
+    } catch { /* ignore */ }
+
+    const code = await generateLinkCode({ channelType: 'slack', channelUserId: slackUserId, channelUserName: userName });
+    return `Your link code: *${code}*\nEnter it at Settings → Channels within 5 minutes.`;
   }
 
   private mapFileType(mimeType: string): Attachment['type'] {
