@@ -3,6 +3,7 @@ import { getAgentManager } from '@/core/agent-manager';
 import type { Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
 import type { TriggerContext } from './triggers';
+import { summarizeWebhookPayload } from './webhook-summary';
 
 export interface ActionResult {
   success: boolean;
@@ -201,7 +202,9 @@ async function executeSpawnAgent(
     if (renderedMessage) {
       prompt += `\n\n${renderedMessage}`;
     } else {
-      prompt += `\n\n--- Webhook Payload ---\n${JSON.stringify(context.webhook.body, null, 2)}`;
+      // Summarize the payload instead of dumping the full JSON, which flooded
+      // the user-visible message with repo metadata (see webhook-summary.ts).
+      prompt += `\n\n${summarizeWebhookPayload(context.webhook.body)}`;
     }
     if (context.webhook.headers) {
       const eventType = context.webhook.headers['x-github-event'] || context.webhook.headers['x-gitlab-event'] || '';

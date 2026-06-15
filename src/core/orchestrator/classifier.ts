@@ -63,6 +63,17 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'authentication flow', 'access control', 'encryption',
     'security review', 'cve', 'exploit', 'hardening',
   ],
+  // Code/PR review against project standards. Multi-word keywords so a generic
+  // "review" doesn't steal routing; these reliably win over the lone-word
+  // 'summary'/'security' ties that previously misrouted push-review hooks to
+  // the research arm (which can't read repo files).
+  review: [
+    'review the changes', 'review the change', 'review the diff', 'review the code',
+    'review the pr', 'review this pr', 'review the pull request', 'review this pull request',
+    'review of this pull request', 'review of the pull request', 'code review', 'pr review',
+    'against our guidelines', 'against the guidelines', 'repo guidelines', 'coding guidelines',
+    'project guidelines', 'style guidelines', 'compliance review', 'review against',
+  ],
   qa: [
     'qa', 'qa/validate', 'qa validate',
     'validate', 'validate wiring', 'validate pipeline', 'validate artifact',
