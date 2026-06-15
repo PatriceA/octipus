@@ -103,7 +103,8 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         conditions: t.Optional(t.Array(t.Any())),
         isEnabled: t.Optional(t.Boolean()),
         priority: t.Optional(t.Number()),
-        maxExecutions: t.Optional(t.Number()),
+        // null = unlimited; accept it on create too, for parity with PATCH
+        maxExecutions: t.Optional(t.Union([t.Number(), t.Null()])),
         cooldownMs: t.Optional(t.Number()),
       }),
       detail: { tags: ['hooks'] },
@@ -139,7 +140,8 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         conditions: t.Optional(t.Array(t.Any())),
         isEnabled: t.Optional(t.Boolean()),
         priority: t.Optional(t.Number()),
-        maxExecutions: t.Optional(t.Number()),
+        // null = unlimited; the edit form clears run-once by sending null
+        maxExecutions: t.Optional(t.Union([t.Number(), t.Null()])),
         cooldownMs: t.Optional(t.Number()),
       }),
       detail: { tags: ['hooks'] },
