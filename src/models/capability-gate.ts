@@ -1,10 +1,9 @@
 /**
  * Capability gate — verify a model can actually do tool-calling and JSON output
  * before (or after) it's bound to topics. Small local models routinely report
- * `supportsTools: true` yet emit malformed tool-call JSON (see
- * `known-bad-orchestrators`), and ignore JSON-mode requests. The static check
- * is a cheap, network-free heuristic used to warn at register time; the live
- * check runs the real conformance subset on demand.
+ * `supportsTools: true` yet emit malformed tool-call JSON, and ignore JSON-mode
+ * requests. The static check is a cheap, network-free heuristic used to warn
+ * at register time; the live check runs the real conformance subset on demand.
  */
 import { getConfig } from '@/config';
 import { deriveParamCount } from '@/core/orchestrator/mode-selector';
@@ -55,12 +54,6 @@ export function staticCapabilityWarnings(
     warnings.push(
       `Small local model (~${Math.round(params / 1e9)}B): tool-calling and JSON output are often unreliable below ~10B. ` +
         'Run a capability check (POST /api/models/:name/check-capabilities) before relying on it for agent work.',
-    );
-  }
-  // Known-unreliable orchestrators (e.g. qwen3 local builds emitting bad tool JSON).
-  if (/^qwen3(\.\d+)?:/i.test(model.modelId)) {
-    warnings.push(
-      'qwen3 local builds reliably emit malformed tool-call JSON via Ollama — prefer a proven tool-caller (qwen2.5:32b, glm-4.x-flash, or a cloud model).',
     );
   }
   return warnings;

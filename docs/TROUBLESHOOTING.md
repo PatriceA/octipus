@@ -186,16 +186,15 @@ ERROR: Orchestrator agent failed
 |---|---|---|
 | `glm-4.7-flash:latest` | ✅ Works | Tested end-to-end; recommended baseline for local orchestrator. |
 | `qwen2.5:32b+` | ✅ Generally works | Proven tool-calling track record at 32B+. |
-| `qwen3:*`, `qwen3.6:*` (any size up to 35B observed) | ❌ Fails | All Qwen3 family sizes tested fail with the unbalanced-JSON parser error. Not recommended at any local size below ~35B; even 35B Qwen3 has been observed to fail. The `known-bad-orchestrators` list auto-swaps these to a working alternative if one is configured. |
-| `qwen3-vl:*` | (vision-only, not for orchestrator) | Distinct family, not on the bad list — but a VL model shouldn't be the orchestrator anyway. |
+| `qwen3:*`, `qwen3.6:*` (any size up to 35B observed) | ❌ Fails (full mode) | All Qwen3 family sizes tested fail the orchestrator tool-call JSON path with the unbalanced-JSON parser error. Fine as a *worker* model, and fine in router mode (router has no orchestrator LLM at all). Just don't pin it as the default if your hardware can run a 24B+ model and you'd land in full mode. |
+| `qwen3-vl:*` | (vision-only, not for orchestrator) | Distinct family — but a VL model shouldn't be the orchestrator anyway. |
 
-**Recommended setup**:
+**Recommended setup** (full mode only — router/lite are not affected):
 - **Local-only**: install `glm-4.7-flash:latest` in Ollama and bind it as default. Use Qwen models for *workers* (writing, coding, etc.) where their output is plain text, not tool-call JSON.
-- **Hybrid**: keep a cloud model (Deepseek, OpenAI, Anthropic, Gemini) as the orchestrator default; auto-swap will fall back to it if a Qwen model is somehow assigned.
+- **Hybrid**: keep a cloud model (Deepseek, OpenAI, Anthropic, Gemini) as the orchestrator default.
 
 **Solution**:
 1. In **Models → add model**, pull `glm-4.7-flash:latest` (or any cloud model) and set it as the default for the orchestrator topic.
 2. Restart the backend or trigger a model reload — the next chat turn will pick the new default.
-3. If you keep Qwen as default, the auto-swap logic in `src/core/orchestrator/model-selector.ts` will warn and swap to another tool-capable model in the registry. If no swap candidate exists, the chat still fails — that's why the manual recommendation above matters.
 
-To add new known-good or known-bad orchestrator models, edit `src/core/orchestrator/known-bad-orchestrators.ts`. The pattern is a regex matched case-insensitively against the model id.
+Octipus no longer auto-swaps known-unreliable orchestrators. The bad-list / swap logic was removed because the failure mode is specific to full-mode swarm coordination — router and lite tiers either skip the orchestrator LLM (router) or run only single-step delegation (lite), so a small qwen3 set as default and landing in those tiers shouldn't be silently replaced.

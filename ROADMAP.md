@@ -215,9 +215,9 @@ worker.run`, so the UI saw narration only on errors and turn-end.
   badge stays. Plus a merge-preserves-live fix so the 10s REST poll
   doesn't wipe streamed status.
 - **`/model` slash command.** Per-session in-memory orchestrator
-  model override. Override runs through the full suitability gate
-  (reasoner / no-tools / known-bad swap), so a bad pick fails loud
-  at command time, not mid-turn.
+  model override. Override runs through the reasoner / no-tools
+  rejection so a structurally-incapable pick fails loud at command
+  time, not mid-turn.
 
 Plus polish that surfaced while wiring everything together:
 

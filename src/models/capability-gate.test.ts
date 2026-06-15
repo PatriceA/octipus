@@ -27,16 +27,6 @@ describe('staticCapabilityWarnings', () => {
     expect(staticCapabilityWarnings({ provider: 'openai', modelId: 'some-7b' })).toEqual([]);
   });
 
-  test('flags the qwen3 family (malformed tool JSON) regardless of size', () => {
-    const w = staticCapabilityWarnings({ provider: 'ollama', modelId: 'qwen3:8b' });
-    expect(w.some((m) => /qwen3/i.test(m))).toBe(true);
-  });
-
-  test('a small qwen3 gets both the size and the qwen3 warning', () => {
-    const w = staticCapabilityWarnings({ provider: 'ollama', modelId: 'qwen3:8b' });
-    expect(w.length).toBe(2);
-  });
-
   test('prefers explicit metadata.paramCount over the tag', () => {
     // No size in the id, but metadata says 3B → small.
     const w = staticCapabilityWarnings({ provider: 'ollama', modelId: 'mymodel:latest', metadata: { paramCount: 3_000_000_000 } });

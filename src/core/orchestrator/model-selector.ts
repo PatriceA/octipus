@@ -1,6 +1,5 @@
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { checkOrchestratorCapability } from './known-bad-orchestrators';
 import { getSessionModel } from './session-model-override';
 
 interface ModelRouting {
@@ -19,10 +18,10 @@ export class ModelSelector {
     const registry = getModelRegistry();
 
     // Per-session override (Phase 6) wins over the registry default,
-    // but it must pass the same suitability gate (reasoner/no-tools
-    // rejection + known-bad-list swap) the default model goes through.
-    // Earlier this bypassed the reasoner check, letting `/model
-    // <thinking-model>` succeed at the command then fail mid-turn.
+    // but it must pass the same reasoner/no-tools rejection the default
+    // model goes through. Earlier this bypassed the reasoner check,
+    // letting `/model <thinking-model>` succeed at the command then fail
+    // mid-turn.
     if (sessionId) {
       const overrideId = getSessionModel(sessionId);
       if (overrideId) {
@@ -49,13 +48,9 @@ export class ModelSelector {
   }
 
   /**
-   * Run a candidate orchestrator model through the full suitability gate:
-   *   1. Reject reasoning / no-tools models in favor of a working
-   *      alternative (matters when the user explicitly overrides too —
-   *      see the override branch above).
-   *   2. Swap off the known-bad list.
-   *
-   * Returns the final model id the orchestrator should run with.
+   * Reject reasoning / no-tools models in favor of a working alternative.
+   * Matters when the user explicitly overrides too — see the override
+   * branch above. Returns the final model id the orchestrator should run with.
    */
   private async validateOrchestratorModel(
     modelName: string,
@@ -64,62 +59,25 @@ export class ModelSelector {
     const registry = getModelRegistry();
     const isReasoner = modelMeta.modelId.includes('reasoner') || modelMeta.modelId.includes('thinking');
     const noTools = !modelMeta.supportsTools && modelMeta.provider !== 'cli';
-    let chosen = modelName;
-    if (isReasoner || noTools) {
-      const allModels = await registry.getAllModels();
-      const suitable = allModels.find(m =>
-        m.supportsTools &&
-        !m.modelId.includes('reasoner') &&
-        !m.modelId.includes('thinking') &&
-        m.provider !== 'cli',
-      );
-      if (suitable) {
-        chosen = suitable.modelId;
-        coreLogger.info(
-          { candidateModel: modelMeta.modelId, selectedModel: chosen, reason: isReasoner ? 'reasoner' : 'no-tools' },
-          'Candidate model unsuitable for orchestration, using alternative',
-        );
-      } else {
-        coreLogger.warn(
-          { candidateModel: modelMeta.modelId, reason: isReasoner ? 'reasoner' : 'no-tools' },
-          'Candidate model unsuitable for orchestration and no alternative configured — attempting anyway',
-        );
-      }
-    }
-    return this.applyOrchestratorCapabilityCheck(chosen);
-  }
+    if (!isReasoner && !noTools) return modelName;
 
-  /**
-   * If the chosen model is on the known-bad list, swap to a working
-   * alternative before the agent burns 3 retries on malformed tool-call
-   * JSON. The agent-worker already classifies the failure as retryable,
-   * but with structural model limits retries just fail the same way, so
-   * a pre-emptive swap saves ~30s per turn and gives the user a usable
-   * result instead of "Orchestrator agent failed".
-   */
-  private async applyOrchestratorCapabilityCheck(modelName: string): Promise<string> {
-    const capWarning = checkOrchestratorCapability(modelName);
-    if (!capWarning) return modelName;
-    const registry = getModelRegistry();
     const allModels = await registry.getAllModels();
-    const swap = allModels.find(m =>
+    const suitable = allModels.find(m =>
       m.supportsTools &&
-      m.provider !== 'cli' &&
       !m.modelId.includes('reasoner') &&
       !m.modelId.includes('thinking') &&
-      !checkOrchestratorCapability(m.modelId) &&
-      m.modelId !== modelName,
+      m.provider !== 'cli',
     );
-    if (swap) {
+    if (suitable) {
       coreLogger.warn(
-        { from: modelName, to: swap.modelId, reason: capWarning.reason },
-        'Orchestrator model is on the known-unreliable list — swapping to a working alternative',
+        { originalModel: modelMeta.modelId, selectedModel: suitable.modelId, reason: isReasoner ? 'reasoner' : 'no-tools' },
+        'Overriding user-selected orchestrator model — it cannot emit tool calls',
       );
-      return swap.modelId;
+      return suitable.modelId;
     }
     coreLogger.warn(
-      { model: modelName, reason: capWarning.reason },
-      'Orchestrator model is on the known-unreliable list, but no working alternative is configured — attempting anyway',
+      { candidateModel: modelMeta.modelId, reason: isReasoner ? 'reasoner' : 'no-tools' },
+      'Candidate model unsuitable for orchestration and no alternative configured — attempting anyway',
     );
     return modelName;
   }

@@ -32,8 +32,12 @@ even though everything else is configured correctly.
 
 - Known-good local tool-callers: `qwen2.5:32b`, `glm-4.x-flash`, and other
   proven instruct models.
-- Known-bad: the **qwen3** family via Ollama emits malformed tool-call JSON and
-  is blocked from orchestration automatically.
+- Known-risk: the **qwen3** family via Ollama reliably emits malformed
+  tool-call JSON. This is a **full-mode** risk only — router mode has no
+  orchestrator LLM at all, and lite mode runs single-step delegation that
+  most qwen3 sizes survive. Octipus does **not** silently swap qwen3 off
+  the default; if you have hardware that would push qwen3 into full mode
+  (≥24B) pick a proven tool-caller instead.
 - Verify any model before relying on it:
   `POST /api/models/:name/check-capabilities` runs a tool-calling + JSON
   conformance probe and returns a `capable` / `incapable` verdict.
