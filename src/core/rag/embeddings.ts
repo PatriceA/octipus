@@ -57,6 +57,31 @@ export interface SearchResult {
 
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
 
+/** Provenance tag for the auto-indexed product documentation corpus. */
+const DOCS_SOURCE = 'octipus-docs';
+
+/**
+ * Optional, additive scoping for the search methods. `globalDocsOnly` hard-
+ * restricts a query to the GLOBAL product-docs corpus
+ * (`user_id IS NULL AND metadata->>'source' = 'octipus-docs'`) — used by
+ * `searchGlobalDocs` to keep `/docs` from ranking against, or being crowded
+ * out by, other tenants' private `document` rows. Defaults to off so existing
+ * callers are unaffected.
+ */
+export interface SearchScope {
+  globalDocsOnly?: boolean;
+}
+
+/**
+ * SQL fragment for the global-docs scope, or empty when not requested. Shared
+ * by `ftsSearch`/`hybridSearch` so the predicate lives in exactly one place.
+ */
+function globalDocsScopeSql(scope?: SearchScope) {
+  return scope?.globalDocsOnly
+    ? sql`AND user_id IS NULL AND metadata->>'source' = ${DOCS_SOURCE}`
+    : sql``;
+}
+
 /**
  * Drizzle's `db.execute(sql\`…\`)` returns an opaque `unknown`-shaped result
  * across drivers (PG returns `QueryResult`, PGlite returns a different shape).
@@ -456,10 +481,11 @@ export class EmbeddingService {
   }
 
   /** Full-text search only (no embedding needed) */
-  async ftsSearch(query: string, limit = 5, purpose?: EmbeddingPurpose, userId?: string): Promise<SearchResult[]> {
+  async ftsSearch(query: string, limit = 5, purpose?: EmbeddingPurpose, userId?: string, scope?: SearchScope): Promise<SearchResult[]> {
     const db = getDb();
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
     const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
+    const scopeFilter = globalDocsScopeSql(scope);
 
     const results = await db.execute(sql`
       SELECT id, content, abstract, purpose, source_id, metadata,
@@ -469,6 +495,7 @@ export class EmbeddingService {
       WHERE content_tsv @@ plainto_tsquery('english', ${query})
         ${purposeFilter}
         ${userFilter}
+        ${scopeFilter}
       ORDER BY similarity DESC
       LIMIT ${limit}
     `);
@@ -513,6 +540,7 @@ export class EmbeddingService {
     alpha = 0.6,
     minSimilarity = 0,
     userId?: string,
+    scope?: SearchScope,
   ): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
@@ -522,7 +550,7 @@ export class EmbeddingService {
         { err, queryLength: query.length },
         'Hybrid search: embedding failed, falling back to keyword-only (FTS)',
       );
-      return this.ftsSearch(query, limit, purpose, userId);
+      return this.ftsSearch(query, limit, purpose, userId, scope);
     }
 
     const db = getDb();
@@ -530,6 +558,8 @@ export class EmbeddingService {
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
     // Tenant scope (notes etc.); omitted for the shared/global KB.
     const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
+    // Optional hard-scope to the global product-docs corpus (see searchGlobalDocs).
+    const scopeFilter = globalDocsScopeSql(scope);
     const k = 60; // RRF constant
 
     const results = await db.execute(sql`
@@ -540,6 +570,7 @@ export class EmbeddingService {
         WHERE content_tsv @@ plainto_tsquery('english', ${query})
           ${purposeFilter}
           ${userFilter}
+          ${scopeFilter}
         LIMIT 50
       ),
       vec AS (
@@ -551,7 +582,7 @@ export class EmbeddingService {
                row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec,
                1 - (embedding <=> ${vecLiteral}::vector) AS cosine_sim
         FROM embeddings
-        WHERE 1=1 ${purposeFilter} ${userFilter}
+        WHERE 1=1 ${purposeFilter} ${userFilter} ${scopeFilter}
         ORDER BY embedding <=> ${vecLiteral}::vector
         LIMIT 50
       ),
@@ -605,6 +636,22 @@ export class EmbeddingService {
       .map(({ hasFtsMatch: _hasFtsMatch, ...rest }) => rest);
     this.recordAccess(out.map((r) => r.id));
     return out;
+  }
+
+  /**
+   * Hybrid search hard-scoped to the GLOBAL product-docs corpus
+   * (`user_id IS NULL AND metadata->>'source' = 'octipus-docs'`). Backs the
+   * `/docs` command.
+   *
+   * This app is always multi-user, so an unscoped `document` search would
+   * also match every other tenant's private uploads — both a cross-tenant
+   * ranking-signal leak AND a way for a tenant with many private documents to
+   * crowd the docs chunks out of the fetch window (so `/docs` wrongly reports
+   * "no matches"). Filtering in SQL means the candidate window only ever holds
+   * docs rows, so no over-fetch + post-filter is needed at the call site.
+   */
+  async searchGlobalDocs(query: string, limit = 8): Promise<SearchResult[]> {
+    return this.hybridSearch(query, limit, 'document', 0.6, 0, undefined, { globalDocsOnly: true });
   }
 
   /**
@@ -826,6 +873,40 @@ export class EmbeddingService {
     return r[0]?.c ?? 0;
   }
 
+  /**
+   * Has this exact source FILE already been indexed for `(purpose, sourceId)`?
+   * Compares the SHA-256 of the whole file against the `metadata.fileSha`
+   * stamped on prior chunks by an idempotent re-indexer (see
+   * `src/db/seed-docs.ts`). A `true` means the file is unchanged since its
+   * last index, so the caller can skip re-embedding entirely — `indexText`
+   * would otherwise embed every chunk before the per-chunk dedup upsert
+   * short-circuits, which is the expensive part we want to avoid.
+   *
+   * Note this is keyed on the FULL-file sha (chunk rows each hash only their
+   * own chunk in `content_sha256`, so that column can't answer "is the source
+   * file unchanged"). Returns false when no chunk carries a `fileSha`, so the
+   * first index of pre-existing rows written without the stamp re-indexes
+   * once and then becomes idempotent.
+   */
+  async isFileIndexed(purpose: EmbeddingPurpose, sourceId: string, fileContent: string, globalOnly = false): Promise<boolean> {
+    const db = getDb();
+    const sha = sha256Hex(fileContent);
+    const r = await db
+      .select({ id: embeddings.id })
+      .from(embeddings)
+      .where(and(
+        eq(embeddings.purpose, purpose),
+        eq(embeddings.sourceId, sourceId),
+        sql`${embeddings.metadata}->>'fileSha' = ${sha}`,
+        // Global-corpus callers (seed-docs) pass true so a hypothetical
+        // per-user row at the same path can't mask the global file as "already
+        // indexed". Defaults to false → existing behaviour for other callers.
+        globalOnly ? sql`${embeddings.userId} IS NULL` : undefined,
+      ))
+      .limit(1);
+    return r.length > 0;
+  }
+
   // ── Deletion ──────────────────────────────────────────────────────
 
   async deleteById(id: string): Promise<boolean> {
@@ -834,11 +915,18 @@ export class EmbeddingService {
     return result.length > 0;
   }
 
-  async deleteBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
+  async deleteBySource(purpose: EmbeddingPurpose, sourceId: string, globalOnly = false): Promise<number> {
     const db = getDb();
     const result = await db
       .delete(embeddings)
-      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId)))
+      .where(and(
+        eq(embeddings.purpose, purpose),
+        eq(embeddings.sourceId, sourceId),
+        // Global-corpus callers (seed-docs) pass true so the stale-chunk purge
+        // before a re-index can't delete a per-user row that happens to share
+        // the path. Defaults to false → existing behaviour for other callers.
+        globalOnly ? sql`${embeddings.userId} IS NULL` : undefined,
+      ))
       .returning({ id: embeddings.id });
     return result.length;
   }

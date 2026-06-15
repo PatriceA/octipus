@@ -9,6 +9,7 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
+| `/docs <query>` | Search the product documentation (setup, channels, providers, configuration) — returns matching sections directly, no LLM call |
 | `/status` | Check session status, running agents |
 | `/expert [name]` | List experts or switch to a specific expert |
 | `/experts [name]` | Alias for `/expert` |
@@ -78,6 +79,27 @@ Switch between pre-built expert personas from any channel:
 When an expert is active, all your messages bypass the orchestrator's classifier and go directly to that expert's agent with its specialized system prompt, domain knowledge (skills), critical rules, and deliverable template.
 
 Expert selection persists across messages in the session. Use `/expert reset` to return to automatic classification.
+
+---
+
+## Searching the Docs (`/docs`)
+
+`/docs <query>` searches Octipus's own product documentation — which is
+auto-indexed into the knowledge base at boot (see [`docs/RAG.md`](RAG.md) →
+*Product docs auto-index at boot*) — and returns the top matching sections
+directly:
+
+```
+/docs how do I set up Telegram
+/docs add a model provider
+/docs configure Slack
+```
+
+It is a deterministic lookup (no LLM call), so it works even when no chat
+model is configured. Each hit shows the section heading, a short snippet, and
+the source file. To get a synthesized answer instead of raw sections, just ask
+in plain language ("how do I connect Telegram?") — knowledge-tool agents are
+instructed to consult the same docs and cite them.
 
 ---
 

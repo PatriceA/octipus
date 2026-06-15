@@ -609,6 +609,14 @@ If you cannot write files (e.g., read-only environment), include the summary con
   // Workers must return results to the orchestrator, not message the user directly
   systemPrompt += `\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`;
 
+  // Knowledge-tool roles: point them at the auto-indexed product docs so
+  // "how do I set up / configure / connect X" questions are answered from
+  // the shipped manual instead of a guess. Small models get the leaner
+  // surface (they tend to misfire on extra tool guidance).
+  if (!isSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
+    systemPrompt += `\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`;
+  }
+
   // Inform agents about Octipus MCP server tools.
   // CLI agents (Claude Code, Gemini, Codex) use tool names directly (octipus_*).
   // LLM agents use meta-tools: mcp_call_tool(server_id: "octipus", tool_name: "...", arguments: {...})

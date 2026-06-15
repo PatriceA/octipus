@@ -128,6 +128,19 @@ export interface EmbeddingMetadata {
   filePath?: string;
   /** Human title of the source (e.g. a note's title) for result display. */
   title?: string;
+  /**
+   * Provenance tag for rows that were not user-supplied. Lets a surface
+   * scope retrieval/display to a known corpus — e.g. `'octipus-docs'` for
+   * the product documentation auto-indexed at boot (see `src/db/seed-docs.ts`).
+   */
+  source?: string;
+  /**
+   * SHA-256 of the FULL source file this chunk came from (distinct from the
+   * row's `content_sha256`, which hashes only the chunk). Stamped on every
+   * chunk by an idempotent re-indexer so it can detect "file unchanged since
+   * last index" with one query and skip re-embedding. See `src/db/seed-docs.ts`.
+   */
+  fileSha?: string;
 }
 
 export type Embedding = typeof embeddings.$inferSelect;

@@ -64,6 +64,10 @@ COPY src/ src/
 COPY mcp-server/ mcp-server/
 COPY eval/ eval/
 COPY bin/ bin/
+# Product docs — auto-indexed into the knowledge base at boot so users can ask
+# "how do I set up X?" (see src/db/seed-docs.ts). Without this the indexer
+# finds nothing in the image.
+COPY docs/ docs/
 
 # Create data directories
 RUN mkdir -p /data/workspace /data/documents /data/extensions

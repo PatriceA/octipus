@@ -45,7 +45,7 @@ PR #28 / migration 0056). Valid values:
 
 | Purpose | What writes it | Default retention |
 |---|---|---|
-| `document` | Document uploads via `/api/documents/upload` and `index_file(path, 'document')` | Tied to the parent `documents` row (cascade delete via FK) |
+| `document` | Document uploads via `/api/documents/upload`, `index_file(path, 'document')`, and the boot/cron product-docs auto-index (`metadata.source='octipus-docs'`, see [Product docs auto-index](#product-docs-auto-index-at-boot)) | Tied to the parent `documents` row (cascade delete via FK); the auto-indexed product docs carry no `doc_id` and are refreshed in place |
 | `code` | Filesystem auto-index on `.ts`, `.py`, `.rs`, etc. and `index_file(path, 'code')` | Re-indexed on change via `content_sha256` upsert; otherwise persistent |
 | `image_description` | Vision-LLM caption + OCR text written by `documents/processor.ts` for image uploads | Tied to the parent `documents` row |
 | `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
@@ -87,6 +87,35 @@ ON DELETE CASCADE FK reaps the chunks with the parent.
   'file'|'directory', purpose: 'document'|'code', patterns? }`.
 - **MCP server** — `octipus_index_file` and `octipus_search_knowledge`
   for external models (Claude Code, Gemini CLI, …).
+
+### Product docs auto-index at boot
+
+`src/db/seed-docs.ts` (`indexProductDocs()`) indexes Octipus's own
+documentation — top-level `docs/*.md` plus `docs/architecture/**` and
+`docs/guides/**` — into `embeddings` as **global** rows
+(`user_id = NULL`) tagged `metadata.source = 'octipus-docs'`, so users
+can ask the assistant "how do I set up Telegram / a model provider /
+X?" and get an answer grounded in the shipped manual. High-churn /
+low-signal files are excluded (`*CHANGELOG*`, `WEEKLY-CHANGELOG-*`,
+`QA.md`, and the `plans/`, `superpowers/`, `images/` trees).
+
+- **When it runs:** once at boot (after tools are registered and the
+  runtime config — hence the embedding provider's credentials — is
+  loaded; gated on `isKBReady()`), and on a 6-hour cron refresh
+  (`maybeReindexDocs()` in `src/core/cron-runner.ts`). The cron refresh
+  also covers first-install, where the embedding model is bound *after*
+  boot: the boot-time pass bails as KB-not-ready and the cron pass lands
+  the docs once a model is assigned.
+- **Idempotent:** every chunk is stamped with the source file's
+  SHA-256 (`metadata.fileSha`); a re-run skips any unchanged file, so
+  re-indexing is cheap. A changed file is deleted-by-source and
+  re-indexed so shrinking edits don't strand orphan chunks.
+- **In the image:** the Dockerfile `COPY docs/ docs/` ships the manual
+  into the runtime stage — without it the indexer finds nothing in prod.
+- **Consume it:** the `/docs <query>` chat command
+  (`src/core/commands/docs.ts`) searches this corpus directly (no LLM
+  call), and knowledge-tool worker roles are nudged to `search_knowledge`
+  for "how do I set up X" questions before answering.
 
 ## How data gets retrieved
 
