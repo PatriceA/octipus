@@ -679,6 +679,57 @@ Use these when the task benefits from them — especially for people-related que
     }
   }
 
+  // Lazy tool discovery (docs/plans/lazy-tool-discovery.md). Decided here, after
+  // roleTools is fully assembled (connector handlers + spawn_child injected
+  // above), where model + size are known — agent-worker never re-derives it.
+  // The per-request tool-schema payload only hurts local Ollama (each request
+  // re-prefills the schemas on the iGPU; no cross-request server-side prompt
+  // caching). Remote providers prefix-cache the tool block cheaply and tool-call
+  // more reliably, so they stay on the proven full-schema path. Small models
+  // chain multi-step discovery poorly and already get the heaviest trims, so
+  // they keep the capped full-schema path above.
+  let toolAdvertisement: import('@/core/agent-base').ToolAdvertisement = { mode: 'full' };
+  let workerTools = roleTools;
+  if (!isSmall && roleConfig.coreToolIds !== undefined) {
+    try {
+      const finalModelEntry = await getModelRegistry().getModelByModelId(finalModel);
+      // `isSmall` above was derived from the topic model (routing.model). An
+      // expert modelPreference can pin a *different* model, so re-check size
+      // against the actual finalModel — a small expert-pinned Ollama model must
+      // not be put on the discovery path.
+      const finalIsSmall = isSmallModel(
+        { modelId: finalModel, metadata: finalModelEntry?.metadata },
+        orchCfg.routerSmallModelMaxParams,
+      );
+      if (!finalIsSmall && finalModelEntry?.provider === 'ollama' && finalModelEntry.supportsTools) {
+        const { splitRoleTools } = await import('./tool-split');
+        const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
+        const { longTail } = splitRoleTools(roleTools, roleConfig.coreToolIds);
+        const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+        if (discoveryHandlers.length > 0) {
+          // Register ALL role tools + the discovery meta-tools (dispatch must
+          // keep working); only advertisement shrinks (filtered in agent-worker).
+          workerTools = [...roleTools, ...discoveryHandlers];
+          toolAdvertisement = { mode: 'lazy', coreToolIds: roleConfig.coreToolIds };
+          // Keep the meta-tools grantable to any children this stage spawns
+          // (child tools = parent.allowedToolIds ∩ childRoleTools).
+          stageNode?.allowedToolIds.add('tool_discovery');
+          coreLogger.info(
+            {
+              role: agentRole,
+              model: finalModel,
+              coreCount: roleTools.length - longTail.length,
+              longTailCount: longTail.length,
+            },
+            'Lazy tool discovery enabled for worker',
+          );
+        }
+      }
+    } catch (err) {
+      coreLogger.warn({ err, model: finalModel, role: agentRole }, 'Lazy tool discovery gate skipped (non-fatal) — using full schema');
+    }
+  }
+
   const worker = await agentManager.spawn({
     sessionId: context.sessionId,
     userId: context.userId,
@@ -687,7 +738,8 @@ Use these when the task benefits from them — especially for people-related que
     model: finalModel,
     role: agentRole,
     systemPrompt,
-    tools: roleTools,
+    tools: workerTools,
+    toolAdvertisement,
     parentAgentId: overrides?.swarmParent?.id,
   });
 

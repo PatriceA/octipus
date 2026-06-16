@@ -11,11 +11,25 @@ export interface AgentEvent {
   timestamp: Date;
 }
 
+/**
+ * How a worker advertises its tools to the model (lazy tool discovery).
+ * - `full`: advertise every registered tool's JSON schema (default, unchanged).
+ * - `lazy`: advertise only the `coreToolIds` groups (plus the discovery/MCP
+ *   meta-tools); the long tail stays registered/callable but unadvertised.
+ * The mode is DECIDED by the worker-spawner (where model + size are known) and
+ * passed in — agent-worker never re-derives it. See docs/plans/lazy-tool-discovery.md.
+ */
+export type ToolAdvertisement =
+  | { mode: 'full' }
+  | { mode: 'lazy'; coreToolIds: string[] };
+
 export interface AgentWorkerConfig {
   maxIterations: number;
   contextWindowSize: number;
   timeout: number;
   maxTokenBudget: number;
+  /** Defaults to `{ mode: 'full' }` when omitted. */
+  toolAdvertisement?: ToolAdvertisement;
 }
 
 export interface ToolHandler {

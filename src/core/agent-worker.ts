@@ -13,6 +13,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
+import { isLongTailHandler } from './orchestrator/tool-split';
 import { ClassifiedError } from './errors/classification';
 import {
   BudgetExceededError,
@@ -1228,9 +1229,18 @@ export class AgentWorker extends BaseAgentWorker {
     }
 
     const litellmModel = model.modelId;
+    // Lazy tool discovery: when the spawner put this worker on the `lazy` path,
+    // advertise only the core tools (+ discovery/MCP meta-tools). Long-tail
+    // handlers stay registered and callable by name — only the advertised
+    // schema array shrinks. `full` (the default) is byte-for-byte unchanged.
+    const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
+    const registeredTools = Array.from(this.toolExecutor.getTools().values());
+    const advertisedTools = advertisement.mode === 'lazy'
+      ? registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds))
+      : registeredTools;
     const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled
       ? []
-      : Array.from(this.toolExecutor.getTools().values()).map((tool) => ({
+      : advertisedTools.map((tool) => ({
           type: 'function' as const,
           function: {
             name: tool.name,
