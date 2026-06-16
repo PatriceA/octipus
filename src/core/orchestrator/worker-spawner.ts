@@ -368,7 +368,7 @@ export async function spawnWorker(
           }
           // Index-only mode: dump skill name + 1-line description, not
           // the whole body. The agent loads specific skill content via
-          // the `octipus_get_skill` MCP tool when it needs to. A typical
+          // the built-in `get_skill` tool when it needs to. A typical
           // role with 30+ skills was previously dumping ~50–80k tokens
           // of skill bodies into every worker prompt; now it's a few
           // hundred and the agent pays only for what it pulls.

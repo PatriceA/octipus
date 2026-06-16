@@ -37,7 +37,7 @@ function buildPromptFragment(skill: Skill): string {
 /**
  * One-line summary for a skill, used in the worker prompt index. Full
  * content stays out of the prompt — the worker pulls it on demand via
- * the `octipus_get_skill` MCP tool. This cuts a typical expert prompt
+ * the built-in `get_skill` tool. This cuts a typical expert prompt
  * from 40–80k tokens of skill dumps down to a few hundred, and the
  * agent only loads what it actually needs.
  */
@@ -129,8 +129,8 @@ export class SkillRegistry {
    * Index-style listing: one bullet per skill (name + short
    * description). Use this in worker system prompts to keep token
    * cost flat regardless of how many skills the role inherits; the
-   * agent loads full content for a specific skill via the
-   * `octipus_get_skill` MCP tool when it actually needs it.
+   * agent loads full content for a specific skill via the built-in
+   * `get_skill` tool when it actually needs it.
    */
   async buildPromptSummary(skillIds: string[]): Promise<string> {
     if (skillIds.length === 0) return '';
@@ -140,10 +140,22 @@ export class SkillRegistry {
     // exists and may load its full content via the MCP tool.
     recordSkillUsage(found.filter((s) => !isExternalSkillId(s.id)).map((s) => s.id));
     const lines = [
-      'Available skills (call `octipus_get_skill` with the id to load the full spec):',
+      'Available skills (call `get_skill` with the id to load the full spec):',
       ...found.map(buildPromptSummary),
     ];
     return lines.join('\n');
+  }
+
+  /**
+   * Render one skill's full content for on-demand loading (the built-in
+   * `get_skill` tool). Returns null if the id is unknown. Counts as usage —
+   * the agent asked for the body, not just the index.
+   */
+  async renderSkill(skillId: string): Promise<string | null> {
+    const skill = await this.get(skillId);
+    if (!skill) return null;
+    if (!isExternalSkillId(skill.id)) recordSkillUsage([skill.id]);
+    return buildPromptFragment(skill);
   }
 
   async getActiveSkillsForTopic(topic: string): Promise<Skill[]> {
