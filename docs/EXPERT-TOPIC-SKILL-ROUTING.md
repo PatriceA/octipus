@@ -30,7 +30,7 @@ Agent spawned with: role tools + topic model + expert prompt + skills
 |---|---|---|
 | `general` | filesystem, browser-ext, websearch, messaging, knowledge, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, mcp | Multi-purpose, browsing, messaging |
 | `coding` | filesystem, shell, git, knowledge, task_state, mcp | Code generation, debugging, git |
-| `research` | browser, browser-ext, websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | Web search, investigation |
+| `research` | websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | Web search, investigation |
 | `architecture` | filesystem, shell, knowledge, websearch, task_state, mcp | System design, requirements, specs |
 | `review` | filesystem, shell, git, knowledge, task_state, visual | Code review, linting, testing (read-only) |
 | `qa` | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | Test suites, UI testing, bug reports |

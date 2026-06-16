@@ -18,7 +18,7 @@ The orchestrator classifies incoming messages using keyword heuristics (src/core
 | Category | Role | Tools Available | Trigger Keywords (examples) |
 |----------|------|----------------|----------------------------|
 | coding | coding | filesystem, shell, git, knowledge, task_state, mcp | "implement", "write code", "fix bug", "refactor", "typescript", "react", "git commit" |
-| research | research | browser, browser-ext, websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
+| research | research | websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
 | devops | devops | shell, docker, git, filesystem, mcp | "docker", "kubernetes", "deploy", "CI/CD", "nginx", "terraform" |
 | security | security | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "vulnerability", "audit", "OWASP", "threat model", "security review" |
 | data | data | shell, filesystem, knowledge, task_state, artifacts, artifacts_toolbox, mcp | "database schema", "SQL query", "migration", "ETL", "data pipeline" |
@@ -38,7 +38,7 @@ The orchestrator classifies incoming messages using keyword heuristics (src/core
   → coding role → filesystem, shell, git tools
 
 "Search the web for React state management best practices"
-  → research → research role → browser, websearch tools
+  → research → research role → websearch, knowledge tools
 
 "Deploy the Docker container to production"
   → devops → devops role → shell, docker, git tools

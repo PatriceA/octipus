@@ -226,7 +226,7 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 | orchestrator | profiles | — | Routes tasks to specialists |
 | coding | filesystem, shell, git, knowledge, task_state, mcp | architecture, data-structures, db-design, api-design | Code implementation |
 | review | filesystem, shell, git, knowledge, task_state, visual | architecture, testing, security, performance | Code review |
-| research | browser, browser-ext, websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | technical-writing | Investigation |
+| research | websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | technical-writing | Investigation |
 | design | browser, filesystem | design-principles, design-frameworks | UI/UX |
 | devops | shell, docker, git, filesystem, mcp | devops, containers, cloud, networking | Infrastructure |
 | security | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | security, networking, cloud | Security analysis |

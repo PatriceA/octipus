@@ -102,7 +102,7 @@ with the file view (#2) and documents.
 ## 5. Deep Research → report
 
 Odysseus's headline "multi-step synthesis into reports." We already have the
-**`research` role** (browser, websearch, knowledge, RAG, artifacts) and the
+**`research` role** (websearch, knowledge, RAG, artifacts) and the
 swarm to fan out — what's missing is the *product flow*: a research panel that
 takes a question, runs a bounded multi-source investigation (reuse the
 `deep-research` workflow pattern), and produces a **cited report artifact**

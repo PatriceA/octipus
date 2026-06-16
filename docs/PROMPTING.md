@@ -91,7 +91,7 @@ POST /api/chat
 |--------|---------------|-----------|
 | Coder | Code implementation, debugging | filesystem, shell, git |
 | Code Reviewer | Code review, architecture analysis | filesystem, git |
-| Researcher | Web research, investigation | browser, websearch, knowledge |
+| Researcher | Web research, investigation | websearch, knowledge |
 | Designer | UI/UX evaluation | browser, filesystem |
 | DevOps Engineer | CI/CD, containers, infrastructure | shell, docker, git |
 | Security Analyst | Vulnerability scanning, auditing | shell, browser, websearch |
