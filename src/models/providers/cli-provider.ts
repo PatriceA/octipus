@@ -108,50 +108,42 @@ const claudeCodeConfig: CLIToolConfig = {
   },
 };
 
-// ---- Gemini CLI ----
-const geminiCliConfig: CLIToolConfig = {
-  name: 'Gemini CLI',
-  modelPatterns: ['cli/gemini', 'cli/gemini-cli'],
-  binaryPath: 'gemini',
-  buildArgs: (prompt: string) => ['-p', prompt, '-o', 'json'],
-  parseOutput: (stdout: string, startTime: number): CompletionResult => {
-    try {
-      const data = JSON.parse(stdout);
-      const content = typeof data === 'string' ? data : (data.response || data.text || data.content || JSON.stringify(data));
-      return {
-        content,
-        finishReason: 'stop',
-        usage: {
-          inputTokens: data.input_tokens || data.usage?.inputTokens || 0,
-          outputTokens: data.output_tokens || data.usage?.outputTokens || 0,
-          totalTokens: (data.input_tokens || 0) + (data.output_tokens || 0),
-        },
-        model: 'cli/gemini-cli',
-        latencyMs: Date.now() - startTime,
-      };
-    } catch {
-      return {
-        content: stdout.trim(),
-        finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        model: 'cli/gemini-cli',
-        latencyMs: Date.now() - startTime,
-      };
-    }
-  },
+// ---- Antigravity CLI (agy) ----
+// Replaces the Gemini CLI: Google's `gemini` agentic CLI is superseded by
+// Antigravity (`agy`), which shares the same ~/.gemini config dir and Gemini
+// model backend but has a different, simpler interface — `--print <prompt>`
+// emits PLAIN TEXT (no `-o json`/stream-json), `--model` (not `-m`), and
+// `--dangerously-skip-permissions` (not `--approval-mode`). cli/gemini model
+// patterns are retained so existing model rows keep routing here.
+const antigravityConfig: CLIToolConfig = {
+  name: 'Antigravity',
+  modelPatterns: ['cli/gemini', 'cli/gemini-cli', 'cli/antigravity', 'cli/agy'],
+  binaryPath: 'agy',
+  buildArgs: (prompt: string) => ['--dangerously-skip-permissions', '--print', prompt],
+  // agy --print returns plain text (no structured envelope). bufferOutput=true
+  // routes the whole stdout buffer here at process close.
+  parseOutput: (stdout: string, startTime: number): CompletionResult => ({
+    content: stdout.trim(),
+    finishReason: 'stop',
+    // agy reports no token usage in print mode.
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    model: 'cli/antigravity',
+    latencyMs: Date.now() - startTime,
+  }),
   isQuotaError: (output: string) =>
     /rate.?limit|quota|exceeded|resource.?exhausted/i.test(output),
-  quotaProvider: 'gemini-cli',
+  quotaProvider: 'antigravity',
   modelProvider: 'google',
-  modelFlag: '-m',
+  modelFlag: '--model',
+  bufferOutput: true,
   billingInfo: {
     vendor: 'Google',
-    planNote: 'Personal Google account (free-tier quota), GEMINI_API_KEY (metered), or Vertex AI via GOOGLE_CLOUD_PROJECT',
+    planNote: 'Google account via `agy` (antigravity) auth in ~/.gemini — same backend as Gemini CLI',
     billingMode: 'mixed',
     pricingDocUrl: 'https://ai.google.dev/pricing',
     modelsDocUrl: 'https://ai.google.dev/gemini-api/docs/models',
-    modelFlagDocUrl: 'https://github.com/google-gemini/gemini-cli',
-    warning: 'Free-tier limits and metered pricing are vendor-controlled. Heavy use will spill over into API billing.',
+    modelFlagDocUrl: 'https://antigravity.google/docs/cli',
+    warning: 'Free-tier limits and metered pricing are vendor-controlled. Antigravity manages its own auth and model selection in ~/.gemini.',
   },
 };
 
@@ -296,12 +288,12 @@ const vibeCliConfig: CLIToolConfig = {
 };
 
 /** All registered CLI tool configs */
-export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, geminiCliConfig, codexCliConfig, vibeCliConfig];
+export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig];
 
-export { claudeCodeConfig, codexCliConfig, geminiCliConfig, vibeCliConfig };
+export { antigravityConfig, claudeCodeConfig, codexCliConfig, vibeCliConfig };
 
 /**
- * CLI Provider — wraps subscription-based CLI tools (Claude Code, Gemini CLI, Codex)
+ * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe)
  * as subprocess calls. Tracks quota and detects exhaustion.
  */
 export class CLIProvider implements ModelProvider {

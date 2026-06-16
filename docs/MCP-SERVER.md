@@ -1,6 +1,6 @@
 # MCP Server
 
-Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP tools for CLI models like Claude Code and Gemini CLI.
+Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP tools for CLI models like Claude Code and Antigravity (`agy`).
 
 ## Tools
 
@@ -57,7 +57,7 @@ cd mcp-server && npm install && npm run build
 }
 ```
 
-## Gemini CLI (`.gemini/settings.json`)
+## Antigravity / agy (`.gemini/settings.json`)
 
 ```json
 {

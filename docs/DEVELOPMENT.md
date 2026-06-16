@@ -14,7 +14,7 @@ octipus/
 │   ├── config/             # Zod-validated configuration, settings service, hot-reload
 │   ├── core/               # Agent runtime
 │   │   ├── agent-worker.ts # LLM agent loop (thought → action → observation)
-│   │   ├── cli-agent-worker.ts  # CLI model agent (Claude Code, Gemini CLI)
+│   │   ├── cli-agent-worker.ts  # CLI model agent (Claude Code, Antigravity, Codex, Mistral Vibe)
 │   │   ├── tool-executor.ts     # Tool execution with permissions
 │   │   ├── agent-manager.ts
 │   │   ├── orchestrator/   # Message classification, worker spawning, pipelines

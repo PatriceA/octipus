@@ -180,9 +180,9 @@ export const cliModelsConfigSchema = z.object({
     binaryPath: z.string().default('claude'),
     timeout: z.number().min(0).default(300000),
   }).prefault({}),
-  geminiCli: z.object({
+  antigravityCli: z.object({
     enabled: z.boolean().default(true),
-    binaryPath: z.string().default('gemini'),
+    binaryPath: z.string().default('agy'),
     timeout: z.number().min(0).default(300000),
   }).prefault({}),
   codexCli: z.object({

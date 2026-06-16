@@ -30,30 +30,47 @@ describe('CLIArgumentBuilder model override', () => {
     expect(out.args.includes('--model')).toBe(false);
   });
 
-  // For Gemini we inspect `geminiArgs` (the underlying gemini.cmd argv)
-  // instead of `args` — on Windows the spawn target is powershell.exe
-  // wrapping a generated .ps1, so `args` carries only the PS shim. The
-  // flag construction we care about (-m / -p / --approval-mode) lives
-  // in `geminiArgs` on both platforms.
-  it('Gemini CLI: passes -m when settings.model is set', () => {
+  // Antigravity (agy) replaces the Gemini CLI: native binary, --model flag,
+  // --print plain-text output, --dangerously-skip-permissions.
+  it('Antigravity: passes --model when settings.model is set', () => {
     delete process.env.GEMINI_MODEL;
-    const out = builder.build('Gemini CLI', 'hi', { model: 'gemini-2.5-flash' }, []);
-    const i = (out.geminiArgs ?? []).indexOf('-m');
+    delete process.env.ANTIGRAVITY_MODEL;
+    const out = builder.build('Antigravity', 'hi', { model: 'gemini-3-pro' }, []);
+    expect(out.binary).toBe('agy');
+    const i = out.args.indexOf('--model');
     expect(i).toBeGreaterThanOrEqual(0);
-    expect((out.geminiArgs ?? [])[i + 1]).toBe('gemini-2.5-flash');
+    expect(out.args[i + 1]).toBe('gemini-3-pro');
   });
 
-  it('Gemini CLI: env GEMINI_MODEL beats settings.model', () => {
-    process.env.GEMINI_MODEL = 'gemini-2.5-pro';
-    const out = builder.build('Gemini CLI', 'hi', { model: 'gemini-2.5-flash' }, []);
-    const i = (out.geminiArgs ?? []).indexOf('-m');
-    expect((out.geminiArgs ?? [])[i + 1]).toBe('gemini-2.5-pro');
+  it('Antigravity: env ANTIGRAVITY_MODEL beats settings.model', () => {
+    process.env.ANTIGRAVITY_MODEL = 'gemini-3-flash';
+    const out = builder.build('Antigravity', 'hi', { model: 'gemini-3-pro' }, []);
+    const i = out.args.indexOf('--model');
+    expect(out.args[i + 1]).toBe('gemini-3-flash');
   });
 
-  it('Gemini CLI: omits -m entirely when neither set', () => {
+  it('Antigravity: omits --model entirely when neither set', () => {
     delete process.env.GEMINI_MODEL;
-    const out = builder.build('Gemini CLI', 'hi', {}, []);
-    expect((out.geminiArgs ?? []).includes('-m')).toBe(false);
+    delete process.env.ANTIGRAVITY_MODEL;
+    const out = builder.build('Antigravity', 'hi', {}, []);
+    expect(out.args.includes('--model')).toBe(false);
+  });
+
+  it('Antigravity: uses --print plain-text mode with auto-approve and no shell wrap', () => {
+    delete process.env.GEMINI_MODEL;
+    delete process.env.ANTIGRAVITY_MODEL;
+    const out = builder.build('Antigravity', 'do the thing', {}, []);
+    expect(out.args).toContain('--dangerously-skip-permissions');
+    const p = out.args.indexOf('--print');
+    expect(p).toBeGreaterThanOrEqual(0);
+    expect(out.args[p + 1]).toBe('do the thing');
+    expect(out.useShell).toBe(false);
+  });
+
+  it('Antigravity: prepends the system prompt to the user prompt', () => {
+    const out = builder.build('Antigravity', 'user ask', {}, [], 'SYSTEM RULES');
+    const p = out.args.indexOf('--print');
+    expect(out.args[p + 1]).toBe('SYSTEM RULES\n\nuser ask');
   });
 
   it('Codex CLI: settings.model overrides default', () => {

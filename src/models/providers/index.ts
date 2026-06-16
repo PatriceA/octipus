@@ -44,7 +44,8 @@ function resolveRateLimitKey(provider: ModelProvider, model: string): string {
   if (provider.type === 'cli') {
     const lower = model.toLowerCase();
     if (lower.includes('claude')) return 'cli-claude';
-    if (lower.includes('gemini')) return 'cli-gemini';
+    // Antigravity (agy) reuses the Gemini rate bucket — same Google backend.
+    if (lower.includes('gemini') || lower.includes('antigravity') || lower.includes('agy')) return 'cli-gemini';
     if (lower.includes('codex')) return 'cli-codex';
     return 'cli-claude'; // default CLI
   }

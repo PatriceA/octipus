@@ -449,7 +449,7 @@ export default function MCPPage() {
     <div className="space-y-6">
       <PageHeader
         title="mcp"
-        description="Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Gemini CLI, and other MCP clients."
+        description="Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Antigravity, and other MCP clients."
         actions={activeTab === 'servers' ? (
           <button
             onClick={() => setShowAdd(true)}

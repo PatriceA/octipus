@@ -86,7 +86,7 @@ ON DELETE CASCADE FK reaps the chunks with the parent.
 - **API** — `POST /api/knowledge/index` with `{ path, type:
   'file'|'directory', purpose: 'document'|'code', patterns? }`.
 - **MCP server** — `octipus_index_file` and `octipus_search_knowledge`
-  for external models (Claude Code, Gemini CLI, …).
+  for external models (Claude Code, Antigravity, …).
 
 ### Product docs auto-index at boot
 
