@@ -1,7 +1,34 @@
 # Plan: Lazy Tool Discovery (cut per-request tool-schema bloat)
 
-Status: DRAFT (planning only — do not implement until approved)
+Status: IMPLEMENTED (2026-06-16, branch `feat/lazy-tool-discovery`). Phases 1-6
+landed.
+
+### Phase 6 measured results (research role, `scripts/measure-tool-payload.ts`)
+- **Advertised tool payload:** FULL 49 tools / 29,087 bytes (~7.3k tokens) →
+  LAZY 13 tools (11 core + 2 discovery) / 7,869 bytes (~2.0k tokens) =
+  **72.9% smaller**. 38 handlers move behind `list_tools`/`describe_tool`.
+- **Live prefill (qwen3:8b, ollama, num_ctx=16384):** prompt_eval_count
+  6,387 → 1,705 tokens = **73.3% fewer prefill tokens** (matches the byte cut).
+  Wall-time prefill on a *warm/healthy* GPU is already sub-100ms so the time
+  delta is small/noisy there; the win is largest on a cold iGPU with no prefix
+  cache (the original timeout failure mode).
+- **Tuning note:** core = `['websearch','knowledge']`. `knowledge` is a 9-handler
+  group (~6.3k bytes) kept whole, so it dominates the residual core payload.
+  Dropping `knowledge` to the long tail would reach ~95% reduction but costs a
+  discovery round-trip on the common KB-search path — kept core deliberately
+  (Design decision: don't over-trim the common path). Note: `coreToolIds` is
+  toolId-granular, so a finer split would require carving a lighter knowledge
+  tool group.
+- NOTE: the plan's `OLLAMA_DEBUG_LOG_REQUESTS` / `/tmp/ollama-request-logs-*`
+  capture does **not** exist in this codebase; measured via the script above
+  (static payload) + a direct `/api/chat` prefill benchmark instead.
 Author context: 2026-06-16. Follow-up to the research-role trim (commit a2491fb).
+
+Implemented files: `src/core/orchestrator/tool-split.ts` (+ test),
+`src/tools/tool-discovery.ts` (+ test), `RoleMeta.coreToolIds` +
+`roles/index.ts` validation, `AgentWorkerConfig.toolAdvertisement` (agent-base),
+agent-worker `:1231` advertisement filter, worker-spawner gating,
+`roles/research/config.ts` core set. Docs: `docs/OLLAMA.md`.
 
 ## Problem & goal
 

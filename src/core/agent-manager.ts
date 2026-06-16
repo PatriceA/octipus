@@ -34,6 +34,8 @@ export interface SpawnOptions {
   parentAgentId?: string;
   /** Seed metadata on the agent context (e.g. `originalRequest`). */
   contextMetadata?: Record<string, unknown>;
+  /** Lazy tool discovery mode; decided by the spawner. Defaults to full. */
+  toolAdvertisement?: import('./agent-base').ToolAdvertisement;
 }
 
 export interface AgentInfo {
@@ -148,6 +150,7 @@ export class AgentManager {
       contextWindowSize: config.agent.contextWindowSize,
       timeout: options.timeout ?? config.agent.defaultTimeout,
       maxTokenBudget: options.maxTokenBudget ?? config.agent.maxTokenBudget,
+      toolAdvertisement: options.toolAdvertisement,
     };
 
     // Determine if this is a CLI model (autonomous sub-agent)

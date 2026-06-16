@@ -22,6 +22,8 @@ export interface RoleConfig {
   toolIds: string[];
   defaultTopic: string;
   systemPromptTemplate: string;
+  /** Lazy-discovery core set; see `RoleMeta.coreToolIds`. */
+  coreToolIds?: string[];
 }
 
 export interface MessageClassification {

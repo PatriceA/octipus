@@ -62,6 +62,18 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
       );
     }
 
+    // Invariant: coreToolIds ⊆ toolIds. Fail loud at load — a typo here would
+    // silently advertise nothing for that id and force a wasted discovery
+    // round-trip on the common path.
+    if (meta.coreToolIds) {
+      const unknown = meta.coreToolIds.filter((id) => !meta.toolIds.includes(id));
+      if (unknown.length > 0) {
+        throw new Error(
+          `Role '${name}' coreToolIds [${unknown.join(', ')}] not present in toolIds — must be a subset.`,
+        );
+      }
+    }
+
     let prompt: string;
     try {
       prompt = readFileSync(promptPath, 'utf-8');
@@ -74,6 +86,7 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
       toolIds: meta.toolIds,
       defaultTopic: meta.defaultTopic,
       systemPromptTemplate: prompt,
+      coreToolIds: meta.coreToolIds,
     };
   }
 
