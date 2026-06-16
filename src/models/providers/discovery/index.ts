@@ -6,6 +6,7 @@ import { curate } from './curation';
 import { DeepSeekDiscovery } from './deepseek';
 import { GeminiDiscovery } from './gemini';
 import { GrokDiscovery } from './grok';
+import { MistralDiscovery } from './mistral';
 import { OllamaDiscovery } from './ollama';
 import { OpenAIDiscovery } from './openai';
 import { OpenRouterDiscovery } from './openrouter';
@@ -22,6 +23,7 @@ const CLIENTS: Record<string, ProviderDiscovery> = {
   gemini: new GeminiDiscovery(),
   google: new GeminiDiscovery(),
   grok: new GrokDiscovery(),
+  mistral: new MistralDiscovery(),
   openrouter: new OpenRouterDiscovery(),
   ollama: new OllamaDiscovery(),
 };
@@ -60,6 +62,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     gemini: 'GEMINI_API_KEY',
     google: 'GEMINI_API_KEY',
     grok: 'XAI_API_KEY',
+    mistral: 'MISTRAL_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
   };
   const vaultKeyMap: Record<string, string> = {
@@ -69,6 +72,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     gemini: 'gemini_api_key',
     google: 'gemini_api_key',
     grok: 'xai_api_key',
+    mistral: 'mistral_api_key',
     openrouter: 'openrouter_api_key',
   };
 

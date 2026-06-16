@@ -69,6 +69,7 @@ const PROVIDER_DEFAULTS: Record<string, RateLimitConfig> = {
   anthropic: { maxConcurrency: 5, rpm: 300, tpm: 100000, minDelay: 0, adaptive: true },
   gemini: { maxConcurrency: 10, rpm: 360, tpm: 120000, minDelay: 0, adaptive: true },
   deepseek: { maxConcurrency: 5, rpm: 200, tpm: 100000, minDelay: 0, adaptive: true },
+  mistral: { maxConcurrency: 5, rpm: 300, tpm: 100000, minDelay: 0, adaptive: true },
   litellm: { maxConcurrency: 20, rpm: 0, tpm: 0, minDelay: 0, adaptive: true },
   'cli-claude': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },
   'cli-gemini': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },

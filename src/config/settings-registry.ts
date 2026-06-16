@@ -568,6 +568,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     vaultName: 'deepseek_api_key',
     envVar: 'DEEPSEEK_API_KEY',
   },
+  {
+    key: 'mistral.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Mistral AI API key',
+    isSecret: true,
+    vaultName: 'mistral_api_key',
+    envVar: 'MISTRAL_API_KEY',
+  },
 
   // ── Workspace ──
   {

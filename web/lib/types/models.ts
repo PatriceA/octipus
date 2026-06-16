@@ -115,6 +115,7 @@ export function mapLiteLLMProvider(provider: string): string {
     anthropic: 'anthropic',
     deepseek: 'deepseek',
     gemini: 'gemini',
+    mistral: 'mistral',
   };
   return map[provider] || provider;
 }
@@ -127,6 +128,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   deepseek: 'DeepSeek',
   gemini: 'Google Gemini',
   grok: 'Grok (xAI)',
+  mistral: 'Mistral AI',
   openrouter: 'OpenRouter',
   voyage: 'Voyage AI (Embeddings)',
   cli: 'CLI (Subscription)',
@@ -144,6 +146,7 @@ export const PROVIDER_DEFAULTS: Record<string, { contextWindow: number; maxToken
   deepseek: { contextWindow: 128000, maxTokens: 8192, supportsVision: false, supportsTools: true },
   gemini: { contextWindow: 1000000, maxTokens: 8192, supportsVision: true, supportsTools: true },
   grok: { contextWindow: 256000, maxTokens: 8192, supportsVision: true, supportsTools: true },
+  mistral: { contextWindow: 128000, maxTokens: 8192, supportsVision: true, supportsTools: true },
   openrouter: { contextWindow: 128000, maxTokens: 16384, supportsVision: true, supportsTools: true },
   litellm: { contextWindow: 8192, maxTokens: 4096, supportsVision: false, supportsTools: true },
   'custom-openai': { contextWindow: 32000, maxTokens: 4096, supportsVision: false, supportsTools: true },
