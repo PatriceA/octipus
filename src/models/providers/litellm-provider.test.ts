@@ -17,6 +17,14 @@ const PROXY_URL = 'http://litellm.test:4000';
 process.env.LITELLM_URL = PROXY_URL;
 process.env.LITELLM_API_KEY ??= 'sk-test';
 
+// The config is a cached singleton. When another test file runs first and
+// loads config (e.g. the knowledge suites call getConfig via initializeDb),
+// the cache holds THAT proxyUrl — so checkHealth below would fetch a stale URL
+// and the mocked-fetch URL assertion would throw, flaking `checkHealth returns
+// healthy on 200`. Reset the cache so getConfig() reloads with our LITELLM_URL.
+const { resetConfig } = await import('@/config');
+resetConfig();
+
 const realLitellmClient = await import('../litellm-client');
 
 const fakeCompleteResult: CompletionResult = {
