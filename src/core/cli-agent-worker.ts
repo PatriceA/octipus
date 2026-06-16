@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'child_process';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join as joinPath, resolve as resolvePath } from 'path';
 import { getConfig } from '@/config';
@@ -293,7 +293,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const prompt = this.buildPrompt();
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args, stdinPrompt, useShell } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt);
+    const { binary, args, stdinPrompt, useShell, env: toolEnv } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget);
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
@@ -386,6 +386,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const contextFileMap: Record<string, string> = {
         'Gemini CLI': 'GEMINI.md',
         'Codex CLI': 'AGENTS.md',
+        // vibe reads AGENTS.md from the workdir for project context.
+        'Mistral Vibe': 'AGENTS.md',
       };
       const contextFileName = contextFileMap[toolConfig.name];
       if (contextFileName) {
@@ -403,10 +405,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
 
-    // Cleanup helper
+    // Cleanup helper — removes temp context files and any ephemeral per-spawn
+    // VIBE_HOME the arg builder created for vibe's MCP registration.
+    const tempVibeHome = toolEnv?.VIBE_HOME;
     const cleanupContextFiles = () => {
       for (const f of tempContextFiles) {
         try { unlinkSync(f); } catch { /* already gone */ }
+      }
+      if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
+        try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
       }
     };
 
@@ -419,7 +426,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Node's shell:true escaping mangles the prompt all over again.
     const useShellForSpawn = useShell !== false && process.platform === 'win32';
     return new Promise<string>((resolve, reject) => {
-      const env = { ...process.env };
+      // toolEnv carries per-tool overrides (e.g. vibe's ephemeral VIBE_HOME that
+      // registers the Octipus MCP server).
+      const env = { ...process.env, ...(toolEnv || {}) };
       delete env.CLAUDECODE;
 
       const proc = spawn(binary, args, {
@@ -455,9 +464,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
       let accumulatedText = '';
       let stderr = '';
       let lineBuffer = '';
+      // Buffer-at-end tools (e.g. vibe --output json) emit their whole result as
+      // one blob at process close, not incremental stream-json events. For those
+      // we collect raw stdout and run parseOutput on the full buffer in `close`.
+      let rawStdout = '';
 
       proc.stdout.on('data', (chunk: Buffer) => {
         if (this.aborted) return; // Stop processing events after abort
+        if (toolConfig.bufferOutput) {
+          rawStdout += chunk.toString();
+          return;
+        }
         lineBuffer += chunk.toString();
         const lines = lineBuffer.split('\n');
         lineBuffer = lines.pop() || '';
@@ -489,8 +506,23 @@ export class CLIAgentWorker extends BaseAgentWorker {
         cleanupContextFiles();
         this.process = null;
 
-        // Process remaining buffer
-        if (lineBuffer.trim()) {
+        // Buffer-at-end tools: parse the whole accumulated stdout via the tool's
+        // parseOutput (the streaming line-parser above is skipped for these).
+        if (toolConfig.bufferOutput) {
+          try {
+            const parsed = toolConfig.parseOutput(rawStdout, startTime);
+            accumulatedText = parsed.content;
+            // Usage is typically 0 for these tools (vibe reports none); only add
+            // if the parser surfaced real counts.
+            if (parsed.usage.totalTokens > 0) {
+              this.totalTokens += parsed.usage.totalTokens;
+            }
+          } catch (err) {
+            agentLogger.warn({ err, agentId: this.context.id, tool: toolConfig.name }, 'Buffer-mode parseOutput failed; falling back to raw stdout');
+            accumulatedText = rawStdout.trim();
+          }
+        } else if (lineBuffer.trim()) {
+          // Process remaining streamed line buffer
           try {
             const event = JSON.parse(lineBuffer);
             const result = parser.parse(event, toolConfig.name);
