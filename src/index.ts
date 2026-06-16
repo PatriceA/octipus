@@ -123,6 +123,16 @@ async function main() {
     const { getSkillRegistry } = await import('@/skills/registry');
     getSkillRegistry().loadExternal();
 
+    // Register the built-in skill loader (list_skills / get_skill) on every
+    // spawned worker. Worker prompts carry only a skill index; this is how the
+    // agent pulls full content on demand — independent of whether the role has
+    // the `mcp` tool (which the old `octipus_get_skill` path required).
+    const { getAgentManager } = await import('@/core/agent-manager');
+    const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
+    for (const handler of buildSkillLoaderHandlers()) {
+      getAgentManager().registerGlobalTool(handler);
+    }
+
     // Clean up any agents left "running" from a previous process
     const { agentRepository } = await import('@/db/repositories/agent-repository');
     const staleCount = await agentRepository.cleanupStale();
