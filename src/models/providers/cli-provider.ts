@@ -47,9 +47,16 @@ export interface CLIToolConfig {
   /** Vendor-managed billing/usage pointers (surfaced in UI) */
   billingInfo: CLIBillingInfo;
   /** Direct provider whose model catalog drives the picker for this CLI */
-  modelProvider: 'anthropic' | 'google' | 'openai';
+  modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral';
   /** Flag the CLI uses to select a model (`--model`, `-m`) — for docs only */
   modelFlag: string;
+  /**
+   * The CLI emits its entire result as a single blob at process end (e.g. vibe
+   * `--output json` writes one JSON array), not incremental stream-json events.
+   * When true, the CLIAgentWorker accumulates raw stdout and runs `parseOutput`
+   * on the full buffer at close instead of parsing each line as an event.
+   */
+  bufferOutput?: boolean;
 }
 
 // ---- Claude Code CLI ----
@@ -220,10 +227,78 @@ const codexCliConfig: CLIToolConfig = {
   },
 };
 
-/** All registered CLI tool configs */
-export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, geminiCliConfig, codexCliConfig];
+// ---- Mistral Vibe CLI ----
+const vibeCliConfig: CLIToolConfig = {
+  name: 'Mistral Vibe',
+  modelPatterns: ['cli/vibe', 'cli/mistral-vibe'],
+  binaryPath: 'vibe',
+  // vibe -p runs programmatic mode; --output json emits the full message array
+  // at the end. --trust skips the workdir trust prompt; --auto-approve allows
+  // tool calls without blocking. Model is selected via vibe's own config
+  // (active_model), not a flag — see modelFlag below.
+  buildArgs: (prompt: string) => ['-p', prompt, '--output', 'json', '--trust', '--auto-approve'],
+  parseOutput: (stdout: string, startTime: number): CompletionResult => {
+    try {
+      // vibe --output json is a JSON array of all messages. The answer is the
+      // last element with role 'assistant'.
+      const data = JSON.parse(stdout);
+      if (Array.isArray(data)) {
+        const assistant = [...data].reverse().find(
+          (m) => m && typeof m === 'object' && (m as { role?: string }).role === 'assistant',
+        ) as { content?: string } | undefined;
+        const content = assistant?.content ?? stdout.trim();
+        return {
+          content,
+          finishReason: 'stop',
+          // vibe's JSON carries no usage/cost fields — usage is unknown (0).
+          // Budget is enforced via --max-tokens / --max-price instead.
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          model: 'cli/vibe',
+          latencyMs: Date.now() - startTime,
+        };
+      }
+      // Unexpected non-array JSON — fall back to raw text.
+      return {
+        content: stdout.trim(),
+        finishReason: 'stop',
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        model: 'cli/vibe',
+        latencyMs: Date.now() - startTime,
+      };
+    } catch {
+      // Plain-text / partial output — return as-is.
+      return {
+        content: stdout.trim(),
+        finishReason: 'stop',
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        model: 'cli/vibe',
+        latencyMs: Date.now() - startTime,
+      };
+    }
+  },
+  isQuotaError: (output: string) =>
+    /rate.?limit|quota|exceeded|insufficient|limit reached/i.test(output),
+  quotaProvider: 'mistral-vibe',
+  // vibe selects its model from its own config (active_model), not a CLI flag,
+  // so this is display-only and effectively unused for the picker.
+  modelProvider: 'mistral',
+  modelFlag: '',
+  bufferOutput: true,
+  billingInfo: {
+    vendor: 'Mistral AI',
+    planNote: 'Mistral API key (metered, stored in ~/.vibe/.env via `vibe --setup`)',
+    billingMode: 'api-key',
+    pricingDocUrl: 'https://mistral.ai/pricing',
+    modelsDocUrl: 'https://docs.mistral.ai/getting-started/models/models_overview/',
+    modelFlagDocUrl: 'https://docs.mistral.ai/',
+    warning: 'vibe manages its own API key and model selection in ~/.vibe (run `vibe --setup`). Octipus stores no key for it.',
+  },
+};
 
-export { claudeCodeConfig, codexCliConfig, geminiCliConfig };
+/** All registered CLI tool configs */
+export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, geminiCliConfig, codexCliConfig, vibeCliConfig];
+
+export { claudeCodeConfig, codexCliConfig, geminiCliConfig, vibeCliConfig };
 
 /**
  * CLI Provider — wraps subscription-based CLI tools (Claude Code, Gemini CLI, Codex)
@@ -361,7 +436,7 @@ export class CLIProvider implements ModelProvider {
     name: string;
     available: boolean;
     modelPatterns: string[];
-    modelProvider: 'anthropic' | 'google' | 'openai';
+    modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral';
     modelFlag: string;
     billingInfo: CLIBillingInfo;
   }[]> {

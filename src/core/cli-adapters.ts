@@ -1,12 +1,47 @@
 import { randomBytes } from 'crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { tmpdir, } from 'os';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { homedir, tmpdir, } from 'os';
 import { join, resolve } from 'path';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 
 const IS_WIN = process.platform === 'win32';
+
+/** How to launch the Octipus MCP server as a stdio child of a CLI tool. */
+interface OctipusMcpLaunch {
+  /** Runtime to exec — 'node' for the compiled bundle, 'bun' for source. */
+  runtime: string;
+  /** Absolute path to the MCP server entry point. */
+  entry: string;
+  /** Loopback URL the MCP server should call back into. */
+  apiUrl: string;
+  /** Scoped API token (may be '' before the server has booted). */
+  apiKey: string;
+}
+
+/**
+ * Resolve how to launch Octipus's MCP server from the project root. Shared by
+ * the Claude JSON config generator and the vibe TOML/VIBE_HOME generator so the
+ * runtime/entry/port/token resolution lives in exactly one place.
+ */
+function resolveOctipusMcpLaunch(): OctipusMcpLaunch {
+  const projectRoot = resolve(join(import.meta.dir, '../..'));
+  const mcpServerEntry = join(projectRoot, 'mcp-server/dist/index.js');
+  const mcpServerSrc = join(projectRoot, 'mcp-server/src/index.ts');
+
+  // Prefer compiled, fall back to source (bun can run .ts).
+  const entry = existsSync(mcpServerEntry) ? mcpServerEntry : mcpServerSrc;
+  const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
+
+  const apiPort = process.env.API_PORT || process.env.PORT || '3005';
+  // Only a scoped API token is accepted by the server now (the MASTER_KEY
+  // fallback was removed with single-user mode). bin/octi writes the MCP
+  // bootstrap token into OCTIPUS_API_KEY after the server boots.
+  const apiKey = process.env.OCTIPUS_API_KEY || '';
+
+  return { runtime, entry, apiUrl: `http://127.0.0.1:${apiPort}`, apiKey };
+}
 
 /**
  * Generate a temporary MCP config file that points CLI tools to Octipus's MCP server.
@@ -24,29 +59,16 @@ function getOrCreateMcpConfig(): string | null {
     }
   } catch (err) { coreLogger.error({ err }, 'silent failure in cli-adapters'); }
 
-  // Build MCP server path — resolve from project root
-  const projectRoot = resolve(join(import.meta.dir, '../..'));
-  const mcpServerEntry = join(projectRoot, 'mcp-server/dist/index.js');
-  const mcpServerSrc = join(projectRoot, 'mcp-server/src/index.ts');
-
-  // Determine entry point — prefer compiled, fall back to source (bun can run .ts)
-  const entry = existsSync(mcpServerEntry) ? mcpServerEntry : mcpServerSrc;
-  const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
-
-  const apiPort = process.env.API_PORT || process.env.PORT || '3005';
-  // Only a scoped API token is accepted by the server now (the MASTER_KEY
-  // fallback was removed with single-user mode). bin/octi writes the MCP
-  // bootstrap token into OCTIPUS_API_KEY after the server boots.
-  const apiKey = process.env.OCTIPUS_API_KEY || '';
+  const launch = resolveOctipusMcpLaunch();
 
   const config = {
     mcpServers: {
       octipus: {
-        command: runtime,
-        args: [entry],
+        command: launch.runtime,
+        args: [launch.entry],
         env: {
-          OCTIPUS_URL: `http://127.0.0.1:${apiPort}`,
-          ...(apiKey ? { OCTIPUS_API_KEY: apiKey } : {}),
+          OCTIPUS_URL: launch.apiUrl,
+          ...(launch.apiKey ? { OCTIPUS_API_KEY: launch.apiKey } : {}),
         },
       },
     },
@@ -55,6 +77,77 @@ function getOrCreateMcpConfig(): string | null {
   mkdirSync(dir, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2));
   return configPath;
+}
+
+/**
+ * Inject (or replace) a top-level `mcp_servers` assignment in a vibe
+ * `config.toml` with one that registers the Octipus MCP server. vibe's schema
+ * makes `mcp_servers` a list, and the default config writes it as an inline
+ * empty array (`mcp_servers = []`) — so we replace that single-line assignment
+ * with an inline array-of-tables. (A `[[mcp_servers]]` table block would
+ * collide with the existing `mcp_servers = []` and be a TOML redefinition.)
+ */
+export function injectVibeMcpServer(config: string, launch: OctipusMcpLaunch): string {
+  // JSON.stringify produces TOML-valid string/array literals for our values
+  // (double-quoted strings, `["..."]` arrays).
+  const command = JSON.stringify(launch.runtime);
+  const argsArr = JSON.stringify([launch.entry]);
+  const env = launch.apiKey
+    ? `, env = { OCTIPUS_URL = ${JSON.stringify(launch.apiUrl)}, OCTIPUS_API_KEY = ${JSON.stringify(launch.apiKey)} }`
+    : `, env = { OCTIPUS_URL = ${JSON.stringify(launch.apiUrl)} }`;
+  const assignment =
+    `mcp_servers = [\n` +
+    `  { name = "octipus", transport = "stdio", command = ${command}, args = ${argsArr}${env} },\n` +
+    `]`;
+
+  // Replace an existing single-line inline `mcp_servers = [ ... ]` assignment.
+  if (/^mcp_servers\s*=\s*\[.*\]\s*$/m.test(config)) {
+    return config.replace(/^mcp_servers\s*=\s*\[.*\]\s*$/m, assignment);
+  }
+  // No inline assignment found (e.g. user uses [[mcp_servers]] tables) — append.
+  return `${config.trimEnd()}\n${assignment}\n`;
+}
+
+/**
+ * Build an ephemeral `VIBE_HOME` seeded from the host's real `~/.vibe`, with the
+ * Octipus MCP server merged into `config.toml`. vibe honors `VIBE_HOME` to
+ * relocate its config dir; spawning with `env.VIBE_HOME` set lets us register
+ * the MCP server without mutating the user's real config (vibe has no
+ * `--mcp-config` flag). Returns the dir, or null if vibe isn't set up (no
+ * config.toml) — in which case the caller spawns vibe with its own defaults.
+ *
+ * The dir is UNIQUE per spawn: Octipus is always multi-user and CLI agents run
+ * concurrently, and vibe writes per-run session state (history, logs, cache)
+ * into VIBE_HOME — a shared dir would let concurrent agents corrupt each other's
+ * config.toml mid-write and cross-contaminate session state. The caller is
+ * responsible for removing the returned dir when the vibe process exits.
+ */
+function getOrCreateVibeHome(): string | null {
+  const realHome = process.env.VIBE_HOME || join(homedir(), '.vibe');
+  const realConfig = join(realHome, 'config.toml');
+  // Nothing to seed if vibe was never set up — let vibe fall back to defaults
+  // (it will still run, just without the Octipus MCP server).
+  if (!existsSync(realConfig)) return null;
+
+  const dir = join(tmpdir(), 'octipus-cli', `vibe-home-${randomBytes(8).toString('hex')}`);
+  try {
+    mkdirSync(dir, { recursive: true });
+
+    // Seed creds + trust list into the fresh dir so vibe finds the API key.
+    const realEnv = join(realHome, '.env');
+    if (existsSync(realEnv)) copyFileSync(realEnv, join(dir, '.env'));
+    const realTrust = join(realHome, 'trusted_folders.toml');
+    if (existsSync(realTrust)) copyFileSync(realTrust, join(dir, 'trusted_folders.toml'));
+
+    // Write config.toml with a fresh MCP launch (entry/port/token) merged in.
+    const launch = resolveOctipusMcpLaunch();
+    const merged = injectVibeMcpServer(readFileSync(realConfig, 'utf-8'), launch);
+    writeFileSync(join(dir, 'config.toml'), merged);
+    return dir;
+  } catch (err) {
+    coreLogger.warn({ err }, 'Failed to seed VIBE_HOME for Octipus MCP — vibe will run without it');
+    return null;
+  }
 }
 
 /** Detect a more descriptive tool name from a shell command */
@@ -103,7 +196,8 @@ export class CLIArgumentBuilder {
     settings: CLIAgentConfig,
     systemMessages: string[],
     systemPrompt?: string | null,
-  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; geminiArgs?: string[] } {
+    maxTokenBudget?: number,
+  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; geminiArgs?: string[]; env?: Record<string, string> } {
     switch (toolName) {
       case 'Claude Code':
         return this.buildClaudeArgs(prompt, settings, systemMessages);
@@ -111,9 +205,66 @@ export class CLIArgumentBuilder {
         return this.buildGeminiArgs(prompt, settings, systemPrompt);
       case 'Codex CLI':
         return this.buildCodexArgs(prompt, systemPrompt, settings);
+      case 'Mistral Vibe':
+        return this.buildVibeArgs(prompt, settings, maxTokenBudget);
       default:
         throw new Error(`Unknown CLI tool: ${toolName}`);
     }
+  }
+
+  private buildVibeArgs(
+    prompt: string,
+    settings: CLIAgentConfig,
+    maxTokenBudget?: number,
+  ): { binary: string; args: string[]; stdinPrompt?: string; env?: Record<string, string> } {
+    // vibe -p runs programmatic mode (send prompt → emit JSON message array →
+    // exit). --trust skips the workdir trust prompt; --auto-approve allows tool
+    // calls without blocking on approval. --output json is parsed at process
+    // close (CLIToolConfig.bufferOutput) — `streaming` hangs in a non-interactive
+    // pipe. Model is chosen by vibe's own config (active_model), not a flag.
+    const args = ['-p'];
+
+    // On Windows, shell:true re-tokenizes argv and mangles long/special-char
+    // prompts; pipe via stdin instead (vibe reads the prompt from stdin when -p
+    // is given no inline text). Linux/macOS spawn argv is safe — pass inline.
+    if (!IS_WIN) {
+      args.push(prompt);
+    }
+
+    args.push('--output', 'json', '--trust', '--auto-approve');
+
+    // vibe reports no token/cost usage in its output, so the worker's
+    // token-budget kill can't fire — let vibe self-limit via its caps instead.
+    if (settings.maxBudgetUsd != null) {
+      args.push('--max-price', String(settings.maxBudgetUsd));
+    }
+    if (maxTokenBudget && maxTokenBudget > 0) {
+      args.push('--max-tokens', String(maxTokenBudget));
+    }
+
+    // allowedTools → vibe --enabled-tools (in -p mode this disables all others).
+    if (settings.allowedTools?.length) {
+      for (const tool of settings.allowedTools) {
+        args.push('--enabled-tools', tool);
+      }
+    }
+
+    if (settings.extraArgs?.length) {
+      args.push(...settings.extraArgs);
+    }
+
+    // Point vibe at an ephemeral VIBE_HOME that registers the Octipus MCP server
+    // (vibe has no --mcp-config flag). Null when vibe isn't set up — then it runs
+    // with its own defaults and no Octipus MCP.
+    const vibeHome = getOrCreateVibeHome();
+    const env = vibeHome ? { VIBE_HOME: vibeHome } : undefined;
+
+    return {
+      binary: 'vibe',
+      args,
+      stdinPrompt: IS_WIN ? prompt : undefined,
+      env,
+    };
   }
 
   private buildClaudeArgs(
