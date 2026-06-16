@@ -573,6 +573,12 @@ function computeTestTimeout(model: ModelConfigEntry, baseTimeout: number, explic
     return Math.max(baseTimeout, isReasoning ? 600_000 : 180_000);
   }
 
+  if (model.provider === 'mistral') {
+    // Mirror MistralProvider's reasoning detection (Magistral family).
+    const isReasoning = /magistral|reasoning/.test(lower);
+    return Math.max(baseTimeout, isReasoning ? 600_000 : 180_000);
+  }
+
   return baseTimeout;
 }
 

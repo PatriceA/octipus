@@ -24,6 +24,7 @@ export type ProviderId =
   | 'anthropic'
   | 'gemini'
   | 'deepseek'
+  | 'mistral'
   | 'cli';
 
 export interface ProviderDef {
@@ -152,6 +153,23 @@ export const PROVIDERS: ProviderDef[] = [
     kind: 'manual',
     requiresApiKey: true,
     vaultKey: 'deepseek_api_key',
+  },
+  {
+    id: 'mistral',
+    label: 'Mistral AI',
+    description: 'Mistral / Magistral / Codestral models. Requires API key.',
+    defaultModel: 'mistral-large-latest',
+    kind: 'manual',
+    requiresApiKey: true,
+    vaultKey: 'mistral_api_key',
+    listModels: async ({ apiKey }) => {
+      if (!apiKey) return null;
+      const data = await httpJson<{ data?: Array<{ id: string }> }>(
+        'https://api.mistral.ai/v1/models',
+        { headers: { Authorization: `Bearer ${apiKey}` } },
+      );
+      return data?.data?.map((m) => m.id) ?? null;
+    },
   },
   {
     id: 'cli',
