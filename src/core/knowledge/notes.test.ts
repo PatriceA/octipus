@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,13 +28,27 @@ describe('NoteService', () => {
     const linksMod = await import('@/db/repositories/knowledge-link-repository');
     links = new linksMod.KnowledgeLinkRepository();
     // Inject a real EmbeddingService (not getEmbeddingService(), which other
-    // test files mock.module into a partial stub that leaks across the suite).
-    // 'test-model' has no live provider, so embedding calls fail and the
-    // service degrades exactly as a no-model deployment would — but the DB
-    // methods (countBySource/deleteBySource) are real.
+    // test files mock.module into a partial stub that leaks across the suite),
+    // so the DB methods (countBySource/deleteBySource) stay real — but stub the
+    // single network seam, generateEmbedding, to fail locally.
+    //
+    // Without the stub, `new EmbeddingService('test-model')` only "degrades" if
+    // NO embedding backend is reachable. When the dev/CI env has a LiteLLM proxy
+    // configured (LITELLM_URL/key), the proxy accepts the bogus 'test-model' and
+    // the embed call goes out for real → 401. That rejection (and the wrapped
+    // "Indexing failed" error) surfaces asynchronously and bun attributes it to
+    // whichever unrelated test happens to be running — most visibly flaking
+    // `LiteLLMProvider > checkHealth` in the full-suite run. Failing fast at the
+    // accessor (instance spyOn, not a prototype/mock.module that leaks
+    // process-wide) reproduces the no-model degradation contract with zero
+    // network and zero cross-file leakage.
     const { EmbeddingService } = await import('@/core/rag/embeddings');
+    const embeddings = new EmbeddingService('test-model');
+    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
+      new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
+    );
     const mod = await import('./notes');
-    svc = new mod.NoteService(undefined, undefined, new EmbeddingService('test-model'));
+    svc = new mod.NoteService(undefined, undefined, embeddings);
   });
 
   afterAll(async () => {
