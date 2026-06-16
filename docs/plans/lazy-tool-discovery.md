@@ -82,15 +82,23 @@ long-tail tool is first needed.
    - `describe_tool({name})` → `{name, description, parameters}` for one tool;
      throw on unknown name (fail loud, suggest `list_tools`).
    - These are registered AND advertised (they're the entry point).
-4. **Per-model-tier gating (reliability).**
-   - **Small models** (`isSmallModel`): do NOT use discovery (they chain
-     multi-step poorly). Keep the existing `applyToolCap` path (full schemas,
-     hard-capped count). Small models already get the heaviest prompt trims.
-   - **Non-small models with `coreToolIds` set**: use lazy discovery.
+4. **Gating (DECIDED: ollama-only + non-small).** Lazy discovery is enabled
+   **only when `model.provider === 'ollama'`** AND the model is non-small AND has
+   `coreToolIds` set. Rationale: the bloat only hurts local ollama (each request
+   re-prefills the schemas on the iGPU with no cross-request server-side prompt
+   caching benefit across cold loads/evictions); remote providers (deepseek,
+   openai, anthropic) prefix-cache the tool block cheaply and tool-call more
+   reliably, so they stay on the proven full-schema path.
+   - **provider !== 'ollama'**: full schema (unchanged). Never lazy.
+   - **ollama + small model** (`isSmallModel`): NOT discovery — keep the existing
+     `applyToolCap` path (full schemas, hard-capped count). Small models chain
+     multi-step discovery poorly and already get the heaviest prompt trims.
+   - **ollama + non-small + `coreToolIds` set**: use lazy discovery.
    - **`supportsTools === false`**: no tools at all (unchanged).
-   - Gating decided in `worker-spawner.ts` (where `isSmall` is already known),
-     then passed to the worker so the `:1231` builder knows the mode. Do NOT
-     re-derive model size in agent-worker.
+   - Gating decided in `worker-spawner.ts` (where `isSmall` and the resolved
+     model — incl. `provider` — are already known), then passed to the worker so
+     the `:1231` builder knows the mode. Do NOT re-derive model size or provider
+     in agent-worker.
 5. **Boundary with MCP discovery.** MCP keeps its own `mcp_list_tools`/
    `mcp_call_tool` (genuinely dynamic/remote). Built-in discovery is a separate
    pair (`list_tools`/`describe_tool`) over statically-registered built-ins —
@@ -149,8 +157,10 @@ still dispatches (executor lookup succeeds).
 ### Phase 4 — Gating in worker-spawner
 **Implement:** in `worker-spawner.ts` where `isSmall` is computed and
 `getToolsForRole` is called (~:275-437):
-- Compute mode: `lazy` iff `!isSmall && roleConfig.coreToolIds !== undefined &&
-  model.supportsTools`; else `full`. Small-model path keeps `applyToolCap`.
+- Compute mode: `lazy` iff `model.provider === 'ollama' && !isSmall &&
+  roleConfig.coreToolIds !== undefined && model.supportsTools`; else `full`.
+  Small-model (and all non-ollama) paths keep the current behavior /
+  `applyToolCap`.
 - Pass the chosen `toolAdvertisement` into the worker config.
 - Log the decision (mode, core count, long-tail count) for observability.
 **Verify:** spawn a non-small research worker → mode lazy, advertised count
@@ -208,10 +218,10 @@ a long-tail tool still usable end-to-end.
    reliably call `describe_tool` then the real tool? Validate in Phase 6 before
    enabling for a role in production. If shaky, gate lazy mode to remote models
    only (add a capability/metadata flag rather than size alone).
-3. **Prefix caching already softens the cost for remote + same-session local.**
-   Quantify whether lazy discovery is worth it for remote models (deepseek) at
-   all, or only for cold/first-turn + local. Possibly enable lazy only when
-   `provider === 'ollama'` (or a `metadata.lazyTools` flag), keeping remote on
-   full schema. Decide during review.
+3. **Prefix caching softens the cost for remote — RESOLVED: ollama-only gate.**
+   Remote providers prefix-cache the tool block cheaply and tool-call reliably,
+   so lazy discovery is gated to `provider === 'ollama'` only (see Design
+   decision 4). Remote models always stay on full schema. (A future
+   `metadata.lazyTools` opt-in flag could broaden this, but is out of scope.)
 4. **Two discovery surfaces (built-in vs MCP).** Acceptable for v1; note future
    unification.
