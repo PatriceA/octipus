@@ -150,12 +150,19 @@ async function main() {
     // loadRuntimeConfig()/resetLiteLLMClient() above. Non-fatal and idempotent
     // (skips unchanged files); the cron refresh retries if the embedding model
     // is only bound after first boot.
-    try {
-      const { indexProductDocs } = await import('@/db/seed-docs');
-      await indexProductDocs();
-    } catch (err) {
-      logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues');
-    }
+    //
+    // Detached on purpose: the first index does slow LLM-bound work (embed every
+    // chunk + a per-chunk abstract via the default model — minutes when the
+    // default is a remote model). Awaiting it inline kept boot on the critical
+    // path long enough for the `octi` launcher's startup timeout to SIGTERM the
+    // process *before* the index committed — so the per-file SHA stamps that make
+    // it idempotent were never written, and it re-ran (and re-failed) on every
+    // boot. Running it fire-and-forget lets the server reach ready immediately;
+    // the index finishes in the background and stamps the files, so subsequent
+    // boots skip unchanged docs (truly a one-time cost).
+    void import('@/db/seed-docs')
+      .then(({ indexProductDocs }) => indexProductDocs())
+      .catch((err) => logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues'));
 
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the orchestrator can
