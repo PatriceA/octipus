@@ -20,7 +20,7 @@ import { getCLIToolConfig } from './cli-agent-factory';
 import type { AgentContext, AgentMessage } from './types';
 
 /**
- * CLIAgentWorker — spawns a CLI binary (Claude Code, Gemini CLI, Codex)
+ * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe)
  * as an autonomous sub-agent.
  */
 export class CLIAgentWorker extends BaseAgentWorker {
@@ -384,7 +384,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
     }
     if (systemPrompt) {
       const contextFileMap: Record<string, string> = {
-        'Gemini CLI': 'GEMINI.md',
+        // agy (Antigravity) reads GEMINI.md from the workdir, like gemini-cli did.
+        'Antigravity': 'GEMINI.md',
         'Codex CLI': 'AGENTS.md',
         // vibe reads AGENTS.md from the workdir for project context.
         'Mistral Vibe': 'AGENTS.md',

@@ -115,7 +115,7 @@ Three sub-checks. Each is independent.
 
 ### 2b. `CLIAgentWorker` parent-signal cascade
 
-1. Configure a CLI-backed model (Claude Code / Gemini CLI / Codex CLI)
+1. Configure a CLI-backed model (Claude Code / Antigravity / Codex CLI / Mistral Vibe)
    in **Settings → Models** and bind one topic to it.
 2. Send a message that routes to that topic and would normally take
    ≥10s (e.g. *"Read every file under `src/core/orchestrator/` and

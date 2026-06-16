@@ -183,7 +183,7 @@ function detectFileChangeFromCommand(command: string): { action: string; path: s
 }
 
 /**
- * Builds CLI arguments for different agent tools (Claude Code, Gemini CLI, Codex).
+ * Builds CLI arguments for different agent tools (Claude Code, Antigravity, Codex, Mistral Vibe).
  *
  * On Windows, prompts are piped via stdin (not as args) because shell: true
  * is required for .cmd wrappers but mangles long/special-char arguments.
@@ -197,12 +197,12 @@ export class CLIArgumentBuilder {
     systemMessages: string[],
     systemPrompt?: string | null,
     maxTokenBudget?: number,
-  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; geminiArgs?: string[]; env?: Record<string, string> } {
+  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; env?: Record<string, string> } {
     switch (toolName) {
       case 'Claude Code':
         return this.buildClaudeArgs(prompt, settings, systemMessages);
-      case 'Gemini CLI':
-        return this.buildGeminiArgs(prompt, settings, systemPrompt);
+      case 'Antigravity':
+        return this.buildAntigravityArgs(prompt, settings, systemPrompt);
       case 'Codex CLI':
         return this.buildCodexArgs(prompt, systemPrompt, settings);
       case 'Mistral Vibe':
@@ -331,77 +331,38 @@ export class CLIArgumentBuilder {
     return { binary: 'claude', args, stdinPrompt: IS_WIN ? prompt : undefined };
   }
 
-  private buildGeminiArgs(
+  private buildAntigravityArgs(
     prompt: string,
     settings: CLIAgentConfig,
     systemPrompt?: string | null,
-  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; geminiArgs?: string[] } {
-    // Gemini CLI: -p switches to headless (non-interactive) mode.
-    //
-    // Windows pain: Node's spawn() requires shell:true to run a .cmd
-    // wrapper, but shell:true means cmd.exe re-tokenizes our argv. Long
-    // -p values that include backslashes, quotes, or even ordinary
-    // whitespace get split at delimiters, and gemini-cli reports it as
-    // "Cannot use both a positional prompt and the --prompt (-p) flag
-    // together" — what was a single -p argument becomes ((mangled
-    // positional fragments) + a partial -p).
-    //
-    // Fix: on Windows, write the prompt to a temp file and drive the
-    // call through PowerShell, which (a) hands the file contents to
-    // gemini as a single argv element via $prompt expansion, and (b)
-    // can execute .cmd files without re-parsing. The non-Windows path
-    // still uses -p directly — Linux/macOS spawn argv goes through
-    // execve and has no shell layer to mangle it.
-    const flagArgs: string[] = ['-o', 'stream-json'];
+  ): { binary: string; args: string[]; useShell?: boolean } {
+    // agy (Antigravity) replaces the Gemini CLI. `--print <prompt>` runs a
+    // single prompt non-interactively and emits PLAIN TEXT (no -o json /
+    // stream-json), which the worker buffers via CLIToolConfig.bufferOutput.
+    // --dangerously-skip-permissions auto-approves tool calls (the agy
+    // equivalent of gemini's --approval-mode yolo).
+    const args: string[] = ['--dangerously-skip-permissions'];
 
-    const approvalMode = settings.permissionMode || 'yolo';
-    flagArgs.push('--approval-mode', approvalMode);
-
-    // Model override: env var > settings. Vendor uses gemini-2.5-flash by default.
-    // https://github.com/google-gemini/gemini-cli (Quickstart, `-m` flag)
-    const geminiModel = process.env.GEMINI_MODEL || settings.model;
-    if (geminiModel) {
-      flagArgs.push('-m', geminiModel);
+    // Model override: env var > settings. agy uses --model (not gemini's -m);
+    // when unset, agy picks the model from its own ~/.gemini config.
+    const model = process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL || settings.model;
+    if (model) {
+      args.push('--model', model);
     }
-
-    // Note: Gemini CLI does NOT support --mcp-config or --system-instruction flags.
-    // It uses its own `gemini mcp` subcommand to manage MCP servers.
-    // The octipus MCP server must be added via: gemini mcp add octipus
 
     if (settings.extraArgs?.length) {
-      flagArgs.push(...settings.extraArgs);
+      args.push(...settings.extraArgs);
     }
 
+    // agy has no --system-prompt flag. Prepend the expert system prompt to the
+    // user prompt; the worker also writes it to GEMINI.md (which agy reads).
     const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-    // `geminiArgs` is the underlying gemini.cmd argv regardless of how
-    // we end up invoking it — exposed on the return so unit tests can
-    // assert on flags like `-m` without caring about platform wrapping.
-    const geminiArgs = [...flagArgs, '-p', fullPrompt];
+    args.push('--print', fullPrompt);
 
-    if (IS_WIN) {
-      const promptFile = this.writeTempFile('gemini-prompt-', fullPrompt);
-      // PowerShell here: $p reads the prompt from disk in one shot (no
-      // newline-trimming), then `&` invokes gemini.cmd with $p as a
-      // single bound argument. `--%` stop-parsing token isn't used
-      // because we WANT PowerShell to treat $p as one argv element.
-      const psBody = [
-        '$ErrorActionPreference = "Stop";',
-        `$p = Get-Content -Raw -LiteralPath '${promptFile.replace(/'/g, "''")}';`,
-        // Flatten the flag args into the PowerShell call. They are all
-        // safe (no spaces, no quotes) — `-o stream-json --approval-mode yolo`
-        // style.
-        `& gemini.cmd ${flagArgs.join(' ')} -p $p`,
-      ].join(' ');
-      const scriptFile = this.writeTempFile('gemini-call-', psBody, '.ps1');
-      return {
-        binary: 'powershell.exe',
-        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile],
-        useShell: false,
-        geminiArgs,
-      };
-    }
-
-    return { binary: 'gemini', args: geminiArgs, geminiArgs };
+    // agy is a native single binary (not a .cmd wrapper), so the worker must
+    // NOT shell-wrap it on Windows — shell:true would re-tokenize the prompt
+    // argv. Passing useShell:false keeps the prompt a single argv element.
+    return { binary: 'agy', args, useShell: false };
   }
 
   /**
@@ -498,9 +459,8 @@ export class CLIOutputParser {
       return this.parseClaudeEvent(event, type);
     }
 
-    if (toolName === 'Gemini CLI') {
-      return this.parseGeminiEvent(event, type);
-    }
+    // Antigravity (agy) emits plain text buffered at process close
+    // (CLIToolConfig.bufferOutput), so it has no per-event stream parser here.
 
     if (toolName === 'Codex CLI') {
       return this.parseCodexEvent(event, type);
@@ -600,98 +560,6 @@ export class CLIOutputParser {
       this.onTokenUsage?.({ input: inputTokens + cacheRead + cacheCreation, output: outputTokens, total: totalTokens });
 
       return result ? { text: result, replace: true } : null;
-    }
-
-    return null;
-  }
-
-  private parseGeminiEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
-    // Gemini CLI stream-json format (verified):
-    // { type: "init", model, session_id }
-    // { type: "message", role: "user"|"assistant", content, delta: true }
-    // { type: "tool_use", tool_name, tool_id, parameters }
-    // { type: "tool_result", tool_id, status, output }
-    // { type: "result", status, stats: { total_tokens, input_tokens, output_tokens, duration_ms, tool_calls } }
-
-    if (type === 'init') {
-      this.emitFn('thought', {
-        status: 'running',
-        sessionId: event.session_id,
-        model: event.model,
-      });
-      return null;
-    }
-
-    if (type === 'message') {
-      const role = event.role as string;
-      const content = event.content as string | undefined;
-      if (role === 'assistant' && content) {
-        // delta: true means streaming chunks — append, don't replace
-        return { text: content };
-      }
-      return null;
-    }
-
-    if (type === 'tool_use') {
-      this.onIteration();
-      this.emitFn('action', {
-        type: 'cli_tool_use',
-        toolName: event.tool_name,
-        args: event.parameters,
-      });
-
-      // Also emit file_change for file-modifying tools
-      const geminiFileTools: Record<string, string> = {
-        replace_file: 'edit', write_file: 'write', create_file: 'write',
-        delete_file: 'delete', patch_file: 'edit', update_file: 'edit',
-      };
-      const toolName = event.tool_name as string;
-      if (geminiFileTools[toolName] && event.parameters) {
-        const params = event.parameters as Record<string, unknown>;
-        const filePath = (params.file_path || params.path || params.filename) as string | undefined;
-        if (filePath) {
-          this.emitFn('action', {
-            type: 'file_change',
-            action: geminiFileTools[toolName],
-            path: filePath,
-            content: (params.content || params.new_content) as string | undefined,
-            oldContent: (params.old_content) as string | undefined,
-          });
-        }
-      }
-
-      return null;
-    }
-
-    if (type === 'tool_result') {
-      this.emitFn('action', {
-        type: 'cli_tool_result',
-        toolName: event.tool_id,
-        result: ((event.output || '') as string).slice(0, 500),
-        status: event.status,
-      });
-      return null;
-    }
-
-    if (type === 'result') {
-      const stats = event.stats as Record<string, unknown> | undefined;
-      if (stats) {
-        const inputTokens = (stats.input_tokens || 0) as number;
-        const outputTokens = (stats.output_tokens || 0) as number;
-        const totalTokens = (stats.total_tokens as number | undefined) ?? (inputTokens + outputTokens);
-        this.emitFn('thought', {
-          status: 'completed',
-          stats: {
-            totalTokens,
-            inputTokens,
-            outputTokens,
-            durationMs: stats.duration_ms,
-            toolCalls: stats.tool_calls,
-          },
-        });
-        this.onTokenUsage?.({ input: inputTokens, output: outputTokens, total: totalTokens });
-      }
-      return null;
     }
 
     return null;

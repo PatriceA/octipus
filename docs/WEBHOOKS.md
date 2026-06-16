@@ -57,7 +57,7 @@ Both sides (Octipus hook and the external service) must share this secret. **Nev
 
 ### Step 1: Create the Hook
 
-Via MCP (Claude Code / Gemini CLI):
+Via MCP (Claude Code / Antigravity):
 
 ```
 Use octipus_create_recurring_task:
