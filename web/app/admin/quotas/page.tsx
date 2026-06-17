@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, RotateCcw, X } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { Portal } from '@/components/ui/portal';
 
 /**
  * Admin: per-user quotas — Phase 3c-1.
@@ -238,6 +239,7 @@ function EditModal({
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="term-frame rounded-xs p-6 max-w-md w-full space-y-4 border-primary/40 animate-enter">
         <div className="flex items-start justify-between">
@@ -285,6 +287,7 @@ function EditModal({
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

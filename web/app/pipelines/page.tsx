@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
 import { PageHeader } from '@/components/ui/page-header';
+import { Portal } from '@/components/ui/portal';
 import { reorderStages } from '../../../src/core/orchestrator/pipeline-validation';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS } from '@/lib/types/models';
@@ -381,6 +382,7 @@ function TemplateEditor({
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
@@ -668,5 +670,6 @@ function TemplateEditor({
         </div>
       </div>
     </div>
+    </Portal>
   );
 }

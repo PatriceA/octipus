@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/ui/page-header';
+import { Portal } from '@/components/ui/portal';
 import { ConnectorsTab } from '@/components/mcp/connectors-tab';
 
 interface MCPServer {
@@ -139,6 +140,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
@@ -297,6 +299,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
