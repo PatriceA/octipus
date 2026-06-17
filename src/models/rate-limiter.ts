@@ -74,6 +74,7 @@ const PROVIDER_DEFAULTS: Record<string, RateLimitConfig> = {
   'cli-claude': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },
   'cli-gemini': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },
   'cli-codex': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },
+  'cli-vibe': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },
 };
 
 const RPM_WINDOW_MS = 60_000;

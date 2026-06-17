@@ -113,11 +113,12 @@ const claudeCodeConfig: CLIToolConfig = {
 // Antigravity (`agy`), which shares the same ~/.gemini config dir and Gemini
 // model backend but has a different, simpler interface — `--print <prompt>`
 // emits PLAIN TEXT (no `-o json`/stream-json), `--model` (not `-m`), and
-// `--dangerously-skip-permissions` (not `--approval-mode`). cli/gemini model
-// patterns are retained so existing model rows keep routing here.
+// `--dangerously-skip-permissions` (not `--approval-mode`). The canonical
+// pattern is first (new model rows register as `cli/antigravity`); the legacy
+// cli/gemini patterns are retained last so existing rows keep routing here.
 const antigravityConfig: CLIToolConfig = {
   name: 'Antigravity',
-  modelPatterns: ['cli/gemini', 'cli/gemini-cli', 'cli/antigravity', 'cli/agy'],
+  modelPatterns: ['cli/antigravity', 'cli/agy', 'cli/gemini', 'cli/gemini-cli'],
   binaryPath: 'agy',
   buildArgs: (prompt: string) => ['--dangerously-skip-permissions', '--print', prompt],
   // agy --print returns plain text (no structured envelope). bufferOutput=true
@@ -278,12 +279,12 @@ const vibeCliConfig: CLIToolConfig = {
   bufferOutput: true,
   billingInfo: {
     vendor: 'Mistral AI',
-    planNote: 'Mistral API key (metered, stored in ~/.vibe/.env via `vibe --setup`)',
-    billingMode: 'api-key',
+    planNote: 'Le Chat Pro / Team (account login via console.mistral.ai — covers Vibe CLI usage), or a metered MISTRAL_API_KEY',
+    billingMode: 'mixed',
     pricingDocUrl: 'https://mistral.ai/pricing',
     modelsDocUrl: 'https://docs.mistral.ai/getting-started/models/models_overview/',
     modelFlagDocUrl: 'https://docs.mistral.ai/',
-    warning: 'vibe manages its own API key and model selection in ~/.vibe (run `vibe --setup`). Octipus stores no key for it.',
+    warning: 'vibe manages its own auth and model selection in ~/.vibe: log in to a Mistral account (subscription, browser auth) or set an API key via `vibe --setup`. Octipus stores no credential for it; subscription vs. metered split is vendor-controlled.',
   },
 };
 
