@@ -9,6 +9,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
+import { formatDateTimeContext } from '@/utils/date-context';
 
 /**
  * Generate a direct LLM response for casual messages (no orchestrator/worker needed).
@@ -80,8 +81,7 @@ export async function directResponse(
         summary = (session?.context as SessionContext)?.compactedSummary;
       }
     }
-    const now = new Date();
-    const dateContext = `\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
+    const dateContext = `\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`;
     // Persona block — resolved from the user's assistant profile (or
     // the base octipus persona if no profile exists yet). Casual
     // replies go through this path, so the dry octopus-machine voice

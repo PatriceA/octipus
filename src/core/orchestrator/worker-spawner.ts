@@ -22,6 +22,7 @@ import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
+import { formatDateTimeContext } from '@/utils/date-context';
 
 /**
  * Optional swarm wiring for `spawnWorker`. When provided, the worker is
@@ -447,8 +448,7 @@ export async function spawnWorker(
   }
 
   // Inject current date/time context so agents know "today"
-  const now = new Date();
-  systemPrompt += `\n\nCURRENT DATE/TIME: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
+  systemPrompt += `\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`;
   // Determine if this is a dev mode session
   const session = await sessionRepository.findById(context.sessionId);
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
