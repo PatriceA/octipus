@@ -1,6 +1,6 @@
 'use client';
 
-import { Brain, Compass, Cpu, Database, Globe, Layers, RefreshCw, Rocket, Server, Settings2, Sparkles, Zap } from 'lucide-react';
+import { Brain, Compass, Cpu, Database, Globe, Layers, RefreshCw, Rocket, Server, Settings2, Sparkles, Wind, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +21,7 @@ interface HealthStatusProps {
     gemini: ServiceHealth;
     deepseek: ServiceHealth;
     grok: ServiceHealth;
+    mistral: ServiceHealth;
     voyage: ServiceHealth;
     openrouter: ServiceHealth;
     custom: ServiceHealth;
@@ -38,6 +39,7 @@ const SERVICE_CONFIG = [
   { key: 'gemini',     label: 'gemini',     icon: Sparkles },
   { key: 'deepseek',   label: 'deepseek',   icon: Layers },
   { key: 'grok',       label: 'grok',       icon: Rocket },
+  { key: 'mistral',    label: 'mistral',    icon: Wind },
   { key: 'voyage',     label: 'voyage',     icon: Compass },
   { key: 'openrouter', label: 'openrouter', icon: Globe },
   { key: 'custom',     label: 'custom',     icon: Settings2 },
