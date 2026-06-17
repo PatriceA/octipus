@@ -1081,11 +1081,35 @@ function mapChildResultToNodeStatus(status: ChildResultStatus): import('./types'
 }
 
 /** Build the child's initial user message from the structured brief. */
-function composeChildMessage(
+export function composeChildMessage(
   brief: TaskBrief,
   opts: { availableToolNames: string[]; canSpawnChildren: boolean },
 ): string {
   const parts: string[] = [];
+
+  // Ground every child in "today" — without this, time-relative requests
+  // ("who played yesterday", "latest news") make the model fall back to its
+  // training cutoff and reason about a stale date (e.g. assuming an event
+  // hasn't happened yet). The orchestrator grounds its own system prompt
+  // (worker-spawner.ts / direct-response.ts), but swarm children spawned here
+  // were not — this closes that gap using the same single-timezone format
+  // (all fields local + an explicit TZ label, never a UTC/local mix).
+  const now = new Date();
+  parts.push(
+    `CURRENT DATE/TIME: ${now.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })} ${now.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })} (${Intl.DateTimeFormat().resolvedOptions().timeZone}). Treat any ` +
+      `time-relative phrasing ("today", "yesterday", "this week", "latest", ` +
+      `"current") as relative to this — do not assume events are in the future ` +
+      `based on your training data.`,
+  );
 
   // Always surface the user's actual request — prevents the child from
   // drifting into what it *thinks* the user wanted based on orchestrator

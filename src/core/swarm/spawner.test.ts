@@ -5,11 +5,40 @@ import {
   taskFingerprint,
   SwarmSpawner,
   TASK_BRIEF_PREVIEW_MAX,
+  composeChildMessage,
 } from './spawner';
 import { LEVEL_DEFAULT, type AgentNode, type NodeBudget, type TaskBrief } from './types';
 import type { ToolHandler } from '@/core/agent-worker';
 import { __resetCallGraphsForTests, getCallGraph } from './call-graph';
 import { createEscalateTool } from './escalate-tool';
+
+// ── composeChildMessage: date grounding ───────────────────────────────
+
+describe('composeChildMessage — date grounding', () => {
+  const brief: TaskBrief = {
+    originalUserRequest: 'Who played yesterday?',
+    topicPath: 'research/world-cup',
+    parentSummary: '',
+    taskBrief: 'Summarize recent matches.',
+    constraints: [],
+    inputArtifacts: [],
+    expectedOutput: { shape: 'summary', maxTokens: 800 },
+    forbidden: [],
+  };
+
+  test('injects today as the first block so the child is not date-blind', () => {
+    const msg = composeChildMessage(brief, {
+      availableToolNames: ['websearch__search'],
+      canSpawnChildren: false,
+    });
+    expect(msg.startsWith('CURRENT DATE/TIME: ')).toBe(true);
+    // Current year must be present so time-relative requests resolve to "now".
+    expect(msg).toContain(String(new Date().getFullYear()));
+    // Date and time are formatted from the same (local) clock — no UTC suffix
+    // that could disagree with the local date near midnight.
+    expect(msg).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+});
 
 // ── deriveChildBudget: budget cascade math ────────────────────────────
 
