@@ -5,19 +5,21 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { AVAILABLE_TOPICS, type Model } from '@/lib/types/models';
 
-type CliKind = 'claude' | 'gemini' | 'codex' | null;
+type CliKind = 'claude' | 'antigravity' | 'codex' | null;
 
 function detectCliKind(modelId: string): CliKind {
   const id = modelId.toLowerCase();
   if (id.includes('claude')) return 'claude';
-  if (id.includes('gemini')) return 'gemini';
+  // antigravity (agy) supersedes the gemini CLI but legacy cli/gemini rows still route here.
+  if (id.includes('antigravity') || id.includes('agy') || id.includes('gemini')) return 'antigravity';
   if (id.includes('codex')) return 'codex';
   return null;
 }
 
 function cliProviderForKind(kind: CliKind): 'anthropic' | 'gemini' | 'openai' | null {
   if (kind === 'claude') return 'anthropic';
-  if (kind === 'gemini') return 'gemini';
+  // Antigravity runs on the Gemini/Google backend — discover models via the gemini provider.
+  if (kind === 'antigravity') return 'gemini';
   if (kind === 'codex') return 'openai';
   return null;
 }
@@ -473,8 +475,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   {cliKind === 'claude' && <option value="bypassPermissions">Bypass Permissions</option>}
                   {cliKind === 'claude' && <option value="acceptEdits">Accept Edits</option>}
                   {cliKind === 'claude' && <option value="plan">Plan Only</option>}
-                  {cliKind === 'gemini' && <option value="yolo">YOLO</option>}
-                  {cliKind === 'gemini' && <option value="auto_edit">Auto Edit</option>}
+                  {cliKind === 'antigravity' && <option value="yolo">YOLO</option>}
+                  {cliKind === 'antigravity' && <option value="auto_edit">Auto Edit</option>}
                   {cliKind === 'codex' && <option value="auto">Auto</option>}
                   {!cliKind && (
                     <>
