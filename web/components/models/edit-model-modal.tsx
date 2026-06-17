@@ -3,6 +3,7 @@
 import { Terminal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { Portal } from '@/components/ui/portal';
 import { AVAILABLE_TOPICS, type Model } from '@/lib/types/models';
 
 type CliKind = 'claude' | 'gemini' | 'codex' | null;
@@ -184,6 +185,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="animate-enter bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
@@ -567,5 +569,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         </form>
       </div>
     </div>
+    </Portal>
   );
 }

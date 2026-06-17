@@ -3,6 +3,7 @@
 import { AlertCircle, CheckCircle, Cpu, Loader2, Pencil, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { Portal } from '@/components/ui/portal';
 import {
   AVAILABLE_TOPICS,
   type LiteLLMModel,
@@ -417,6 +418,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   const stepTitle = step === 'choose-source' ? 'Add Model' : step === 'litellm-pick' ? 'Select from LiteLLM' : 'Configure Model';
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="animate-enter bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/10">
@@ -1006,5 +1008,6 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         )}
       </div>
     </div>
+    </Portal>
   );
 }

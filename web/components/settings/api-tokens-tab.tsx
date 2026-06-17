@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Key, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { Portal } from '@/components/ui/portal';
 
 /**
  * Personal access tokens — Phase 2b multi-user.
@@ -259,6 +260,7 @@ export function ApiTokensTab() {
 
       {/* One-time plaintext modal — load-bearing UX. */}
       {issued && (
+        <Portal>
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="bg-surface-container rounded-2xl p-6 max-w-lg w-full space-y-4 border border-primary/20">
             <div className="flex items-start justify-between gap-3">
@@ -311,6 +313,7 @@ export function ApiTokensTab() {
             </div>
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );

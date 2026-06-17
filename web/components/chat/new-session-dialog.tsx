@@ -4,6 +4,7 @@ import { Check, ChevronDown, Code2, FolderOpen, GitBranch, Loader2, MessageSquar
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { Portal } from '@/components/ui/portal';
 
 export interface NewSessionOptions {
   devMode: boolean;
@@ -156,6 +157,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
   if (!open) return null;
 
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs">
       <div className="bg-surface-container rounded-2xl w-full max-w-md ring-1 ring-outline-variant/20 shadow-2xl">
         {/* Header */}
@@ -395,5 +397,6 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
         </div>
       </div>
     </div>
+    </Portal>
   );
 }

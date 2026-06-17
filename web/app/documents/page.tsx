@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/ui/markdown-renderer';
+import { Portal } from '@/components/ui/portal';
 import { api, getApiUrl } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -149,6 +150,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4"
@@ -241,6 +243,7 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -392,6 +395,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
   });
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto"
@@ -517,6 +521,7 @@ function DetailDialog({ documentId, onClose, onDelete, onCancel }: { documentId:
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

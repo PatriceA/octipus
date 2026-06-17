@@ -5,6 +5,7 @@ import { Bot, Loader2, Square, Trash2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
+import { Portal } from '@/components/ui/portal';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 
@@ -73,6 +74,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface-container rounded-xs shadow-xl border border-outline-variant/10 w-full max-w-lg mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
@@ -154,6 +156,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

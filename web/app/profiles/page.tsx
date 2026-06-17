@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { Portal } from '@/components/ui/portal';
 import { cn } from '@/lib/utils';
 
 // --- Types ---
@@ -289,6 +290,7 @@ function CreateProfileDialog({
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-xl w-full max-w-md mx-4"
@@ -368,6 +370,7 @@ function CreateProfileDialog({
         </form>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -447,17 +450,20 @@ function EditProfileDialog({
 
   if (isLoading) {
     return (
+      <Portal>
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
         <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-2xl mx-4 p-8 text-center" onClick={(e) => e.stopPropagation()}>
           <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-on-surface-variant" />
           <span className="text-on-surface-variant">Loading profile...</span>
         </div>
       </div>
+      </Portal>
     );
   }
 
   if (!profile) {
     return (
+      <Portal>
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
         <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-md mx-4 p-6 text-center" onClick={(e) => e.stopPropagation()}>
           <p className="text-on-surface-variant">Profile not found.</p>
@@ -466,12 +472,14 @@ function EditProfileDialog({
           </button>
         </div>
       </div>
+      </Portal>
     );
   }
 
   const CategoryIcon = CATEGORY_ICONS[profile.category] || User;
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto"
@@ -605,6 +613,7 @@ function EditProfileDialog({
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

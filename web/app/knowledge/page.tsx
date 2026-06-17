@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
+import { Portal } from '@/components/ui/portal';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -138,6 +139,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto"
@@ -261,6 +263,7 @@ function EntryDetailDialog({ entryId, onClose }: { entryId: string; onClose: () 
         )}
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -307,6 +310,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4"
@@ -430,6 +434,7 @@ function IndexFilesDialog({ onClose }: { onClose: () => void }) {
         </form>
       </div>
     </div>
+    </Portal>
   );
 }
 
