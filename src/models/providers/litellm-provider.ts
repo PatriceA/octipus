@@ -31,7 +31,12 @@ export class LiteLLMProvider implements ModelProvider {
     const startTime = Date.now();
 
     try {
-      const response = await fetch(`${config.litellm.proxyUrl}/health`, {
+      // Use /health/readiness, NOT /health: the latter sends a live test
+      // request to EVERY model in LiteLLM's model_list, which loads each
+      // model on its backend. For Ollama-backed entries that share one
+      // instance (one model at a time), a probe evicts the in-use model and
+      // forces a costly reload swap. Readiness checks the proxy is up only.
+      const response = await fetch(`${config.litellm.proxyUrl}/health/readiness`, {
         signal: AbortSignal.timeout(5000),
       });
 
