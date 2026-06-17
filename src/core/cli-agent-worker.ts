@@ -44,6 +44,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
    */
   private budgetExceeded = false;
   /**
+   * Why the subprocess was stopped, when it wasn't a plain user/parent abort.
+   * Set by the hard-timeout path so `run()` can surface "timed out" instead of
+   * the default "aborted by user" (which downstream maps to "action denied").
+   */
+  private abortReason: string | null = null;
+  /**
    * Cleanup for the parent AbortSignal listener. Symmetric with `AgentWorker`
    * (Swarm Phase 2): when an ancestor aborts, the cascade reaches the CLI
    * worker too — it triggers `stop()` which kills the subprocess.
@@ -136,7 +142,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           iterations: this.iteration,
           durationMs,
         }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cli-agent-worker'));
-        throw new Error('Agent was aborted by user');
+        throw new Error(this.abortReason ?? 'Agent was aborted by user');
       }
 
       this.context.status = 'completed';
@@ -452,15 +458,23 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       // Hard timeout: forcefully kill the CLI process if it exceeds the configured timeout.
       // The spawn `timeout` option is unreliable across platforms.
-      const hardTimeout = setTimeout(() => {
-        if (!this.aborted && this.process && !this.process.killed) {
-          agentLogger.warn(
-            { agentId: this.context.id, tool: toolConfig.name, timeoutMs: this.config.timeout },
-            'CLI agent exceeded hard timeout, force-killing',
-          );
-          this.stop();
-        }
-      }, this.config.timeout);
+      // A timeout <= 0 means "unlimited" — matching AgentWorker.withTimeout
+      // (agent-worker.ts). Without this guard a 0 config armed setTimeout(…, 0),
+      // which fires on the next tick and instantly kills the CLI subprocess with
+      // a misleading "aborted by user" error.
+      const hardTimeout =
+        this.config.timeout > 0
+          ? setTimeout(() => {
+              if (!this.aborted && this.process && !this.process.killed) {
+                agentLogger.warn(
+                  { agentId: this.context.id, tool: toolConfig.name, timeoutMs: this.config.timeout },
+                  'CLI agent exceeded hard timeout, force-killing',
+                );
+                this.abortReason = `CLI agent ${toolConfig.name} timed out after ${this.config.timeout}ms`;
+                this.stop();
+              }
+            }, this.config.timeout)
+          : undefined;
 
       let accumulatedText = '';
       let stderr = '';
