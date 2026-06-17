@@ -117,7 +117,7 @@ describe('LiteLLMProvider', () => {
 
   test('checkHealth returns healthy on 200', async () => {
     globalThis.fetch = (async (input: RequestInfo) => {
-      expect(String(input)).toBe(`${PROXY_URL}/health`);
+      expect(String(input)).toBe(`${PROXY_URL}/health/readiness`);
       return new Response('ok', { status: 200 });
     }) as typeof fetch;
 
