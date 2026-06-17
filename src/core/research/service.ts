@@ -11,6 +11,7 @@ import { coreLogger } from '@/utils/logger';
 import { fetchSourceText, type SearchHit, searxngSearch } from './gather';
 import { buildSource, type RawSection, resolveReport } from './synthesis';
 import { DEPTH_BUDGET, type ReportDoc, type ResearchDepth, type Source } from './types';
+import { formatLongDate } from '@/utils/date-context';
 
 export interface ResearchDeps {
   search: (query: string, max: number) => Promise<SearchHit[]>;
@@ -44,9 +45,7 @@ function parseJson<T>(raw: string): T | null {
 /** Human-readable date (e.g. "Monday, June 15, 2026") from an ISO timestamp, used to ground the model in "today". */
 function formatToday(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  return Number.isNaN(d.getTime()) ? iso : formatLongDate(d);
 }
 
 /** Plan sub-queries for the question (falls back to the question itself). */

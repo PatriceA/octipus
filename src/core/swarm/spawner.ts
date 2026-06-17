@@ -33,6 +33,7 @@ import {
   type TaskBrief,
 } from './types';
 import type { AgentWorker } from '@/core/agent-worker';
+import { formatDateTimeContext } from '@/utils/date-context';
 
 /** Re-exported (moved into `call-graph.ts` in Phase 2). */
 export const taskFingerprint = _taskFingerprint;
@@ -1092,20 +1093,9 @@ export function composeChildMessage(
   // training cutoff and reason about a stale date (e.g. assuming an event
   // hasn't happened yet). The orchestrator grounds its own system prompt
   // (worker-spawner.ts / direct-response.ts), but swarm children spawned here
-  // were not — this closes that gap using the same single-timezone format
-  // (all fields local + an explicit TZ label, never a UTC/local mix).
-  const now = new Date();
+  // were not — this closes that gap using the shared single-clock format.
   parts.push(
-    `CURRENT DATE/TIME: ${now.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    })} ${now.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    })} (${Intl.DateTimeFormat().resolvedOptions().timeZone}). Treat any ` +
+    `CURRENT DATE/TIME: ${formatDateTimeContext(new Date())}. Treat any ` +
       `time-relative phrasing ("today", "yesterday", "this week", "latest", ` +
       `"current") as relative to this — do not assume events are in the future ` +
       `based on your training data.`,
