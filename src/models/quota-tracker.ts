@@ -117,7 +117,7 @@ export class QuotaTracker {
 
   /** Get status for all known CLI providers */
   async getAllStatuses(): Promise<QuotaStatus[]> {
-    const providers = ['claude-code', 'antigravity', 'codex-cli'];
+    const providers = ['claude-code', 'antigravity', 'codex-cli', 'mistral-vibe'];
     return Promise.all(providers.map(p => this.getStatus(p)));
   }
 }
