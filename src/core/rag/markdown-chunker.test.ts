@@ -2,51 +2,60 @@ import { describe, test, expect } from 'bun:test';
 import { chunkMarkdown, looksLikeMarkdown } from './markdown-chunker';
 
 describe('chunkMarkdown', () => {
-  test('emits one chunk per heading + body, threads parent links', () => {
+  test('glues each heading onto its own body, threads parent links', () => {
     const md = `# Title\n\nIntro paragraph.\n\n## Section A\n\nBody of A.\n\n## Section B\n\nBody of B.\n`;
     const chunks = chunkMarkdown(md);
-    // 3 headings + 3 body chunks = 6
-    expect(chunks.length).toBe(6);
+    // 3 sections, each heading folded into its body = 3 chunks (no orphans).
+    expect(chunks.length).toBe(3);
 
-    // Title at index 0 — no parent.
+    // Title section — heading + its intro body, no parent.
     expect(chunks[0].headingLevel).toBe(1);
     expect(chunks[0].sectionPath).toEqual(['Title']);
     expect(chunks[0].parentIndex).toBeNull();
+    expect(chunks[0].content).toBe('# Title\n\nIntro paragraph.');
 
-    // Intro body under Title.
-    expect(chunks[1].headingLevel).toBe(0);
+    // Section A — heading + body, under Title.
+    expect(chunks[1].headingLevel).toBe(2);
+    expect(chunks[1].sectionPath).toEqual(['Title', 'Section A']);
     expect(chunks[1].parentIndex).toBe(0);
-    expect(chunks[1].sectionPath).toEqual(['Title']);
+    expect(chunks[1].content).toBe('## Section A\n\nBody of A.');
 
-    // Section A heading under Title.
+    // Section B — sibling to A, NOT child of A.
     expect(chunks[2].headingLevel).toBe(2);
-    expect(chunks[2].sectionPath).toEqual(['Title', 'Section A']);
+    expect(chunks[2].sectionPath).toEqual(['Title', 'Section B']);
     expect(chunks[2].parentIndex).toBe(0);
-
-    // Body of A under Section A.
-    expect(chunks[3].headingLevel).toBe(0);
-    expect(chunks[3].parentIndex).toBe(2);
-
-    // Section B heading under Title (sibling to A, NOT child of A).
-    expect(chunks[4].headingLevel).toBe(2);
-    expect(chunks[4].sectionPath).toEqual(['Title', 'Section B']);
-    expect(chunks[4].parentIndex).toBe(0);
   });
 
-  test('deep nesting: H1 → H2 → H3 emits a section path of length 3', () => {
+  test('heading-only sections (no direct body) emit no chunk', () => {
+    // A and B have no body of their own — only C carries text.
     const md = `# A\n\n## B\n\n### C\n\nbody`;
     const chunks = chunkMarkdown(md);
-    const body = chunks[chunks.length - 1];
-    expect(body.headingLevel).toBe(0);
-    expect(body.sectionPath).toEqual(['A', 'B', 'C']);
+    expect(chunks.length).toBe(1);
+    const only = chunks[0];
+    expect(only.headingLevel).toBe(3);
+    expect(only.sectionPath).toEqual(['A', 'B', 'C']);
+    // Title text of the empty ancestors survives via sectionPath + content.
+    expect(only.content).toBe('### C\n\nbody');
+  });
+
+  test('heading-only intermediate section: leaf parents to nearest emitted ancestor', () => {
+    // B has no body of its own, so C must skip past it to A (index 0).
+    const md = `# A\n\nbody-a\n\n## B\n\n### C\n\nbody-c`;
+    const chunks = chunkMarkdown(md);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0].sectionPath).toEqual(['A']);
+    expect(chunks[0].parentIndex).toBeNull();
+    expect(chunks[1].sectionPath).toEqual(['A', 'B', 'C']);
+    expect(chunks[1].parentIndex).toBe(0);
   });
 
   test('sibling re-entry: H1 → H2 → H1 pops back to root for the new H1', () => {
     const md = `# A\n\n## A.1\n\n# B\n\nbody-under-B`;
     const chunks = chunkMarkdown(md);
-    const bUnder = chunks.find((c) => c.content === 'body-under-B');
+    const bUnder = chunks.find((c) => c.content.includes('body-under-B'));
     expect(bUnder).toBeDefined();
     expect(bUnder!.sectionPath).toEqual(['B']);
+    expect(bUnder!.content).toBe('# B\n\nbody-under-B');
   });
 
   test('does not split inside a fenced code block', () => {
