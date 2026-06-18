@@ -164,17 +164,35 @@ regen_mcp_config() {
   }
 }
 MCPEOF
-  if command -v gemini &>/dev/null; then
-    # Re-register so the gemini CLI picks up the rotated key. Best
-    # effort — the CLI is optional.
-    gemini mcp remove octipus -s user >/dev/null 2>&1 || true
-    gemini mcp add octipus node "$_mcp_entry" \
-      -s user --trust \
-      -e "OCTIPUS_URL=http://127.0.0.1:${API_PORT}" \
-      ${_mcp_key:+-e "OCTIPUS_API_KEY=${_mcp_key}"} >/dev/null 2>&1 || true
-  fi
-
+  sync_gemini_mcp_config "$_mcp_entry" "$_mcp_key"
   sync_codex_mcp_config "$_mcp_entry" "$_mcp_key"
+}
+
+# Register the Octipus MCP server for the Antigravity (agy) / Gemini CLI family,
+# which read ~/.gemini/settings.json. The old `gemini mcp add` command is gone
+# (agy replaced the gemini CLI and exposes no `mcp` subcommand), so we merge the
+# JSON in place — preserving the user's other settings — and refresh the key on
+# every restart. Best effort: only runs if the CLI family is present.
+sync_gemini_mcp_config() {
+  local _entry="$1"
+  local _key="$2"
+  command -v agy &>/dev/null || command -v gemini &>/dev/null || [[ -d "$HOME/.gemini" ]] || return 0
+  mkdir -p "$HOME/.gemini"
+  OCTI_MCP_ENTRY="$_entry" \
+  OCTI_MCP_URL="http://127.0.0.1:${API_PORT}" \
+  OCTI_MCP_KEY="$_key" \
+  OCTI_MCP_SETTINGS="$HOME/.gemini/settings.json" \
+    node -e '
+      const fs = require("fs");
+      const p = process.env.OCTI_MCP_SETTINGS;
+      let cfg = {};
+      try { cfg = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+      cfg.mcpServers = cfg.mcpServers || {};
+      const env = { OCTIPUS_URL: process.env.OCTI_MCP_URL };
+      if (process.env.OCTI_MCP_KEY) env.OCTIPUS_API_KEY = process.env.OCTI_MCP_KEY;
+      cfg.mcpServers.octipus = { command: "node", args: [process.env.OCTI_MCP_ENTRY], env, trust: true };
+      fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+    ' >/dev/null 2>&1 || true
 }
 
 # Sync the Octipus MCP entry in Codex's config (~/.codex/config.toml).

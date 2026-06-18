@@ -36,11 +36,32 @@ function resolveOctipusMcpLaunch(): OctipusMcpLaunch {
 
   const apiPort = process.env.API_PORT || process.env.PORT || '3005';
   // Only a scoped API token is accepted by the server now (the MASTER_KEY
-  // fallback was removed with single-user mode). bin/octi writes the MCP
-  // bootstrap token into OCTIPUS_API_KEY after the server boots.
-  const apiKey = process.env.OCTIPUS_API_KEY || '';
+  // fallback was removed with single-user mode). The backend process does NOT
+  // carry OCTIPUS_API_KEY in its env (bin/octi only stamps it into the static
+  // CLI config files), so for octipus-spawned CLI subagents we fall back to the
+  // bootstrap token the server mints on boot (~/.octipus/mcp-token). Without
+  // this, the ephemeral MCP config is keyless and every tool call hits the REST
+  // API anonymously → 401.
+  const apiKey = process.env.OCTIPUS_API_KEY || readMcpBootstrapToken();
 
   return { runtime, entry, apiUrl: `http://127.0.0.1:${apiPort}`, apiKey };
+}
+
+/**
+ * Read the MCP bootstrap api token the server mints at boot (mode-600 file at
+ * ~/.octipus/mcp-token). Returns '' if absent/unreadable — callers then emit a
+ * keyless config, same as before.
+ */
+function readMcpBootstrapToken(): string {
+  try {
+    const tokenPath = join(homedir(), '.octipus', 'mcp-token');
+    if (!existsSync(tokenPath)) return '';
+    const raw = readFileSync(tokenPath, 'utf-8').trim();
+    return raw || '';
+  } catch (err) {
+    coreLogger.warn({ err }, 'Failed to read MCP bootstrap token for CLI subagent — MCP calls may be unauthenticated');
+    return '';
+  }
 }
 
 /**
