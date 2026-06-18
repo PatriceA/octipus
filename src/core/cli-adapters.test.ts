@@ -87,6 +87,14 @@ describe('CLIArgumentBuilder model override', () => {
     const idx = out.args.findIndex(a => a.startsWith('model='));
     expect(out.args[idx]).toBe('model="o3"');
   });
+
+  it('Codex CLI: no -c model override when neither env nor settings set it', () => {
+    delete process.env.CODEX_MODEL;
+    const out = builder.build('Codex CLI', 'hi', {}, []);
+    // No model forced from Octipus — codex resolves it from ~/.codex/config.toml.
+    expect(out.args.some(a => a.startsWith('model='))).toBe(false);
+    expect(out.args).not.toContain('-c');
+  });
 });
 
 describe('CLIArgumentBuilder Mistral Vibe args', () => {

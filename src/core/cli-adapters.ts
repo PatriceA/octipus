@@ -388,11 +388,13 @@ export class CLIArgumentBuilder {
     // the argv text contains newlines. Always pipe via stdin in that case.
     // Short single-line prompts may still go as a positional.
     //
-    // Model override via `-c model="<name>"`: bypasses ~/.codex/config.toml so
-    // a host default like `gpt-5.2-codex` (blocked on ChatGPT-account auth)
-    // cannot silently exit 1 for every codex-routed swarm child. Default to
-    // gpt-5.4 (the successor per codex migration notice) unless overridden.
-    const modelOverride = process.env.CODEX_MODEL || settings?.model || 'gpt-5.4';
+    // Model selection is the user's codex choice. Only inject `-c
+    // model="<name>"` when an override is set explicitly (CODEX_MODEL env or
+    // the model row); otherwise let codex resolve the model from its own
+    // ~/.codex/config.toml. Do NOT hardcode a default here — a stale guess
+    // (e.g. a model the user's plan can't use) makes every codex spawn exit 1
+    // server-side, which is exactly the failure this used to cause.
+    const modelOverride = process.env.CODEX_MODEL || settings?.model;
     // Sandbox / approval policy: codex `exec` defaults to `--sandbox
     // read-only`, so spawned agents (e.g. pipeline architecture stages)
     // cannot write the ADRs / docs they produce. Mirror the write-enabled
@@ -412,8 +414,8 @@ export class CLIArgumentBuilder {
       '--json',
       '--ephemeral',
       '--sandbox', codexPermMode,
-      '-c', `model="${modelOverride}"`,
     ];
+    if (modelOverride) baseArgs.push('-c', `model="${modelOverride}"`);
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
 
     if (systemPrompt) {
