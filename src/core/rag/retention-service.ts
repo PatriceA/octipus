@@ -142,9 +142,19 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
   // added an FK with ON DELETE CASCADE on `doc_id`; this sweep
   // catches rows that pre-date the FK (`doc_id` NULL, source_id
   // pointing at a deleted document).
+  //
+  // Guard: only rows whose `source_id` is a UUID actually reference a
+  // `documents.id`. The product-docs corpus (source='octipus-docs') and
+  // any other path-keyed `purpose='document'` rows use the FILE PATH as
+  // `source_id`, not a documents.id — without the UUID filter this sweep
+  // deletes the ENTIRE shipped manual on every boot, and (because the
+  // auto-index runs fire-and-forget at the same time) races the re-index,
+  // yanking just-inserted parent chunks out from under their children and
+  // raising `embeddings_parent_chunk_id_fkey` violations.
   const orphanedRes = await db.execute(sql`
     SELECT e.id FROM embeddings e
     WHERE e.purpose = 'document'
+      AND e.source_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       AND NOT EXISTS (SELECT 1 FROM documents d WHERE CAST(d.id AS text) = e.source_id)
   `);
   const orphaned = unwrapRows<{ id: string }>(orphanedRes);
@@ -169,11 +179,16 @@ export async function runCleanup(options: CleanupOptions = {}): Promise<CleanupR
     await deleteIdsInBatches(stale.map((r) => r.id));
   }
 
-  // 3. Short / low-quality.
+  // 3. Short / low-quality. Excludes the product-docs corpus
+  // (source='octipus-docs'): it is owned by the idempotent boot indexer,
+  // not retention — sweeping a short heading+body chunk here would race
+  // the concurrent re-index and orphan its children (see the UUID-guard
+  // note on the orphan sweep above).
   const shortRes = await db.execute(sql`
     SELECT id FROM embeddings
     WHERE length(content) < ${minContentLength}
       AND content NOT LIKE '[%'
+      AND (metadata->>'source') IS DISTINCT FROM 'octipus-docs'
   `);
   const short = unwrapRows<{ id: string }>(shortRes);
   results.shortEntries = short.length;
