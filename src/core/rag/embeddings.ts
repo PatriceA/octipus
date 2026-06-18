@@ -714,6 +714,22 @@ export class EmbeddingService {
     const client = getLiteLLMClient();
     const db = getDb();
 
+    // Abstracts are opt-in: resolve the dedicated `summarization` topic
+    // ONCE up front. Unbound ⇒ skip every abstract (no default fallback)
+    // so a high-volume doc import never silently fans out hundreds of
+    // summary calls against whatever the default model happens to be —
+    // the user picks the model (cheap/local/CLI) by binding the topic.
+    const { getModelRegistry } = await import('@/models/model-registry');
+    const summarizer = await getModelRegistry().getModelForTopic('summarization');
+    if (!summarizer) {
+      coreLogger.debug(
+        { count: ids.length },
+        'Abstract generation skipped — no model bound to topic "summarization" (opt-in; bind one in the Models page)',
+      );
+      return;
+    }
+    const modelName = summarizer.modelId;
+
     for (let i = 0; i < ids.length; i++) {
       try {
         // Skip very short content — it's its own abstract
@@ -724,10 +740,6 @@ export class EmbeddingService {
           continue;
         }
 
-        const { getModelRegistry } = await import('@/models/model-registry');
-        const defaultModel = await getModelRegistry().getDefaultModel();
-        if (!defaultModel) continue; // no model configured — skip abstract
-        const modelName = defaultModel.modelId;
         const now = new Date();
         const response = await client.complete({
           model: modelName,

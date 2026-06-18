@@ -105,6 +105,7 @@ export const AVAILABLE_TOPICS = [
   { value: 'voice', label: 'Voice', description: 'Phone call conversations — use a fast model for low latency' },
   { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
   { value: 'memory_extraction', label: 'Memory Extraction', description: 'Long-term memory extractor + judge. Runs per turn — bind a cheap, fast model. Unbound = memory tier stays off.' },
+  { value: 'summarization', label: 'Summarization', description: 'L0 abstracts for knowledge-base chunks (docs/files). Runs per chunk on import — bind a cheap/local model. Unbound = no abstracts generated.' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */

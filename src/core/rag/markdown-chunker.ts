@@ -1,9 +1,22 @@
 /**
  * Memory-redesign Phase C — structural chunker for Markdown.
  *
- * Walks a Markdown document, emits one chunk per heading and one
- * chunk per body block, and threads the section path so the embedder
- * can write `parent_chunk_id` / `section_path` / `heading_level`.
+ * Walks a Markdown document and emits one chunk per *section* — the
+ * heading line glued to its own body text — threading the section path
+ * so the embedder can write `parent_chunk_id` / `section_path` /
+ * `heading_level`.
+ *
+ * Why heading+body, not heading-alone (2026-06-18)
+ * ────────────────────────────────────────────────
+ * The original chunker emitted the heading as its own chunk separate
+ * from the body. On real docs that produced a flood of useless rows
+ * whose entire content was a single header line ("### Schedule Types")
+ * — they embed to noise, clutter the KB UI, and each one still paid for
+ * an L0 abstract call. We now fold the heading into the body chunk it
+ * introduces. A heading with NO direct body (only sub-headings, or a
+ * trailing leaf with nothing under it) emits NO chunk at all — its
+ * title still reaches retrieval via the `sectionPath` of its
+ * descendants, so nothing searchable is lost.
  *
  * Why a chunker module (not inline in EmbeddingService)
  * ─────────────────────────────────────────────────────
@@ -16,15 +29,16 @@
  * Output contract
  * ───────────────
  *   StructuralChunk = {
- *     content:        string  — the chunk text
- *     headingLevel:   number  — 0=body, 1=H1, 2=H2, …
+ *     content:        string  — the chunk text (heading line + body for
+ *                               a section; bare prose for preamble /
+ *                               soft-split overflow pieces)
+ *     headingLevel:   number  — 0=body/overflow, 1=H1, 2=H2, …
  *     sectionPath:    string[] — ancestor headings, root → self
- *                                (self included for heading chunks;
- *                                self EXCLUDED for body chunks)
+ *                                (self INCLUDED for a section chunk)
  *     parentIndex:    number | null — index into the same array
- *                                     pointing at the nearest
- *                                     enclosing heading chunk, or
- *                                     null for a top-level chunk
+ *                                     pointing at the nearest enclosing
+ *                                     emitted section, or null for a
+ *                                     top-level chunk
  *   }
  *
  * Callers materialise the chunks into the embeddings table in array
@@ -56,31 +70,65 @@ const SOFT_MAX_CHARS = 1000;
 
 export function chunkMarkdown(markdown: string): StructuralChunk[] {
   const chunks: StructuralChunk[] = [];
-  // Stack of (headingChunkIndex, level) for the open heading scope.
-  // We pop entries whose level >= incoming heading level to find the
-  // new parent.
-  const stack: Array<{ index: number; level: number; path: string[] }> = [];
+  // Open heading scope. `emittedIndex` is the chunk index this section
+  // produced, or null while it has no body yet (so descendants skip it
+  // when hunting for a real parent). We pop entries whose level >=
+  // incoming heading level to find the new parent.
+  const stack: Array<{
+    level: number;
+    title: string;
+    path: string[];
+    emittedIndex: number | null;
+  }> = [];
 
   const lines = markdown.split(/\r?\n/);
   let i = 0;
   let bodyBuf = '';
 
-  const flushBody = () => {
+  // Finalise the body accumulated for the current top-of-stack section
+  // (or the pre-heading preamble when the stack is empty). A section
+  // with no body emits nothing — its title still rides along on its
+  // descendants' sectionPath.
+  const flushSection = () => {
     const trimmed = bodyBuf.trim();
     bodyBuf = '';
-    if (!trimmed) return;
-    const parent = stack[stack.length - 1];
-    const parentPath = parent ? parent.path : [];
-    // Soft-split the body if it busts the chunk size. Same paragraph
-    // rule as the flat chunker so long bodies don't become one mega
-    // embedding.
-    for (const piece of softSplit(trimmed)) {
-      chunks.push({
-        content: piece,
-        headingLevel: 0,
-        sectionPath: parentPath,
-        parentIndex: parent ? parent.index : null,
-      });
+    const cur = stack[stack.length - 1];
+
+    if (!cur) {
+      // Preamble: prose before the first heading. No heading to glue on.
+      if (!trimmed) return;
+      for (const piece of softSplit(trimmed)) {
+        chunks.push({ content: piece, headingLevel: 0, sectionPath: [], parentIndex: null });
+      }
+      return;
+    }
+
+    if (!trimmed) return; // heading-only section — drop it (no orphan header chunk)
+
+    // Nearest ancestor that actually emitted a chunk becomes the parent.
+    let parentIndex: number | null = null;
+    for (let k = stack.length - 2; k >= 0; k--) {
+      if (stack[k].emittedIndex !== null) {
+        parentIndex = stack[k].emittedIndex;
+        break;
+      }
+    }
+
+    // Soft-split if the body busts the chunk size. The heading line is
+    // glued to the FIRST piece (the section node); overflow pieces nest
+    // under it as plain body so retrieval still finds the heading.
+    const headingLine = `${'#'.repeat(cur.level)} ${cur.title}`;
+    const pieces = softSplit(trimmed);
+    const firstIndex = chunks.length;
+    chunks.push({
+      content: `${headingLine}\n\n${pieces[0]}`,
+      headingLevel: cur.level,
+      sectionPath: cur.path,
+      parentIndex,
+    });
+    cur.emittedIndex = firstIndex;
+    for (let p = 1; p < pieces.length; p++) {
+      chunks.push({ content: pieces[p], headingLevel: 0, sectionPath: cur.path, parentIndex: firstIndex });
     }
   };
 
@@ -106,7 +154,7 @@ export function chunkMarkdown(markdown: string): StructuralChunk[] {
 
     const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (heading) {
-      flushBody();
+      flushSection();
       const level = heading[1].length;
       const title = heading[2].trim();
       // Pop the heading stack until we find a strictly-higher (lower
@@ -116,14 +164,7 @@ export function chunkMarkdown(markdown: string): StructuralChunk[] {
       }
       const parent = stack[stack.length - 1];
       const newPath = [...(parent ? parent.path : []), title];
-      const idx = chunks.length;
-      chunks.push({
-        content: `${'#'.repeat(level)} ${title}`,
-        headingLevel: level,
-        sectionPath: newPath,
-        parentIndex: parent ? parent.index : null,
-      });
-      stack.push({ index: idx, level, path: newPath });
+      stack.push({ level, title, path: newPath, emittedIndex: null });
       i++;
       continue;
     }
@@ -131,7 +172,7 @@ export function chunkMarkdown(markdown: string): StructuralChunk[] {
     bodyBuf += (bodyBuf ? '\n' : '') + line;
     i++;
   }
-  flushBody();
+  flushSection();
 
   return chunks;
 }
