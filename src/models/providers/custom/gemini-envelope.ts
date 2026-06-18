@@ -78,7 +78,36 @@ export function buildGeminiContents(messages: AgentMessage[]): Array<Record<stri
     });
   }
 
-  return contents;
+  return mergeConsecutiveSameRole(contents);
+}
+
+/**
+ * Fold consecutive same-role `contents` entries into one, concatenating their
+ * `parts`. Gemini rejects a request with 400 INVALID_ARGUMENT ("function call
+ * turn comes immediately after a user turn or after a function response turn")
+ * when a `model` turn carrying a `functionCall` follows another `model` turn —
+ * which happens whenever the agent loop emits two assistant turns back to back
+ * (e.g. an empty/text-only turn then a tool-call turn, or a nudge path). Unlike
+ * OpenAI, Gemini has no tolerance for adjacent same-role turns, so we coalesce
+ * them here. This also correctly merges back-to-back tool results into a single
+ * user turn with multiple `functionResponse` parts.
+ */
+function mergeConsecutiveSameRole(
+  contents: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const merged: Array<Record<string, unknown>> = [];
+  for (const entry of contents) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.role === entry.role) {
+      const prevParts = Array.isArray(prev.parts) ? prev.parts : [];
+      const nextParts = Array.isArray(entry.parts) ? entry.parts : [];
+      prev.parts = [...prevParts, ...nextParts];
+      continue;
+    }
+    // Shallow-copy so we never mutate the caller's raw content objects.
+    merged.push({ ...entry });
+  }
+  return merged;
 }
 
 /** Extract system instruction (concatenated content from system messages, if any) */
