@@ -52,6 +52,46 @@ describe('buildGeminiContents', () => {
       parts: [{ functionCall: { name: 'get_weather', args: { city: 'Berlin' } } }],
     }]);
   });
+
+  it('merges consecutive assistant turns so a functionCall follows the user turn', () => {
+    // Two back-to-back assistant turns (text-only then tool-call) would emit two
+    // adjacent `model` turns — Gemini 400s ("function call turn comes immediately
+    // after a user turn…"). They must collapse into one model turn after the user.
+    const out = buildGeminiContents([
+      userMsg('weather?'),
+      asstMsg('let me check'),
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'get_weather', arguments: { city: 'Berlin' } }],
+        timestamp: ts,
+      },
+    ]);
+    expect(out).toEqual([
+      { role: 'user', parts: [{ text: 'weather?' }] },
+      {
+        role: 'model',
+        parts: [
+          { text: 'let me check' },
+          { functionCall: { name: 'get_weather', args: { city: 'Berlin' } } },
+        ],
+      },
+    ]);
+  });
+
+  it('merges consecutive tool results into one user turn', () => {
+    const out = buildGeminiContents([
+      toolMsg('get_weather', '{"temp":12}', 'c1'),
+      toolMsg('get_time', '{"hour":9}', 'c2'),
+    ]);
+    expect(out).toEqual([{
+      role: 'user',
+      parts: [
+        { functionResponse: { name: 'get_weather', response: { temp: 12 } } },
+        { functionResponse: { name: 'get_time', response: { hour: 9 } } },
+      ],
+    }]);
+  });
 });
 
 describe('extractSystemInstruction', () => {

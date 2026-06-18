@@ -309,7 +309,13 @@ const PATTERNS: Array<{
     recovery: RecoveryAction.FALLBACK_PROVIDER,
   },
   {
-    test: (m) =>
+    // Proxies (LiteLLM, gateways) prefix *every* upstream failure — including
+    // deterministic 4xx client errors — with text like "Upstream error: …".
+    // Don't let that wording mark a 4xx as a retryable provider outage; a
+    // present 4xx status means the request itself is bad and must not retry.
+    // Only treat as PROVIDER_DOWN when status is absent or 5xx.
+    test: (m, _c, s) =>
+      !(typeof s === 'number' && s >= 400 && s < 500) &&
       /service.*(unavailable|down)|upstream.*(error|failure)|bad.gateway|gateway.timeout|overloaded|provider.*unavailable|internal.server.error/i.test(
         m,
       ),

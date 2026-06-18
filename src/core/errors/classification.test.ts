@@ -155,6 +155,30 @@ describe('classifyError — provider down / 5xx', () => {
     const err = classifyError(new Error('Anthropic API is overloaded, try later'));
     expect(err.reason).toBe(FailoverReason.PROVIDER_DOWN);
   });
+
+  test('proxy-wrapped 4xx ("Upstream error") stays ABORT_FATAL, not failed over', () => {
+    // LiteLLM/gateways prefix even deterministic 4xx with "Upstream error: …".
+    // The 400 status must win over that wording so we don't treat a bad request
+    // as a provider outage and pointlessly fail over to another provider.
+    const err = classifyError({
+      status: 400,
+      message: 'Upstream error: invalid request parameter "foo"',
+    });
+    expect(err.reason).toBe(FailoverReason.ABORT_FATAL);
+    expect(err.recovery).toBe(RecoveryAction.ABORT);
+    expect(err.isRetryable).toBe(false);
+  });
+
+  test('5xx "upstream error" still PROVIDER_DOWN (failover)', () => {
+    const err = classifyError({ status: 502, message: 'Upstream error: bad gateway' });
+    expect(err.reason).toBe(FailoverReason.PROVIDER_DOWN);
+    expect(err.recovery).toBe(RecoveryAction.FALLBACK_PROVIDER);
+  });
+
+  test('"upstream error" with no status still PROVIDER_DOWN', () => {
+    const err = classifyError(new Error('upstream error: provider unavailable'));
+    expect(err.reason).toBe(FailoverReason.PROVIDER_DOWN);
+  });
 });
 
 describe('classifyError — tool calls', () => {
