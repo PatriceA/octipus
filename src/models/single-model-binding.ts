@@ -16,51 +16,19 @@
  * and/or vision model separately).
  */
 
-/**
- * Every text topic a single general chat model can reasonably handle:
- *   - the 16 worker role topics (1:1 with AgentRole, minus `orchestrator`,
- *     which routes via the default model, not a topic binding),
- *   - orchestrator-direct / capability text topics (`chat`, `simple`, `local`,
- *     `voice`),
- *   - the automated background text tasks (`memory_extraction`,
- *     `knowledge_review`, `evaluation`).
- *
- * Kept as a flat literal (not derived from ROLE_CONFIGS) so this module stays
- * dependency-light enough to import from the DB bootstrap layer. A drift guard
- * in the test cross-checks the role subset against the live role registry.
- */
-export const SINGLE_MODEL_CHAT_TOPICS = [
-  // worker role topics (topic === role)
-  'general',
-  'coding',
-  'research',
-  'review',
-  'qa',
-  'communication',
-  'design',
-  'devops',
-  'security',
-  'data',
-  'ai',
-  'finance',
-  'automation',
-  'pm',
-  'writing',
-  'architecture',
-  // orchestrator-direct / capability text topics
-  'chat',
-  'simple',
-  'local',
-  'voice',
-  // automated background text tasks
-  'memory_extraction',
-  'knowledge_review',
-  'evaluation',
-  'summarization',
-  'tool_translation',
-] as const;
+import { TEXT_TOPIC_VALUES } from './topics';
 
-export type SingleModelChatTopic = (typeof SINGLE_MODEL_CHAT_TOPICS)[number];
+/**
+ * Every text topic a single general chat model can reasonably handle — the
+ * worker role topics, orchestrator-direct text topics, and automated background
+ * text tasks. Derived from the canonical topic registry (`TEXT_TOPIC_VALUES`)
+ * so there is ONE source of truth; the vision/ocr/embedding model classes are
+ * excluded there. A drift guard in the test cross-checks the role subset
+ * against the live role registry.
+ */
+export const SINGLE_MODEL_CHAT_TOPICS = TEXT_TOPIC_VALUES;
+
+export type SingleModelChatTopic = string;
 
 /**
  * Build the `topics` array + `topicRoles` map that bind a model as `primary` for

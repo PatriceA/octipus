@@ -12,6 +12,7 @@ import { wireMessageHandler } from '@/core/gateway/message-handler';
 import { seedExperts } from '@/db/seed-experts';
 import { seedPresetTemplates } from '@/db/seed-presets';
 import { loadRolesFromDb, seedRoles } from '@/db/seed-roles';
+import { loadTopicConfigs } from '@/models/topic-config';
 import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
 import { seedSkills } from '@/db/seed-skills';
 import { getHookManager } from '@/hooks/manager';
@@ -60,6 +61,7 @@ async function main() {
     await seedStep('skill-topic-assignments', seedSkillTopicAssignments);
     await seedStep('roles', seedRoles);
     await loadRolesFromDb();
+    await loadTopicConfigs();
     logger.info('System data seeded');
 
     // One-time migration: move .env values into DB settings + vault

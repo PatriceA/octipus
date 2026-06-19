@@ -58,6 +58,7 @@ import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
 import { capabilitiesRoutes } from './routes/capabilities';
 import { roleRoutes } from './routes/roles';
+import { topicRoutes } from './routes/topics';
 import { settingsRoutes } from './routes/settings';
 import { skillProposalRoutes } from './routes/skill-proposals';
 import { skillTopicAssignmentRoutes } from './routes/skill-topic-assignments';
@@ -320,6 +321,7 @@ export function createServer() {
         .use(mcpRoutes)
         .use(toolRoutes)
         .use(roleRoutes)
+        .use(topicRoutes)
         .use(voiceRoutes)
         .use(notificationRoutes)
         .use(workspaceRoutes)
