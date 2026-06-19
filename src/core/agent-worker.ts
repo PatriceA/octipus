@@ -10,6 +10,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getCostTracker } from '@/models/cost-tracker';
 import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
@@ -1282,17 +1283,22 @@ export class AgentWorker extends BaseAgentWorker {
       } catch (err) { coreLogger.error({ err }, 'silent failure in agent-worker'); }
     }
 
-    const completionOpts = {
-      model: litellmModel,
-      messages: this.messages,
-      tools: tools.length > 0 ? tools : undefined,
-      temperature: model.defaultTemperature || 0.7,
-      maxTokens: model.defaultMaxTokens || model.maxTokens || 4096,
-      extraBody,
-      endpoint: model.endpoint || undefined,
-      apiKey,
-      userId: this.context.userId,
-    };
+    // Per-topic overrides (W10) take precedence over the model's own defaults
+    // when set on the Topics page — applied here so they reach the LLM call.
+    const completionOpts = applyTopicParamOverrides(
+      {
+        model: litellmModel,
+        messages: this.messages,
+        tools: tools.length > 0 ? tools : undefined,
+        temperature: model.defaultTemperature || 0.7,
+        maxTokens: model.defaultMaxTokens || model.maxTokens || 4096,
+        extraBody,
+        endpoint: model.endpoint || undefined,
+        apiKey,
+        userId: this.context.userId,
+      },
+      getTopicConfig(this.context.topic),
+    );
 
     // Route to the correct provider based on DB config.
     // Direct providers (openrouter, openai, anthropic, etc.) bypass LiteLLM.
