@@ -48,6 +48,70 @@ export function calculateTotalTokens(messages: AgentMessage[]): number {
   }, 0);
 }
 
+/** Default soft cap on full tool-result messages kept in context. */
+export const DEFAULT_TOOL_OUTPUT_SOFT_CAP = 10;
+
+/** Max chars retained per truncated tool output (mirrors the reactive-overflow idiom). */
+const TOOL_OUTPUT_TRUNCATE_CHARS = 2000;
+
+/** Marker appended to a truncated tool output — also the idempotency guard. */
+const TOOL_OUTPUT_TRUNCATED_MARKER = '\n\n[... older tool output truncated to keep context small]';
+
+/**
+ * Marker the reactive (ContextWindowExceeded) path uses when it truncates tool
+ * content. Exported so the agent loop and the idempotency guard share one
+ * source of truth — a tool output truncated by either path is recognized as
+ * already-truncated and never re-folded.
+ */
+export const CONTEXT_OVERFLOW_TRUNCATED_MARKER = '\n\n[... truncated due to context window limit]';
+
+/**
+ * Tool-output-targeted compaction: once there are more than `softCap` tool-result
+ * messages in context, truncate the OLDEST ones (keeping the most recent `softCap`
+ * full) to a fixed char budget. Cheaper and far less destructive than whole-history
+ * summarization, and it triggers earlier so context-overflow errors are rarer.
+ *
+ * - Only `role === 'tool'` messages are touched; assistant/user/system turns are
+ *   left intact, so the model keeps its reasoning and the recent tool outputs full.
+ * - Idempotent: an already-truncated output (ends with the marker) is skipped, so
+ *   re-running each iteration does NOT double-fold or re-count.
+ * - Returns a new array only when something changed; otherwise the original is
+ *   returned unchanged with `truncated: 0`.
+ */
+export function truncateOldestToolOutputs(
+  messages: AgentMessage[],
+  opts: { softCap?: number; maxToolChars?: number } = {},
+): { messages: AgentMessage[]; truncated: number } {
+  const softCap = opts.softCap ?? DEFAULT_TOOL_OUTPUT_SOFT_CAP;
+  const maxToolChars = opts.maxToolChars ?? TOOL_OUTPUT_TRUNCATE_CHARS;
+
+  const toolIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === 'tool') toolIndices.push(i);
+  }
+  if (toolIndices.length <= softCap) return { messages, truncated: 0 };
+
+  // Oldest tool outputs above the cap are candidates; keep the most recent `softCap`.
+  const candidates = toolIndices.slice(0, toolIndices.length - softCap);
+  const result = [...messages];
+  let truncated = 0;
+
+  for (const idx of candidates) {
+    const msg = result[idx];
+    const content = msg.content;
+    // Nothing to gain on already-small outputs, and skip already-truncated ones
+    // (the marker check is what prevents a double-fold loop on repeated calls).
+    // Recognize BOTH markers so a tool output the reactive overflow path already
+    // truncated isn't re-folded here with a different marker.
+    if (content.length <= maxToolChars) continue;
+    if (content.endsWith(TOOL_OUTPUT_TRUNCATED_MARKER) || content.endsWith(CONTEXT_OVERFLOW_TRUNCATED_MARKER)) continue;
+    result[idx] = { ...msg, content: content.slice(0, maxToolChars) + TOOL_OUTPUT_TRUNCATED_MARKER };
+    truncated++;
+  }
+
+  return truncated > 0 ? { messages: result, truncated } : { messages, truncated: 0 };
+}
+
 /**
  * Group messages into atomic units that must stay together:
  * - assistant message with toolCalls + all following tool result messages

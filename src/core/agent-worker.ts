@@ -12,7 +12,7 @@ import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client
 import { getModelRegistry } from '@/models/model-registry';
 import { type ToolShimSchema, translateToToolCall } from '@/models/toolshim';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { compactMessagesWithSummary } from '@/utils/context-compaction';
+import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import type { ToolHandler } from './agent-base';
@@ -658,6 +658,23 @@ export class AgentWorker extends BaseAgentWorker {
         });
       }
 
+      // Incremental tool-output compaction: once there are more than the soft
+      // cap of tool results in context, truncate the OLDEST ones (recent ones
+      // stay full). Cheaper + less destructive than whole-history compaction
+      // and triggers earlier, so context-overflow errors are rarer. Lives next
+      // to the token-threshold proactive path below so both run together.
+      const { messages: toolCompacted, truncated: toolOutputsTruncated } = truncateOldestToolOutputs(
+        this.messages,
+        { softCap: this.config.toolOutputSoftCap ?? DEFAULT_TOOL_OUTPUT_SOFT_CAP },
+      );
+      if (toolOutputsTruncated > 0) {
+        this.messages = toolCompacted;
+        agentLogger.info({
+          agentId: this.context.id, iteration: this.iteration,
+          toolOutputsTruncated, messageCount: this.messages.length,
+        }, 'Incremental tool-output compaction (soft cap)');
+      }
+
       // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
       // This prevents context window overflow before it happens (inspired by claw-code-parity's 100K threshold)
       const AUTO_COMPACT_THRESHOLD = 100_000;
@@ -734,7 +751,7 @@ export class AgentWorker extends BaseAgentWorker {
 
           for (const msg of this.messages) {
             if (msg.role === 'tool' && msg.content.length > 2000) {
-              msg.content = msg.content.slice(0, 2000) + '\n\n[... truncated due to context window limit]';
+              msg.content = msg.content.slice(0, 2000) + CONTEXT_OVERFLOW_TRUNCATED_MARKER;
             }
           }
 
