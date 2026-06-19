@@ -17,7 +17,7 @@ import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
-import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
+import { getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
@@ -278,7 +278,12 @@ export async function spawnWorker(
   if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
     try {
       const { getConnectorRegistry } = await import('@/connectors');
-      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(context.userId);
+      // Role↔connector binding: if the role binds specific connectors
+      // (`connector_<id>` in its toolIds), expose only those; otherwise expose
+      // all of the user's active connectors (backward-compatible default).
+      const boundConnectorIds = getBoundConnectorIds(agentRole);
+      const allowed = boundConnectorIds.length > 0 ? new Set(boundConnectorIds) : undefined;
+      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(context.userId, allowed);
       roleTools.push(...connectorHandlers);
     } catch (err) {
       coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');

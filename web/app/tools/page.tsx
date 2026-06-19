@@ -14,9 +14,16 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
+
+interface RoleBinding {
+  role: string;
+  defaultTopic: string;
+  toolIds: string[];
+}
 
 interface ToolPermission {
   action: string;
@@ -118,6 +125,10 @@ function ToolModuleCard({
   module,
   userPermissions,
   roleAccess,
+  allRoles,
+  canEditRoles,
+  pendingRole,
+  onRoleToggle,
   onPermissionChange,
   onPermissionReset,
 }: {
@@ -125,10 +136,18 @@ function ToolModuleCard({
   userPermissions: UserPermission[];
   /** Agent roles whose toolIds include this module — i.e. who can actually call it. */
   roleAccess: string[];
+  /** All known agent role names (for the assign/unassign toggles). */
+  allRoles: string[];
+  /** Admin can toggle role bindings; non-admin sees read-only chips. */
+  canEditRoles: boolean;
+  /** Role currently being written (disables its toggle + shows a spinner). */
+  pendingRole: string | null;
+  onRoleToggle: (toolId: string, role: string, assigned: boolean) => void;
   onPermissionChange: (toolId: string, action: string, level: PermissionLevel) => void;
   onPermissionReset: (toolId: string, action: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const roleAccessSet = new Set(roleAccess);
 
   const getEffectiveLevel = (perm: ToolPermission): PermissionLevel => {
     const override = userPermissions.find((p) => p.toolId === module.id && p.action === perm.action);
@@ -224,7 +243,37 @@ function ToolModuleCard({
               tool was visible but not which topics could reach it. */}
           <div className="flex items-start gap-2 pb-2 mb-1.5 border-b border-outline-variant/10">
             <Users className="w-4 h-4 text-on-surface-variant mt-0.5 shrink-0" />
-            {roleAccess.length > 0 ? (
+            {canEditRoles && allRoles.length > 0 ? (
+              <div className="flex flex-wrap gap-1 items-center">
+                <span className="text-xs text-on-surface-variant mr-1">
+                  Assign to roles{' '}
+                  <span className="text-on-surface-variant/60">(click to toggle)</span>:
+                </span>
+                {allRoles.map((role) => {
+                  const assigned = roleAccessSet.has(role);
+                  const busy = pendingRole === role;
+                  return (
+                    <button
+                      key={role}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onRoleToggle(module.id, role, assigned)}
+                      title={assigned ? `Click to remove ${module.id} from ${role}` : `Click to grant ${module.id} to ${role}`}
+                      className={cn(
+                        'px-1.5 py-0.5 text-[10px] rounded font-mono inline-flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50',
+                        assigned
+                          ? 'bg-primary-container/60 text-primary ring-1 ring-primary/30'
+                          : 'bg-surface-container-high text-on-surface-variant/60 hover:text-on-surface/80'
+                      )}
+                    >
+                      {busy && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                      {assigned ? <Check className="w-2.5 h-2.5" /> : null}
+                      {role}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : roleAccess.length > 0 ? (
               <div className="flex flex-wrap gap-1">
                 <span className="text-xs text-on-surface-variant mr-1">Available to roles:</span>
                 {roleAccess.map((role) => (
@@ -363,13 +412,16 @@ export default function ToolsPage() {
     },
   });
 
+  const { user } = useAuth();
+  const [pendingRoleToggle, setPendingRoleToggle] = useState<string | null>(null);
+
   const { data: roleMapData } = useQuery({
     queryKey: ['tool-role-map'],
     queryFn: async () => {
       try {
-        return await api.get<{ byTool: Record<string, string[]> }>('/tools/role-map');
+        return await api.get<{ byTool: Record<string, string[]>; roles: RoleBinding[] }>('/tools/role-map');
       } catch {
-        return { byTool: {} };
+        return { byTool: {}, roles: [] as RoleBinding[] };
       }
     },
   });
@@ -378,6 +430,31 @@ export default function ToolsPage() {
   const userPermissions = permissionsData?.permissions || [];
   const mcpTools = mcpData?.tools || [];
   const roleByTool = roleMapData?.byTool || {};
+  const roleBindings = useMemo(() => roleMapData?.roles || [], [roleMapData]);
+  const allRoles = useMemo(() => roleBindings.map((r) => r.role), [roleBindings]);
+  const canEditRoles = !!user?.isAdmin;
+
+  const handleRoleToggle = useCallback(
+    async (toolId: string, role: string, assigned: boolean) => {
+      const binding = roleBindings.find((r) => r.role === role);
+      if (!binding) return;
+      const next = assigned
+        ? binding.toolIds.filter((id) => id !== toolId)
+        : [...binding.toolIds, toolId];
+      setPendingRoleToggle(role);
+      try {
+        await api.patch(`/roles/${role}`, { toolIds: next });
+        await queryClient.invalidateQueries({ queryKey: ['tool-role-map'] });
+      } catch (err) {
+        // Fail loud: the chip reverts (query not updated) — log so a failed
+        // write (403/404/network) isn't mistaken for a no-op.
+        console.error(`Failed to update role "${role}" tool bindings:`, err);
+      } finally {
+        setPendingRoleToggle(null);
+      }
+    },
+    [roleBindings, queryClient]
+  );
 
   const handlePermissionChange = useCallback(
     async (toolId: string, action: string, level: PermissionLevel) => {
@@ -500,6 +577,10 @@ export default function ToolsPage() {
               module={module}
               userPermissions={userPermissions}
               roleAccess={roleByTool[module.id] || []}
+              allRoles={allRoles}
+              canEditRoles={canEditRoles}
+              pendingRole={pendingRoleToggle}
+              onRoleToggle={handleRoleToggle}
               onPermissionChange={handlePermissionChange}
               onPermissionReset={handlePermissionReset}
             />

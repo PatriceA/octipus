@@ -15,10 +15,22 @@ export class ConnectorRegistry {
     ) => Promise<string | null>,
   ) {}
 
-  async getUserToolHandlers(userId: string): Promise<ToolHandler[]> {
+  /**
+   * Tool handlers for the user's active (authed) connectors.
+   *
+   * @param allowedConnectorIds When provided (non-null), only connectors whose
+   *   id is in this set are exposed — this is how role↔connector binding gates
+   *   connectors per role (W7). When omitted/undefined, ALL active connectors
+   *   are exposed (backward-compatible default for roles that bind none).
+   */
+  async getUserToolHandlers(
+    userId: string,
+    allowedConnectorIds?: ReadonlySet<string>,
+  ): Promise<ToolHandler[]> {
     const activeConnectors: ConnectorDefinition[] = [];
 
     for (const connector of ALL_CONNECTORS) {
+      if (allowedConnectorIds && !allowedConnectorIds.has(connector.id)) continue;
       const token = await this.getAccessToken(connector.id, userId).catch(() => null);
       if (token) activeConnectors.push(connector);
     }

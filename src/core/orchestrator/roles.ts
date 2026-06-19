@@ -110,13 +110,57 @@ export function stripSecurityPreamble(prompt: string | undefined): string {
  * warmed at boot — if it's cold (very early in startup or in tests),
  * we don't gate (null sentinel from getAvailableSync).
  */
+/**
+ * Prefix marking a role toolId as a connector binding (e.g.
+ * `connector:atlassian`). A colon is used (not `connector_`) so the binding id
+ * can never collide with the real connector meta-tool names
+ * `connector_list_tools` / `connector_call_tool`. Connector tools are gated
+ * per-role through this convention so connectors stop bypassing role gating
+ * (see worker-spawner).
+ */
+export const CONNECTOR_TOOL_PREFIX = 'connector:';
+
+/**
+ * Connector ids a role is explicitly bound to (the `connector:<id>` entries in
+ * its toolIds, with the prefix stripped). Empty array ⇒ the role binds no
+ * specific connectors → today's behaviour (all of the user's active connectors)
+ * is preserved by the caller. This keeps the migration backward-compatible:
+ * gating only kicks in once a role binds at least one connector.
+ *
+ * Reads ROLE_CONFIGS directly (not getRoleConfig) — avoids the per-call
+ * SECURITY_PREAMBLE allocation on the spawn hot path, and an unknown role
+ * resolves to `[]` (all connectors) rather than silently inheriting general's
+ * connector bindings.
+ */
+export function getBoundConnectorIds(role: AgentRole): string[] {
+  const toolIds = ROLE_CONFIGS[role]?.toolIds ?? [];
+  return toolIds
+    .filter((id) => id.startsWith(CONNECTOR_TOOL_PREFIX))
+    .map((id) => id.slice(CONNECTOR_TOOL_PREFIX.length));
+}
+
+/**
+ * Update a role's toolIds in the in-memory ROLE_CONFIGS cache. Called after a
+ * DB write (PATCH /roles/:role) so a freshly spawned worker sees the new
+ * toolset immediately — getToolsForRole reads ROLE_CONFIGS synchronously, so
+ * this mutation IS the cache invalidation. No-op for unknown roles.
+ */
+export function setRoleToolIdsInMemory(role: AgentRole, toolIds: string[]): void {
+  if (ROLE_CONFIGS[role]) {
+    ROLE_CONFIGS[role] = { ...ROLE_CONFIGS[role], toolIds };
+  }
+}
+
 export function getToolsForRole(role: AgentRole): ToolHandler[] {
   const config = getRoleConfig(role);
-  if (config.toolIds.length === 0) return [];
+  // Connector bindings are resolved per-user at spawn time (worker-spawner),
+  // not here — drop them so they aren't looked up in the builtin/MCP registry.
+  const nonConnectorIds = config.toolIds.filter((id) => !id.startsWith(CONNECTOR_TOOL_PREFIX));
+  if (nonConnectorIds.length === 0) return [];
 
   const capSnapshot = getCapabilityService().getAvailableSync();
   const requestedIds = capSnapshot
-    ? config.toolIds.filter((id) => {
+    ? nonConnectorIds.filter((id) => {
         if (capSnapshot.has(id)) return true;
         logger.warn(
           { role, toolId: id },
@@ -124,7 +168,7 @@ export function getToolsForRole(role: AgentRole): ToolHandler[] {
         );
         return false;
       })
-    : config.toolIds;
+    : nonConnectorIds;
 
   const builtinIds = requestedIds.filter((id) => id !== 'mcp');
   const wantsMcp = requestedIds.includes('mcp');

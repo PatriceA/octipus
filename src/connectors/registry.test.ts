@@ -51,4 +51,26 @@ describe('ConnectorRegistry', () => {
     expect(names).toContain('connector_list_tools');
     expect(names).toContain('connector_call_tool');
   });
+
+  test('allowedConnectorIds filters out connectors not bound to the role (W7 gating)', async () => {
+    const mockGetToken = async (): Promise<string | null> => 'valid-token';
+    const registry = new ConnectorRegistry(mockGetToken);
+    // Role binds a connector the user does NOT have → no handlers exposed.
+    const handlers = await registry.getUserToolHandlers('user-with-atlassian', new Set(['some-other-connector']));
+    expect(handlers).toHaveLength(0);
+  });
+
+  test('allowedConnectorIds includes the bound connector → meta-tools exposed', async () => {
+    const mockGetToken = async (): Promise<string | null> => 'valid-token';
+    const registry = new ConnectorRegistry(mockGetToken);
+    const handlers = await registry.getUserToolHandlers('user-with-atlassian', new Set(['atlassian']));
+    expect(handlers.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('undefined allowedConnectorIds preserves backward-compatible all-connectors behaviour', async () => {
+    const mockGetToken = async (): Promise<string | null> => 'valid-token';
+    const registry = new ConnectorRegistry(mockGetToken);
+    const handlers = await registry.getUserToolHandlers('user-with-atlassian', undefined);
+    expect(handlers.length).toBeGreaterThanOrEqual(2);
+  });
 });
