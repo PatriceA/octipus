@@ -8,3 +8,6 @@ CREATE TABLE "topics_config" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "topics_config_topic_unique" UNIQUE("topic")
 );
+--> statement-breakpoint
+ALTER TABLE "pipeline_templates" ADD COLUMN "parameters" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "roles" ADD COLUMN "tool_ids_customized" boolean DEFAULT false NOT NULL;

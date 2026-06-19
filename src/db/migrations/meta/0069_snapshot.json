@@ -1,5 +1,5 @@
 {
-  "id": "8f7a0d1e-250a-4c33-87c4-163b1ef34a1e",
+  "id": "b997695e-e489-4d33-bb43-83d9a81833a2",
   "prevId": "4e660b8e-f58a-4b53-9624-99ed3849766f",
   "version": "7",
   "dialect": "postgresql",
@@ -5820,6 +5820,13 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
+        "parameters": {
+          "name": "parameters",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -8345,6 +8352,72 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.topics_config": {
+      "name": "topics_config",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "topic": {
+          "name": "topic",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "executor_model": {
+          "name": "executor_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "temperature": {
+          "name": "temperature",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_tokens": {
+          "name": "max_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "topics_config_topic_unique": {
+          "name": "topics_config_topic_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "topic"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

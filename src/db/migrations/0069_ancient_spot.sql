@@ -1,1 +1,0 @@
-ALTER TABLE "roles" ADD COLUMN "tool_ids_customized" boolean DEFAULT false NOT NULL;
