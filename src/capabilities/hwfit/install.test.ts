@@ -111,4 +111,42 @@ describe('runInstall', () => {
     expect(job.status).toBe('error');
     expect(job.error).toContain('duplicate');
   });
+
+  test('onUpdate is called on status transitions, percent changes, and completion', async () => {
+    const statuses: string[] = [];
+    const percents: number[] = [];
+    const deps: InstallDeps = {
+      pull: async (_id, onProgress) => {
+        onProgress({ status: 'downloading', percent: 25 });
+        onProgress({ status: 'downloading', percent: 25 }); // no change ⇒ no extra notify
+        onProgress({ status: 'downloading', percent: 80 });
+      },
+      register: async () => {},
+      isFirstModel: async () => false,
+      onUpdate: (j) => { statuses.push(j.status); percents.push(j.percent); },
+    };
+    await runInstall(makeJob(['chat']), ENTRY, deps);
+
+    // pulling(start) → 25 → 80 → registering → done.
+    expect(statuses).toContain('pulling');
+    expect(statuses).toContain('registering');
+    expect(statuses[statuses.length - 1]).toBe('done');
+    expect(percents).toContain(25);
+    expect(percents).toContain(80);
+    expect(percents[percents.length - 1]).toBe(100);
+    // The duplicate 25%/same-status tick must not emit twice.
+    expect(percents.filter((p) => p === 25)).toHaveLength(1);
+  });
+
+  test('onUpdate fires with status=error on failure', async () => {
+    const seen: string[] = [];
+    const deps: InstallDeps = {
+      pull: async () => { throw new Error('boom'); },
+      register: async () => {},
+      isFirstModel: async () => false,
+      onUpdate: (j) => seen.push(j.status),
+    };
+    await runInstall(makeJob(['chat']), ENTRY, deps);
+    expect(seen[seen.length - 1]).toBe('error');
+  });
 });
