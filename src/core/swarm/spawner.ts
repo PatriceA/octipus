@@ -10,6 +10,7 @@ import type { AgentRole } from '@/core/orchestrator/types';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { getModelRegistry } from '@/models/model-registry';
+import { getTopicConfig } from '@/models/topic-config';
 import { coreLogger } from '@/utils/logger';
 import { taskFingerprint as _taskFingerprint, getCallGraph } from './call-graph';
 import {
@@ -918,11 +919,30 @@ export class SwarmSpawner {
 
     // Model selection — in order of preference:
     //   1. expert.modelPreference (specialist's explicit choice)
-    //   2. topic→model mapping (registered role→model binding in Models page)
-    //   3. fail loud — do NOT inherit parent model. The parent's model is
+    //   2. topic executorModel (W9 planner→executor split) — the spawned child
+    //      IS the executor, so it binds to the topic's configured executor model
+    //      when one is set on the Topics page.
+    //   3. topic→model mapping (registered role→model binding)
+    //   4. fail loud — do NOT inherit parent model. The parent's model is
     //      whatever the orchestrator happened to pick; it has no claim to
     //      being right for the child's topic. Inheriting hides routing bugs.
     let candidate = expertModel;
+    if (!candidate) {
+      // Empty executorModel ⇒ this whole block is skipped and resolution is
+      // byte-for-byte today's behaviour (planner == executor).
+      const executorName = getTopicConfig(childRole).executorModel;
+      if (executorName) {
+        const execModel =
+          (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
+        if (!execModel) {
+          throw new Error(
+            `Topic '${childRole}' has executorModel '${executorName}' but no such model is registered. ` +
+              `Fix it on the Topics page or clear the executor binding.`,
+          );
+        }
+        candidate = execModel.modelId;
+      }
+    }
     if (!candidate) {
       const topicModel = await registry.getModelForTopic(childRole);
       candidate = topicModel?.modelId;
