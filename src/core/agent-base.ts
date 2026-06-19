@@ -30,6 +30,14 @@ export interface AgentWorkerConfig {
   maxTokenBudget: number;
   /** Defaults to `{ mode: 'full' }` when omitted. */
   toolAdvertisement?: ToolAdvertisement;
+  /**
+   * Soft cap on the number of full tool-result messages kept in context. Once
+   * exceeded, the OLDEST tool outputs are truncated (recent ones kept full) —
+   * cheaper + less destructive than whole-history compaction, and it triggers
+   * earlier so context-overflow errors are rarer. Defaults to
+   * `DEFAULT_TOOL_OUTPUT_SOFT_CAP` when omitted.
+   */
+  toolOutputSoftCap?: number;
 }
 
 export interface ToolHandler {
