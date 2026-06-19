@@ -1,8 +1,8 @@
 'use client';
 
 import { Check, ChevronDown, Cpu, Download, Gauge, HardDrive, Sparkles, TriangleAlert } from 'lucide-react';
-import { useState } from 'react';
-import { api } from '@/lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { api, createAuthenticatedWebSocket } from '@/lib/api';
 
 // API response shapes for the hwfit recommender (mirrors src/capabilities/hwfit).
 interface DetectedGpu {
@@ -71,6 +71,49 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
   const [collapsed, setCollapsed] = useState(false);
   // modelId → live install job (progress / outcome).
   const [jobs, setJobs] = useState<Record<string, InstallJob>>({});
+  // Shared WS for pushed install progress + per-model update handlers.
+  const wsRef = useRef<WebSocket | null>(null);
+  const jobHandlersRef = useRef<Map<string, (job: InstallJob) => void>>(new Map());
+
+  // Close the progress WebSocket when the panel unmounts.
+  useEffect(() => {
+    const handlers = jobHandlersRef.current;
+    return () => {
+      try { wsRef.current?.close(); } catch { /* ignore */ }
+      wsRef.current = null;
+      handlers.clear();
+    };
+  }, []);
+
+  // Open (once) a WebSocket that routes `model_install_progress` messages to the
+  // per-model handler. Resolves false if it can't connect (caller falls back to
+  // polling). Replaces the old 1s polling loop with server push.
+  const ensureProgressWs = async (): Promise<boolean> => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return true;
+    try {
+      const ws = await createAuthenticatedWebSocket('/ws');
+      wsRef.current = ws;
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(typeof e.data === 'string' ? e.data : '');
+          if (msg?.type === 'model_install_progress' && msg.job) {
+            jobHandlersRef.current.get(msg.job.modelId)?.(msg.job as InstallJob);
+          }
+        } catch { /* ignore non-JSON frames */ }
+      };
+      ws.onclose = () => { if (wsRef.current === ws) wsRef.current = null; };
+      await new Promise<void>((resolve, reject) => {
+        if (ws.readyState === WebSocket.OPEN) return resolve();
+        ws.addEventListener('open', () => resolve(), { once: true });
+        ws.addEventListener('error', () => reject(new Error('ws error')), { once: true });
+        setTimeout(() => reject(new Error('ws timeout')), 4000);
+      });
+      return true;
+    } catch {
+      wsRef.current = null;
+      return false;
+    }
+  };
 
   const scan = async () => {
     setScanning(true);
@@ -101,14 +144,35 @@ export function RecommendedModelsPanel({ onInstalled }: RecommendedModelsPanelPr
         setJobs((j) => ({ ...j, [entry.id]: errorJob(entry.id, res.error ?? 'Install failed to start') }));
         return;
       }
-      pollJob(res.jobId, entry.id);
+      setJobs((j) => ({ ...j, [entry.id]: { id: res.jobId!, modelId: entry.id, status: 'pulling', percent: 0, statusText: 'starting' } }));
+
+      // Prefer pushed progress over the WebSocket; fall back to polling only if
+      // the socket can't connect.
+      jobHandlersRef.current.set(entry.id, (job) => {
+        setJobs((j) => ({ ...j, [entry.id]: job }));
+        if (job.status === 'done') { onInstalled(); jobHandlersRef.current.delete(entry.id); }
+        else if (job.status === 'error') { jobHandlersRef.current.delete(entry.id); }
+      });
+      const wsOk = await ensureProgressWs();
+      if (!wsOk) {
+        jobHandlersRef.current.delete(entry.id);
+        pollJob(res.jobId, entry.id);
+      } else {
+        // One sync GET to catch an install that already finished before the WS
+        // handshake completed (e.g. an already-cached model pulls in ~ms — its
+        // `done` push would otherwise land before our listener was live).
+        try {
+          const current = await api.get<InstallJob>(`/models/install/${res.jobId}`);
+          jobHandlersRef.current.get(entry.id)?.(current);
+        } catch { /* WS will deliver it */ }
+      }
     } catch (err) {
       setJobs((j) => ({ ...j, [entry.id]: errorJob(entry.id, (err as Error).message) }));
     }
   };
 
-  // Poll install progress until the job finishes. (A WS progress stream can
-  // replace this later; polling keeps the panel self-contained.)
+  // Fallback only: poll install progress until the job finishes when the WS
+  // push channel is unavailable.
   const pollJob = (jobId: string, modelId: string) => {
     const deadline = Date.now() + 35 * 60_000; // stop polling after ~35 min
     const tick = async () => {

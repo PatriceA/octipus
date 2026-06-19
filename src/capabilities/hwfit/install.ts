@@ -37,6 +37,13 @@ export interface InstallDeps {
   register: (entry: NewModelConfigEntry) => Promise<void>;
   /** True when no models are configured yet (⇒ the install should become default). */
   isFirstModel: () => Promise<boolean>;
+  /**
+   * Optional progress sink — invoked with the job on every meaningful change
+   * (each percent tick + status transition). The route wires this to the WS
+   * publisher so the browser gets pushed updates instead of polling. Omitted in
+   * tests; failures here never affect the install.
+   */
+  onUpdate?: (job: InstallJob) => void;
 }
 
 /**
@@ -73,14 +80,20 @@ export function getInstallJob(id: string): InstallJob | undefined {
  * tests can await the full sequence; production callers use startInstall.
  */
 export async function runInstall(job: InstallJob, entry: ModelCatalogEntry, deps: InstallDeps): Promise<void> {
+  const notify = () => deps.onUpdate?.(job);
   try {
     job.status = 'pulling';
+    notify();
     await deps.pull(entry.id, (p) => {
-      if (typeof p.percent === 'number') job.percent = p.percent;
+      const nextPercent = typeof p.percent === 'number' ? p.percent : job.percent;
+      const changed = nextPercent !== job.percent || p.status !== job.statusText;
+      job.percent = nextPercent;
       job.statusText = p.status;
+      if (changed) notify();
     });
 
     job.status = 'registering';
+    notify();
     const isFirst = await deps.isFirstModel();
     const model = buildModelEntry(entry, job.bindTopics, isFirst);
     await deps.register(model);
@@ -88,10 +101,12 @@ export async function runInstall(job: InstallJob, entry: ModelCatalogEntry, deps
     job.modelName = model.name;
     job.percent = 100;
     job.status = 'done';
+    notify();
     modelLogger.info({ model: model.name, topics: job.bindTopics, isDefault: isFirst }, 'hwfit: model installed and bound');
   } catch (err) {
     job.status = 'error';
     job.error = err instanceof Error ? err.message : String(err);
+    notify();
     modelLogger.error({ modelId: entry.id, err: job.error }, 'hwfit: install failed');
   }
 }

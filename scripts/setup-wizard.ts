@@ -701,10 +701,22 @@ interface InstallJobResp {
  * post-backend phase runs on plain stdout without the TUI).
  */
 async function maybeRecommendModel(api: ApiClient): Promise<void> {
-  if (process.env.OCTIPUS_SETUP_RECOMMEND !== '1') {
+  // HW recommendation is the DEFAULT in interactive setup (un-gated): first-run
+  // users get offered a fitting local model. Controls:
+  //   OCTIPUS_SETUP_RECOMMEND=1  → force auto-install, no prompt (Docker/CI).
+  //   OCTIPUS_SETUP_RECOMMEND=0  → skip entirely (just point at the web panel).
+  //   unset + interactive        → scan, recommend, and PROMPT before pulling.
+  //   unset + non-interactive    → tip only (never auto-download GBs in CI
+  //                                without an explicit opt-in).
+  const forced = process.env.OCTIPUS_SETUP_RECOMMEND === '1';
+  const disabled = process.env.OCTIPUS_SETUP_RECOMMEND === '0';
+  const tip = () =>
     process.stdout.write(
       '\x1b[90m· Tip: open the web Models page for "Recommended for your hardware" to install a local model.\x1b[0m\n',
     );
+
+  if (disabled || (!forced && NON_INTERACTIVE)) {
+    tip();
     return;
   }
 
@@ -736,6 +748,18 @@ async function maybeRecommendModel(api: ApiClient): Promise<void> {
     // on 'auto' (re-derived live), so swapping the default model later changes
     // this automatically — we only inform here.
     process.stdout.write(`\x1b[90m· As the default, this model runs the orchestrator in ${pick.orchestratorModeNote}.\x1b[0m\n`);
+  }
+
+  // Interactive default: confirm before a potentially large download. Forced
+  // mode (env=1) skips the prompt for unattended first-boot.
+  if (!forced) {
+    const ans = await readlinePrompt(
+      `  \x1b[36mInstall ${pick.entry.id} now? It will be bound to: ${pick.entry.topics.join(', ')}. [Y/n]\x1b[0m `,
+    );
+    if (ans.trim().toLowerCase().startsWith('n')) {
+      tip();
+      return;
+    }
   }
 
   process.stdout.write(`Pulling ${pick.entry.id} (binding: ${pick.entry.topics.join(', ')})…\n`);

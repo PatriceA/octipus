@@ -160,6 +160,19 @@ export function setupWebSocket(app: Elysia): void {
         apiLogger.debug({ err }, 'swarm event subscription skipped');
       }
 
+      // Subscribe to hwfit model-install progress for this user — the
+      // Recommended-models panel listens for these instead of polling.
+      let unsubscribeInstall: (() => void) | undefined;
+      try {
+        const { onInstallProgress } = await import('@/capabilities/hwfit/install-events');
+        unsubscribeInstall = onInstallProgress((job) => {
+          if (job.ownerId !== session.userId) return;
+          safeSend({ type: 'model_install_progress', job, timestamp: Date.now() });
+        });
+      } catch (err) {
+        apiLogger.debug({ err }, 'install-progress subscription skipped');
+      }
+
       // Store unsubscribe functions
       wsData(ws).unsubscribeAgentEvents = unsubscribe;
       wsData(ws).unsubscribeOrchestrator = unsubscribeOrchestrator;
@@ -171,6 +184,7 @@ export function setupWebSocket(app: Elysia): void {
         unsubscribeOrchestrator();
         if (unsubscribePermissions) unsubscribePermissions();
         if (unsubscribeSwarm) unsubscribeSwarm();
+        if (unsubscribeInstall) unsubscribeInstall();
         for (const { event, handler } of docHandlers) {
           docQueue.off(event, handler);
         }

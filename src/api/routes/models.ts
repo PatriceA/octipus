@@ -854,6 +854,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
       const { getCatalogEntry } = await import('@/capabilities/hwfit');
       const { startInstall } = await import('@/capabilities/hwfit/install');
+      const { emitInstallProgress } = await import('@/capabilities/hwfit/install-events');
       const { OllamaProvider } = await import('@/models/providers/ollama-provider');
 
       const entry = getCatalogEntry(body.id);
@@ -888,6 +889,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
           await registry.registerModel(e);
         },
         isFirstModel: async () => (await registry.getDefaultModel()) === null,
+        // Push progress to the owner's WebSocket (the panel listens instead of
+        // polling). Polling stays available as a fallback via GET /install/:id.
+        onUpdate: (j) => emitInstallProgress(j),
       });
       return { jobId: job.id, status: job.status, bindTopics };
     },
