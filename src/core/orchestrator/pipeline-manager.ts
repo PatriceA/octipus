@@ -8,12 +8,33 @@ import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '@/db/schema/pipelines';
 import { pipelineStages, pipelines } from '@/db/schema/pipelines';
-import { getModelRegistry } from '@/models/model-registry';
+import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
+import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
 import { appendSources, type QAValidationResult } from './types';
+
+/**
+ * Resolve a per-stage model override (a bound model name or id) to a concrete
+ * modelId. Returns undefined when no override is set; throws (fail loud) when an
+ * override names a model that isn't registered/enabled.
+ */
+async function resolveStageModelId(
+  stageModel: string | undefined,
+  registry: ModelRegistry,
+): Promise<string | undefined> {
+  if (!stageModel) return undefined;
+  const model = (await registry.getModel(stageModel)) || (await registry.getModelByModelId(stageModel));
+  if (!model) {
+    throw new Error(
+      `Pipeline stage has model override '${stageModel}' but no such model is registered. ` +
+        `Fix the recipe's stage model or clear it.`,
+    );
+  }
+  return model.modelId;
+}
 
 export class PipelineManager {
   private get db() { return getDb(); }
@@ -29,7 +50,7 @@ export class PipelineManager {
     type: string,
     description: string,
     context: AgentContext,
-    options?: { maxRetries?: number },
+    options?: { maxRetries?: number; params?: Record<string, unknown> },
   ): Promise<{ pipelineId: string; result: string }> {
     const template = await getPipelineTemplate(type);
     // Override maxRetries if provided
@@ -40,6 +61,10 @@ export class PipelineManager {
         }
       }
     }
+    // Resolve + validate recipe parameters against the template's typed defs
+    // (fail loud on missing-required / unknown / type-mismatch). Substituted
+    // into stage prompts as {{param.<key>}}.
+    const paramVars = paramTemplateVars(resolveRecipeParams(template.parameters, options?.params ?? {}));
     const stageConfigs = buildStagesFromTemplate(template, description);
 
     // Create pipeline record
@@ -98,6 +123,7 @@ export class PipelineManager {
       const input = expandPromptTemplate(stageTemplate.promptTemplate, {
         description,
         previousOutput: handoffText || previousOutput,
+        ...paramVars,
       });
 
       // Update stage input
@@ -174,8 +200,10 @@ export class PipelineManager {
         // correct topic-specific model instead of the role's defaultTopic.
         const stageTopic = stage.role; // role is set from the step's topic field
         const registry = getModelRegistry();
+        // Per-stage model override (recipes) wins over the topic binding when set.
+        const stageModelId = await resolveStageModelId(stageTemplate.model, registry);
         const topicModel = await registry.getModelForTopic(stageTopic);
-        const modelOverride = topicModel?.modelId || undefined;
+        const modelOverride = stageModelId || topicModel?.modelId || undefined;
 
         const result = await orchestrator.spawnWorker(
           stage.role,
@@ -255,6 +283,7 @@ export class PipelineManager {
             const originalTargetInput = expandPromptTemplate(retryTargetTemplate.promptTemplate, {
               description,
               previousOutput: retryTargetIndex > 0 ? (stages[retryTargetIndex - 1] as any).output || '' : '',
+              ...paramVars,
             });
 
             let qaResult = this.parseQAResult(previousOutput);
@@ -290,9 +319,11 @@ export class PipelineManager {
               await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
               try {
-                // Resolve topic-specific model for the retry target stage
+                // Per-stage model override wins over the topic binding (same as
+                // the initial run) so retries don't silently switch models.
+                const retryStageModelId = await resolveStageModelId(retryTargetTemplate.model, registry);
                 const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
-                const retryModelOverride = retryTopicModel?.modelId || undefined;
+                const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
 
                 const retryResult = await orchestrator.spawnWorker(
                   retryTargetStage.role,
@@ -328,13 +359,15 @@ export class PipelineManager {
                 const qaRetryInput = expandPromptTemplate(stageTemplate.promptTemplate, {
                   description,
                   previousOutput: retryOutput,
+                  ...paramVars,
                 });
 
                 await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
-                // Resolve topic-specific model for the QA stage
+                // Per-stage model override wins over the topic binding.
+                const qaStageModelId = await resolveStageModelId(stageTemplate.model, registry);
                 const qaTopicModel = await registry.getModelForTopic(stage.role);
-                const qaModelOverride = qaTopicModel?.modelId || undefined;
+                const qaModelOverride = qaStageModelId || qaTopicModel?.modelId || undefined;
 
                 const qaRetryResult = await orchestrator.spawnWorker(
                   stage.role,
@@ -501,12 +534,14 @@ export class PipelineManager {
     const stageRows: NewPipelineStage[] = [];
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
-      const model = await registry.getModelForTopic(step.topic);
+      // Per-stage model override (recipes) wins over the topic binding when set.
+      const stageModelId = await resolveStageModelId(step.model, registry);
+      const model = stageModelId ? null : await registry.getModelForTopic(step.topic);
       stageRows.push({
         pipelineId: pipeline.id,
         name: step.name,
         role: step.topic,
-        model: model?.modelId || undefined,
+        model: stageModelId || model?.modelId || undefined,
         toolIds: step.toolIds || [],
         systemPrompt: step.promptTemplate || `Execute: ${step.name}`,
         input: '',

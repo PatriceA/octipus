@@ -113,6 +113,12 @@ export function createMetaTools(
             type: 'number',
             description: 'Max QA retry attempts before escalating (default 3)',
           },
+          params: {
+            type: 'object',
+            description:
+              'Recipe parameter values (for parameterized templates), as a key→value object. ' +
+              'Call list_recipes to see a template’s parameters. Omit for unparameterized templates.',
+          },
         },
         required: ['title', 'templateName', 'description'],
       },
@@ -136,13 +142,91 @@ export function createMetaTools(
         }
 
         pipelineCreated = true;
-        return orchestrator.createAndRunPipeline(
-          args.title as string,
-          match.name,
-          args.description as string,
-          context,
-          { maxRetries: args.maxRetries as number | undefined },
+        try {
+          return await orchestrator.createAndRunPipeline(
+            args.title as string,
+            match.name,
+            args.description as string,
+            context,
+            {
+              maxRetries: args.maxRetries as number | undefined,
+              params: (args.params as Record<string, unknown> | undefined) ?? undefined,
+            },
+          );
+        } catch (err) {
+          // The pipeline never actually started (e.g. param-validation failure)
+          // — release the one-shot gate so the model can retry with fixed params
+          // in the same turn. Surface the reason.
+          pipelineCreated = false;
+          return `Pipeline could not start: ${(err as Error).message}`;
+        }
+      },
+    },
+    {
+      name: 'list_recipes',
+      description:
+        'List available recipes (parameterized pipeline templates) with their typed parameters. ' +
+        'Call before invoke_recipe / create_pipeline with params so you supply the right inputs.',
+      parameters: { type: 'object', properties: {} },
+      execute: async (_args, context) => {
+        const { listRecipes } = await import('./templates');
+        const recipes = await listRecipes(context.userId);
+        if (recipes.length === 0) return 'No recipes configured. Ask the user to create one in the Pipelines page.';
+        return recipes
+          .map((r) => {
+            const params = r.parameters.length
+              ? r.parameters
+                  .map((p) => `${p.key}:${p.inputType}${p.requirement === 'required' ? '*' : ''}`)
+                  .join(', ')
+              : 'none';
+            return `- **${r.name}**${r.isPreset ? ' (preset)' : ''}: ${r.description || 'No description'} ` +
+              `(${r.stageCount} stages; params: ${params})`;
+          })
+          .join('\n');
+      },
+    },
+    {
+      name: 'invoke_recipe',
+      final: true,
+      description:
+        'Run a recipe (parameterized pipeline template) by name with parameter values. ' +
+        'Call list_recipes first to see the recipe’s parameters. Equivalent to create_pipeline with params.',
+      parameters: {
+        type: 'object',
+        properties: {
+          recipeName: { type: 'string', description: 'Exact recipe (template) name or ID.' },
+          title: { type: 'string', description: 'Short title for this run.' },
+          description: { type: 'string', description: 'What this run should achieve.' },
+          params: { type: 'object', description: 'Recipe parameter values as a key→value object.' },
+        },
+        required: ['recipeName', 'description'],
+      },
+      execute: async (args, context) => {
+        if (pipelineCreated) throw new Error(PIPELINE_ALREADY_CREATED_MSG);
+        const recipeName = args.recipeName as string;
+        const { listAvailableTemplates } = await import('./templates');
+        const templates = await listAvailableTemplates(context.userId);
+        const match = templates.find(
+          (t) => t.name.toLowerCase() === recipeName.toLowerCase() || t.id === recipeName,
         );
+        if (!match) {
+          return `Recipe "${recipeName}" not found. Available: ${templates.map((t) => t.name).join(', ') || 'none'}.`;
+        }
+        pipelineCreated = true;
+        try {
+          return await orchestrator.createAndRunPipeline(
+            (args.title as string) || match.name,
+            match.name,
+            args.description as string,
+            context,
+            { params: (args.params as Record<string, unknown> | undefined) ?? undefined },
+          );
+        } catch (err) {
+          // Release the one-shot gate — the recipe didn't start (likely bad
+          // params) — so the model can correct and retry in the same turn.
+          pipelineCreated = false;
+          return `Recipe could not start: ${(err as Error).message}`;
+        }
       },
     },
     {
