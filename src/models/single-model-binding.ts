@@ -57,6 +57,7 @@ export const SINGLE_MODEL_CHAT_TOPICS = [
   'knowledge_review',
   'evaluation',
   'summarization',
+  'tool_translation',
 ] as const;
 
 export type SingleModelChatTopic = (typeof SINGLE_MODEL_CHAT_TOPICS)[number];

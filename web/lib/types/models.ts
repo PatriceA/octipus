@@ -106,6 +106,7 @@ export const AVAILABLE_TOPICS = [
   { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
   { value: 'memory_extraction', label: 'Memory Extraction', description: 'Long-term memory extractor + judge. Runs per turn — bind a cheap, fast model. Unbound = memory tier stays off.' },
   { value: 'summarization', label: 'Summarization', description: 'L0 abstracts for knowledge-base chunks (docs/files). Runs per chunk on import — bind a cheap/local model. Unbound = no abstracts generated.' },
+  { value: 'tool_translation', label: 'Tool Translation', description: 'Toolshim: converts a weak/local model’s prose-instead-of-tool-call into a valid tool call. Runs only on the tool-call failure path — bind a small, reliable tool-calling model. Unbound = toolshim disabled (current behaviour).' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */

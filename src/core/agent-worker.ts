@@ -10,9 +10,12 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getCostTracker } from '@/models/cost-tracker';
 import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { type ToolShimSchema, translateToToolCall } from '@/models/toolshim';
+import type { ModelConfigEntry } from '@/db/schema/models';
 import { compactMessagesWithSummary } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
+import type { ToolHandler } from './agent-base';
 import { isLongTailHandler } from './orchestrator/tool-split';
 import { ClassifiedError } from './errors/classification';
 import {
@@ -22,7 +25,7 @@ import {
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { ToolExecutor } from './tool-executor';
-import type { AgentMessage, } from './types';
+import type { AgentMessage, ToolCall } from './types';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -34,6 +37,10 @@ export class AgentWorker extends BaseAgentWorker {
   private startTime: number = 0;
   private emptyRetries: number = 0;
   private llmRetries: number = 0;
+  /** Iteration index at which toolshim last ran — caps it to once per iteration. */
+  private toolShimAttemptedIteration: number = -1;
+  /** Log the unbound-translator skip only once per agent. */
+  private toolShimUnboundLogged: boolean = false;
   /** Track consecutive identical tool calls (same name + args) to detect loops */
   private lastToolCallSignature: string = '';
   private consecutiveRepeatCount: number = 0;
@@ -928,43 +935,16 @@ export class AgentWorker extends BaseAgentWorker {
       if (completion.content && !completion.toolCalls?.length) {
         const textToolCalls = this.parseTextToolCalls(completion.content);
         if (textToolCalls.length > 0) {
-          completion.toolCalls = textToolCalls;
-          // Normalize near-miss names before the recovery log, the persisted
-          // assistant message, and the action emit below — same coherence
-          // requirement as the structured path.
-          this.toolExecutor.normalizeToolCallNames(textToolCalls);
-          // Re-run the tool call handling above
-          agentLogger.info({
-            agentId: this.context.id, iteration: this.iteration,
-            tools: textToolCalls.map(tc => tc.name),
-          }, 'Recovered tool calls from text output');
+          await this.executeRecoveredToolCalls(textToolCalls, 'text output');
+          continue;
+        }
 
-          const octiMsg: AgentMessage = {
-            role: 'assistant',
-            content: '',
-            toolCalls: textToolCalls,
-            timestamp: new Date(),
-          };
-          this.messages.push(octiMsg);
-
-          this.emit('action', {
-            toolCalls: textToolCalls.map(tc => ({
-              id: tc.id, name: tc.name,
-              argsSummary: JSON.stringify(tc.arguments).slice(0, 80),
-            })),
-          });
-
-          const isFinalTool = this.toolExecutor.hasFinalToolCall(textToolCalls);
-          const toolMessages = isFinalTool
-            ? await this.toolExecutor.handleToolCalls(textToolCalls)
-            : await this.raceTimeout(
-                this.toolExecutor.handleToolCalls(textToolCalls),
-                'handleToolCalls',
-              );
-          this.messages.push(...toolMessages);
-
-          // Drain steering queue before next LLM call
-          this.drainSteeringQueue();
+        // Toolshim — last resort: ask a bound translator model to convert the
+        // prose into a tool call. Only after the cheap text/JSON/XML fallbacks
+        // above failed; gated + capped once per iteration inside tryToolShim.
+        const shimToolCalls = await this.tryToolShim(completion.content);
+        if (shimToolCalls && shimToolCalls.length > 0) {
+          await this.executeRecoveredToolCalls(shimToolCalls, 'toolshim');
           continue;
         }
       }
@@ -1218,6 +1198,157 @@ export class AgentWorker extends BaseAgentWorker {
     return results;
   }
 
+  /**
+   * Tool handlers advertised to the model this turn. Lazy mode (set by the
+   * spawner) trims long-tail handlers from the advertised schema array; they
+   * stay registered and callable by name. `full` (the default) is unchanged.
+   * Shared by the completion call and toolshim so both see the same tool set.
+   */
+  private getAdvertisedToolHandlers(): ToolHandler[] {
+    const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
+    const registeredTools = Array.from(this.toolExecutor.getTools().values());
+    return advertisement.mode === 'lazy'
+      ? registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds))
+      : registeredTools;
+  }
+
+  /**
+   * Last-resort, model-based recovery of a tool call from prose. Only runs when
+   * the cheap text→toolcall fallbacks failed. Guarded hard: at most once per
+   * iteration, only when tools are enabled + advertised, and only when the
+   * `tool_translation` topic is bound (unbound ⇒ fail-soft to today's
+   * behaviour). Returns the translated calls, or null to fall through to plain
+   * text. See `src/models/toolshim.ts`.
+   */
+  private async tryToolShim(prose: string): Promise<ToolCall[] | null> {
+    if (this.toolShimAttemptedIteration === this.iteration) return null;
+    if (this.toolExecutor.toolsDisabled) return null;
+    const advertised = this.getAdvertisedToolHandlers();
+    if (advertised.length === 0) return null;
+    // Mark attempted up front: a thrown/failed translator call must still count
+    // against the once-per-iteration cap (no retry storm on the failure path).
+    this.toolShimAttemptedIteration = this.iteration;
+
+    const model = await getModelRegistry().getModelForTopic('tool_translation');
+    if (!model) {
+      if (!this.toolShimUnboundLogged) {
+        this.toolShimUnboundLogged = true;
+        agentLogger.debug(
+          { agentId: this.context.id },
+          'Toolshim skipped: tool_translation topic unbound',
+        );
+      }
+      return null;
+    }
+
+    const tools: ToolShimSchema[] = advertised.map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }));
+    // Validate against the ADVERTISED set (what the translator was shown), not
+    // the full registry — so a coincidental long-tail name match can't slip a
+    // tool through that the translator never saw a schema for.
+    const advertisedNames = new Set(advertised.map((t) => t.name));
+
+    const toolCall = await translateToToolCall({
+      text: prose,
+      tools,
+      isRegistered: (name) => advertisedNames.has(name),
+      complete: (prompt) => this.runToolTranslator(model, prompt),
+    });
+    if (!toolCall) return null;
+
+    agentLogger.info(
+      { agentId: this.context.id, iteration: this.iteration, tool: toolCall.name, translator: model.modelId },
+      'Toolshim translated prose into a tool call',
+    );
+    return [toolCall];
+  }
+
+  /**
+   * One-shot completion against the bound translator model — no tools, no
+   * history, deterministic. Returns the raw assistant content. Mirrors
+   * getCompletion's provider routing + vault key resolution.
+   */
+  private async runToolTranslator(model: ModelConfigEntry, prompt: string): Promise<string> {
+    const messages: AgentMessage[] = [{ role: 'user', content: prompt, timestamp: new Date() }];
+
+    let apiKey: string | undefined;
+    if (model.apiKeyRef) {
+      try {
+        const { getVault } = await import('@/security/vault');
+        apiKey = (await getVault().getByName('system', model.apiKeyRef)) || undefined;
+      } catch (err) {
+        coreLogger.error({ err }, 'toolshim: vault key lookup failed');
+      }
+    }
+
+    const completionOpts = {
+      model: model.modelId,
+      messages,
+      temperature: 0,
+      maxTokens: model.defaultMaxTokens || 1024,
+      endpoint: model.endpoint || undefined,
+      apiKey,
+      userId: this.context.userId,
+    };
+
+    let result: CompletionResult;
+    if (model.provider && model.provider !== 'litellm') {
+      const { getProviderRouter } = await import('@/models/providers');
+      const directProvider = getProviderRouter().getProviderByName(model.provider);
+      result = directProvider
+        ? await directProvider.complete(completionOpts)
+        : await getLiteLLMClient().complete(completionOpts);
+    } else {
+      result = await getLiteLLMClient().complete(completionOpts);
+    }
+
+    await getCostTracker().logUsageWithCost(
+      this.context.userId,
+      model.modelId,
+      result.usage.inputTokens,
+      result.usage.outputTokens,
+      { sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'chat', metadata: { toolshim: true, iteration: this.iteration } },
+    );
+
+    return result.content;
+  }
+
+  /**
+   * Execute tool calls recovered from text (parseTextToolCalls) or toolshim —
+   * push the synthetic assistant message, emit the action, run the tools, and
+   * drain the steer queue. Shared so both recovery paths behave identically.
+   */
+  private async executeRecoveredToolCalls(toolCalls: ToolCall[], source: string): Promise<void> {
+    // Normalize near-miss names before the persisted assistant message + emit,
+    // same coherence requirement as the structured path.
+    this.toolExecutor.normalizeToolCallNames(toolCalls);
+    agentLogger.info(
+      { agentId: this.context.id, iteration: this.iteration, tools: toolCalls.map((tc) => tc.name), source },
+      'Recovered tool calls',
+    );
+
+    this.messages.push({ role: 'assistant', content: '', toolCalls, timestamp: new Date() });
+
+    this.emit('action', {
+      toolCalls: toolCalls.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        argsSummary: JSON.stringify(tc.arguments).slice(0, 80),
+      })),
+    });
+
+    const isFinalTool = this.toolExecutor.hasFinalToolCall(toolCalls);
+    const toolMessages = isFinalTool
+      ? await this.toolExecutor.handleToolCalls(toolCalls)
+      : await this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls');
+    this.messages.push(...toolMessages);
+
+    this.drainSteeringQueue();
+  }
+
   private async getCompletion(): Promise<CompletionResult> {
     const client = getLiteLLMClient();
     const registry = getModelRegistry();
@@ -1229,15 +1360,7 @@ export class AgentWorker extends BaseAgentWorker {
     }
 
     const litellmModel = model.modelId;
-    // Lazy tool discovery: when the spawner put this worker on the `lazy` path,
-    // advertise only the core tools (+ discovery/MCP meta-tools). Long-tail
-    // handlers stay registered and callable by name — only the advertised
-    // schema array shrinks. `full` (the default) is byte-for-byte unchanged.
-    const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
-    const registeredTools = Array.from(this.toolExecutor.getTools().values());
-    const advertisedTools = advertisement.mode === 'lazy'
-      ? registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds))
-      : registeredTools;
+    const advertisedTools = this.getAdvertisedToolHandlers();
     const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled
       ? []
       : advertisedTools.map((tool) => ({
