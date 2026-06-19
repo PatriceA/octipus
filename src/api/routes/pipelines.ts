@@ -2,11 +2,41 @@ import { desc, eq, or } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
-import { listAvailableTemplates } from '@/core/orchestrator/templates';
+import { validateRecipeParameterDefs } from '@/core/orchestrator/recipe-params';
+import {
+  exportRecipe,
+  importRecipe,
+  listAvailableTemplates,
+  parseRecipeExport,
+} from '@/core/orchestrator/templates';
 import { getDb } from '@/db/postgres';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
+
+/** Shared Elysia body schema for a recipe stage (incl. per-stage model override). */
+const recipeStepBodySchema = t.Object({
+  name: t.String(),
+  description: t.Optional(t.String()),
+  topic: t.String(),
+  toolIds: t.Optional(t.Array(t.String())),
+  requiresApproval: t.Optional(t.Boolean()),
+  promptTemplate: t.Optional(t.String()),
+  stageType: t.Optional(t.Union([t.Literal('standard'), t.Literal('qa_validation')])),
+  maxRetries: t.Optional(t.Number()),
+  retryTargetStage: t.Optional(t.Number()),
+  model: t.Optional(t.String()),
+});
+
+/** Shared Elysia body schema for a recipe parameter (deep-validated by Zod). */
+const recipeParamBodySchema = t.Object({
+  key: t.String(),
+  description: t.Optional(t.String()),
+  inputType: t.String(),
+  requirement: t.String(),
+  default: t.Optional(t.String()),
+  options: t.Optional(t.Array(t.String())),
+});
 
 /**
  * Pipelines — Phase 1a multi-user conversion.
@@ -178,12 +208,20 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         stageType: s.stageType,
         maxRetries: s.maxRetries,
         retryTargetStage: s.retryTargetStage,
+        model: s.model,
       }));
+      let parameters;
+      try {
+        parameters = validateRecipeParameterDefs(body.parameters ?? []);
+      } catch (err) {
+        return { error: `Invalid recipe parameters: ${(err as Error).message}` };
+      }
       const [template] = await db.insert(pipelineTemplates).values({
         userId: user.id,
         name: body.name,
         description: body.description,
         steps,
+        parameters,
       }).returning();
       return template;
     },
@@ -191,17 +229,8 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),
-        steps: t.Optional(t.Array(t.Object({
-          name: t.String(),
-          description: t.Optional(t.String()),
-          topic: t.String(),
-          toolIds: t.Optional(t.Array(t.String())),
-          requiresApproval: t.Optional(t.Boolean()),
-          promptTemplate: t.Optional(t.String()),
-          stageType: t.Optional(t.Union([t.Literal('standard'), t.Literal('qa_validation')])),
-          maxRetries: t.Optional(t.Number()),
-          retryTargetStage: t.Optional(t.Number()),
-        }))),
+        steps: t.Optional(t.Array(recipeStepBodySchema)),
+        parameters: t.Optional(t.Array(recipeParamBodySchema)),
       }),
       detail: { tags: ['pipelines'] },
     }
@@ -231,10 +260,17 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         stageType: s.stageType,
         maxRetries: s.maxRetries,
         retryTargetStage: s.retryTargetStage,
+        model: s.model,
       }));
+      let parameters;
+      try {
+        parameters = validateRecipeParameterDefs(body.parameters ?? []);
+      } catch (err) {
+        return { error: `Invalid recipe parameters: ${(err as Error).message}` };
+      }
       const [updated] = await db
         .update(pipelineTemplates)
-        .set({ name: body.name, description: body.description, steps, updatedAt: new Date() })
+        .set({ name: body.name, description: body.description, steps, parameters, updatedAt: new Date() })
         .where(eq(pipelineTemplates.id, params.id))
         .returning();
       if (!updated) return { error: 'Template not found' };
@@ -245,17 +281,8 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),
-        steps: t.Optional(t.Array(t.Object({
-          name: t.String(),
-          description: t.Optional(t.String()),
-          topic: t.String(),
-          toolIds: t.Optional(t.Array(t.String())),
-          requiresApproval: t.Optional(t.Boolean()),
-          promptTemplate: t.Optional(t.String()),
-          stageType: t.Optional(t.Union([t.Literal('standard'), t.Literal('qa_validation')])),
-          maxRetries: t.Optional(t.Number()),
-          retryTargetStage: t.Optional(t.Number()),
-        }))),
+        steps: t.Optional(t.Array(recipeStepBodySchema)),
+        parameters: t.Optional(t.Array(recipeParamBodySchema)),
       }),
       detail: { tags: ['pipelines'] },
     }
@@ -279,4 +306,43 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       params: t.Object({ id: t.String() }),
       detail: { tags: ['pipelines'] },
     }
+  )
+
+  // Export a recipe (template) to a portable JSON string for sharing.
+  .get(
+    '/templates/:id/export',
+    async ({ user, params, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      try {
+        const json = await exportRecipe(params.id, user.id === 'system' ? undefined : user.id);
+        return { recipe: json };
+      } catch (err) {
+        set.status = 404;
+        return { error: (err as Error).message };
+      }
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['pipelines'] } },
+  )
+
+  // Import a shared recipe JSON as a new template owned by the caller.
+  .post(
+    '/templates/import',
+    async ({ user, body, set }) => {
+      if (!user || user.id === 'system') {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      try {
+        const recipe = parseRecipeExport(body.recipe);
+        const created = await importRecipe(user.id, recipe);
+        return created;
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { body: t.Object({ recipe: t.String() }), detail: { tags: ['pipelines'] } },
   );

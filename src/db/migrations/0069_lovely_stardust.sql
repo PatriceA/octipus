@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_templates" ADD COLUMN "parameters" jsonb DEFAULT '[]'::jsonb NOT NULL;

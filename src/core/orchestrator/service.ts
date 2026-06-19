@@ -1086,7 +1086,7 @@ export class OrchestratorService {
     type: string,
     description: string,
     context: AgentContext,
-    options?: { maxRetries?: number },
+    options?: { maxRetries?: number; params?: Record<string, unknown> },
   ): Promise<unknown> {
     const { getPipelineManager } = await import('./pipeline-manager');
     const pipelineManager = getPipelineManager();
