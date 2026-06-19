@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  CONNECTOR_TOOL_PREFIX,
+  getBoundConnectorIds,
+  getToolsForRole,
   OUTPUT_FORMATTING_RULES,
   ROLE_CONFIGS,
   SECURITY_PREAMBLE,
   getRoleConfig,
+  setRoleToolIdsInMemory,
   stripSecurityPreamble,
 } from './roles';
+import type { AgentRole, RoleConfig } from './types';
 
 describe('SECURITY_PREAMBLE', () => {
   test('contains core jailbreak guards', () => {
@@ -78,6 +83,73 @@ describe('general role grants the user-facing capture tools', () => {
     const prompt = ROLE_CONFIGS.general.systemPromptTemplate;
     expect(prompt).toContain('write_note');
     expect(prompt).toContain('create_task');
+  });
+});
+
+describe('role↔tool binding (W7)', () => {
+  // Use a disposable test role so we never corrupt a real role's config for
+  // other tests in the same process. ROLE_CONFIGS is a shared mutable cache.
+  const TEST_ROLE = '__test_binding_role__' as AgentRole;
+
+  function withTestRole(toolIds: string[], fn: () => void): void {
+    const original = ROLE_CONFIGS[TEST_ROLE];
+    ROLE_CONFIGS[TEST_ROLE] = {
+      role: TEST_ROLE,
+      toolIds,
+      defaultTopic: 'general',
+      systemPromptTemplate: 'x',
+    } as RoleConfig;
+    try {
+      fn();
+    } finally {
+      if (original) ROLE_CONFIGS[TEST_ROLE] = original;
+      else delete (ROLE_CONFIGS as Record<string, RoleConfig>)[TEST_ROLE];
+    }
+  }
+
+  describe('getBoundConnectorIds', () => {
+    test('extracts connector ids (prefix stripped)', () => {
+      withTestRole(['filesystem', `${CONNECTOR_TOOL_PREFIX}atlassian`, 'mcp'], () => {
+        expect(getBoundConnectorIds(TEST_ROLE)).toEqual(['atlassian']);
+      });
+    });
+
+    test('empty when the role binds no connectors', () => {
+      withTestRole(['filesystem', 'shell', 'mcp'], () => {
+        expect(getBoundConnectorIds(TEST_ROLE)).toEqual([]);
+      });
+    });
+  });
+
+  describe('getToolsForRole connector handling', () => {
+    test('a connector-only role resolves to no builtin/MCP handlers', () => {
+      // Connector handlers are resolved per-user at spawn time, not here, so a
+      // role with only connector ids must not dead-end in the builtin registry.
+      withTestRole([`${CONNECTOR_TOOL_PREFIX}atlassian`], () => {
+        expect(getToolsForRole(TEST_ROLE)).toEqual([]);
+      });
+    });
+
+    test('empty toolIds → no handlers', () => {
+      withTestRole([], () => {
+        expect(getToolsForRole(TEST_ROLE)).toEqual([]);
+      });
+    });
+  });
+
+  describe('setRoleToolIdsInMemory', () => {
+    test('updates the in-memory cache (the spawn-time read point)', () => {
+      withTestRole(['filesystem'], () => {
+        setRoleToolIdsInMemory(TEST_ROLE, ['shell', 'git']);
+        expect(ROLE_CONFIGS[TEST_ROLE].toolIds).toEqual(['shell', 'git']);
+        expect(getBoundConnectorIds(TEST_ROLE)).toEqual([]);
+      });
+    });
+
+    test('no-op for an unknown role (does not create a phantom entry)', () => {
+      setRoleToolIdsInMemory('totally-unknown-role' as AgentRole, ['x']);
+      expect(ROLE_CONFIGS['totally-unknown-role' as AgentRole]).toBeUndefined();
+    });
   });
 });
 

@@ -36,12 +36,18 @@ export async function seedRoles(): Promise<void> {
     if (existing) {
       const updates: Record<string, unknown> = {};
 
-      // Merge any new toolIds from code into the DB record (preserves user additions)
-      const dbToolIds = new Set((existing.toolIds as string[]) || []);
-      const codeToolIds = config.toolIds || [];
-      const newTools = codeToolIds.filter(id => !dbToolIds.has(id));
-      if (newTools.length > 0) {
-        updates.toolIds = [...dbToolIds, ...newTools];
+      // Merge any new toolIds from code into the DB record (preserves user
+      // additions) — but ONLY while the user hasn't customized this role's
+      // toolIds via the UI. Once customized, the row is authoritative so a
+      // user's removals survive restarts (otherwise a removed code tool would
+      // be re-added on every boot). When not customized, code is the default.
+      if (!existing.toolIdsCustomized) {
+        const dbToolIds = new Set((existing.toolIds as string[]) || []);
+        const codeToolIds = config.toolIds || [];
+        const newTools = codeToolIds.filter(id => !dbToolIds.has(id));
+        if (newTools.length > 0) {
+          updates.toolIds = [...dbToolIds, ...newTools];
+        }
       }
 
       // If the system prompt was never customized (matches an older hardcoded version),
