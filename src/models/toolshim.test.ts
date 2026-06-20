@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
+import { modelLogger } from '@/utils/logger';
 import {
   buildToolShimPrompt,
   parseToolShimResponse,
@@ -110,14 +111,42 @@ describe('translateToToolCall', () => {
     expect(called).toBe(false);
   });
 
-  test('translator throws ⇒ null (fail-soft, no rethrow)', async () => {
-    const call = await translateToToolCall({
-      text: 'write a file',
-      tools: TOOLS,
-      isRegistered: registered,
-      complete: async () => { throw new Error('provider down'); },
-    });
-    expect(call).toBeNull();
+  test('translator throws ⇒ null (fail-soft, no rethrow) AND logs a breadcrumb', async () => {
+    const debugSpy = spyOn(modelLogger, 'debug').mockImplementation(() => {});
+    try {
+      const err = new Error('provider down');
+      const call = await translateToToolCall({
+        text: 'write a file',
+        tools: TOOLS,
+        isRegistered: registered,
+        complete: async () => { throw err; },
+      });
+      expect(call).toBeNull();
+      // The thrown-error path must NOT be silent: a debug breadcrumb carrying
+      // the error reason fires (the caller's success/unbound logs never run here).
+      expect(debugSpy).toHaveBeenCalledTimes(1);
+      const [ctx, msg] = debugSpy.mock.calls[0] as [{ error: unknown }, string];
+      expect(ctx.error).toBe(err);
+      expect(msg).toContain('tool-translation failed');
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
+
+  test('successful translation does NOT log a failure breadcrumb', async () => {
+    const debugSpy = spyOn(modelLogger, 'debug').mockImplementation(() => {});
+    try {
+      const call = await translateToToolCall({
+        text: 'I will write hello to /a.txt',
+        tools: TOOLS,
+        isRegistered: registered,
+        complete: async () => '{"name":"filesystem__write_file","arguments":{"path":"/a.txt","content":"hello"}}',
+      });
+      expect(call?.name).toBe('filesystem__write_file');
+      expect(debugSpy).not.toHaveBeenCalled();
+    } finally {
+      debugSpy.mockRestore();
+    }
   });
 
   test('translator returns unregistered name ⇒ null', async () => {

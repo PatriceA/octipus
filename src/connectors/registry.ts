@@ -20,8 +20,10 @@ export class ConnectorRegistry {
    *
    * @param allowedConnectorIds When provided (non-null), only connectors whose
    *   id is in this set are exposed — this is how role↔connector binding gates
-   *   connectors per role (W7). When omitted/undefined, ALL active connectors
-   *   are exposed (backward-compatible default for roles that bind none).
+   *   connectors per role (W7). Callers derive this set from a role's
+   *   `connector:<id>` toolIds (colon prefix, not `connector_`). When
+   *   omitted/undefined, ALL active connectors are exposed (backward-compatible
+   *   default for roles that bind none).
    */
   async getUserToolHandlers(
     userId: string,

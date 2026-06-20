@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'crypto';
 import { Elysia } from 'elysia';
-import { isIntegration, setupIntegrationDb, truncateTables } from '@/test-helpers/integration';
+import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
@@ -44,8 +44,7 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
   });
 
   afterAll(async () => {
-    const { closeDb } = await import('@/db/postgres');
-    await closeDb();
+    await teardownIntegration();
   });
 
   async function patchJson(app: ElysiaLike, path: string, body: unknown) {

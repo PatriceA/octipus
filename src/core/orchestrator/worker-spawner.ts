@@ -279,7 +279,7 @@ export async function spawnWorker(
     try {
       const { getConnectorRegistry } = await import('@/connectors');
       // Role↔connector binding: if the role binds specific connectors
-      // (`connector_<id>` in its toolIds), expose only those; otherwise expose
+      // (`connector:<id>` in its toolIds), expose only those; otherwise expose
       // all of the user's active connectors (backward-compatible default).
       const boundConnectorIds = getBoundConnectorIds(agentRole);
       const allowed = boundConnectorIds.length > 0 ? new Set(boundConnectorIds) : undefined;
@@ -291,6 +291,20 @@ export async function spawnWorker(
   }
 
   coreLogger.info({ role: agentRole, toolCount: roleTools.length, toolNames: roleTools.map(t => t.name) }, 'Worker tools resolved');
+
+  // Fail-loud (house rule #1): a TOOLLESS worker would otherwise spawn
+  // silently. The empty set can come from a deliberate customization (PATCH
+  // /roles + tool_ids_customized=true so loadRolesFromDb no longer merges code
+  // defaults — an intended capability we do NOT auto-restore) OR from every
+  // tool being gated out by missing capabilities / unregistered ids. We can't
+  // discriminate synchronously here, so the message names all causes rather
+  // than blaming customization — surface it so operators can spot the gap.
+  if (roleTools.length === 0) {
+    coreLogger.warn(
+      { role: agentRole },
+      `Worker role "${agentRole}" resolved to ZERO tools (deliberate customization, capability gating, or unregistered ids); this worker will spawn toolless`,
+    );
+  }
 
   // Resolve the worker's model up front so we know whether it's in the small
   // (router) tier before assembling the prompt. The orchestrator already

@@ -11,7 +11,14 @@ import { modelLogger } from '@/utils/logger';
 const CACHE_TTL = 300; // 5 minutes
 
 export class ModelRegistry {
-  private db = getDb();
+  // Resolve the live connection per access rather than snapshotting it at
+  // construction: this is a process-global singleton, so a cached handle would
+  // dangle after the socket is recycled (max_lifetime) or closed/reopened
+  // between integration-test files, surfacing as CONNECTION_ENDED. getDb() is a
+  // cheap `if (db) return db`.
+  private get db() {
+    return getDb();
+  }
   private cache = new RedisCache(CACHE_TTL);
 
   private async cacheGet<T>(key: string): Promise<T | null> {

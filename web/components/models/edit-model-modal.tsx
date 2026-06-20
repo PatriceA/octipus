@@ -41,7 +41,11 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     endpoint: model.endpoint || '',
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
-    topics: (model.topics || []).filter(t => AVAILABLE_TOPICS.some(at => at.value === t)),
+    // Preserve ALL of the model's existing topics, even ones not in
+    // AVAILABLE_TOPICS (e.g. a topic added to the backend's canonical list but
+    // not yet mirrored here). Filtering them out used to silently drop the
+    // binding on save.
+    topics: model.topics || [],
     priority: model.priority,
     supportsVision: model.supportsVision,
     supportsTools: model.supportsTools,
@@ -67,6 +71,17 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   });
   const [error, setError] = useState('');
   const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
+
+  // Render the canonical topic catalog plus any topic the model is already
+  // bound to that isn't in the catalog (so it stays visible/toggleable instead
+  // of being silently dropped). Unknown topics fall back to their raw value as
+  // the label.
+  const topicOptions = [
+    ...AVAILABLE_TOPICS,
+    ...(model.topics || [])
+      .filter((t) => !AVAILABLE_TOPICS.some((at) => at.value === t))
+      .map((t) => ({ value: t, label: t, description: 'Topic not in the catalog — preserved from this model.' })),
+  ];
 
   const isCli = model.provider === 'cli';
   const isCustomProvider = model.provider.startsWith('custom-');
@@ -259,7 +274,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
             <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
             <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 w-full">
-              {AVAILABLE_TOPICS.map((topic) => {
+              {topicOptions.map((topic) => {
                 const selected = formData.topics.includes(topic.value);
                 return (
                   <button

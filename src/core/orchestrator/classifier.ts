@@ -58,8 +58,14 @@ const TASK_KEYWORDS: Record<string, string[]> = {
     'monitoring', 'grafana', 'prometheus',
   ],
   security: [
-    'security', 'vulnerability', 'audit', 'owasp', 'penetration',
+    'security', 'vulnerability', 'vulnerabilities', 'audit', 'owasp', 'penetration',
     'threat model', 'sql injection', 'xss', 'csrf',
+    // 'vulnerabilities' (plural) is listed alongside the singular so an
+    // "audit ... for potential vulnerabilities" ask scores for security — the
+    // single-word word-boundary regex does not match the plural form.
+    // NOTE: do NOT add bare 'authentication middleware' here — a multi-word
+    // keyword scores +1.5 and would steal ordinary coding asks like
+    // "implement authentication middleware" from the coding role (+1).
     'authentication flow', 'access control', 'encryption',
     'security review', 'cve', 'exploit', 'hardening',
   ],

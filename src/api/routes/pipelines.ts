@@ -2,7 +2,7 @@ import { desc, eq, or } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
-import { validateRecipeParameterDefs } from '@/core/orchestrator/recipe-params';
+import { validateRecipeParameterDefs, validateRecipeParameterRefs } from '@/core/orchestrator/recipe-params';
 import {
   exportRecipe,
   importRecipe,
@@ -213,6 +213,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       let parameters;
       try {
         parameters = validateRecipeParameterDefs(body.parameters ?? []);
+        validateRecipeParameterRefs(steps, parameters);
       } catch (err) {
         return { error: `Invalid recipe parameters: ${(err as Error).message}` };
       }
@@ -265,6 +266,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       let parameters;
       try {
         parameters = validateRecipeParameterDefs(body.parameters ?? []);
+        validateRecipeParameterRefs(steps, parameters);
       } catch (err) {
         return { error: `Invalid recipe parameters: ${(err as Error).message}` };
       }

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { isIntegration, setupIntegrationDb, truncateTables } from '@/test-helpers/integration';
+import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
 import { SwarmSpawner } from './spawner';
 
 /**
@@ -15,7 +15,7 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
 
   beforeAll(async () => {
     await setupIntegrationDb();
-    await truncateTables(['topics_config', 'model_config', 'experts']);
+    await truncateTables(['topics_config', 'model_config', 'presets']);
 
     const { getModelRegistry } = await import('@/models/model-registry');
     const reg = getModelRegistry();
@@ -34,8 +34,7 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
   });
 
   afterAll(async () => {
-    const { closeDb } = await import('@/db/postgres');
-    await closeDb();
+    await teardownIntegration();
   });
 
   test('no executorModel ⇒ resolves the topic primary (unchanged behaviour)', async () => {
