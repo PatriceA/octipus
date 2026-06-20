@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import type { RecipeParameter } from '@/db/schema/pipeline-templates';
+import type { PipelineStepConfig, RecipeParameter } from '@/db/schema/pipeline-templates';
 
 /** Zod schema for a single recipe parameter definition (validate on create). */
 export const recipeParameterSchema = z
@@ -35,6 +35,38 @@ export function validateRecipeParameterDefs(defs: unknown): RecipeParameter[] {
     keys.add(p.key);
   }
   return parsed as RecipeParameter[];
+}
+
+/** Matches a `{{param.<key>}}` reference, capturing the key. */
+const PARAM_REF_RE = /\{\{\s*param\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+
+/**
+ * Validate that every `{{param.<key>}}` reference in a recipe's stage prompt
+ * templates resolves to a DECLARED parameter. An undeclared reference would
+ * otherwise be left as a literal `{{param.typo}}` in the worker input (silent
+ * footgun) — so we fail loud at create/validate time with a specific message.
+ *
+ * `defs` is the already-validated parameter list (see validateRecipeParameterDefs).
+ * Throws on the first undeclared reference; no-op when there are no references.
+ */
+export function validateRecipeParameterRefs(
+  steps: Array<Pick<PipelineStepConfig, 'name' | 'promptTemplate'>>,
+  defs: RecipeParameter[],
+): void {
+  const declared = new Set(defs.map((d) => d.key));
+  for (const step of steps) {
+    const template = step.promptTemplate;
+    if (!template) continue;
+    for (const match of template.matchAll(PARAM_REF_RE)) {
+      const key = match[1];
+      if (!declared.has(key)) {
+        throw new Error(
+          `stage "${step.name}" references undeclared recipe parameter "{{param.${key}}}"; ` +
+            `declare it in the recipe's parameters or fix the typo`,
+        );
+      }
+    }
+  }
 }
 
 /** Coerce + validate one provided value against its definition. Returns the string form. */

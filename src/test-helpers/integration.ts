@@ -12,7 +12,7 @@
  */
 
 import { resetConfig } from '@/config';
-import { closeDb, initializeDb, initializeExtensions } from '@/db/postgres';
+import { closeDb, initializeDb, initializeExtensions, isDbInitialized } from '@/db/postgres';
 import { closeStorage, getStorageProvider, initializeStorage } from '@/db/storage';
 
 export const isIntegration = process.env.INTEGRATION === '1';
@@ -26,7 +26,12 @@ let storageInitialized = false;
  * (the test:integration runner handles migrations before tests).
  */
 export async function setupIntegrationDb(): Promise<void> {
-  if (dbInitialized) return;
+  // Self-healing: if a prior test file called closeDb() directly (instead of
+  // teardownIntegration), the real connection is gone even though our
+  // module-global `dbInitialized` is still true. Re-init whenever the live
+  // connection is missing so later files don't throw "Database not initialized".
+  if (dbInitialized && isDbInitialized()) return;
+  dbInitialized = false;
   // Config is cached; reset so a fresh env read picks up the test DATABASE_URL
   resetConfig();
   process.env.STORAGE_MODE = 'external';

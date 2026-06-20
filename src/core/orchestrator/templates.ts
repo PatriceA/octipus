@@ -2,7 +2,7 @@ import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import type { PipelineStepConfig, RecipeParameter } from '@/db/schema/pipeline-templates';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
-import { validateRecipeParameterDefs } from './recipe-params';
+import { validateRecipeParameterDefs, validateRecipeParameterRefs } from './recipe-params';
 import { getRoleConfig } from './roles';
 import type { AgentRole, PipelineStageType } from './types';
 
@@ -204,6 +204,9 @@ export function parseRecipeExport(json: string): RecipeExport {
   }
   // Validate parameter defs with the same schema used at create time.
   const parameters = validateRecipeParameterDefs(obj.parameters ?? []);
+  // Reject an import whose stages reference an undeclared {{param.x}} — same
+  // fail-loud rule as the create/update API paths.
+  validateRecipeParameterRefs(obj.steps as PipelineStepConfig[], parameters);
   return {
     octipusRecipe: 1,
     name: obj.name,
@@ -252,9 +255,11 @@ export function expandPromptTemplate(
   for (const [key, value] of Object.entries(vars)) {
     // Escape regex metachars in the key so dotted keys like `param.foo` match
     // literally (the `.` would otherwise match any char). `$` in the value is
-    // escaped so it isn't interpreted as a replacement special.
+    // escaped so it isn't interpreted as a replacement special. Allow optional
+    // whitespace inside the braces (`{{ param.foo }}`) so the runtime accepts
+    // the same forms the recipe-param validator (PARAM_REF_RE) recognizes.
     const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    result = result.replace(new RegExp(`\\{\\{${escapedKey}\\}\\}`, 'g'), () => value);
+    result = result.replace(new RegExp(`\\{\\{\\s*${escapedKey}\\s*\\}\\}`, 'g'), () => value);
   }
   return result;
 }

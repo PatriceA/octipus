@@ -80,18 +80,23 @@ export interface LiteLLMModel {
   litellmModel: string;
 }
 
-/** Topics used by the orchestrator for role-based model routing */
+/**
+ * Topics used by the orchestrator for role-based model routing.
+ *
+ * KEEP IN SYNC with src/models/topics.ts (TOPICS) — single source of truth.
+ * web cannot import backend src (its tsconfig only maps @/* to the web root),
+ * so this literal is mirrored by hand. Adding a topic to TOPICS without
+ * mirroring it here makes the topic invisible in the model editor AND (until
+ * the edit-model-modal fix) silently strips it from any model bound to it.
+ */
 export const AVAILABLE_TOPICS = [
+  // worker role topics (topic === role)
   { value: 'general', label: 'General', description: 'General-purpose tasks, browser interaction' },
   { value: 'coding', label: 'Coding', description: 'Code generation, shell, git' },
   { value: 'research', label: 'Research', description: 'Web search, information gathering, investigation' },
   { value: 'architecture', label: 'Architecture', description: 'Software architecture, requirements, system design' },
   { value: 'review', label: 'Review', description: 'Code review, PR review, quality analysis' },
   { value: 'communication', label: 'Communication', description: 'Email, calendar, contacts (Google/Microsoft)' },
-  { value: 'chat', label: 'Chat', description: 'Casual conversations' },
-  { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents' },
-  { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis' },
-  { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
   { value: 'design', label: 'Design', description: 'UI/UX design, layout, accessibility' },
   { value: 'devops', label: 'DevOps', description: 'CI/CD, Docker, infrastructure, deployment' },
   { value: 'security', label: 'Security', description: 'Security analysis, threat modeling, hardening' },
@@ -102,11 +107,21 @@ export const AVAILABLE_TOPICS = [
   { value: 'automation', label: 'Automation', description: 'Workflows, process orchestration' },
   { value: 'pm', label: 'Project Mgmt', description: 'Project planning, tracking, coordination' },
   { value: 'writing', label: 'Writing', description: 'Documentation, technical writing' },
+  // orchestrator-direct / capability text topics
+  { value: 'chat', label: 'Chat', description: 'Casual conversations' },
+  { value: 'simple', label: 'Simple', description: 'Trivial single-step requests routed direct (no swarm)' },
+  { value: 'local', label: 'Local', description: 'Local-model-preferred lightweight tasks' },
   { value: 'voice', label: 'Voice', description: 'Phone call conversations — use a fast model for low latency' },
-  { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
+  // automated background text tasks
   { value: 'memory_extraction', label: 'Memory Extraction', description: 'Long-term memory extractor + judge. Runs per turn — bind a cheap, fast model. Unbound = memory tier stays off.' },
+  { value: 'knowledge_review', label: 'Knowledge Review', description: 'KB curation / review passes — bind a cheap model.' },
+  { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
   { value: 'summarization', label: 'Summarization', description: 'L0 abstracts for knowledge-base chunks (docs/files). Runs per chunk on import — bind a cheap/local model. Unbound = no abstracts generated.' },
   { value: 'tool_translation', label: 'Tool Translation', description: 'Toolshim: converts a weak/local model’s prose-instead-of-tool-call into a valid tool call. Runs only on the tool-call failure path — bind a small, reliable tool-calling model. Unbound = toolshim disabled (current behaviour).' },
+  // non-text model classes
+  { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents' },
+  { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis' },
+  { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */

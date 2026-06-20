@@ -64,6 +64,8 @@ tests:
     assertions:
       - type: classification
         value: task
+      - type: routes_to_role
+        value: security
       - type: confidence_above
         value: 0.4
     tags: [routing, security]

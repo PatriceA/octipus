@@ -12,6 +12,7 @@ import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client
 import { getModelRegistry } from '@/models/model-registry';
 import { type ToolShimSchema, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
+import { getConfig } from '@/config';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -664,9 +665,14 @@ export class AgentWorker extends BaseAgentWorker {
       // stay full). Cheaper + less destructive than whole-history compaction
       // and triggers earlier, so context-overflow errors are rarer. Lives next
       // to the token-threshold proactive path below so both run together.
+      // Effective cap: per-worker config wins, else the runtime `agent` config
+      // knob (config schema field), else the hardcoded default. This makes the
+      // soft cap tunable via config without editing agent construction sites.
+      const effectiveSoftCap =
+        this.config.toolOutputSoftCap ?? getConfig().agent?.toolOutputSoftCap ?? DEFAULT_TOOL_OUTPUT_SOFT_CAP;
       const { messages: toolCompacted, truncated: toolOutputsTruncated } = truncateOldestToolOutputs(
         this.messages,
-        { softCap: this.config.toolOutputSoftCap ?? DEFAULT_TOOL_OUTPUT_SOFT_CAP },
+        { softCap: effectiveSoftCap },
       );
       if (toolOutputsTruncated > 0) {
         this.messages = toolCompacted;

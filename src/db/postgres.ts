@@ -98,6 +98,15 @@ async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
 }
 
 /**
+ * Whether a live raw connection is currently bound. Used by test helpers to
+ * detect when a prior direct `closeDb()` (from another test file) tore down the
+ * connection so they can self-heal and reconnect.
+ */
+export function isDbInitialized(): boolean {
+  return rawExec !== null;
+}
+
+/**
  * Get database connection. Must call initializeDb() first during startup.
  * For backward compat in external mode, synchronously initializes if not yet done.
  */

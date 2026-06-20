@@ -24,7 +24,12 @@ export interface DailyUsage {
 }
 
 export class CostTracker {
-  private db = getDb();
+  // Resolve the live connection per access — see ModelRegistry.db: a singleton
+  // must not snapshot a handle that can be recycled (max_lifetime) or closed
+  // and reopened between integration-test files (else CONNECTION_ENDED).
+  private get db() {
+    return getDb();
+  }
   private cache = new RedisCache(60); // 1 minute cache for stats
 
   /**

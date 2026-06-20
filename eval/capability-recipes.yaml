@@ -1,0 +1,80 @@
+name: Recipe Meta-Tool Tests (Quality Standard)
+description: >
+  Tests verifying that requests to run, save, list, and import recipes
+  (parameterized pipeline templates exposed via the orchestrator's recipe
+  meta-tools: list_recipes / invoke_recipe / create_pipeline) classify as
+  actionable tasks and route to a sensible specialist.
+  In unit mode this validates classification + topic routing only — the
+  recipe meta-tools themselves fire in integration mode (toolsUsed is empty
+  in unit mode), so assertions here stay to what unit-mode eval can observe.
+
+tests:
+  # ── Run a recipe ──
+  - id: recipe-run-deployment
+    description: Running a deployment pipeline recipe is an actionable task (devops)
+    input: "Run my deployment pipeline recipe with env=prod"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: devops
+    tags: [recipes, invoke, quality-standard]
+
+  - id: recipe-run-cicd
+    description: Running a CI/CD pipeline recipe routes to devops
+    input: "Run the CI/CD pipeline recipe to deploy the service"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: devops
+    tags: [recipes, invoke, quality-standard]
+
+  - id: recipe-run-research
+    description: Running a research recipe routes to research
+    input: "Run the research recipe to investigate database options"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: research
+    tags: [recipes, invoke, quality-standard]
+
+  # ── Save / create a recipe ──
+  - id: recipe-save-pipeline
+    description: Saving a multi-step pipeline as a reusable template is a task
+    input: "Save this multi-step pipeline as a reusable template"
+    assertions:
+      - type: classification
+        value: task
+    tags: [recipes, save, quality-standard]
+
+  - id: recipe-save-stages
+    description: Saving stages as a reusable recipe is a task
+    input: "Save these stages as a reusable deployment recipe I can run later"
+    assertions:
+      - type: classification
+        value: task
+    tags: [recipes, save, quality-standard]
+
+  # ── List recipes ──
+  - id: recipe-list
+    description: Listing available recipes is an actionable task
+    input: "List the recipes I have available to run"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: general
+    tags: [recipes, list, quality-standard]
+
+  # ── Scheduled recipe run ──
+  - id: recipe-schedule-run
+    description: Scheduling a recurring recipe run routes to automation
+    input: "Set up a recurring task that runs the nightly build recipe every morning"
+    assertions:
+      - type: classification
+        value: task
+      - type: routes_to_role
+        value: automation
+    tags: [recipes, schedule, quality-standard]

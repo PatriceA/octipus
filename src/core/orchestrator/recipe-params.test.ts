@@ -4,6 +4,7 @@ import {
   paramTemplateVars,
   resolveRecipeParams,
   validateRecipeParameterDefs,
+  validateRecipeParameterRefs,
 } from './recipe-params';
 
 describe('validateRecipeParameterDefs', () => {
@@ -80,6 +81,62 @@ describe('resolveRecipeParams', () => {
   test('optional with no default + not provided ⇒ omitted', () => {
     const r = resolveRecipeParams(defs, { repo: 'x', reviewer: 'a' });
     expect('env' in r).toBe(false);
+  });
+});
+
+describe('validateRecipeParameterRefs', () => {
+  const defs: RecipeParameter[] = [
+    { key: 'repo', inputType: 'string', requirement: 'required' },
+    { key: 'env', inputType: 'select', requirement: 'optional', options: ['dev', 'prod'] },
+  ];
+
+  test('declared {{param.x}} references are accepted', () => {
+    expect(() =>
+      validateRecipeParameterRefs(
+        [{ name: 'build', promptTemplate: 'Deploy {{param.repo}} to {{param.env}}' }],
+        defs,
+      ),
+    ).not.toThrow();
+  });
+
+  test('undeclared {{param.x}} reference => validation error naming the stage + key', () => {
+    expect(() =>
+      validateRecipeParameterRefs(
+        [{ name: 'build', promptTemplate: 'Deploy {{param.repo}} as {{param.typo}}' }],
+        defs,
+      ),
+    ).toThrow(/stage "build" references undeclared recipe parameter "\{\{param\.typo\}\}"/);
+  });
+
+  test('whitespace-padded undeclared ref {{ param.bogus }} is still caught', () => {
+    expect(() =>
+      validateRecipeParameterRefs([{ name: 's', promptTemplate: 'X {{ param.bogus }}' }], defs),
+    ).toThrow(/bogus/);
+  });
+
+  test('whitespace-padded DECLARED ref {{ param.repo }} is accepted (runtime expands it too)', () => {
+    expect(() =>
+      validateRecipeParameterRefs([{ name: 's', promptTemplate: 'Deploy {{ param.repo }}' }], defs),
+    ).not.toThrow();
+  });
+
+  test('non-param template vars (e.g. {{description}}) are ignored', () => {
+    expect(() =>
+      validateRecipeParameterRefs(
+        [{ name: 's', promptTemplate: 'Do {{description}} with {{previousOutput}}' }],
+        defs,
+      ),
+    ).not.toThrow();
+  });
+
+  test('stage with no promptTemplate is skipped', () => {
+    expect(() => validateRecipeParameterRefs([{ name: 's', promptTemplate: undefined }], defs)).not.toThrow();
+  });
+
+  test('no declared params + a {{param.x}} reference => error', () => {
+    expect(() =>
+      validateRecipeParameterRefs([{ name: 's', promptTemplate: 'Use {{param.x}}' }], []),
+    ).toThrow(/undeclared recipe parameter/);
   });
 });
 

@@ -21,6 +21,7 @@
  */
 
 import type { ToolCall } from '@/core/types';
+import { modelLogger } from '@/utils/logger';
 
 /** The tool schema shape we hand the translator — same fields the providers see. */
 export interface ToolShimSchema {
@@ -158,8 +159,11 @@ export async function translateToToolCall(
   let content: string;
   try {
     content = await complete(buildToolShimPrompt(text, tools));
-  } catch {
-    // Translator call failed — fail-soft to current behaviour. The caller logs.
+  } catch (error) {
+    // Translator call failed (timeout/5xx/etc). Fail-soft to current behaviour,
+    // but leave a breadcrumb so the failure isn't fully silent — the caller's
+    // success/unbound logs never fire on this thrown-error path.
+    modelLogger.debug({ error }, 'tool-translation failed, skipping toolshim');
     return null;
   }
 

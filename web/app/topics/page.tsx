@@ -56,6 +56,7 @@ function TopicCard({
   const [maxTokens, setMaxTokens] = useState(topic.maxTokens?.toString() ?? '');
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(0);
+  const [saveError, setSaveError] = useState('');
 
   // Local form state is seeded from props once. The parent gives each card a
   // `key` derived from the server values, so a save→refetch that changes them
@@ -70,6 +71,7 @@ function TopicCard({
 
   const save = async () => {
     setSaving(true);
+    setSaveError('');
     try {
       // Binding (primary/backup) and extras are separate endpoints.
       if (primary !== (topic.primaryModel ?? '') || backup !== (topic.backupModel ?? '')) {
@@ -86,7 +88,10 @@ function TopicCard({
       setSavedAt(Date.now());
       onSaved();
     } catch (err) {
+      // Surface the failure to the user instead of only logging — a silent
+      // console.error reads as a successful save.
       console.error(`Failed to save topic "${topic.value}":`, err);
+      setSaveError(err instanceof Error ? err.message : 'Failed to save. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -167,6 +172,10 @@ function TopicCard({
             placeholder="default" onChange={(e) => setMaxTokens(e.target.value)} />
         </label>
       </div>
+
+      {saveError && (
+        <p className="mt-2 text-xs text-error bg-error/10 px-2 py-1 rounded">{saveError}</p>
+      )}
     </div>
   );
 }
@@ -176,26 +185,19 @@ export default function TopicsPage() {
   const queryClient = useQueryClient();
   const canEdit = !!user?.isAdmin;
 
-  const { data: topicsData, isLoading } = useQuery({
+  const { data: topicsData, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['topics-config'],
-    queryFn: async () => {
-      try {
-        return await api.get<{ topics: TopicRow[] }>('/topics');
-      } catch {
-        return { topics: [] as TopicRow[] };
-      }
-    },
+    // Let the fetch error propagate so the UI can show a real failure instead
+    // of an empty "no topics" success when /topics is down or auth fails.
+    queryFn: () => api.get<{ topics: TopicRow[] }>('/topics'),
   });
 
   const { data: modelsData } = useQuery({
     queryKey: ['models'],
-    queryFn: async () => {
-      try {
-        return await api.get<{ models: ModelOption[] }>('/models');
-      } catch {
-        return { models: [] as ModelOption[] };
-      }
-    },
+    // Don't swallow: let react-query record the error (and apply its retry)
+    // rather than masking a /models failure as "no models". This only feeds the
+    // model/executor dropdowns, so the page still renders topics on failure.
+    queryFn: () => api.get<{ models: ModelOption[] }>('/models'),
   });
 
   const topics = topicsData?.topics || [];
@@ -227,6 +229,18 @@ export default function TopicsPage() {
         <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
           <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
           Loading...
+        </div>
+      ) : isError ? (
+        <div className="bg-error/10 ring-1 ring-error/30 rounded-xs p-6 text-center space-y-3">
+          <p className="text-sm text-error">
+            Failed to load topics: {error instanceof Error ? error.message : 'Unknown error'}
+          </p>
+          <button
+            onClick={() => refetch()}
+            className="px-3 py-1.5 text-xs rounded bg-error/20 text-error cursor-pointer"
+          >
+            Retry
+          </button>
         </div>
       ) : (
         <div className={cn('space-y-3')}>
