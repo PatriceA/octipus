@@ -1,6 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getModelRegistry } from '@/models/model-registry';
+import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { getTopicConfig, setTopicConfig } from '@/models/topic-config';
 import { TOPICS } from '@/models/topics';
 import { apiLogger } from '@/utils/logger';
@@ -158,6 +159,68 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         primaryModel: t.Optional(t.Union([t.String(), t.Null()])),
         backupModel: t.Optional(t.Union([t.String(), t.Null()])),
       }),
+      detail: { tags: ['topics'] },
+    },
+  )
+
+  // Bind ONE model as primary for every text topic — the one-click "run
+  // everything on a single model" setup for small / local installs. Makes that
+  // model the default and demotes any other model currently primary for those
+  // topics. embedding/ocr/vision are intentionally left alone (different model
+  // classes — add those separately). This is the Topics-page home for what used
+  // to be the Models page's "use for all topics" action. Admin-only.
+  .post(
+    '/assign-all',
+    async ({ body, user, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+
+      const registry = getModelRegistry();
+      const models = await registry.getAllModelsIncludeDisabled();
+      const target = models.find((m) => m.name === body.model);
+      if (!target) {
+        set.status = 400;
+        return { error: `Unknown model: ${body.model}` };
+      }
+      // getModelForTopic only resolves enabled models, so binding a disabled one
+      // would leave every text topic effectively unresolvable. Reject up front.
+      if (!target.isEnabled) {
+        set.status = 400;
+        return { error: `Model "${body.model}" is disabled — enable it before assigning it to all topics` };
+      }
+
+      const textTopics = new Set(SINGLE_MODEL_CHAT_TOPICS);
+      for (const m of models) {
+        const roles = { ...((m.topicRoles ?? {}) as Record<string, 'primary' | 'backup'>) };
+        let changed = false;
+        for (const topic of textTopics) {
+          if (m.name === target.name) {
+            if (roles[topic] !== 'primary') {
+              roles[topic] = 'primary';
+              changed = true;
+            }
+          } else if (roles[topic] === 'primary') {
+            // Another model takes primary for this topic — demote the old one.
+            delete roles[topic];
+            changed = true;
+          }
+        }
+        if (changed) await registry.updateModel(m.name, { topicRoles: roles });
+      }
+
+      await registry.setDefaultModel(target.name);
+
+      apiLogger.info({ model: target.name, topics: SINGLE_MODEL_CHAT_TOPICS.length, by: user.id }, 'Assigned model to all text topics');
+      return {
+        model: target.name,
+        topics: SINGLE_MODEL_CHAT_TOPICS,
+        note: 'Bound as primary for all text topics and set as default. embedding/ocr/vision stay unbound — add an embedding model for RAG + memory, and a vision model for document/image features.',
+      };
+    },
+    {
+      body: t.Object({ model: t.String() }),
       detail: { tags: ['topics'] },
     },
   );

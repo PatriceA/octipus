@@ -26,6 +26,7 @@
     "db:migrate": "bun run scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:backfill-skill-embeddings": "bun run scripts/backfill-skill-embeddings.ts",
+    "db:backfill-topic-roles": "bun run scripts/backfill-topic-roles.ts",
     "db:check-embedding-drift": "bun run scripts/check-embedding-drift.ts",
     "setup": "bun run scripts/setup-wizard.ts",
     "backup": "bun run scripts/backup.ts",

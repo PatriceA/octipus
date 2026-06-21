@@ -1,12 +1,11 @@
 'use client';
 
-import { AlertCircle, CheckCircle, Cpu, Layers, Pencil, Star, Terminal, Trash2, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Cpu, Pencil, Star, Terminal, Trash2, XCircle } from 'lucide-react';
 import type { Model } from '@/lib/types/models';
 
 export interface ModelCardProps {
   model: Model;
   onSetDefault: (name: string) => void;
-  onUseForAllTopics: (name: string) => void;
   onEdit: (model: Model) => void;
   onToggleEnabled: (model: Model) => void;
   onDelete: (name: string) => void;
@@ -49,7 +48,7 @@ function ProviderBadge({ provider }: { provider: string }) {
 
 export { HealthBadge, ProviderBadge };
 
-export function ModelCard({ model, onSetDefault, onUseForAllTopics, onEdit, onToggleEnabled, onDelete }: ModelCardProps) {
+export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDelete }: ModelCardProps) {
   return (
     <div
       className={`bg-surface-container rounded-xs border ${
@@ -66,13 +65,6 @@ export function ModelCard({ model, onSetDefault, onUseForAllTopics, onEdit, onTo
             <Star className="w-4 h-4" />
           </button>
         )}
-        <button
-          onClick={() => onUseForAllTopics(model.name)}
-          className="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary/10 rounded cursor-pointer"
-          title="Use for all topics (single-model setup) — binds this model to every text topic and makes it default"
-        >
-          <Layers className="w-4 h-4" />
-        </button>
         <button
           onClick={() => onEdit(model)}
           className="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary/10 rounded cursor-pointer"
@@ -169,16 +161,6 @@ export function ModelCard({ model, onSetDefault, onUseForAllTopics, onEdit, onTo
           <span className="px-2 py-0.5 bg-accent/10 text-accent text-xs rounded">Sub-Agent</span>
         )}
       </div>
-
-      {model.topics && model.topics.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {model.topics.map((topic) => (
-            <span key={topic} className="px-2 py-0.5 bg-surface-container-high text-on-surface-variant text-xs rounded">
-              {topic}
-            </span>
-          ))}
-        </div>
-      )}
 
       {model.metadata?.description && (
         <p className="mt-2 text-xs text-on-surface-variant">{model.metadata.description}</p>

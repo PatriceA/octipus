@@ -4,7 +4,7 @@ import { Terminal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
-import { AVAILABLE_TOPICS, type Model } from '@/lib/types/models';
+import type { Model } from '@/lib/types/models';
 
 type CliKind = 'claude' | 'antigravity' | 'codex' | null;
 
@@ -41,11 +41,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     endpoint: model.endpoint || '',
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
-    // Preserve ALL of the model's existing topics, even ones not in
-    // AVAILABLE_TOPICS (e.g. a topic added to the backend's canonical list but
-    // not yet mirrored here). Filtering them out used to silently drop the
-    // binding on save.
-    topics: model.topics || [],
     priority: model.priority,
     supportsVision: model.supportsVision,
     supportsTools: model.supportsTools,
@@ -71,17 +66,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   });
   const [error, setError] = useState('');
   const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
-
-  // Render the canonical topic catalog plus any topic the model is already
-  // bound to that isn't in the catalog (so it stays visible/toggleable instead
-  // of being silently dropped). Unknown topics fall back to their raw value as
-  // the label.
-  const topicOptions = [
-    ...AVAILABLE_TOPICS,
-    ...(model.topics || [])
-      .filter((t) => !AVAILABLE_TOPICS.some((at) => at.value === t))
-      .map((t) => ({ value: t, label: t, description: 'Topic not in the catalog — preserved from this model.' })),
-  ];
 
   const isCli = model.provider === 'cli';
   const isCustomProvider = model.provider.startsWith('custom-');
@@ -115,7 +99,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         endpoint: formData.endpoint || undefined,
         contextWindow: formData.contextWindow,
         maxTokens: formData.maxTokens,
-        topics: formData.topics,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
         supportsTools: formData.supportsTools,
@@ -268,36 +251,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               Drives the orchestrator mode (router/lite/full) when mode is <code className="bg-surface-container-high px-1 rounded">auto</code>.
               External model IDs without a size tag (e.g. <code className="bg-surface-container-high px-1 rounded">deepseek-v4-flash</code>) default to <strong>lite</strong> until set here. Leave empty to infer from the model ID.
             </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
-            <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 w-full">
-              {topicOptions.map((topic) => {
-                const selected = formData.topics.includes(topic.value);
-                return (
-                  <button
-                    key={topic.value}
-                    type="button"
-                    onClick={() => setFormData({
-                      ...formData,
-                      topics: selected
-                        ? formData.topics.filter(t => t !== topic.value)
-                        : [...formData.topics, topic.value],
-                    })}
-                    className={`px-2 py-1 rounded-lg text-xs cursor-pointer transition-colors ${
-                      selected
-                        ? 'bg-primary/10 text-primary ring-1 ring-primary/30'
-                        : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-                    }`}
-                    title={topic.description}
-                  >
-                    {topic.label}
-                  </button>
-                );
-              })}
-            </div>
           </div>
 
           {model.provider !== 'cli' && (

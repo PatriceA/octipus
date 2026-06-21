@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
 import {
-  AVAILABLE_TOPICS,
   type LiteLLMModel,
   mapLiteLLMProvider,
   PROVIDER_DEFAULTS,
@@ -52,7 +51,6 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     supportsTools: true,
     supportsStreaming: true,
     disableThinking: false,
-    topics: [] as string[],
     priority: 50,
     costPerInputToken: 0,
     costPerOutputToken: 0,
@@ -279,7 +277,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       name: '', provider: 'ollama', modelId: '', endpoint: '',
       contextWindow: 4096, maxTokens: 4096, supportsVision: false,
       supportsTools: true, supportsStreaming: true, disableThinking: false,
-      topics: [], priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
+      priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
       customAuthType: 'bearer', customAuthHeaderName: '', customAuthParamName: '',
       customPathOverride: '', customApiKeyRef: '',
     });
@@ -304,7 +302,6 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       supportsTools: defaults.supportsTools ?? true,
       supportsStreaming: true,
       disableThinking: false,
-      topics: [],
       priority: 50,
       costPerInputToken: 0,
       costPerOutputToken: 0,
@@ -400,7 +397,6 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         supportsVision: formData.supportsVision,
         supportsTools: formData.supportsTools,
         supportsStreaming: formData.supportsStreaming,
-        topics: formData.topics.length > 0 ? formData.topics : undefined,
         priority: formData.priority,
         costPerInputToken: formData.costPerInputToken,
         costPerOutputToken: formData.costPerOutputToken,
@@ -870,36 +866,6 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
                 />
                 <p className="text-xs text-on-surface-variant mt-0.5">Max tokens per response (check model docs)</p>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-on-surface-variant mb-1">Topics</label>
-              <p className="text-xs text-on-surface-variant mb-2">Select which orchestrator roles can use this model</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 w-full">
-                {AVAILABLE_TOPICS.map((topic) => {
-                  const selected = formData.topics.includes(topic.value);
-                  return (
-                    <button
-                      key={topic.value}
-                      type="button"
-                      onClick={() => setFormData({
-                        ...formData,
-                        topics: selected
-                          ? formData.topics.filter(t => t !== topic.value)
-                          : [...formData.topics, topic.value],
-                      })}
-                      className={`px-2 py-1 rounded-lg text-xs cursor-pointer transition-colors ${
-                        selected
-                          ? 'bg-primary/10 text-primary ring-1 ring-primary/30'
-                          : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
-                      }`}
-                      title={topic.description}
-                    >
-                      {topic.label}
-                    </button>
-                  );
-                })}
               </div>
             </div>
 
