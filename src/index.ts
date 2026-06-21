@@ -1,4 +1,4 @@
-import { startServer } from '@/api/server';
+import { startServer, stopApiServerWatchdog } from '@/api/server';
 import { initializeChannels } from '@/channels';
 import { loadRuntimeConfig } from '@/config';
 import { initializeHotReload } from '@/config/hot-reload';
@@ -283,8 +283,13 @@ async function main() {
     wireMessageHandler(gatewayHub);
     const disconnectBridge = connectEventBridge(gatewayHub);
 
-    // Start API server
-    await startServer();
+    // Start API server. The returned Elysia app MUST stay referenced for the
+    // lifetime of the process: Bun finalizes the underlying server when its JS
+    // wrapper is garbage-collected, which closes the listen socket. Discarding
+    // this value let GC run ~10s after boot and silently drop the HTTP listener
+    // (the process stayed alive on its channel/cron handles, so it looked "up"
+    // but every request was connection-refused). Hold it and stop it on shutdown.
+    const apiServer = await startServer();
     logger.info('API server started');
 
     // Mint / refresh the MCP bootstrap api token so bin/octi can stamp it
@@ -309,6 +314,20 @@ async function main() {
       if (shuttingDown) return;
       shuttingDown = true;
       logger.info('Shutting down...');
+
+      // Watchdog: the teardown below is a chain of un-timed awaits (gateway,
+      // MCP bridge, channel sockets). If any one never resolves — a Slack
+      // socket-mode / Telegram long-poll close that hangs, say — process.exit
+      // below is never reached and the process wedges alive with its port
+      // already unbound (the "backend went down but the process survives"
+      // failure). Force-exit unconditionally after a grace period so a hung
+      // teardown can never keep the process around. Unref so the timer itself
+      // doesn't keep the loop alive once a clean shutdown finishes first.
+      const forceExit = setTimeout(() => {
+        logger.error('Shutdown timed out after 4s — forcing exit');
+        process.exit(1);
+      }, 4000);
+      forceExit.unref();
 
       // Stop all running agents (kills CLI child processes)
       try {
@@ -342,6 +361,13 @@ async function main() {
       await gatewayHub.stop();
       await mcpBridge.disconnectAll();
       await gateway.stop();
+      // Stop the listener watchdog BEFORE stopping the server, otherwise it would
+      // see the closed listener and immediately rebind it mid-shutdown.
+      stopApiServerWatchdog();
+      // Pass true to force-close active connections (idle keep-alives, the
+      // permission WS). Without it Elysia's stop() waits for every connection to
+      // drain on its own and can hang past the watchdog on a long-poll socket.
+      await apiServer.stop(true);
 
       // Close the long-lived task_state LISTEN connection (if it was
       // ever opened). Safe to call when no subscribers were active.
@@ -352,6 +378,7 @@ async function main() {
         // Module may not have loaded; nothing to close.
       }
 
+      clearTimeout(forceExit);
       logger.info('Shutdown complete');
       process.exit(0);
     };
