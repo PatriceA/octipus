@@ -38,7 +38,7 @@ export function EvalCard({ id, timestamp, summary, suites }: EvalCardProps) {
   const allPassed = summary.totalFailed === 0;
 
   return (
-    <Link href={`/eval/${encodeURIComponent(id)}`}>
+    <Link href={`/eval/view?id=${encodeURIComponent(id)}`}>
       <Card hover className="p-4">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-2">

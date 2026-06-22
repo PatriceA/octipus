@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Loader2, Square, Trash2,
 } from 'lucide-react';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AgentTimeline } from '@/components/agent-timeline';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { PipelineView } from '@/components/pipeline-view';
@@ -43,9 +43,8 @@ interface PipelineDetail {
 }
 
 export default function AgentDetailPage() {
-  const params = useParams();
   const router = useRouter();
-  const agentId = params.id as string;
+  const agentId = useSearchParams().get('id') ?? '';
 
   const { events } = useAgentEvents(agentId);
 

@@ -1,8 +1,9 @@
 'use client';
 
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BarChart3, CheckCircle, FlaskConical, GitCompare, Hash, Microscope, Play, RefreshCw, ShieldAlert, ShieldCheck, XCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ConformanceTab } from '@/components/eval/ConformanceTab';
 import { EvalCard } from '@/components/eval/EvalCard';
 import { ModelEvalTab } from '@/components/eval/ModelEvalTab';
@@ -44,62 +45,69 @@ interface EvalListItem {
   suites: EvalSuiteSummary[];
 }
 
+interface RunStatus {
+  running: boolean;
+  runId?: string;
+  type?: string;
+  suite?: string;
+  elapsedMs?: number;
+  output?: string;
+  lastRun?: { runId: string; type: string; suite: string; exitCode: number | null; output: string };
+}
+
 export default function EvalPage() {
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabId>('suite');
-  const [results, setResults] = useState<EvalListItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [runStatus, setRunStatus] = useState<{
-    running: boolean;
-    runId?: string;
-    type?: string;
-    suite?: string;
-    elapsedMs?: number;
-    output?: string;
-    lastRun?: { runId: string; type: string; suite: string; exitCode: number | null; output: string };
-  }>({ running: false });
   const [showRunMenu, setShowRunMenu] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
-  const [models, setModels] = useState<Array<{ id: string; name?: string; modelId?: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
 
-  const fetchResults = useCallback(async () => {
-    try {
-      const data = await api.get<{ results: EvalListItem[] }>('/eval/results');
-      setResults(data.results || []);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    data: resultsData,
+    isLoading: loading,
+    error: resultsError,
+    refetch: refetchResults,
+  } = useQuery({
+    queryKey: ['eval-results'],
+    queryFn: () => api.get<{ results: EvalListItem[] }>('/eval/results'),
+  });
+  const results = resultsData?.results ?? [];
 
-  const checkStatus = useCallback(async () => {
-    try {
-      const data = await api.get<{
-        running: boolean;
-        runId?: string;
-        type?: string;
-        suite?: string;
-        elapsedMs?: number;
-        output?: string;
-        lastRun?: { runId: string; type: string; suite: string; exitCode: number | null; output: string };
-      }>('/eval/status');
-      const wasRunning = runStatus.running;
-      setRunStatus(data);
-      if (!data.running && wasRunning) {
-        // Eval just finished — refresh results and show output if it failed
-        fetchResults();
-        if (data.lastRun?.exitCode !== 0) {
-          setShowOutput(true);
-        }
-      }
-      return data.running;
-    } catch {
-      return false;
+  // Live run status — polls every 3s only while a run is in flight. Replaces the
+  // former mount-check + setInterval effects (kept lint-clean via refetchInterval).
+  const { data: runStatus = { running: false } } = useQuery<RunStatus>({
+    queryKey: ['eval-status'],
+    queryFn: () => api.get<RunStatus>('/eval/status'),
+    refetchInterval: (query) => (query.state.data?.running ? 3000 : false),
+  });
+
+  // When a run transitions from running → finished, refresh results and surface
+  // failure output. Detected by comparing against the previously-rendered value
+  // (adjust-state-during-render — the React-endorsed alternative to an effect).
+  const [prevRunning, setPrevRunning] = useState(false);
+  if (prevRunning !== runStatus.running) {
+    setPrevRunning(runStatus.running);
+    if (prevRunning && !runStatus.running) {
+      refetchResults();
+      if (runStatus.lastRun && runStatus.lastRun.exitCode !== 0) setShowOutput(true);
     }
-  }, [runStatus.running, fetchResults]);
+  }
+
+  // Fetch available models for the picker
+  const { data: modelsData } = useQuery({
+    queryKey: ['eval-models'],
+    queryFn: () => api.get<{ models: Array<{ id: string; name?: string; modelId?: string }> } | Array<{ id: string; name?: string; modelId?: string }>>('/models/'),
+  });
+  const models = Array.isArray(modelsData)
+    ? modelsData
+    : (modelsData?.models ?? []);
+
+  const fetchResults = useCallback(() => { refetchResults(); }, [refetchResults]);
+
+  // Surface either a results-fetch failure or an action error (e.g. start-run);
+  // the local `error` (when set) takes precedence and is independently dismissable.
+  const displayError = error || (resultsError ? (resultsError as Error).message : '');
 
   const startEval = useCallback(async (type: 'eval' | 'red-team') => {
     try {
@@ -111,43 +119,15 @@ export default function EvalPage() {
         setError(data.error);
         return;
       }
-      setRunStatus({ running: true, runId: data.runId, type });
+      // Optimistically flip status to running so the banner shows and the poll
+      // engages; `refetchInterval` reconciles real fields on the next tick.
+      // No immediate invalidate — a just-spawned job often still reports
+      // running:false, which would clobber this and stop the poll before it starts.
+      queryClient.setQueryData<RunStatus>(['eval-status'], { running: true, runId: data.runId, type });
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [selectedModel]);
-
-  // Fetch available models for the picker
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await api.get<{ models: Array<{ id: string; name?: string; modelId?: string }> } | Array<{ id: string; name?: string; modelId?: string }>>('/models/');
-        const list = Array.isArray(data) ? data : (data as { models: Array<{ id: string; name?: string; modelId?: string }> }).models ?? [];
-        setModels(list);
-      } catch {
-        // Picker stays empty; the runner will fall back to the DB default or fail loud.
-      }
-    })();
-  }, []);
-
-  // Poll status while an eval is running
-  useEffect(() => {
-    if (!runStatus.running) return;
-    const interval = setInterval(async () => {
-      const stillRunning = await checkStatus();
-      if (!stillRunning) clearInterval(interval);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [runStatus.running, checkStatus]);
-
-  // Check if something is already running on mount
-  useEffect(() => {
-    checkStatus();
-  }, []);
-
-  useEffect(() => {
-    fetchResults();
-  }, [fetchResults]);
+  }, [selectedModel, queryClient]);
 
   // Aggregate stats
   const totalRuns = results.length;
@@ -263,9 +243,9 @@ export default function EvalPage() {
       {/* Suite Tests tab (existing content) */}
       {activeTab === 'suite' && (
         <>
-          {error && (
+          {displayError && (
             <div className="bg-error-container/60 border border-error/40 rounded-xl px-4 py-3 text-error text-sm">
-              {error}
+              {displayError}
               <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
             </div>
           )}

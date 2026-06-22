@@ -14,7 +14,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
@@ -46,25 +47,24 @@ interface PipelineTemplate {
 
 
 export default function PipelinesPage() {
-  const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [showEditor, setShowEditor] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<PipelineTemplate | null>(null);
 
-  const fetchTemplates = useCallback(async () => {
-    try {
-      const data = await api.get<{ templates: PipelineTemplate[] }>('/pipelines/templates');
-      setTemplates(data?.templates ?? []);
-    } catch {
-      // Ignore
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ['pipeline-templates'],
+    queryFn: () => api.get<{ templates: PipelineTemplate[] }>('/pipelines/templates'),
+  });
+  const templates = data?.templates ?? [];
 
-  useEffect(() => {
-    fetchTemplates();
-  }, [fetchTemplates]);
+  // Patch the cached list in place so the UI updates without a round-trip,
+  // mirroring the previous local-state mutations.
+  const setTemplates = (next: PipelineTemplate[] | ((prev: PipelineTemplate[]) => PipelineTemplate[])) => {
+    queryClient.setQueryData<{ templates: PipelineTemplate[] }>(['pipeline-templates'], (prev) => {
+      const list = prev?.templates ?? [];
+      return { templates: typeof next === 'function' ? next(list) : next };
+    });
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this pipeline template?')) return;
@@ -86,13 +86,13 @@ export default function PipelinesPage() {
     setShowEditor(true);
   };
 
-  const handleSave = async (data: { name: string; description?: string; steps: PipelineStep[] }) => {
+  const handleSave = async (formData: { name: string; description?: string; steps: PipelineStep[] }) => {
     try {
       if (editingTemplate) {
-        const updated = await api.put<PipelineTemplate>(`/pipelines/templates/${editingTemplate.id}`, data);
+        const updated = await api.put<PipelineTemplate>(`/pipelines/templates/${editingTemplate.id}`, formData);
         setTemplates(prev => prev.map(t => t.id === editingTemplate.id ? updated : t));
       } else {
-        const created = await api.post<PipelineTemplate>('/pipelines/templates', data);
+        const created = await api.post<PipelineTemplate>('/pipelines/templates', formData);
         setTemplates(prev => [created, ...prev]);
       }
       setShowEditor(false);

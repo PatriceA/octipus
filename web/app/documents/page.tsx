@@ -252,11 +252,6 @@ function UploadDialog({ onClose }: { onClose: () => void }) {
 // We do this via fetch + ObjectURL because <img>/<iframe> can't carry the Bearer
 // header. The ObjectURL is revoked on unmount/change to avoid leaks.
 function DocumentPreview({ documentId, mimeType, originalName }: { documentId: string; mimeType: string; originalName: string }) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [textContent, setTextContent] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
   const isImage = mimeType.startsWith('image/');
   const isPdf = mimeType === 'application/pdf';
   const isText =
@@ -269,11 +264,15 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
   const isMarkdown = mimeType === 'text/markdown' || /\.(md|markdown|mdx)$/i.test(originalName);
   const previewable = isImage || isPdf || isText;
 
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Non-previewable files never load — seed the flag from `previewable` so the
+  // effect only ever flips `loading` after an await (lint: no sync setState).
+  const [loading, setLoading] = useState(() => previewable);
+
   useEffect(() => {
-    if (!previewable) {
-      setLoading(false);
-      return;
-    }
+    if (!previewable) return;
 
     let cancelled = false;
     let createdUrl: string | null = null;
@@ -365,7 +364,6 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
             Preview is not available for this file type ({mimeType || 'unknown'}). Use Download to view the original.
           </div>
         ) : isImage && blobUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img src={blobUrl} alt={originalName} className="max-w-full max-h-[60vh] mx-auto block" />
         ) : isPdf && blobUrl ? (
           <iframe src={blobUrl} title={originalName} className="w-full h-[60vh] bg-on-surface" />

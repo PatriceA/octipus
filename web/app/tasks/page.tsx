@@ -417,9 +417,13 @@ function TaskRow({
 
   // Keep the draft in sync with external updates (agent edits / refetch) while
   // the editor is closed — without this, reopening could show a stale value.
-  useEffect(() => {
-    if (!editingNotes) setDraft(task.notes ?? '');
-  }, [task.notes, editingNotes]);
+  // Adjust state during render (the React-endorsed alternative to an effect):
+  // reseed whenever the incoming notes change and the editor isn't open.
+  const [seededNotes, setSeededNotes] = useState(task.notes ?? '');
+  if (!editingNotes && seededNotes !== (task.notes ?? '')) {
+    setSeededNotes(task.notes ?? '');
+    setDraft(task.notes ?? '');
+  }
 
   const saveNotes = () => {
     setEditingNotes(false);
@@ -493,7 +497,6 @@ function TaskRow({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={saveNotes}
-            // eslint-disable-next-line jsx-a11y/no-autofocus -- focus the editor the user just opened
             autoFocus
             rows={3}
             placeholder="Add details, links, context…"

@@ -31,11 +31,10 @@ interface AgentActivityCardProps {
 }
 
 function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: number }) {
-  const [elapsed, setElapsed] = useState(0);
+  const [elapsed, setElapsed] = useState(() => (endTime ? endTime - startTime : Date.now() - startTime));
 
   useEffect(() => {
     if (endTime) {
-      setElapsed(endTime - startTime);
       return;
     }
     const interval = setInterval(() => {
@@ -44,7 +43,8 @@ function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: num
     return () => clearInterval(interval);
   }, [startTime, endTime]);
 
-  const seconds = (elapsed / 1000).toFixed(1);
+  const finalElapsed = endTime ? endTime - startTime : elapsed;
+  const seconds = (finalElapsed / 1000).toFixed(1);
   return <span className="font-mono">{seconds}s</span>;
 }
 

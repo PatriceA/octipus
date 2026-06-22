@@ -1,7 +1,8 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import { Plus, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { AddModelModal } from '@/components/models/add-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';
 import { EditModelModal } from '@/components/models/edit-model-modal';
@@ -14,37 +15,33 @@ import type { CLITool, Model } from '@/lib/types/models';
 export default function ModelsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<Model | null>(null);
-  const [models, setModels] = useState<Model[]>([]);
-  const [cliTools, setCLITools] = useState<CLITool[]>([]);
-  const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const fetchModels = useCallback(async () => {
-    try {
-      const data = await api.get<{ models: Model[] }>('/models');
-      setModels(data.models || []);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    data: modelsData,
+    isLoading: loading,
+    error: modelsError,
+    refetch: refetchModels,
+  } = useQuery({
+    queryKey: ['models'],
+    queryFn: () => api.get<{ models: Model[] }>('/models'),
+  });
+  const models = modelsData?.models ?? [];
 
-  const fetchCLIStatus = useCallback(async () => {
-    try {
-      const data = await api.get<{ tools: CLITool[] }>('/models/cli/status');
-      setCLITools(data.tools || []);
-    } catch {
-      // CLI status is optional, don't show error
-    }
-  }, []);
+  const { data: cliData, refetch: refetchCLIStatus } = useQuery({
+    queryKey: ['models', 'cli-status'],
+    queryFn: () => api.get<{ tools: CLITool[] }>('/models/cli/status'),
+  });
+  const cliTools = cliData?.tools ?? [];
 
-  useEffect(() => {
-    fetchModels();
-    fetchCLIStatus();
-  }, [fetchModels, fetchCLIStatus]);
+  // Re-fetch the models list; returns a promise so mutation handlers can await it.
+  const fetchModels = useCallback(async () => { await refetchModels(); }, [refetchModels]);
+  const fetchCLIStatus = useCallback(() => { refetchCLIStatus(); }, [refetchCLIStatus]);
+
+  // Surface either a load failure or an action error; the local `error` (when
+  // set by a mutation) is independently dismissable.
+  const displayError = error || (modelsError ? (modelsError as Error).message : '');
 
   const handleAddModel = async (modelData: Record<string, unknown>) => {
     setActionLoading(true);
@@ -136,9 +133,9 @@ export default function ModelsPage() {
         }
       />
 
-      {error && (
+      {displayError && (
         <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">
-          {error}
+          {displayError}
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>
       )}

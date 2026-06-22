@@ -11,7 +11,7 @@
  */
 
 import { Bot, CheckCircle2, Clock, Coins, Layers, Loader2, XCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
 export interface SwarmNode {
@@ -87,16 +87,24 @@ function kindIcon(kind: SwarmNode['kind']) {
 export default function SwarmNodesList({ sessionId, latestEvent }: SwarmNodesListProps) {
   const [nodes, setNodes] = useState<Map<string, SwarmNode>>(new Map());
 
-  // Reset node list when switching sessions.
-  useEffect(() => {
+  // Reset the accumulated node list when switching sessions (render-time seed).
+  const [seededSession, setSeededSession] = useState(sessionId);
+  if (sessionId !== seededSession) {
+    setSeededSession(sessionId);
     setNodes(new Map());
-  }, [sessionId]);
+  }
 
-  // Ingest events pumped in from the WS handler.
-  useEffect(() => {
-    if (!latestEvent || !sessionId) return;
-    if (latestEvent.payload.rootSessionId !== sessionId) return;
-
+  // Ingest each WS event exactly once into the accumulated node map. Tracking
+  // the last-processed event object identity keeps the fold idempotent across
+  // re-renders without a setState-in-effect.
+  const [lastEvent, setLastEvent] = useState<SwarmEventMessage | null>(null);
+  if (
+    latestEvent &&
+    latestEvent !== lastEvent &&
+    sessionId &&
+    latestEvent.payload.rootSessionId === sessionId
+  ) {
+    setLastEvent(latestEvent);
     setNodes((prev) => {
       const next = new Map(prev);
       const p = latestEvent.payload;
@@ -143,7 +151,7 @@ export default function SwarmNodesList({ sessionId, latestEvent }: SwarmNodesLis
       }
       return next;
     });
-  }, [latestEvent, sessionId]);
+  }
 
   const sorted = Array.from(nodes.values()).sort((a, b) => a.startedAt - b.startedAt);
 

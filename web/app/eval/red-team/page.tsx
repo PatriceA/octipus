@@ -9,8 +9,9 @@ import {
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AssertionBadge } from '@/components/eval/AssertionBadge';
 import { ScoreBar } from '@/components/eval/ScoreBar';
 import { Card, CardContent, } from '@/components/ui/card';
@@ -91,62 +92,50 @@ function SeverityBadge({ severity }: { severity: Severity }) {
 }
 
 export default function RedTeamPage() {
-  const [results, setResults] = useState<EvalListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [expandedTest, setExpandedTest] = useState<string | null>(null);
 
-  const fetchResults = useCallback(async () => {
-    try {
-      const data = await api.get<{ results: EvalListItem[] }>('/eval/results');
-      setResults(data.results || []);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+  const {
+    data: resultsData,
+    isLoading: loading,
+    error: queryError,
+  } = useQuery({
+    queryKey: ['eval-results'],
+    queryFn: () => api.get<{ results: EvalListItem[] }>('/eval/results'),
+  });
+  const error = queryError ? (queryError as Error).message : '';
+
+  // Find the latest result that contains a red-team suite. Kept as primitives
+  // (not a memoized object) so the query key / derived memo depend on stable
+  // strings — chained object deps trip react-hooks/preserve-manual-memoization.
+  let latestRunId: string | undefined;
+  let latestSuiteName: string | undefined;
+  for (const r of resultsData?.results ?? []) {
+    const rtSuite = r.suites.find(s =>
+      s.suite.toLowerCase().includes('red') ||
+      s.suite.toLowerCase().includes('security') ||
+      s.suite.toLowerCase().includes('safety')
+    );
+    if (rtSuite) {
+      latestRunId = r.id;
+      latestSuiteName = rtSuite.suite;
+      break;
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    fetchResults();
-  }, [fetchResults]);
+  // Fetch full detail for the latest red-team run.
+  const { data: redTeamDetail, isLoading: redTeamLoading } = useQuery({
+    queryKey: ['eval-redteam-detail', latestRunId],
+    queryFn: () => api.get<EvalListItem>(`/eval/results/${encodeURIComponent(latestRunId!)}`),
+    enabled: !!latestRunId,
+  });
 
-  // Find red-team suites across all results. We need full data for the latest red-team run.
-  const [redTeamData, setRedTeamData] = useState<RedTeamResult[]>([]);
-  const [redTeamLoading, setRedTeamLoading] = useState(false);
-
-  // Find the latest result that contains a red-team suite
-  const latestRedTeamRun = useMemo(() => {
-    for (const r of results) {
-      const rtSuite = r.suites.find(s =>
-        s.suite.toLowerCase().includes('red') ||
-        s.suite.toLowerCase().includes('security') ||
-        s.suite.toLowerCase().includes('safety')
-      );
-      if (rtSuite) return { run: r, suiteName: rtSuite.suite };
-    }
-    return null;
-  }, [results]);
-
-  // Fetch full detail for the red-team run
-  useEffect(() => {
-    if (!latestRedTeamRun) return;
-    setRedTeamLoading(true);
-    api.get<EvalListItem>(`/eval/results/${encodeURIComponent(latestRedTeamRun.run.id)}`)
-      .then(data => {
-        const rtSuite = data.suites.find(s => s.suite === latestRedTeamRun.suiteName);
-        if (rtSuite) {
-          setRedTeamData(rtSuite.results);
-        } else {
-          // Use all results if suite name doesn't match exactly
-          const allResults = data.suites.flatMap(s => s.results);
-          setRedTeamData(allResults);
-        }
-      })
-      .catch(() => { /* silent */ })
-      .finally(() => setRedTeamLoading(false));
-  }, [latestRedTeamRun]);
+  // Derive the red-team rows from the fetched detail (exact suite match, else
+  // every suite's results).
+  const redTeamData: RedTeamResult[] = useMemo(() => {
+    if (!redTeamDetail) return [];
+    const rtSuite = redTeamDetail.suites.find(s => s.suite === latestSuiteName);
+    return rtSuite ? rtSuite.results : redTeamDetail.suites.flatMap(s => s.results);
+  }, [redTeamDetail, latestSuiteName]);
 
   // Group by category
   const byCategory = useMemo(() => {

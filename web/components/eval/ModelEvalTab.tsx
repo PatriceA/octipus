@@ -1,7 +1,8 @@
 'use client';
 
 import { BarChart3, CheckCircle, ChevronDown, ChevronRight, Database, Layers, Play, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -224,91 +225,92 @@ function RunHistoryRow({ run }: { run: EvalRun }) {
 }
 
 export function ModelEvalTab() {
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [evaluators, setEvaluators] = useState<Evaluator[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [runs, setRuns] = useState<EvalRun[]>([]);
-  const [summary, setSummary] = useState<SummaryData>({});
+  const queryClient = useQueryClient();
 
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedDataset, setSelectedDataset] = useState('');
   const [selectedEvaluators, setSelectedEvaluators] = useState<string[]>([]);
 
-  const [running, setRunning] = useState(false);
+  // Optimistic flag set when the user starts a run, before the server status
+  // poll reflects it. Cleared once the server confirms the job is no longer running.
+  const [optimisticRunning, setOptimisticRunning] = useState(false);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
 
   // Drill-down state: { runId, evaluator }
   const [drillTarget, setDrillTarget] = useState<{ runId: string; evaluator: string } | null>(null);
 
-  const fetchAll = useCallback(async () => {
-    try {
+  const { data: allData, isLoading: loading } = useQuery({
+    queryKey: ['eval-all'],
+    queryFn: async () => {
       const [datasetsRes, evaluatorsRes, runsRes, summaryRes] = await Promise.allSettled([
         api.get<{ datasets: Dataset[] }>('/evaluations/eval/datasets'),
         api.get<{ evaluators: Evaluator[] }>('/evaluations/eval/evaluators'),
         api.get<{ runs: EvalRun[] }>('/evaluations/eval/runs'),
         api.get<{ summary: SummaryData }>('/evaluations/eval/summary'),
       ]);
-      if (datasetsRes.status === 'fulfilled') setDatasets(datasetsRes.value.datasets ?? []);
-      if (evaluatorsRes.status === 'fulfilled') setEvaluators(evaluatorsRes.value.evaluators ?? []);
-      if (runsRes.status === 'fulfilled') setRuns(runsRes.value.runs ?? []);
-      if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value.summary ?? {});
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+      return {
+        datasets: datasetsRes.status === 'fulfilled' ? datasetsRes.value.datasets ?? [] : [],
+        evaluators: evaluatorsRes.status === 'fulfilled' ? evaluatorsRes.value.evaluators ?? [] : [],
+        runs: runsRes.status === 'fulfilled' ? runsRes.value.runs ?? [] : [],
+        summary: summaryRes.status === 'fulfilled' ? summaryRes.value.summary ?? {} : {},
+      };
+    },
+  });
+  const datasets = allData?.datasets ?? [];
+  const evaluators = allData?.evaluators ?? [];
+  const runs = allData?.runs ?? [];
+  const summary = allData?.summary ?? {};
+
+  const { data: modelsData } = useQuery({
+    queryKey: ['eval-models'],
+    queryFn: () => api.get<{ models: ModelInfo[] } | ModelInfo[]>('/models/'),
+  });
+  const models: ModelInfo[] = Array.isArray(modelsData)
+    ? modelsData
+    : (modelsData as { models: ModelInfo[] } | undefined)?.models ?? [];
+
+  // Default the model picker to the first available model once they load.
+  if (models.length > 0 && !selectedModel) {
+    setSelectedModel(models[0].name || models[0].modelId || models[0].id);
+  }
+
+  // Poll the eval status while a run is (or might be) in progress.
+  const { data: statusData } = useQuery({
+    queryKey: ['evaluations-status'],
+    queryFn: () => api.get<{ running: boolean; job?: { type: string; status: string } }>('/evaluations/status'),
+    refetchInterval: (query) =>
+      query.state.data?.running || optimisticRunning ? 3000 : false,
+  });
+  const serverRunning = statusData?.running ?? false;
+  const running = serverRunning || optimisticRunning;
+
+  // Clear the optimistic flag and refresh results once the server reports idle.
+  const [prevServerRunning, setPrevServerRunning] = useState(false);
+  if (serverRunning !== prevServerRunning) {
+    setPrevServerRunning(serverRunning);
+    if (!serverRunning && optimisticRunning) {
+      setOptimisticRunning(false);
+      queryClient.invalidateQueries({ queryKey: ['eval-all'] });
     }
-  }, []);
+  }
 
-  const fetchModels = useCallback(async () => {
-    try {
-      const data = await api.get<{ models: ModelInfo[] } | ModelInfo[]>('/models/');
-      const list = Array.isArray(data) ? data : (data as { models: ModelInfo[] }).models ?? [];
-      setModels(list);
-      if (list.length > 0 && !selectedModel) setSelectedModel(list[0].name || list[0].modelId || list[0].id);
-    } catch {
-      // Non-fatal
-    }
-  }, [selectedModel]);
-
-  // Poll for running jobs
-  const checkStatus = useCallback(async () => {
-    try {
-      const data = await api.get<{ running: boolean; job?: { type: string; status: string } }>('/evaluations/status');
-      if (data.running) {
-        setRunning(true);
-      } else if (running) {
-        setRunning(false);
-        fetchAll();
-      }
-    } catch { /* ignore */ }
-  }, [running, fetchAll]);
-
-  useEffect(() => {
-    fetchAll();
-    fetchModels();
-    checkStatus();
-  }, [fetchAll, fetchModels, checkStatus]);
-
-  useEffect(() => {
-    if (!running) return;
-    const interval = setInterval(checkStatus, 3000);
-    return () => clearInterval(interval);
-  }, [running, checkStatus]);
+  const fetchAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['eval-all'] });
+  };
 
   const runEval = async () => {
     if (!selectedModel) return;
     try {
-      setRunning(true);
+      setOptimisticRunning(true);
       setError('');
       const body: { model: string; dataset?: string; evaluators?: string[] } = { model: selectedModel };
       if (selectedDataset) body.dataset = selectedDataset;
       if (selectedEvaluators.length > 0) body.evaluators = selectedEvaluators;
       await api.post('/evaluations/eval/run', body);
       // Job runs in background — poll will pick up completion
+      queryClient.invalidateQueries({ queryKey: ['evaluations-status'] });
     } catch (err) {
-      setRunning(false);
+      setOptimisticRunning(false);
       setError((err as Error).message);
     }
   };

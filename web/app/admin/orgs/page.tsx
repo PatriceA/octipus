@@ -227,7 +227,7 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrg; expanded: boolean;
                 Add member
               </button>
               <Link
-                href={`/admin/orgs/${org.id}/sso`}
+                href={`/admin/orgs/sso?id=${org.id}`}
                 className="flex items-center gap-1.5 text-xs text-primary hover:underline"
               >
                 <ShieldCheck className="w-3.5 h-3.5" />

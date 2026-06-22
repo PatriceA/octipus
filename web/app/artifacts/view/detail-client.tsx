@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 
@@ -40,7 +40,7 @@ interface ShareLink {
 }
 
 export default function ArtifactDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const id = useSearchParams().get('id') ?? '';
   const router = useRouter();
   const qc = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);

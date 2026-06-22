@@ -144,8 +144,10 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     setOrSearchLoading(false);
   }, []);
 
-  // Reset state when modal opens and check provider availability
-  useEffect(() => {
+  // Reset state synchronously on the closed→open transition (render-time seed).
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
     if (isOpen) {
       setStep('choose-source');
       setConnectionType('litellm');
@@ -157,7 +159,12 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       setOrSearchQuery('');
       setOrSearchResults([]);
       setOrSearchTotal(0);
-      // Check which providers are configured
+    }
+  }
+
+  // Check which providers are configured when the modal opens.
+  useEffect(() => {
+    if (isOpen) {
       (async () => {
         const configured = new Set<string>();
         // Always include providers that don't need configuration

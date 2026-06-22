@@ -6,7 +6,11 @@
     "dev": "next dev -p 3007",
     "build": "next build",
     "start": "next start -p 3007",
-    "lint": "eslint ."
+    "lint": "eslint . --max-warnings 0",
+    "tauri": "tauri",
+    "tauri:sidecar": "bun run scripts/build-sidecar.ts",
+    "tauri:dev": "TAURI_BUILD=true bun run scripts/build-sidecar.ts && TAURI_BUILD=true tauri dev",
+    "tauri:build": "TAURI_BUILD=true bun run scripts/build-sidecar.ts && TAURI_BUILD=true tauri build"
   },
   "dependencies": {
     "@codemirror/language": "^6.12.3",
@@ -23,6 +27,9 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-shell": "^2.3.1",
+    "@tauri-apps/plugin-store": "^2.4.0",
     "react-markdown": "^10.1.0",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
@@ -32,6 +39,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
     "@tailwindcss/postcss": "^4.3.0",
+    "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^20.12.12",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

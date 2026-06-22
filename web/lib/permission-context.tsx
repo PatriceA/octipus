@@ -225,11 +225,14 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    // Initial poll
-    pollApprovals();
-
+    // Initial poll via a timer so the setState runs in the timer callback, not
+    // synchronously in the effect body (react-hooks/set-state-in-effect).
+    const initial = setTimeout(pollApprovals, 0);
     const interval = setInterval(pollApprovals, 5_000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
   }, [isAuthenticated, pollApprovals]);
 
   return (

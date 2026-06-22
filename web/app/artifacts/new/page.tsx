@@ -23,7 +23,7 @@ export default function NewArtifactPage() {
         title,
         type,
       });
-      router.push(`/artifacts/${res.artifact.id}`);
+      router.push(`/artifacts/view?id=${res.artifact.id}`);
     } catch (e) {
       setError((e as Error).message);
       setSubmitting(false);

@@ -10,9 +10,10 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ScoreBar } from '@/components/eval/ScoreBar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
@@ -62,46 +63,31 @@ export default function ComparePage() {
   const initialIds = searchParams.get('ids')?.split(',').filter(Boolean) || [];
 
   const [selectedIds, setSelectedIds] = useState<string[]>(initialIds);
-  const [compareData, setCompareData] = useState<CompareData | null>(null);
-  const [availableRuns, setAvailableRuns] = useState<EvalListItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
   // Fetch available eval runs for selection
-  const fetchAvailable = useCallback(async () => {
-    try {
-      const data = await api.get<{ results: EvalListItem[] }>('/eval/results');
-      setAvailableRuns(data.results || []);
-    } catch {
-      // silent
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchAvailable();
-  }, [fetchAvailable]);
+  const { data: availableData } = useQuery({
+    queryKey: ['eval-results'],
+    queryFn: () => api.get<{ results: EvalListItem[] }>('/eval/results'),
+  });
+  const availableRuns = availableData?.results ?? [];
 
   // Fetch comparison when we have 2+ selected
-  const fetchComparison = useCallback(async () => {
-    if (selectedIds.length < 2) {
-      setCompareData(null);
-      return;
-    }
-    setLoading(true);
-    try {
-      const data = await api.get<CompareData>(`/eval/compare?ids=${selectedIds.join(',')}`);
-      setCompareData(data);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedIds]);
-
-  useEffect(() => {
-    fetchComparison();
-  }, [fetchComparison]);
+  const {
+    data: compareData = null,
+    isFetching: loading,
+    error: compareError,
+    errorUpdatedAt,
+  } = useQuery({
+    queryKey: ['eval-compare', selectedIds],
+    queryFn: () => api.get<CompareData>(`/eval/compare?ids=${selectedIds.join(',')}`),
+    enabled: selectedIds.length >= 2,
+  });
+  const rawError = compareError ? (compareError as Error).message : '';
+  // Allow dismissing the current error without refetching. Key dismissal on the
+  // error's timestamp so a *new* failure re-shows the banner even when the
+  // message text repeats.
+  const [dismissedAt, setDismissedAt] = useState(0);
+  const error = rawError && errorUpdatedAt !== dismissedAt ? rawError : '';
 
   const addRun = (id: string) => {
     if (!selectedIds.includes(id) && selectedIds.length < 5) {
@@ -152,7 +138,7 @@ export default function ComparePage() {
       {error && (
         <div className="bg-error-container/60 border border-error/40 rounded-xl px-4 py-3 text-error text-sm">
           {error}
-          <button onClick={() => setError('')} className="ml-2 underline cursor-pointer">dismiss</button>
+          <button onClick={() => setDismissedAt(errorUpdatedAt)} className="ml-2 underline cursor-pointer">dismiss</button>
         </div>
       )}
 

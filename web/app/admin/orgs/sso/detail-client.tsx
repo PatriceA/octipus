@@ -3,7 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, KeyRound, Save, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
-import { use, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 
 interface SsoConfig {
@@ -22,10 +23,11 @@ const DEFAULT_ATTRS: Record<string, string> = {
   email: 'email',
 };
 
-export default function OrgSsoPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function OrgSsoPage() {
+  const id = useSearchParams().get('id') ?? '';
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<SsoConfig | null>(null);
+  const [seededFrom, setSeededFrom] = useState<SsoConfig | null>(null);
   const [savedToast, setSavedToast] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,9 +36,12 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
     queryFn: () => api.get<SsoConfig>(`/admin/orgs/${id}/sso`),
   });
 
-  useEffect(() => {
-    if (data && !draft) setDraft(data);
-  }, [data, draft]);
+  // Seed the editable draft from freshly-loaded data — adjusting state during
+  // render (the React-endorsed pattern) instead of in an effect.
+  if (data && data !== seededFrom) {
+    setSeededFrom(data);
+    setDraft(data);
+  }
 
   const saveMutation = useMutation({
     mutationFn: (body: SsoConfig) => api.patch<SsoConfig>(`/admin/orgs/${id}/sso`, {
@@ -102,7 +107,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
         <p className="text-xs text-on-surface-variant leading-relaxed">
           <strong className="text-on-surface">What this is:</strong> SAML lets users in this org sign in
           through your existing identity provider (Okta, Azure AD, Google Workspace, …) instead of
-          managing a separate Octipus password. Users land on the IdP's login page, get
+          managing a separate Octipus password. Users land on the IdP&apos;s login page, get
           redirected back to Octipus already authenticated. Use this if your company already has
           SSO — it removes one more credential to manage and lets you offboard users centrally.
           Leave disabled if you only have a handful of users.
@@ -166,7 +171,7 @@ export default function OrgSsoPage({ params }: { params: Promise<{ id: string }>
           <strong className="text-on-surface">What this is:</strong> SCIM lets your IdP push user
           create/update/delete events into Octipus automatically — so when HR adds someone in Okta
           or Azure AD, they appear here within minutes (and disappear when removed). Pair it with
-          SAML above to fully outsource user lifecycle. Without SCIM you'd add and remove people
+          SAML above to fully outsource user lifecycle. Without SCIM you&apos;d add and remove people
           here by hand. Configure the bearer token on the IdP side and store its value in the
           system vault, then reference it by name below.
         </p>

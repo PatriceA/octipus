@@ -1,7 +1,8 @@
 'use client';
 
 import { CheckCircle, ChevronDown, ChevronRight, Clock, Minus, Play, RefreshCw, XCircle } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -138,14 +139,48 @@ function RunRow({ run }: { run: ConformanceRun }) {
 }
 
 export function ConformanceTab() {
-  const [runs, setRuns] = useState<ConformanceRun[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const queryClient = useQueryClient();
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const [running, setRunning] = useState(false);
+  // Optimistic flag set when the user starts a run, before the server status
+  // poll reflects it. Cleared once the server confirms the job is no longer running.
+  const [optimisticRunning, setOptimisticRunning] = useState(false);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+
+  const { data: runsData, isLoading: loading } = useQuery({
+    queryKey: ['conformance-runs'],
+    queryFn: () => api.get<{ runs: ConformanceRun[] }>('/evaluations/conformance/runs'),
+  });
+  const runs = runsData?.runs ?? [];
+
+  const { data: modelsData } = useQuery({
+    queryKey: ['conformance-models'],
+    queryFn: () => api.get<{ models: ModelInfo[] } | ModelInfo[]>('/models/'),
+  });
+  const models: ModelInfo[] = Array.isArray(modelsData)
+    ? modelsData
+    : (modelsData as { models: ModelInfo[] } | undefined)?.models ?? [];
+
+  // Poll the eval status while a run is (or might be) in progress.
+  const { data: statusData } = useQuery({
+    queryKey: ['evaluations-status'],
+    queryFn: () => api.get<{ running: boolean; job?: { type: string; status: string } }>('/evaluations/status'),
+    refetchInterval: (query) =>
+      query.state.data?.running || optimisticRunning ? 3000 : false,
+  });
+  const serverRunning = statusData?.running ?? false;
+  const running = serverRunning || optimisticRunning;
+
+  // Clear the optimistic flag and refresh results once the server reports idle.
+  const [prevServerRunning, setPrevServerRunning] = useState(false);
+  if (serverRunning !== prevServerRunning) {
+    setPrevServerRunning(serverRunning);
+    if (!serverRunning && optimisticRunning) {
+      setOptimisticRunning(false);
+      queryClient.invalidateQueries({ queryKey: ['conformance-runs'] });
+    }
+  }
 
   // Close the model picker when the user clicks outside it. Without this
   // the dropdown sticks open until the toggle button is clicked again,
@@ -161,65 +196,21 @@ export function ConformanceTab() {
     return () => document.removeEventListener('mousedown', onClick);
   }, [showModelPicker]);
 
-  const fetchRuns = useCallback(async () => {
-    try {
-      const data = await api.get<{ runs: ConformanceRun[] }>('/evaluations/conformance/runs');
-      setRuns(data.runs || []);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const fetchModels = useCallback(async () => {
-    try {
-      const data = await api.get<{ models: ModelInfo[] } | ModelInfo[]>('/models/');
-      const list = Array.isArray(data) ? data : (data as { models: ModelInfo[] }).models ?? [];
-      setModels(list);
-    } catch {
-      // Non-fatal — model picker just stays empty
-    }
-  }, []);
-
-  // Poll for running jobs
-  const checkStatus = useCallback(async () => {
-    try {
-      const data = await api.get<{ running: boolean; job?: { type: string; status: string } }>('/evaluations/status');
-      if (data.running) {
-        setRunning(true);
-      } else if (running) {
-        // Job just finished — refresh results
-        setRunning(false);
-        fetchRuns();
-      }
-    } catch { /* ignore */ }
-  }, [running, fetchRuns]);
-
-  useEffect(() => {
-    fetchRuns();
-    fetchModels();
-    checkStatus();
-  }, [fetchRuns, fetchModels, checkStatus]);
-
-  // Poll while running
-  useEffect(() => {
-    if (!running) return;
-    const interval = setInterval(checkStatus, 3000);
-    return () => clearInterval(interval);
-  }, [running, checkStatus]);
+  const fetchRuns = () => {
+    queryClient.invalidateQueries({ queryKey: ['conformance-runs'] });
+  };
 
   const runConformance = async () => {
     try {
-      setRunning(true);
+      setOptimisticRunning(true);
       setError('');
       const body: { models?: string[] } = {};
       if (selectedModels.length > 0) body.models = selectedModels;
       await api.post('/evaluations/conformance/run', body);
       // Don't await results — job runs in background, poll will pick it up
+      queryClient.invalidateQueries({ queryKey: ['evaluations-status'] });
     } catch (err) {
-      setRunning(false);
+      setOptimisticRunning(false);
       setError((err as Error).message);
     }
   };

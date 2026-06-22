@@ -1,15 +1,25 @@
+import { getDesktopApiUrl, getDesktopWsBase, isDesktop } from './tauri-backend';
+
 const API_PORT = process.env.NEXT_PUBLIC_API_PORT || '3005';
 
 /**
  * Get the API URL. Resolution order:
- *   1. NEXT_PUBLIC_API_URL env var (explicit full URL, build-time)
- *   2. Same-origin /api proxy (works in Docker and reverse-proxy setups)
- *   3. Auto-detect from browser hostname + API_PORT (direct access, LAN-friendly)
+ *   1. Tauri desktop: the sidecar's loopback port (resolved at runtime — see
+ *      tauri-backend.ts). There is no same-origin proxy in the packaged app.
+ *   2. NEXT_PUBLIC_API_URL env var (explicit full URL, build-time)
+ *   3. Same-origin /api proxy (works in Docker and reverse-proxy setups)
+ *   4. Auto-detect from browser hostname + API_PORT (direct access, LAN-friendly)
  *
  * The Next.js rewrite in next.config.mjs proxies /api/* to the backend,
  * so browser requests stay on the same origin — no cross-port issues.
  */
 export function getApiUrl(): string {
+  // Desktop (Tauri) talks directly to the sidecar on its loopback port.
+  // `ensureBackendReady()` runs before any request, so the port is cached.
+  if (isDesktop()) {
+    const desktopUrl = getDesktopApiUrl();
+    if (desktopUrl) return desktopUrl;
+  }
   // Explicit env override takes priority
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
@@ -162,6 +172,11 @@ class ApiClient {
 export const api = new ApiClient();
 
 function buildWsBase(): string {
+  // Desktop (Tauri): WS goes straight to the sidecar's loopback port.
+  if (isDesktop()) {
+    const desktopWs = getDesktopWsBase();
+    if (desktopWs) return desktopWs;
+  }
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL.replace(/^http/, 'ws').replace('/api', '');
   }

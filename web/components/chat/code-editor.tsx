@@ -31,12 +31,18 @@ const baseTheme = EditorView.theme({
 
 export default function CodeEditor({ value, onChange, editable, filename, height = '60vh' }: CodeEditorProps) {
   const [langExt, setLangExt] = useState<Extension[]>([]);
+  const [seededFilename, setSeededFilename] = useState(filename);
+  // Reset to plain text synchronously when the filename changes; the async
+  // grammar load below replaces it once resolved.
+  if (filename !== seededFilename) {
+    setSeededFilename(filename);
+    setLangExt([]);
+  }
 
   useEffect(() => {
     let cancelled = false;
     const desc = LanguageDescription.matchFilename(languages, filename);
     if (!desc) {
-      setLangExt([]);
       return;
     }
     desc

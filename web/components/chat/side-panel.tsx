@@ -149,7 +149,7 @@ function formatTokens(tokens: number): string {
 // --- Sub-components ---
 
 function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: number }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (endTime) return;
@@ -210,7 +210,7 @@ function CollapsibleSection({
   );
 }
 
-function _AgentCard({ agent }: { agent: TrackedAgent }) {
+function AgentCard({ agent }: { agent: TrackedAgent }) {
   const [toolsOpen, setToolsOpen] = useState(false);
 
   return (

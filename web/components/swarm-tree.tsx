@@ -205,27 +205,43 @@ export default function SwarmTree({
 }: SwarmTreeProps) {
   const [nodes, setNodes] = useState<Map<string, SwarmTreeNode>>(new Map());
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [elapsedTick, setElapsedTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const [detailNode, setDetailNode] = useState<SwarmTreeNode | null>(null);
   const [detailMode, setDetailMode] = useState<'brief' | 'result' | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => !!sessionId);
   // Index into the parent's events queue for what we've already folded into
   // `nodes`. Survives batched parent updates: if the queue grows by N entries
   // between renders, the next effect run consumes all N at once.
   const processedIdxRef = useRef(0);
 
+  // Keep the latest `onHydratedTotals` in a ref so the hydrate effect can call
+  // it without listing it as a dependency (which would re-run the fetch every
+  // time the parent passes a fresh callback).
+  const onHydratedTotalsRef = useRef(onHydratedTotals);
+  useEffect(() => {
+    onHydratedTotalsRef.current = onHydratedTotals;
+  }, [onHydratedTotals]);
+
+  // Clear the tree and arm the loading flag when the session changes — during
+  // render (the React-endorsed alternative to a setState in the hydrate effect).
+  const [seededSession, setSeededSession] = useState(sessionId);
+  if (sessionId !== seededSession) {
+    setSeededSession(sessionId);
+    setNodes(new Map());
+    setLoading(!!sessionId);
+  }
+
   // Hydrate from REST when the session changes (covers WS replay gap).
   useEffect(() => {
     // New session: forget how far we've drained the parent's event queue.
     // Without this reset, switching sessions would skip over fresh events
-    // because the index still pointed past them.
+    // because the index still pointed past them. (The tree itself is cleared
+    // during render above.)
     processedIdxRef.current = 0;
     if (!sessionId) {
-      setNodes(new Map());
       return;
     }
     let cancelled = false;
-    setLoading(true);
     api
       .get<{ nodes?: ApiSwarmNode[]; error?: string }>(`/swarm/nodes?rootSessionId=${sessionId}`)
       .then((data) => {
@@ -244,7 +260,7 @@ export default function SwarmTree({
             if (node.durationMs && node.kind === 'orchestrator') durationMs += node.durationMs;
           }
           setNodes(next);
-          onHydratedTotals?.({ tokens, durationMs });
+          onHydratedTotalsRef.current?.({ tokens, durationMs });
         }
       })
       .catch(() => {
@@ -260,7 +276,7 @@ export default function SwarmTree({
 
   // Tick for live wall-clock on running nodes. Cheap — only re-renders numbers.
   useEffect(() => {
-    const interval = setInterval(() => setElapsedTick((t) => t + 1), 1000);
+    const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -491,7 +507,7 @@ export default function SwarmTree({
             onViewBrief={(n) => openDetail(n, 'brief')}
             onViewResult={(n) => openDetail(n, 'result')}
             onViewEvents={onViewEvents}
-            elapsedTick={elapsedTick}
+            now={now}
           />
         ))}
       </div>
@@ -548,8 +564,8 @@ interface TreeNodeProps {
   onViewBrief: (n: SwarmTreeNode) => void;
   onViewResult: (n: SwarmTreeNode) => void;
   onViewEvents?: (id: string) => void;
-  /** Forces re-render for live elapsed counter on running nodes. */
-  elapsedTick: number;
+  /** Current wall-clock time (ms); drives the live elapsed counter on running nodes. */
+  now: number;
 }
 
 function TreeNode({
@@ -562,7 +578,7 @@ function TreeNode({
   onViewBrief,
   onViewResult,
   onViewEvents,
-  elapsedTick,
+  now,
 }: TreeNodeProps) {
   const kids = childrenOf.get(node.nodeId) ?? [];
   const hasKids = kids.length > 0;
@@ -573,9 +589,7 @@ function TreeNode({
 
   const elapsed = node.completedAt
     ? Math.max(0, node.durationMs ?? 0)
-    : Math.max(0, Date.now() - node.startedAt);
-  // elapsedTick intentionally referenced so the memo refreshes each tick.
-  void elapsedTick;
+    : Math.max(0, now - node.startedAt);
 
   return (
     <div>
@@ -709,7 +723,7 @@ function TreeNode({
               onViewBrief={onViewBrief}
               onViewResult={onViewResult}
               onViewEvents={onViewEvents}
-              elapsedTick={elapsedTick}
+              now={now}
             />
           ))}
         </div>

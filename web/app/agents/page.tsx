@@ -248,7 +248,7 @@ export default function AgentsPage() {
                 agents.map((agent) => (
                   <tr
                     key={agent.id}
-                    onClick={() => router.push(`/agents/${agent.id}`)}
+                    onClick={() => router.push(`/agents/view?id=${agent.id}`)}
                     className="border-b border-outline-variant/10 hover:bg-surface-container-high cursor-pointer"
                   >
                     <td className="px-4 py-3">

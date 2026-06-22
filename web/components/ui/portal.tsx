@@ -1,7 +1,11 @@
 'use client';
 
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+
+// Hydration detection without a setState-in-effect: the server snapshot is
+// `false`, the client snapshot `true`, so children mount only after hydration.
+const noopSubscribe = () => () => {};
 
 /**
  * Renders children into <body>, escaping the page-content subtree.
@@ -13,8 +17,11 @@ import { createPortal } from 'react-dom';
  * that entirely, so `fixed inset-0` always resolves against the viewport.
  */
 export function Portal({ children }: { children: ReactNode }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false
+  );
   if (!mounted) return null;
   return createPortal(children, document.body);
 }
