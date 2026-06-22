@@ -23,6 +23,8 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 
 - [Bun](https://bun.sh) ≥ 1.1 — backend + scripts runtime
 - [Node.js](https://nodejs.org) ≥ 18 — required by Next.js web UI
+- _Desktop app only:_ [Rust](https://rustup.rs) + Tauri system libs — installed
+  for you by `scripts/install-desktop-deps.sh` (see below)
 
 ### Clone and run
 
@@ -38,6 +40,13 @@ bin/octi start
 ```
 
 Open http://localhost:3017. If anything crashes or refuses to start, that is a bug — file it.
+
+Working on the **desktop app** (`octi desktop`)? Install its extra deps once —
+the Rust toolchain plus Tauri's per-distro system libraries — with:
+
+```bash
+scripts/install-desktop-deps.sh    # Arch, Debian/Ubuntu, Fedora, openSUSE, macOS
+```
 
 ### Useful commands
 

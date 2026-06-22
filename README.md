@@ -23,6 +23,9 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 iex (irm https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1)
 ```
 
+Want the desktop app too? Add `--desktop` to also install the Rust toolchain
+and Tauri system libraries: `… install.sh | bash -s -- --desktop`.
+
 `octi setup` is the only wizard — it walks storage mode (embedded vs.
 external) → generates security keys → boots the backend → registers
 your admin account → wires a model provider and default model →
@@ -156,12 +159,27 @@ cd web && bun install && cd ..
 cd mcp-server && bun install && cd ..   # standalone MCP server (not a root workspace)
 bun run setup        # the single wizard (same as `octi setup`)
 octi start           # backend + web UI (server / browser)
-# …or `octi desktop` for the Tauri desktop app (needs the Rust toolchain)
+# …or `octi desktop` for the Tauri desktop app (see "Desktop app" below)
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in
 with the admin account you registered during `octi setup`. There is
 no separate web onboarding flow — setup happens in the terminal.
+
+**Desktop app (optional):** the Tauri desktop client needs the Rust toolchain
+plus Tauri's system libraries on top of the deps above. One line installs them
+all — it detects your platform (Arch/Manjaro, Debian/Ubuntu, Fedora, openSUSE,
+macOS) and warms the Cargo cache:
+
+```bash
+scripts/install-desktop-deps.sh    # then: octi desktop
+```
+
+Or fold it into the one-shot installer with `--desktop`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash -s -- --desktop
+```
 
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
 **External Postgres + Valkey (Redis-compatible):** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).

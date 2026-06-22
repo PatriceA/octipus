@@ -921,7 +921,8 @@ cmd_desktop() {
   # `octi start` doesn't — keep this check local so server installs stay lean.
   if ! command -v cargo >/dev/null 2>&1; then
     log_error "Rust toolchain not found (cargo) — required to build the desktop app."
-    log_hint "Install from https://rustup.rs, then re-run: octi desktop"
+    log_hint "Install everything the desktop app needs (Rust + Tauri system libs):"
+    log_hint "    $PROJECT_DIR/scripts/install-desktop-deps.sh"
     return 1
   fi
 
