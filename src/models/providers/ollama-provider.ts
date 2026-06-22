@@ -142,10 +142,7 @@ export class OllamaProvider implements ModelProvider {
       response_format: options.responseFormat,
       stream: false,
     };
-    // Ollama-specific extension: keep the model warm in VRAM between calls.
-    // Best-effort on /v1 (Ollama honors it reliably on native /api/chat); the
-    // server-side OLLAMA_KEEP_ALIVE is the robust backstop.
-    (params as unknown as Record<string, unknown>).keep_alive = getConfig().ollama.keepAlive;
+    this.applyKeepAlive(params);
 
     if (options.tools?.length) {
       params.tools = options.tools;
@@ -398,10 +395,7 @@ export class OllamaProvider implements ModelProvider {
       stop: options.stopSequences,
       stream: true,
     };
-    // Ollama-specific extension: keep the model warm in VRAM between calls.
-    // Best-effort on /v1 (Ollama honors it reliably on native /api/chat); the
-    // server-side OLLAMA_KEEP_ALIVE is the robust backstop.
-    (params as unknown as Record<string, unknown>).keep_alive = getConfig().ollama.keepAlive;
+    this.applyKeepAlive(params);
 
     if (options.tools?.length) {
       params.tools = options.tools;
@@ -545,6 +539,16 @@ export class OllamaProvider implements ModelProvider {
   }
 
   // -- Private helpers --
+
+  /**
+   * Attach Ollama's `keep_alive` to an OpenAI-shaped /v1 params object so the
+   * model stays warm in VRAM between calls. Best-effort on /v1 (Ollama honors it
+   * reliably on native /api/chat); the server-side OLLAMA_KEEP_ALIVE is the
+   * robust backstop. Centralized so the one unavoidable cast lives in one place.
+   */
+  private applyKeepAlive(params: ChatCompletionCreateParams): void {
+    (params as unknown as Record<string, unknown>).keep_alive = getConfig().ollama.keepAlive;
+  }
 
   private createClient(endpointOverride?: string, apiKeyOverride?: string): OpenAI {
     const base = endpointOverride || this.endpoint;
