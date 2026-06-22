@@ -8,8 +8,14 @@
 #   1. Detects platform + verifies prerequisites (git, bun).
 #   2. Clones the repo into ~/.octipus/app (skips if present).
 #   3. Installs dependencies.
-#   4. Runs `bun run setup` (interactive — picks Ollama / LiteLLM / direct provider).
-#   5. Prints the next-step command.
+#   4. (--desktop) Installs the Rust toolchain + Tauri system libs.
+#   5. Runs `bun run setup` (interactive — picks Ollama / LiteLLM / direct provider).
+#   6. Prints the next-step command.
+#
+# Flags (pass after `bash -s --` when piping through curl):
+#   --desktop   Also install desktop-app deps (Rust + Tauri system libraries).
+#               Equivalent: OCTIPUS_DESKTOP=1. Off by default to keep server
+#               installs lean.
 #
 # Idempotent: re-running pulls the latest main, re-installs deps, re-runs setup.
 
@@ -18,6 +24,14 @@ set -eu
 REPO_URL="${OCTIPUS_REPO:-https://github.com/PatriceA/octipus.git}"
 INSTALL_DIR="${OCTIPUS_INSTALL_DIR:-$HOME/.octipus/app}"
 BRANCH="${OCTIPUS_BRANCH:-main}"
+
+# ─── Args ──────────────────────────────────────────────────────────────────
+WANT_DESKTOP="${OCTIPUS_DESKTOP:-}"
+for arg in "$@"; do
+  case "$arg" in
+    --desktop) WANT_DESKTOP=1 ;;
+  esac
+done
 
 # ─── Colors ────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -109,6 +123,16 @@ if [ -d "$INSTALL_DIR/web" ]; then
   say "Installing web dependencies..."
   (cd "$INSTALL_DIR/web" && bun install --silent)
   ok "Web dependencies installed"
+fi
+
+# ─── Desktop deps (opt-in) ─────────────────────────────────────────────────
+# The Tauri desktop app needs the Rust toolchain + system libraries that the
+# server/headless install deliberately skips. Only run when --desktop is set.
+if [ -n "$WANT_DESKTOP" ]; then
+  echo ""
+  say "Installing desktop dependencies (Rust + Tauri system libraries)..."
+  bash "$INSTALL_DIR/scripts/install-desktop-deps.sh"
+  ok "Desktop dependencies installed"
 fi
 
 # ─── Build the compiled CLI binary ────────────────────────────────────────

@@ -86,6 +86,7 @@ docs/             feature & architecture docs (see README Documentation table)
 | Task             | Command                          |
 | ---------------- | -------------------------------- |
 | Install          | `bun install && cd web && bun install && cd ../mcp-server && bun install && cd ..` |
+| Install (desktop)| `scripts/install-desktop-deps.sh` (Rust + Tauri system libs; optional) |
 | Dev (backend)    | `bun run dev`                    |
 | Start full stack | `bin/octi start` (stop: `bin/octi stop`) |
 | Type check       | `bun run typecheck`              |
