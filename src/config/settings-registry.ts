@@ -105,6 +105,24 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'OLLAMA_DEFAULT_MODEL',
   },
+  {
+    key: 'ollama.requestTimeout',
+    category: 'ollama',
+    valueType: 'number',
+    defaultValue: 300000,
+    description: 'Ollama load + inference timeout in ms (raise for slow GPUs/iGPUs that cold-load large models slowly)',
+    isSecret: false,
+    envVar: 'OLLAMA_REQUEST_TIMEOUT',
+  },
+  {
+    key: 'ollama.keepAlive',
+    category: 'ollama',
+    valueType: 'string',
+    defaultValue: '10m',
+    description: 'How long Ollama keeps a model warm in VRAM between calls (duration string like 10m/1h, or -1 for indefinitely)',
+    isSecret: false,
+    envVar: 'OLLAMA_KEEP_ALIVE',
+  },
 
   // ── Telegram ──
   {
