@@ -8,7 +8,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { AssertionBreakdown, LatencyHistogram, PassRateDonut } from '@/components/eval/EvalCharts';
 import { ResultsTable } from '@/components/eval/ResultsTable';
@@ -69,9 +69,8 @@ interface EvalDetail {
 type FilterType = 'all' | 'passed' | 'failed';
 
 export default function EvalDetailPage() {
-  const params = useParams();
   const _router = useRouter();
-  const id = params.id as string;
+  const id = useSearchParams().get('id') ?? '';
 
   const [data, setData] = useState<EvalDetail | null>(null);
   const [loading, setLoading] = useState(true);

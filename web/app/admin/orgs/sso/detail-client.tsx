@@ -3,7 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, KeyRound, Save, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
-import { use, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
 interface SsoConfig {
@@ -22,8 +23,8 @@ const DEFAULT_ATTRS: Record<string, string> = {
   email: 'email',
 };
 
-export default function OrgSsoPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function OrgSsoPage() {
+  const id = useSearchParams().get('id') ?? '';
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<SsoConfig | null>(null);
   const [savedToast, setSavedToast] = useState(false);

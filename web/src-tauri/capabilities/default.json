@@ -6,6 +6,27 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "store:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "octipus-server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-kill",
+      "allow": [
+        {
+          "name": "octipus-server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }

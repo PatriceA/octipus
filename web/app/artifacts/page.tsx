@@ -90,7 +90,7 @@ export default function ArtifactsPage() {
             >
               <div className="min-w-0 flex-1">
                 <Link
-                  href={`/artifacts/${a.id}`}
+                  href={`/artifacts/view?id=${a.id}`}
                   className="text-base font-medium hover:underline"
                 >
                   {a.title}

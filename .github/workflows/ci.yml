@@ -72,6 +72,63 @@ jobs:
         run: bunx tsc --noEmit
         working-directory: web
 
+  desktop:
+    name: Desktop (static export · tauri compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install root deps
+        run: bun install --frozen-lockfile
+
+      - name: Install web deps
+        run: bun install --frozen-lockfile
+        working-directory: web
+
+      # Catches the static-export blocker: `output: 'export'` fails the build
+      # if any dynamic route lacks generateStaticParams (see web/app/**/[id]).
+      - name: Build static export (Tauri mode)
+        run: TAURI_BUILD=true bun run build
+        working-directory: web
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web/src-tauri
+
+      # `tauri::generate_context!()` validates the externalBin declared in
+      # tauri.conf.json. Drop in a placeholder so the Rust side type-checks
+      # without compiling the full backend binary in CI.
+      - name: Stub sidecar binary
+        run: |
+          triple="$(rustc -vV | sed -n 's/host: //p')"
+          mkdir -p web/src-tauri/binaries
+          touch "web/src-tauri/binaries/octipus-server-${triple}"
+          chmod +x "web/src-tauri/binaries/octipus-server-${triple}"
+
+      - name: Cargo check (Tauri app)
+        run: cargo check --manifest-path web/src-tauri/Cargo.toml
+
   mcp-server:
     name: MCP server (typecheck · build · publish-check)
     runs-on: ubuntu-latest
