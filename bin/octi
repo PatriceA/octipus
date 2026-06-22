@@ -335,7 +335,12 @@ kill_tracked() {
           if ! kill -0 "$pid" 2>/dev/null; then break; fi
           sleep 0.5
         done
-        kill -9 "$pid" 2>/dev/null || true
+        # SIGKILL the whole process group, not just the tracked pid: a backend
+        # whose graceful shutdown hangs leaves the wrapper as $pid but the real
+        # work (index.ts) as a child. Killing only $pid orphans that child
+        # (reparented to init, port already unbound) — exactly the "backend
+        # went down but process survives" failure. Negative pid = process group.
+        kill -9 -- -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
       fi
       log_info "$label stopped"
     fi
