@@ -76,6 +76,20 @@ import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
 import { workspaceRoutes } from './routes/workspace';
 import { setupWebSocket } from './websocket';
 
+/**
+ * Fixed local origins the Tauri desktop client is served from. Tauri v2 uses a
+ * `tauri://localhost` / `http://tauri.localhost` custom-protocol origin in the
+ * packaged app, and the dev server port (3008) during `octi desktop` dev. These
+ * are the desktop app's own origins (not remote hosts), always allowed so the
+ * thin client's cross-origin requests reach the backend.
+ */
+const DESKTOP_ORIGINS = [
+  'tauri://localhost',
+  'http://tauri.localhost',
+  'https://tauri.localhost',
+  'http://localhost:3008',
+];
+
 export function createServer() {
   const config = getConfig();
 
@@ -100,10 +114,17 @@ export function createServer() {
         },
       })
     )
-    // CORS — supports wildcard '*' for LAN access or a list of origins
+    // CORS — supports wildcard '*' for LAN access or a list of origins.
+    // The Tauri desktop client is a thin client served from its own fixed local
+    // origin (no same-origin /api proxy like the web build), so its cross-origin
+    // requests need those origins allowed. These are the desktop app's OWN local
+    // origins — not remote exposure — so they're always allowed unless the user
+    // has opted into wildcard CORS.
     .use(
       cors({
-        origin: config.api.corsOrigins.includes('*') ? true : config.api.corsOrigins,
+        origin: config.api.corsOrigins.includes('*')
+          ? true
+          : [...config.api.corsOrigins, ...DESKTOP_ORIGINS],
         credentials: !config.api.corsOrigins.includes('*'),
       })
     )
