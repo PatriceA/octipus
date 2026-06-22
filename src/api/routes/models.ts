@@ -11,7 +11,6 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { getProviderRouter } from '@/models/providers';
 import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { getQuotaTracker } from '@/models/quota-tracker';
-import { singleModelTopicBindings } from '@/models/single-model-binding';
 import { coreLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
 
@@ -455,7 +454,11 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       }
 
       try {
-        const model = await registry.registerModel(body as NewModelConfigEntry);
+        // Strip any topic binding from creation — topic↔model assignment is owned
+        // by the Topics page (PUT /topics/:topic/binding), so a model is created
+        // unbound and gets its topics there. Keeps a single source of truth.
+        const { topics: _topics, topicRoles: _topicRoles, ...createBody } = body as Record<string, unknown>;
+        const model = await registry.registerModel(createBody as NewModelConfigEntry);
         return model;
       } catch (err) {
         const msg = (err as Error).message;
@@ -477,7 +480,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         supportsVision: t.Optional(t.Boolean()),
         supportsTools: t.Optional(t.Boolean()),
         supportsStreaming: t.Optional(t.Boolean()),
-        topics: t.Optional(t.Array(t.String())),
+        // topics/topicRoles intentionally omitted — binding is owned by the Topics page.
         priority: t.Optional(t.Number()),
         costPerInputToken: t.Optional(t.Number()),
         costPerOutputToken: t.Optional(t.Number()),
@@ -500,7 +503,16 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       // and supportsStreaming are derived from the provider capabilities system
       // (see src/models/capabilities.ts) and must not be overridden by user input.
       // This ensures capability presets remain the single source of truth.
-      const { supportsTools: _t, supportsVision: _v, supportsStreaming: _s, ...safeUpdate } = body as any;
+      // topics/topicRoles are likewise stripped: topic binding is owned by the
+      // Topics page, so the model editor must never write it (single source of truth).
+      const {
+        supportsTools: _t,
+        supportsVision: _v,
+        supportsStreaming: _s,
+        topics: _topics,
+        topicRoles: _topicRoles,
+        ...safeUpdate
+      } = body as any;
 
       try {
         const registry = getModelRegistry();
@@ -534,7 +546,9 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         apiKeyRef: t.Optional(t.String()),
         maxTokens: t.Optional(t.Number()),
         contextWindow: t.Optional(t.Number()),
-        topics: t.Optional(t.Array(t.String())),
+        // topics/topicRoles are intentionally excluded — topic↔model binding is
+        // owned by the Topics page (PUT /topics/:topic/binding), not the model
+        // editor. Keeping a topic writer here would be a second source of truth.
         isEnabled: t.Optional(t.Boolean()),
         priority: t.Optional(t.Number()),
         // supportsTools, supportsVision, supportsStreaming are intentionally
@@ -580,44 +594,6 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       const success = await registry.setDefaultModel(params.name);
 
       return { success };
-    },
-    {
-      params: t.Object({
-        name: t.String(),
-      }),
-      detail: { tags: ['models'] },
-    }
-  )
-
-  // Bind a model to every text topic and make it the default — the one-click
-  // "run everything on this single model" action for small / local setups.
-  // embedding/ocr/vision are intentionally left unbound (different model
-  // classes); the response flags that so the caller can prompt for them.
-  .post(
-    '/:name/use-for-all-topics',
-    async ({ user, params, set }) => {
-      if (!user?.isAdmin) {
-        set.status = 403;
-        return { error: 'Admin access required' };
-      }
-
-      const registry = getModelRegistry();
-      const model = await registry.getModel(params.name);
-      if (!model) {
-        set.status = 404;
-        return { error: `Model "${params.name}" not found` };
-      }
-
-      const { topics, topicRoles } = singleModelTopicBindings();
-      const updated = await registry.updateModel(params.name, { topics, topicRoles });
-      await registry.setDefaultModel(params.name);
-
-      return {
-        success: !!updated,
-        topics,
-        unbound: ['embedding', 'ocr', 'vision'],
-        note: 'Bound to all text topics and set as default. embedding/ocr/vision stay unbound — add an embedding model for RAG + memory, and a vision model for document/image features.',
-      };
     },
     {
       params: t.Object({

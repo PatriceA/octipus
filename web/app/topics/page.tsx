@@ -1,8 +1,9 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Save, Tags } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Layers, Loader2, Save, Tags } from 'lucide-react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
@@ -105,8 +106,10 @@ function TopicCard({
 
   const selectCls =
     'bg-surface-container-low border border-outline-variant/10 rounded text-xs px-2 py-1 text-on-surface disabled:opacity-50 min-w-[9rem]';
+  // w-28 + right padding so the number-spinner arrows don't overlap the
+  // "default" placeholder / typed value (w-20 was too narrow and clipped them).
   const inputCls =
-    'bg-surface-container-low border border-outline-variant/10 rounded text-xs px-2 py-1 text-on-surface w-20 disabled:opacity-50';
+    'bg-surface-container-low border border-outline-variant/10 rounded text-xs pl-2 pr-1.5 py-1 text-on-surface w-28 disabled:opacity-50';
 
   return (
     <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4">
@@ -180,6 +183,61 @@ function TopicCard({
   );
 }
 
+// One-click "run everything on a single model" setup: binds the chosen model as
+// primary for every text topic (and makes it default), demoting any current
+// holders. The Topics-page home for what used to live on the Models page.
+function AssignAllPanel({ models, onApplied }: { models: ModelOption[]; onApplied: () => void }) {
+  const [model, setModel] = useState('');
+  const mutation = useMutation({
+    mutationFn: (name: string) => api.post('/topics/assign-all', { model: name }),
+    onSuccess: () => {
+      onApplied();
+      setModel('');
+    },
+  });
+
+  return (
+    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4">
+      <div className="flex items-start gap-2 mb-2">
+        <Layers className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+        <div className="min-w-0">
+          <h3 className="font-medium text-on-surface text-sm">Use one model for all topics</h3>
+          <p className="text-xs text-on-surface-variant mt-0.5">
+            Single-model setup for small / local installs — binds the chosen model as primary for every text
+            topic and makes it the default. embedding, OCR and vision stay unbound (add those separately).
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className="bg-surface-container-low border border-outline-variant/10 rounded text-xs px-2 py-1.5 text-on-surface min-w-[12rem]"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={mutation.isPending}
+        >
+          <option value="">— select a model —</option>
+          {models.map((m) => (
+            <option key={m.name} value={m.name}>{m.name}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => model && mutation.mutate(model)}
+          disabled={!model || mutation.isPending}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-primary-container/60 text-primary disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        >
+          {mutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Layers className="w-3 h-3" />}
+          Apply to all text topics
+        </button>
+        {mutation.isError && (
+          <span className="text-xs text-error">
+            {mutation.error instanceof Error ? mutation.error.message : 'Failed to apply'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function TopicsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -203,27 +261,24 @@ export default function TopicsPage() {
   const topics = topicsData?.topics || [];
   const models = (modelsData?.models || []).filter((m) => m.isEnabled);
   const onSaved = () => queryClient.invalidateQueries({ queryKey: ['topics-config'] });
+  // Assign-all touches bindings across every model, so refresh both queries.
+  const onAssignedAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['topics-config'] });
+    queryClient.invalidateQueries({ queryKey: ['models'] });
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start gap-3">
-        <div className="flex-1">
-          <h1 className="text-base font-semibold lowercase">
-            <span className="text-outline">octi:</span>
-            <span className="text-on-surface">~/topics</span>
-            <span className="text-primary font-bold"> $</span>
-            <span aria-hidden className="term-caret" />
-          </h1>
-          <p className="text-on-surface-variant">
-            Per-topic model routing and overrides. Assign the primary/backup model each topic routes to, an optional
-            executor model (planner→executor split), and per-topic temperature / max-token overrides.
-          </p>
-          {!canEdit && (
-            <p className="text-sm text-warning mt-1">Read-only — admin access is required to change topic configuration.</p>
-          )}
-        </div>
-        <Tags className="w-5 h-5 text-on-surface-variant mt-1" />
-      </div>
+      <PageHeader
+        title="topics"
+        badge={<Tags className="w-5 h-5 text-on-surface-variant" />}
+        description="Per-topic model routing and overrides. Assign the primary/backup model each topic routes to, an optional executor model (planner→executor split), and per-topic temperature / max-token overrides."
+      />
+      {!canEdit && (
+        <p className="text-sm text-warning">Read-only — admin access is required to change topic configuration.</p>
+      )}
+
+      {canEdit && models.length > 0 && <AssignAllPanel models={models} onApplied={onAssignedAll} />}
 
       {isLoading ? (
         <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
