@@ -6,7 +6,10 @@
     "dev": "next dev -p 3007",
     "build": "next build",
     "start": "next start -p 3007",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "tauri": "tauri",
+    "tauri:dev": "TAURI_BUILD=true tauri dev",
+    "tauri:build": "TAURI_BUILD=true tauri build"
   },
   "dependencies": {
     "@codemirror/language": "^6.12.3",
@@ -32,6 +35,8 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
     "@tailwindcss/postcss": "^4.3.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^20.12.12",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
