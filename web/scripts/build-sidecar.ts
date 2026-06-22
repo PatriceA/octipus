@@ -69,6 +69,11 @@ const result = spawnSync(
     'chromium-bidi',
     '--external',
     'electron',
+    // `unzipper` lazily `require`s the AWS SDK for its optional S3 input path
+    // (never exercised here). `bun build --compile` resolves every require at
+    // build time, so without this the uninstalled optional dep fails the build.
+    '--external',
+    '@aws-sdk/client-s3',
     entry,
     '--outfile',
     outFile,
