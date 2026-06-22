@@ -22,6 +22,30 @@ export function getApiUrl(): string {
   return `http://localhost:${API_PORT}/api`;
 }
 
+/**
+ * HTTP methods we can safely re-send after a transient transport failure.
+ *
+ * The backend's Bun/Elysia HTTP listener can briefly drop and self-heal (see the
+ * watchdog in src/api/server.ts), leaving a ~sub-second window where a request
+ * either never connects or — worse — IS processed server-side but its response
+ * is lost (the "Topics save: backend applied it, frontend showed 'Request
+ * failed'" bug). Re-sending only makes sense for idempotent operations, where
+ * replaying the same call reaches the same end state:
+ *   - GET / HEAD / DELETE / PUT — idempotent by HTTP semantics.
+ *   - PATCH — every PATCH endpoint in this app is a full-state field setter /
+ *     upsert (topic config, model fields, skill fields), so replay is safe here.
+ * POST is intentionally excluded — it creates, so a lost response must surface
+ * rather than risk a duplicate.
+ */
+const RETRYABLE_METHODS = new Set(['GET', 'HEAD', 'PUT', 'DELETE', 'PATCH']);
+/** Gateway statuses the Next proxy returns while the backend listener rebinds. */
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+const MAX_TRANSIENT_RETRIES = 3;
+/** Backoff per retry attempt (ms) — totals ~2.1s, outlasting a ~1s rebind. */
+const RETRY_BACKOFF_MS = [300, 600, 1200];
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 class ApiClient {
   private token: string | null = null;
   private workspaceSlug: string | null = null;
@@ -70,25 +94,48 @@ class ApiClient {
     }
 
     const apiUrl = getApiUrl();
-    const response = await fetch(`${apiUrl}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include',
-    });
+    const retryable = RETRYABLE_METHODS.has(method);
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.setToken(null);
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('auth:expired'));
+    for (let attempt = 0; ; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(`${apiUrl}${path}`, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+          credentials: 'include',
+        });
+      } catch (err) {
+        // Network-level failure (connection refused/reset) — typically the
+        // listener-drop window. Retry idempotent calls; otherwise surface it.
+        if (retryable && attempt < MAX_TRANSIENT_RETRIES) {
+          await delay(RETRY_BACKOFF_MS[attempt]);
+          continue;
         }
+        throw err instanceof Error ? err : new Error('Network request failed');
       }
-      const error = await response.json().catch(() => ({ error: 'Request failed' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
-    }
 
-    return response.json();
+      // The proxy returns 502/503/504 while the backend listener is rebinding.
+      // For idempotent methods the call may have already committed (lost
+      // response) or never ran — replaying reaches the same state either way.
+      if (retryable && TRANSIENT_STATUSES.has(response.status) && attempt < MAX_TRANSIENT_RETRIES) {
+        await delay(RETRY_BACKOFF_MS[attempt]);
+        continue;
+      }
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          this.setToken(null);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('auth:expired'));
+          }
+        }
+        const error = await response.json().catch(() => ({ error: 'Request failed' }));
+        throw new Error(error.error || `HTTP ${response.status}`);
+      }
+
+      return response.json();
+    }
   }
 
   get<T>(path: string): Promise<T> {
