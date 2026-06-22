@@ -129,7 +129,6 @@ export default function ReaderPage() {
               <span className="inline-flex items-center gap-1">· <Clock className="w-3.5 h-3.5" /> {doc.estReadMinutes} min · {doc.wordCount} words</span>
             </div>
             {doc.leadImage && (
-              // eslint-disable-next-line @next/next/no-img-element -- remote article image, dimensions unknown
               <img src={doc.leadImage} alt="" className="mt-4 rounded-xs max-h-80 w-full object-cover" />
             )}
             {/* Server-sanitized allowlist HTML (see src/core/reader/extract.ts). */}

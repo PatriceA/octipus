@@ -214,6 +214,14 @@ export default function SwarmTree({
   // between renders, the next effect run consumes all N at once.
   const processedIdxRef = useRef(0);
 
+  // Keep the latest `onHydratedTotals` in a ref so the hydrate effect can call
+  // it without listing it as a dependency (which would re-run the fetch every
+  // time the parent passes a fresh callback).
+  const onHydratedTotalsRef = useRef(onHydratedTotals);
+  useEffect(() => {
+    onHydratedTotalsRef.current = onHydratedTotals;
+  }, [onHydratedTotals]);
+
   // Clear the tree and arm the loading flag when the session changes — during
   // render (the React-endorsed alternative to a setState in the hydrate effect).
   const [seededSession, setSeededSession] = useState(sessionId);
@@ -252,7 +260,7 @@ export default function SwarmTree({
             if (node.durationMs && node.kind === 'orchestrator') durationMs += node.durationMs;
           }
           setNodes(next);
-          onHydratedTotals?.({ tokens, durationMs });
+          onHydratedTotalsRef.current?.({ tokens, durationMs });
         }
       })
       .catch(() => {

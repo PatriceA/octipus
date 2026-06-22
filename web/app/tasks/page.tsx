@@ -497,7 +497,6 @@ function TaskRow({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={saveNotes}
-            // eslint-disable-next-line jsx-a11y/no-autofocus -- focus the editor the user just opened
             autoFocus
             rows={3}
             placeholder="Add details, links, context…"

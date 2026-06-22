@@ -364,7 +364,6 @@ function DocumentPreview({ documentId, mimeType, originalName }: { documentId: s
             Preview is not available for this file type ({mimeType || 'unknown'}). Use Download to view the original.
           </div>
         ) : isImage && blobUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img src={blobUrl} alt={originalName} className="max-w-full max-h-[60vh] mx-auto block" />
         ) : isPdf && blobUrl ? (
           <iframe src={blobUrl} title={originalName} className="w-full h-[60vh] bg-on-surface" />

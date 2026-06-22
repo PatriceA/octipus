@@ -354,7 +354,6 @@ function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPrevi
       return (
         // Dynamic tool-result image (data: URL or artifact ref) — next/image
         // would force `unoptimized`/domain config here for no benefit.
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={result.ref}
           alt="tool result"

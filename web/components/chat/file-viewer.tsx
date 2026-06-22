@@ -291,7 +291,6 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
             <div className="flex items-center justify-center bg-[#0d1117] p-4">
               {/* Source is an in-memory data: URL from the session file API, not a
                   remote asset — next/image would force `unoptimized` and add no value. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={data.dataUrl} alt={displayName(path)} className="max-h-[60vh] object-contain" />
             </div>
           )}
