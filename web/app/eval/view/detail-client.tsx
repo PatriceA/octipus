@@ -7,9 +7,10 @@ import {
   RefreshCw,
   XCircle,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AssertionBreakdown, LatencyHistogram, PassRateDonut } from '@/components/eval/EvalCharts';
 import { ResultsTable } from '@/components/eval/ResultsTable';
 import { ScoreBar } from '@/components/eval/ScoreBar';
@@ -72,31 +73,22 @@ export default function EvalDetailPage() {
   const _router = useRouter();
   const id = useSearchParams().get('id') ?? '';
 
-  const [data, setData] = useState<EvalDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [activeSuite, setActiveSuite] = useState<string | null>(null);
   const [assertionTypeFilter, setAssertionTypeFilter] = useState<string>('');
 
-  const fetchDetail = useCallback(async () => {
-    try {
-      const result = await api.get<EvalDetail>(`/eval/results/${encodeURIComponent(id)}`);
-      setData(result);
-      if (result.suites.length > 0 && !activeSuite) {
-        setActiveSuite(result.suites[0].suite);
-      }
-      setError('');
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [id, activeSuite]);
-
-  useEffect(() => {
-    fetchDetail();
-  }, [fetchDetail]);
+  const {
+    data,
+    isLoading: loading,
+    error: queryError,
+  } = useQuery({
+    queryKey: ['eval-result', id],
+    queryFn: () => api.get<EvalDetail>(`/eval/results/${encodeURIComponent(id)}`),
+    enabled: !!id,
+  });
+  const error = queryError ? (queryError as Error).message : '';
+  // First suite is the default selection until the user picks another.
+  const selectedSuite = activeSuite ?? data?.suites[0]?.suite ?? null;
 
   if (loading) {
     return (
@@ -123,7 +115,7 @@ export default function EvalDetailPage() {
     );
   }
 
-  const currentSuite = data.suites.find(s => s.suite === activeSuite) || data.suites[0];
+  const currentSuite = data.suites.find(s => s.suite === selectedSuite) || data.suites[0];
   const allResults = currentSuite?.results || [];
 
   // Collect unique assertion types for filter
@@ -221,7 +213,7 @@ export default function EvalDetailPage() {
               onClick={() => setActiveSuite(suite.suite)}
               className={cn(
                 'px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer',
-                activeSuite === suite.suite
+                selectedSuite === suite.suite
                   ? 'border-primary text-primary'
                   : 'border-transparent text-on-surface-variant hover:text-on-surface'
               )}
