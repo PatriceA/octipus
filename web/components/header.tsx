@@ -3,6 +3,7 @@
 import { Bell, BookOpen, Brain, Cpu, KeyRound, Loader2, LogOut, MessageSquare, Search, Settings, User, Webhook, Wrench } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
@@ -78,28 +79,31 @@ export function Header() {
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showResults, setShowResults] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchNotifications = useCallback(async () => {
-    try {
-      const data = await api.get<{ notifications: Notification[] }>('/notifications');
-      if (data?.notifications) {
-        setNotifications(data.notifications);
-        setUnreadCount(data.notifications.filter(n => !n.read).length);
-      }
-    } catch {}
-  }, []);
+  const { data: notifData, dataUpdatedAt: notifUpdatedAt, refetch: refetchNotifications } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => api.get<{ notifications: Notification[] }>('/notifications'),
+    refetchInterval: 30000,
+  });
+  const fetchNotifications = useCallback(() => {
+    refetchNotifications();
+  }, [refetchNotifications]);
 
-  useEffect(() => {
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
-  }, [fetchNotifications]);
+  // Seed local notification state from each server fetch. Local state is
+  // mutated in place by pushed events and mark-read actions between fetches;
+  // a fresh server payload (new dataUpdatedAt) re-seeds it, matching the
+  // previous wholesale-replace-on-poll behavior.
+  const [seededAt, setSeededAt] = useState(0);
+  if (notifData?.notifications && notifUpdatedAt !== seededAt) {
+    setSeededAt(notifUpdatedAt);
+    setNotifications(notifData.notifications);
+    setUnreadCount(notifData.notifications.filter(n => !n.read).length);
+  }
 
   useEffect(() => {
     const handler = (event: CustomEvent) => {
@@ -127,35 +131,38 @@ export function Header() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Debounce the raw input into the value actually queried. The timer callback
+  // is the only place that updates state, so no setState runs synchronously in
+  // the effect body.
+  const trimmedQuery = searchQuery.trim();
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (searchQuery.trim().length < 2) {
-      setSearchResults([]);
-      setShowResults(false);
-      setIsSearching(false);
-      return;
-    }
-
-    setIsSearching(true);
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const data = await api.get<{ results: SearchResult[] }>(
-          `/search?q=${encodeURIComponent(searchQuery.trim())}&limit=10`
-        );
-        setSearchResults(data?.results || []);
-        setShowResults(true);
-      } catch {
-        setSearchResults([]);
-      } finally {
-        setIsSearching(false);
-      }
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(trimmedQuery);
     }, 300);
-
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [searchQuery]);
+  }, [trimmedQuery]);
+
+  const searchEnabled = debouncedQuery.length >= 2;
+  const { data: searchData, isFetching: isSearching } = useQuery({
+    queryKey: ['header-search', debouncedQuery],
+    queryFn: () =>
+      api.get<{ results: SearchResult[] }>(`/search?q=${encodeURIComponent(debouncedQuery)}&limit=10`),
+    enabled: searchEnabled,
+  });
+  const searchResults: SearchResult[] = searchEnabled ? searchData?.results ?? [] : [];
+
+  // Open the results dropdown once a search has produced data; close it when the
+  // query is too short to search.
+  const [resultsSeenFor, setResultsSeenFor] = useState<string | null>(null);
+  if (!searchEnabled && showResults) {
+    setShowResults(false);
+  } else if (searchEnabled && searchData && resultsSeenFor !== debouncedQuery) {
+    setResultsSeenFor(debouncedQuery);
+    setShowResults(true);
+  }
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -175,7 +182,7 @@ export function Header() {
   const handleResultClick = (result: SearchResult) => {
     setShowResults(false);
     setSearchQuery('');
-    setSearchResults([]);
+    setDebouncedQuery('');
     router.push(result.href);
   };
 

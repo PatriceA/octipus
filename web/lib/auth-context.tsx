@@ -34,7 +34,11 @@ export function useAuth() {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  // Seed from localStorage at init so the synchronous read isn't a setState
+  // inside the mount effect (react-hooks/set-state-in-effect).
+  const [token, setToken] = useState<string | null>(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+  );
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
@@ -67,7 +71,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const existingToken = localStorage.getItem('auth_token');
     if (existingToken) {
       api.setToken(existingToken);
-      setToken(existingToken);
     }
 
     // Try to get current user — works with both Bearer token and HttpOnly cookie

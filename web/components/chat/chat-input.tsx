@@ -1,8 +1,13 @@
 'use client';
 
 import { Mic, MicOff, Send } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { cn } from '@/lib/utils';
+
+const subscribeNoop = () => () => {};
+const getSpeechSupported = () =>
+  !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+const getSpeechSupportedServer = () => false;
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -18,13 +23,12 @@ interface ChatInputProps {
 export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(false);
+  const speechSupported = useSyncExternalStore(subscribeNoop, getSpeechSupported, getSpeechSupportedServer);
   const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
-      setSpeechSupported(true);
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = true;

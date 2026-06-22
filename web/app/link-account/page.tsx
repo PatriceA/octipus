@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -42,15 +42,14 @@ export default function LinkAccountPage() {
   const queryClient = useQueryClient();
   const { isAuthenticated, isLoading } = useAuth();
   const searchParams = useSearchParams();
-  const [code, setCode] = useState('');
+  // If the deep-link carried `?code=ABCDEF`, pre-fill it (lazy initial state —
+  // the field stays editable afterwards).
+  const [code, setCode] = useState(() => {
+    const fromUrl = searchParams.get('code');
+    return fromUrl ? fromUrl.toUpperCase().slice(0, 12) : '';
+  });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<ChannelBinding | null>(null);
-
-  // If the deep-link carried `?code=ABCDEF`, pre-fill it.
-  useEffect(() => {
-    const fromUrl = searchParams.get('code');
-    if (fromUrl) setCode(fromUrl.toUpperCase().slice(0, 12));
-  }, [searchParams]);
 
   const { data, refetch } = useQuery({
     queryKey: ['channel-bindings'],

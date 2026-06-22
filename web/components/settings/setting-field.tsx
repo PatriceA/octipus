@@ -11,7 +11,7 @@ import {
   Save,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '@/lib/api';
 
 export interface SettingConstraints {
@@ -259,15 +259,20 @@ export function SettingsGroup({
   saving: string | null;
   saved: string | null;
 }) {
-  const [localValues, setLocalValues] = useState<Record<string, unknown>>({});
-
-  useEffect(() => {
+  const seedValues = (items: SettingItem[]) => {
     const initial: Record<string, unknown> = {};
-    for (const s of settings) {
+    for (const s of items) {
       initial[s.key] = s.value;
     }
-    setLocalValues(initial);
-  }, [settings]);
+    return initial;
+  };
+  const [localValues, setLocalValues] = useState<Record<string, unknown>>(() => seedValues(settings));
+  // Re-seed local editable values whenever the incoming settings prop changes.
+  const [seededFrom, setSeededFrom] = useState(settings);
+  if (settings !== seededFrom) {
+    setSeededFrom(settings);
+    setLocalValues(seedValues(settings));
+  }
 
   const getLocalValue = (key: string) => localValues[key] ?? '';
   const setLocalValue = (key: string, value: unknown) => {

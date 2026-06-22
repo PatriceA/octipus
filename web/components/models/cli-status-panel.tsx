@@ -19,8 +19,6 @@ interface DiscoveredModel {
 }
 
 export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLIStatusPanelProps) {
-  if (tools.length === 0) return null;
-
   const [adding, setAdding] = useState<string | null>(null);
   const [discovered, setDiscovered] = useState<Record<string, DiscoveredModel[]>>({});
 
@@ -42,6 +40,9 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
       }
     });
   }, [tools]);
+
+  // Early return must come AFTER all hooks (rules-of-hooks).
+  if (tools.length === 0) return null;
 
   const findRegistered = (tool: CLITool): Model | undefined =>
     registeredModels.find(m => m.provider === 'cli' && tool.modelPatterns.includes(m.modelId));

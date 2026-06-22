@@ -308,7 +308,7 @@ export function ApiTokensTab() {
                 onClick={() => { setIssued(null); setCopied(false); }}
                 className="px-4 py-2 bg-surface-container-high text-on-surface rounded-lg hover:bg-[#333] text-sm cursor-pointer"
               >
-                I've saved it
+                I&apos;ve saved it
               </button>
             </div>
           </div>

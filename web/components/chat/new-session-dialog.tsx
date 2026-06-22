@@ -52,7 +52,9 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
     }
   }, [open, devMode]);
 
-  const loadProjects = async () => {
+  // Function declaration (hoisted) so the mount effect above can reference it
+  // before its textual position without a temporal-dead-zone access.
+  async function loadProjects() {
     setLoading(true);
     try {
       const ws = await api.get<{ rootPath: string; additionalPaths: string[] }>('/workspace');
@@ -94,7 +96,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
       }
     } catch {}
     setLoading(false);
-  };
+  }
 
   const handleCreateRepo = async () => {
     const trimmed = newRepoName.trim();

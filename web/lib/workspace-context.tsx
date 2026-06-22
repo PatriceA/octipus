@@ -101,7 +101,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (authLoading) return;
-    refresh();
+    // Defer to a timer so the fetch's setState runs in the timer callback, not
+    // synchronously in the effect body (react-hooks/set-state-in-effect).
+    const t = setTimeout(refresh, 0);
+    return () => clearTimeout(t);
   }, [authLoading, refresh]);
 
   const switchWorkspace = useCallback((id: string) => {

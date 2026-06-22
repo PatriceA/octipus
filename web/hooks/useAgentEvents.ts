@@ -39,11 +39,17 @@ export function useAgentEvents(agentId?: string) {
   const cursorRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Reset the event list when the agent changes — done during render (the
+  // React-endorsed pattern) instead of a setState inside the effect.
+  const [seededAgent, setSeededAgent] = useState(agentId);
+  if (agentId !== seededAgent) {
+    setSeededAgent(agentId);
+    setEvents([]);
+  }
+
   useEffect(() => {
     if (!agentId) return;
 
-    // Reset on agent change
-    setEvents([]);
     cursorRef.current = 0;
 
     let cancelled = false;

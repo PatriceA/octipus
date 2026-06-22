@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useCallback } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { ALL_VAULT_KEYS, CHANNEL_KEY_GROUPS, type Credential } from '@/lib/vault-config';
@@ -13,35 +14,26 @@ import { ProviderCards } from './provider-cards';
 import { VaultTable } from './vault-table';
 
 export default function SecretsPage() {
-  const [credentials, setCredentials] = useState<Credential[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState(true);
   const { activeWorkspace } = useWorkspace();
 
-  const fetchAll = useCallback(async () => {
-    try {
+  const { data, isLoading: loading, refetch } = useQuery({
+    queryKey: ['vault', activeWorkspace?.id ?? null],
+    queryFn: () => {
       const path = activeWorkspace
         ? `/vault?workspaceId=${encodeURIComponent(activeWorkspace.id)}`
         : '/vault';
-      const data = await api.get<{ credentials?: Credential[] }>(path);
-      const creds = data?.credentials ?? [];
-      setCredentials(creds);
+      return api.get<{ credentials?: Credential[] }>(path);
+    },
+  });
+  const credentials = data?.credentials ?? [];
 
-      const s: Record<string, boolean> = {};
-      for (const k of ALL_VAULT_KEYS) {
-        s[k.vaultName] = creds.some((c) => c.name === k.vaultName);
-      }
-      setStatuses(s);
-    } catch (error) {
-      console.error('Failed to fetch credentials:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [activeWorkspace]);
+  // Derived presence map for the managed vault keys.
+  const statuses: Record<string, boolean> = {};
+  for (const k of ALL_VAULT_KEYS) {
+    statuses[k.vaultName] = credentials.some((c) => c.name === k.vaultName);
+  }
 
-  useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+  const fetchAll = useCallback(() => { refetch(); }, [refetch]);
 
   if (loading) {
     return (

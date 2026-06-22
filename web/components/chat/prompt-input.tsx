@@ -10,9 +10,19 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { cn } from '@/lib/utils';
 import { AudioWaveform } from './audio-waveform';
+
+const subscribeNoop = () => () => {};
+const hasNativeSpeech = () =>
+  !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+const getVoiceSupport = () => {
+  if (hasNativeSpeech()) return 'native';
+  if (typeof MediaRecorder !== 'undefined') return 'server';
+  return 'none';
+};
+const getVoiceSupportServer = () => 'none' as const;
 
 export interface Attachment {
   id: string;
@@ -261,18 +271,9 @@ export default function PromptInput({
   );
 
   // Voice input supported if browser has SpeechRecognition OR MediaRecorder (fallback to server STT)
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [useServerSTT, setUseServerSTT] = useState(false);
-  useEffect(() => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SR) {
-      setSpeechSupported(true);
-    } else if (typeof MediaRecorder !== 'undefined') {
-      // Fallback: record audio and send to server for transcription
-      setSpeechSupported(true);
-      setUseServerSTT(true);
-    }
-  }, []);
+  const voiceSupport = useSyncExternalStore(subscribeNoop, getVoiceSupport, getVoiceSupportServer);
+  const speechSupported = voiceSupport !== 'none';
+  const useServerSTT = voiceSupport === 'server';
 
   // Voice input via Web Speech API
   const toggleVoice = useCallback(async () => {

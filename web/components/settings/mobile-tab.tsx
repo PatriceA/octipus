@@ -174,7 +174,7 @@ export function MobileTab() {
         <ol className="text-sm text-on-surface-variant space-y-2 list-decimal list-inside">
           <li>Open the mobile app on your Android device</li>
           <li>The app will show a QR scanner on first launch</li>
-          <li>Click "Generate QR Code" above</li>
+          <li>Click &quot;Generate QR Code&quot; above</li>
           <li>Point your phone camera at the QR code</li>
           <li>The app will connect automatically</li>
         </ol>
