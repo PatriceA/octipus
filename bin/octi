@@ -6,7 +6,8 @@ set -o pipefail 2>/dev/null || true
 # Single-command management for Octipus.
 #
 # Usage:
-#   octi start [--dev]    Start backend + web UI
+#   octi start [--dev]    Start backend + web UI (server / browser)
+#   octi desktop [--build] Launch the desktop app (owns its own backend)
 #   octi stop             Stop all Octipus processes
 #   octi restart [--dev]  Restart everything
 #   octi tui              Launch terminal chat interface
@@ -904,6 +905,49 @@ cmd_open() {
   log_info "Opening http://localhost:$WEB_PORT"
 }
 
+cmd_desktop() {
+  # Launch the Tauri desktop app. Unlike `octi start` (backend + web server +
+  # browser, for servers/headless), the desktop app OWNS its backend: Tauri
+  # spawns the compiled backend as a sidecar and stops it when the window
+  # closes. So this path must NOT also run the server-mode backend.
+  local build_mode=false
+  for arg in "$@"; do
+    case "$arg" in
+      --build|-b) build_mode=true ;;
+    esac
+  done
+
+  # The desktop app needs the Rust toolchain (+ Tauri system deps) to build.
+  # `octi start` doesn't — keep this check local so server installs stay lean.
+  if ! command -v cargo >/dev/null 2>&1; then
+    log_error "Rust toolchain not found (cargo) — required to build the desktop app."
+    log_hint "Install from https://rustup.rs, then re-run: octi desktop"
+    return 1
+  fi
+
+  # Port collision guard: the desktop sidecar binds the same API port as the
+  # server-mode backend. If `octi start` is up, the sidecar can't bind.
+  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
+    log_warn "Server mode is running (from 'octi start') on :$API_PORT / :$WEB_PORT."
+    log_hint "The desktop app starts its own backend on the same port — stop the server first: octi stop"
+    return 1
+  fi
+
+  cd "$PROJECT_DIR/web" || { log_error "web/ directory not found at $PROJECT_DIR/web"; return 1; }
+
+  if $build_mode; then
+    log_step "Building the desktop app bundle (compiles the backend sidecar — can take a few minutes)…"
+    log_hint "Output: web/src-tauri/target/release/bundle/"
+    exec bun run tauri:build
+  fi
+
+  log_step "Launching the Octipus desktop app…"
+  log_hint "The app runs its own backend; for browser/server access use 'octi start' instead."
+  # Foreground GUI process: tauri:dev compiles the sidecar, starts the backend
+  # + dev server, and opens the window. Use 'octi desktop --build' for a bundle.
+  exec bun run tauri:dev
+}
+
 cmd_setup() {
   # Interactive first-run wizard: storage, secrets, admin account, provider,
   # default model, capabilities. Runs through the same code path as
@@ -966,6 +1010,7 @@ cmd_help() {
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
+  echo -e "    desktop [--build] Launch the desktop app (owns its backend); --build makes a bundle"
   echo -e "    uninstall        Remove Octipus (keeps data; --purge wipes everything)"
   echo -e "    help             Show this help message"
   echo ""
@@ -1179,6 +1224,7 @@ main() {
     doctor)  cmd_doctor "$@" ;;
     logs)    cmd_logs "$@" ;;
     open)    cmd_open ;;
+    desktop) cmd_desktop "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
     help|--help|-h) cmd_help ;;
     *)

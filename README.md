@@ -31,7 +31,8 @@ extension). After it finishes the service is runnable; pick TUI or
 web as your surface.
 
 ```bash
-octi start                    # full stack — backend + web UI
+octi start                    # full stack — backend + web UI (server / browser)
+octi desktop                  # desktop app — owns its own backend (Tauri)
 octi tui                      # terminal chat
 octi capabilities             # what optional tools are installed
 octi doctor                   # what's wired, what's missing
@@ -154,7 +155,8 @@ cd octipus && bun install
 cd web && bun install && cd ..
 cd mcp-server && bun install && cd ..   # standalone MCP server (not a root workspace)
 bun run setup        # the single wizard (same as `octi setup`)
-octi start           # backend + web UI
+octi start           # backend + web UI (server / browser)
+# …or `octi desktop` for the Tauri desktop app (needs the Rust toolchain)
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in
