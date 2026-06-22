@@ -7,6 +7,14 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 
+// The desktop client is cross-origin to the backend, so the HttpOnly session
+// cookie set by `/auth/login` is never sent back (SameSite) — auth silently
+// fails. Native clients use `/auth/login-mobile`, which returns a bearer token
+// in the body that the api client stores and sends via the Authorization
+// header (cross-origin safe). Baked at build time (see next.config.mjs).
+const IS_DESKTOP_BUILD = process.env.NEXT_PUBLIC_DESKTOP_BUILD === '1';
+const LOGIN_ENDPOINT = IS_DESKTOP_BUILD ? '/auth/login-mobile' : '/auth/login';
+
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
@@ -38,7 +46,7 @@ export default function LoginPage() {
         return;
       }
 
-      const endpoint = isLogin ? '/auth/login' : '/auth/register';
+      const endpoint = isLogin ? LOGIN_ENDPOINT : '/auth/register';
       const body = isLogin
         ? { username: formData.username, password: formData.password }
         : { username: formData.username, email: formData.email, password: formData.password };
@@ -60,7 +68,17 @@ export default function LoginPage() {
       }
 
       if (data.user) {
-        login(data.token || '', {
+        // Desktop registration creates a cookie-only session; exchange the
+        // credentials for a bearer token so cross-origin requests authenticate.
+        let token = data.token || '';
+        if (IS_DESKTOP_BUILD && !token && !isLogin) {
+          const m = await api.post<{ token?: string }>('/auth/login-mobile', {
+            username: formData.username,
+            password: formData.password,
+          });
+          token = m.token || '';
+        }
+        login(token, {
           id: data.user.id,
           username: data.user.username,
           isAdmin: data.user.isAdmin,
@@ -83,7 +101,7 @@ export default function LoginPage() {
         token?: string;
         user?: { id: string; username: string; isAdmin: boolean };
         error?: string;
-      }>('/auth/login', {
+      }>(LOGIN_ENDPOINT, {
         username: formData.username,
         password: formData.password,
         totpCode,
