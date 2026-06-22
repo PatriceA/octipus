@@ -636,9 +636,22 @@ If you cannot write files (e.g., read-only environment), include the summary con
     systemPrompt += `\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`;
   }
 
-  // Inform agents about Octipus MCP server tools.
-  // CLI agents (Claude Code, Gemini, Codex) use tool names directly (octipus_*).
-  // LLM agents use meta-tools: mcp_call_tool(server_id: "octipus", tool_name: "...", arguments: {...})
+  // Inform CLI agents about the Octipus MCP self-server.
+  //
+  // This is CLI-ONLY by design: Claude Code / Gemini / Codex run out-of-process
+  // and have NO in-process tool registry, so they reach Octipus capabilities
+  // (profiles, knowledge, web search, messaging, scheduling, documents) by
+  // connecting to the standalone "octipus" MCP server and calling octipus_* tools.
+  //
+  // In-process LLM agents are different: those same capabilities are already
+  // their DIRECT built-in tools (knowledge, websearch, profiles, …), and the
+  // in-process MCP bridge only ever connects to the user's *external* MCP
+  // servers — never the octipus self-server. The old `else if (!isSmall)` block
+  // therefore advertised a server that isn't in their bridge and duplicated tools
+  // they already hold (and claimed MCP existed even when no external server was
+  // configured and the meta-tools were absent). Removed. LLM agents that have
+  // external MCP servers bound still get the self-describing mcp_list_tools /
+  // mcp_call_tool handlers — no prompt guidance needed.
   const isCLIModel = finalModel?.startsWith('cli/');
   if (isCLIModel) {
     systemPrompt += `\n\nOCTIPUS MCP TOOLS: You have access to the "octipus" MCP server which provides tools for:
@@ -649,15 +662,6 @@ If you cannot write files (e.g., read-only environment), include the summary con
 - **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
 - **Documents**: Upload and index documents (octipus_upload_document)
 Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
-  } else if (!isSmall) {
-    // Small-tier models can't reliably drive the mcp_list_tools → mcp_call_tool
-    // meta-tool indirection, and their mcp handlers are usually capped away —
-    // so skip the guidance rather than advertise tools they'll misuse.
-    systemPrompt += `\n\nEXTERNAL TOOLS VIA MCP: You can access external tools from the "octipus" MCP server.
-To use them, first call mcp_list_tools() to discover available tools and their parameters.
-Then call mcp_call_tool(server_id: "octipus", tool_name: "<tool>", arguments: {...}) to invoke one.
-Available capabilities: people/profiles, knowledge base, web search, messaging (Telegram/Slack), scheduling, documents.
-Use these when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
   }
 
   // ── Swarm wiring (pipeline stages) ──────────────────────────────
