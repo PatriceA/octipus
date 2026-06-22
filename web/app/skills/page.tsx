@@ -34,7 +34,11 @@ interface Skill {
   isSystem: boolean;
 }
 
-// Categories match agent role / model topic names — see src/core/orchestrator/roles.ts
+// Skill *category* options — a single grouping per skill (the colored chip).
+// These mirror the worker role names. NOTE: category ≠ topic. A skill's TOPIC
+// assignments (which topics auto-inject it) are a separate many-to-many set and
+// come from the canonical backend topic list via useTopicOptions() below — never
+// from this constant, so the assignment UI stays in sync with src/models/topics.ts.
 const CATEGORIES = [
   'coding',
   'architecture',
@@ -53,6 +57,35 @@ const CATEGORIES = [
   'communication',
   'general',
 ];
+
+interface TopicOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Canonical topic list from the backend (`GET /topics` → src/models/topics.ts) —
+ * the SAME source the Topics page reads. Using it here means the skill↔topic
+ * assignment UI can never drift from the real topic set: the old hardcoded
+ * 16-item CATEGORIES subset silently omitted ~10 topics (memory_extraction,
+ * summarization, knowledge_review, evaluation, tool_translation, vision, ocr,
+ * embedding, chat, simple, local, voice), so skills could never be assigned to
+ * them from the UI. Returns [] while loading or on error (fail-soft for a
+ * read-only selector — the page still renders).
+ */
+function useTopicOptions(): TopicOption[] {
+  const { data } = useQuery<{ topics: TopicOption[] }>({
+    queryKey: ['topics'],
+    queryFn: async () => {
+      try {
+        return await api.get<{ topics: TopicOption[] }>('/topics');
+      } catch {
+        return { topics: [] };
+      }
+    },
+  });
+  return data?.topics ?? [];
+}
 
 const CATEGORY_COLORS: Record<string, string> = {
   coding: 'bg-primary-container/60 text-primary',
@@ -191,6 +224,7 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   // just the UI grouping. Allow users to attach topics on create so they
   // don't have to open the edit dialog as a second step.
   const [topics, setTopics] = useState<string[]>([]);
+  const topicOptions = useTopicOptions();
 
   const toggleTopic = (t: string) => {
     setTopics((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -295,13 +329,15 @@ function CreateSkillDialog({ onClose }: { onClose: () => void }) {
               </span>
             </label>
             <div className="grid grid-cols-3 gap-1.5 p-2 bg-surface-container border border-outline-variant/10 rounded-lg max-h-40 overflow-y-auto">
-              {CATEGORIES.map((t) => {
+              {topicOptions.map((opt) => {
+                const t = opt.value;
                 const selected = topics.includes(t);
                 return (
                   <button
                     key={t}
                     type="button"
                     onClick={() => toggleTopic(t)}
+                    title={opt.label}
                     className={cn(
                       'px-2 py-1 text-xs rounded-md text-left cursor-pointer transition-colors',
                       selected
@@ -409,6 +445,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
     queryFn: async () => api.get(`/skills/topics?skillId=${skillId}`),
   });
   const [pending, setPending] = useState<string | null>(null);
+  const topicOptions = useTopicOptions();
 
   const assignments = data?.assignments ?? [];
   const byTopic = new Map(assignments.map((a) => [a.topic, a]));
@@ -427,24 +464,31 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
         await api.delete(`/skills/topics/${existing.id}`);
       }
       queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments', skillId] });
+      queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments-all'] });
     } finally {
       setPending(null);
     }
   };
 
   const handleBulk = async (isActive: boolean) => {
+    // "Enable all" needs the canonical topic list to create missing rows. If
+    // /topics hasn't resolved yet, bail rather than silently no-op the ensure
+    // loop (which would leave unassigned topics off). The button is also
+    // disabled in this state, so this is a belt-and-suspenders guard.
+    if (isActive && topicOptions.length === 0) return;
     setPending('__bulk__');
     try {
       // Ensure assignments exist for all topics first, then toggle
       if (isActive) {
-        for (const topic of CATEGORIES) {
-          if (!byTopic.has(topic)) {
-            await api.post('/skills/topics', { skillId, topic, isActive: true });
+        for (const opt of topicOptions) {
+          if (!byTopic.has(opt.value)) {
+            await api.post('/skills/topics', { skillId, topic: opt.value, isActive: true });
           }
         }
       }
       await api.patch(`/skills/topics/bulk/${skillId}`, { isActive });
       queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments', skillId] });
+      queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments-all'] });
     } finally {
       setPending(null);
     }
@@ -463,7 +507,8 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
           <button
             type="button"
             onClick={() => handleBulk(true)}
-            disabled={pending !== null}
+            disabled={pending !== null || topicOptions.length === 0}
+            title={topicOptions.length === 0 ? 'Loading topics…' : undefined}
             className="text-xs px-2 py-1 bg-surface-container-high hover:bg-surface-container-high rounded cursor-pointer disabled:opacity-50"
           >
             Enable all
@@ -482,7 +527,8 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
         <div className="text-xs text-on-surface-variant">Loading assignments...</div>
       ) : (
         <div className="grid grid-cols-4 gap-1.5">
-          {CATEGORIES.map((topic) => {
+          {topicOptions.map((opt) => {
+            const topic = opt.value;
             const existing = byTopic.get(topic);
             const state = !existing ? 'off' : existing.isActive ? 'active' : 'attached';
             return (
@@ -492,9 +538,9 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
                 onClick={() => handleToggle(topic)}
                 disabled={pending !== null}
                 title={
-                  state === 'active' ? 'Active — click to deactivate'
-                  : state === 'attached' ? 'Attached (inactive) — click to remove'
-                  : 'Not attached — click to attach & activate'
+                  state === 'active' ? `${opt.label} — Active, click to deactivate`
+                  : state === 'attached' ? `${opt.label} — Attached (inactive), click to remove`
+                  : `${opt.label} — Not attached, click to attach & activate`
                 }
                 className={cn(
                   'text-xs px-2 py-1.5 rounded border transition-colors cursor-pointer disabled:opacity-50',
@@ -757,10 +803,13 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
 // --- Skill Card ---
 function SkillCard({
   skill,
+  activeTopics,
   onEdit,
   onDelete,
 }: {
   skill: Skill;
+  /** Topics this skill is ACTIVELY assigned to (auto-injected). */
+  activeTopics: string[];
   onEdit: (skill: Skill) => void;
   onDelete: (skill: Skill) => void;
 }) {
@@ -780,6 +829,19 @@ function SkillCard({
           <div>
             <h3 className="font-medium text-on-surface">{skill.name}</h3>
             <p className="text-xs text-on-surface-variant mt-0.5">{skill.description}</p>
+            {activeTopics.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {activeTopics.map((t) => (
+                  <span
+                    key={t}
+                    className="px-1.5 py-0.5 text-[10px] leading-none rounded bg-primary/15 text-primary"
+                    title={`Active for the "${t}" topic — this skill auto-injects into ${t} worker prompts`}
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -897,6 +959,7 @@ function SkillCard({
 export default function SkillsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [topicFilter, setTopicFilter] = useState<string>('');
   const [showCreate, setShowCreate] = useState(false);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<Skill | null>(null);
@@ -912,12 +975,37 @@ export default function SkillsPage() {
     },
   });
 
+  const topicOptions = useTopicOptions();
+
+  // One bulk fetch of every skill↔topic assignment → an active-topics map keyed
+  // by skillId. Lets the list show each skill's topics (and filter by topic)
+  // without an N+1 of per-skill requests.
+  const { data: assignmentsData } = useQuery<{ assignments: { skillId: string; topic: string; isActive: boolean }[] }>({
+    queryKey: ['skill-topic-assignments-all'],
+    queryFn: async () => {
+      try {
+        return await api.get('/skills/topics');
+      } catch {
+        return { assignments: [] };
+      }
+    },
+  });
+
+  const activeTopicsBySkill = new Map<string, string[]>();
+  for (const a of assignmentsData?.assignments ?? []) {
+    if (!a.isActive) continue;
+    const list = activeTopicsBySkill.get(a.skillId) ?? [];
+    list.push(a.topic);
+    activeTopicsBySkill.set(a.skillId, list);
+  }
+
   const skills = data?.skills || [];
 
   const categories = Array.from(new Set(skills.map((s) => s.category))).sort();
 
   const filtered = skills.filter((s) => {
     if (categoryFilter && s.category !== categoryFilter) return false;
+    if (topicFilter && !(activeTopicsBySkill.get(s.id) ?? []).includes(topicFilter)) return false;
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -926,7 +1014,8 @@ export default function SkillsPage() {
       s.category.toLowerCase().includes(q) ||
       s.content?.toLowerCase().includes(q) ||
       s.principles.some((p) => p.toLowerCase().includes(q)) ||
-      s.frameworks.some((f) => f.toLowerCase().includes(q))
+      s.frameworks.some((f) => f.toLowerCase().includes(q)) ||
+      (activeTopicsBySkill.get(s.id) ?? []).some((tp) => tp.toLowerCase().includes(q))
     );
   });
 
@@ -963,6 +1052,19 @@ export default function SkillsPage() {
             className="w-full pl-10 pr-4 py-2 bg-surface-container border border-outline-variant/10 rounded-lg text-sm focus:ring-2 focus:ring-primary text-on-surface"
           />
         </div>
+        {/* Topic filter — show only skills actively assigned to a topic. Sourced
+            from the canonical /topics list so every real topic is selectable. */}
+        <select
+          value={topicFilter}
+          onChange={(e) => setTopicFilter(e.target.value)}
+          title="Filter by assigned topic"
+          className="px-3 py-1.5 bg-surface-container border border-outline-variant/10 rounded-lg text-xs text-on-surface focus:ring-2 focus:ring-primary cursor-pointer"
+        >
+          <option value="">All topics</option>
+          {topicOptions.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
         <div className="flex gap-1.5 flex-wrap">
           <button
             onClick={() => setCategoryFilter(null)}
@@ -1010,6 +1112,7 @@ export default function SkillsPage() {
             <SkillCard
               key={skill.id}
               skill={skill}
+              activeTopics={activeTopicsBySkill.get(skill.id) ?? []}
               onEdit={setEditingSkill}
               onDelete={setDeletingSkill}
             />
