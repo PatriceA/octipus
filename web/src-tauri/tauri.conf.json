@@ -5,8 +5,8 @@
   "identifier": "cc.octipus.desktop",
   "build": {
     "frontendDist": "../out",
-    "devUrl": "http://localhost:3007",
-    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:3008",
+    "beforeDevCommand": "bun run tauri:webdev",
     "beforeBuildCommand": "bun run build"
   },
   "app": {
