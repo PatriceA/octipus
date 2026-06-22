@@ -244,6 +244,12 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
         .limit(1);
       if (!user) { set.status = 404; return scimError(404, 'User not found'); }
 
+      // NOTE: idempotent by construction — every op below collapses to a flat
+      // field→value set, then a single UPDATE, so replaying the same Operations
+      // array yields the same end state (the web ApiClient retries idempotent
+      // PATCHes — see web/lib/api.ts). If an `add` op for an ARRAY field (e.g.
+      // group membership append) is ever handled here, it stops being idempotent
+      // and must NOT be exposed to a blind retry.
       const patch: Record<string, unknown> = {};
       for (const op of body.Operations) {
         const path = (op.path ?? '').toLowerCase();

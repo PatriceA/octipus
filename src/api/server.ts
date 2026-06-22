@@ -434,7 +434,11 @@ export async function startServer() {
         apiLogger.error({ err: err instanceof Error ? err.message : String(err) }, 'API listener rebind failed (will retry)');
       }
     }
-  }, 3000);
+    // Poll at 1s (not 3s): the rebind window is when requests get
+    // connection-refused / 502, so a tighter loop shrinks user-visible failures
+    // and lets the client's idempotent retry (web/lib/api.ts, ~2.1s budget)
+    // land after the listener is back. The check is a cheap port read.
+  }, 1000);
   // Keep the watchdog ref'd for the process lifetime; clear it on shutdown.
   apiServerWatchdog = watchdog;
 
