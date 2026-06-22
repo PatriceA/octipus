@@ -35,7 +35,7 @@ web as your surface.
 
 ```bash
 octi start                    # full stack — backend + web UI (server / browser)
-octi desktop                  # desktop app — owns its own backend (Tauri)
+octi desktop                  # desktop client (Tauri) — connects to any backend
 octi tui                      # terminal chat
 octi capabilities             # what optional tools are installed
 octi doctor                   # what's wired, what's missing

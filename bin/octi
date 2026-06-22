@@ -906,10 +906,11 @@ cmd_open() {
 }
 
 cmd_desktop() {
-  # Launch the Tauri desktop app. Unlike `octi start` (backend + web server +
-  # browser, for servers/headless), the desktop app OWNS its backend: Tauri
-  # spawns the compiled backend as a sidecar and stops it when the window
-  # closes. So this path must NOT also run the server-mode backend.
+  # Launch the Tauri desktop app. The desktop app is a thin CLIENT: it does NOT
+  # run its own backend. It connects to any Octipus backend you point it at —
+  # a local `octi start`, a LAN host, or a remote deployment. On first launch
+  # (or when the saved backend is unreachable) the app shows a connection screen
+  # to enter the backend URL.
   local build_mode=false
   for arg in "$@"; do
     case "$arg" in
@@ -917,7 +918,7 @@ cmd_desktop() {
     esac
   done
 
-  # The desktop app needs the Rust toolchain (+ Tauri system deps) to build.
+  # Building the desktop client needs the Rust toolchain (+ Tauri system deps).
   # `octi start` doesn't — keep this check local so server installs stay lean.
   if ! command -v cargo >/dev/null 2>&1; then
     log_error "Rust toolchain not found (cargo) — required to build the desktop app."
@@ -926,26 +927,26 @@ cmd_desktop() {
     return 1
   fi
 
-  # Port collision guard: the desktop sidecar binds the same API port as the
-  # server-mode backend. If `octi start` is up, the sidecar can't bind.
-  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
-    log_warn "Server mode is running (from 'octi start') on :$API_PORT / :$WEB_PORT."
-    log_hint "The desktop app starts its own backend on the same port — stop the server first: octi stop"
-    return 1
+  # The desktop app connects to a backend; it doesn't start one. Nudge the user
+  # to bring up a local backend if nothing is reachable on the default port.
+  if ! is_running "$PID_FILE_BACKEND" \
+    && ! curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
+    log_hint "No backend detected on :$API_PORT. Start one with 'octi start',"
+    log_hint "or point the app at a remote backend from its connection screen."
   fi
 
   cd "$PROJECT_DIR/web" || { log_error "web/ directory not found at $PROJECT_DIR/web"; return 1; }
 
   if $build_mode; then
-    log_step "Building the desktop app bundle (compiles the backend sidecar — can take a few minutes)…"
+    log_step "Building the desktop app bundle (can take a few minutes)…"
     log_hint "Output: web/src-tauri/target/release/bundle/"
     exec bun run tauri:build
   fi
 
   log_step "Launching the Octipus desktop app…"
-  log_hint "The app runs its own backend; for browser/server access use 'octi start' instead."
-  # Foreground GUI process: tauri:dev compiles the sidecar, starts the backend
-  # + dev server, and opens the window. Use 'octi desktop --build' for a bundle.
+  log_hint "It connects to a backend (default http://localhost:$API_PORT) — change it in-app."
+  # Foreground GUI process: tauri:dev starts the web dev server and opens the
+  # window. Use 'octi desktop --build' for a distributable bundle.
   exec bun run tauri:dev
 }
 
