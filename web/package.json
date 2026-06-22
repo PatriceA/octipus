@@ -8,9 +8,8 @@
     "start": "next start -p 3007",
     "lint": "eslint . --max-warnings 0",
     "tauri": "tauri",
-    "tauri:sidecar": "bun run scripts/build-sidecar.ts",
-    "tauri:dev": "TAURI_BUILD=true bun run scripts/build-sidecar.ts && TAURI_BUILD=true tauri dev",
-    "tauri:build": "TAURI_BUILD=true bun run scripts/build-sidecar.ts && TAURI_BUILD=true tauri build"
+    "tauri:dev": "TAURI_BUILD=true tauri dev",
+    "tauri:build": "TAURI_BUILD=true tauri build"
   },
   "dependencies": {
     "@codemirror/language": "^6.12.3",
