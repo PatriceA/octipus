@@ -68,4 +68,15 @@ describe('OllamaProvider JSON mode', () => {
     expect(calls[0].url).toBe('http://localhost:11434/api/chat');
     expect('format' in calls[0].body).toBe(false);
   });
+
+  test('native request carries keep_alive so the model stays warm in VRAM', async () => {
+    const { calls } = captureFetch();
+    const provider = new OllamaProvider('http://localhost:11434');
+
+    await provider.complete({ ...baseOpts, responseFormat: { type: 'json_object' } });
+
+    // Default keepAlive is '10m'; without it Ollama unloads after its own 5min
+    // default and every cold-load risks the timeout loop we fixed.
+    expect(calls[0].body.keep_alive).toBe('10m');
+  });
 });

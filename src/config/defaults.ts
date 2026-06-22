@@ -29,6 +29,8 @@ export const defaultConfig: Partial<Config> = {
   },
   ollama: {
     defaultModel: 'llama3.2',
+    requestTimeout: 300000,
+    keepAlive: '10m',
   },
   security: {
     masterKey: '', // Must be provided

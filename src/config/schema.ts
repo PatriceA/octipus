@@ -38,6 +38,15 @@ export const litellmConfigSchema = z.object({
 export const ollamaConfigSchema = z.object({
   url: z.string().url().optional().describe('Ollama service URL — leave empty if not using a local/remote Ollama instance'),
   defaultModel: z.string().default('llama3.2'),
+  // Cold-loading a large model on slow hardware (e.g. an iGPU) can exceed the
+  // old hard-coded 120s. When the client cancels first, Ollama ABORTS the load,
+  // so the model never warms and every retry cold-loads again → permanent
+  // timeout loop. Default raised to 5min; operators on slower hosts can go higher.
+  requestTimeout: z.number().min(1000).default(300000).describe('Ollama load + inference timeout (ms)'),
+  // Sent as `keep_alive` so a loaded model stays resident in VRAM between calls
+  // instead of unloading after Ollama\'s 5min default — avoids repeated cold loads.
+  // Accepts a duration string ('10m', '1h') or '-1' to keep it loaded indefinitely.
+  keepAlive: z.string().default('10m').describe('How long Ollama keeps a model warm in VRAM (duration string or -1)'),
 });
 
 // Security configuration schema
