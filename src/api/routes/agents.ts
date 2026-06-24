@@ -43,8 +43,13 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // Pagination over the (potentially unbounded) historical rows. Live
       // agents are a small, active set and are always surfaced on the first
       // page; only DB history is paged. `limit` is clamped so a client can't
-      // ask for an arbitrarily large payload.
-      const limit = Math.min(Math.max(Number.parseInt(String(query?.limit ?? ''), 10) || 50, 1), 200);
+      // ask for an arbitrarily large payload. A session-scoped request is
+      // inherently bounded to one conversation, so it keeps the higher legacy
+      // default (200) — the chat page restores a whole session's agent
+      // timeline in one shot and must not be silently truncated.
+      const sessionScoped = !!query?.sessionId;
+      const defaultLimit = sessionScoped ? 200 : 50;
+      const limit = Math.min(Math.max(Number.parseInt(String(query?.limit ?? ''), 10) || defaultLimit, 1), 200);
       const offset = Math.max(Number.parseInt(String(query?.offset ?? ''), 10) || 0, 0);
       const firstPage = offset === 0;
 
@@ -59,7 +64,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         if (!session) {
           // Foreign or missing — present as empty rather than 404 so the
           // UI can keep rendering an empty agent list.
-          return { agents: [] };
+          return { agents: [], total: 0, limit, offset, hasMore: false };
         }
         const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
         if (AGGREGATED_CHANNELS.has(session.channelType)) {
@@ -85,18 +90,26 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       try {
         let dbAgents: Awaited<ReturnType<typeof repos.agents.listOwn>>;
         let total: number;
+        // The page query and its count are independent — run them together
+        // rather than paying two serial round-trips on every poll.
         if (allowedSessionIds) {
           const ids = [...allowedSessionIds];
-          dbAgents = await repos.agents.findBySessions(ids, limit, offset);
-          total = await repos.agents.countBySessions(ids);
+          [dbAgents, total] = await Promise.all([
+            repos.agents.findBySessions(ids, limit, offset),
+            repos.agents.countBySessions(ids),
+          ]);
         } else if (user.isAdmin) {
           // Admin sees everything
           const { agentRepository } = await import('@/db/repositories/agent-repository');
-          dbAgents = await agentRepository.listRecent(limit, offset);
-          total = await agentRepository.countAll();
+          [dbAgents, total] = await Promise.all([
+            agentRepository.listRecent(limit, offset),
+            agentRepository.countAll(),
+          ]);
         } else {
-          dbAgents = await repos.agents.listOwn(limit, offset);
-          total = await repos.agents.countOwn();
+          [dbAgents, total] = await Promise.all([
+            repos.agents.listOwn(limit, offset),
+            repos.agents.countOwn(),
+          ]);
         }
 
         const historical = dbAgents
