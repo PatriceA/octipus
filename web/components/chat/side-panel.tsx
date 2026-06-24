@@ -3,19 +3,15 @@
 import {
   Activity,
   Bot,
-  CheckCircle,
   ChevronDown,
   ChevronUp,
   Clock,
   Coins,
   FileText,
   Layers,
-  Loader2,
   Settings2,
-  Wrench,
-  XCircle,
 } from 'lucide-react';
-import { useEffect, useState, } from 'react';
+import { useState } from 'react';
 import SwarmTree, { type SwarmTreeEvent } from '@/components/swarm-tree';
 import { cn } from '@/lib/utils';
 
@@ -80,57 +76,9 @@ interface SidePanelProps {
   onSwarmHydratedTotals?: (totals: { tokens: number; durationMs: number }) => void;
 }
 
-// --- Constants ---
-
-const ROLE_COLORS: Record<string, string> = {
-  orchestrator: 'purple',
-  research: 'blue',
-  coding: 'green',
-  review: 'yellow',
-  qa: 'orange',
-  communication: 'pink',
-  general: 'gray',
-  design: 'indigo',
-  devops: 'cyan',
-  security: 'red',
-  data: 'emerald',
-  ai: 'violet',
-  finance: 'amber',
-  automation: 'teal',
-  pm: 'rose',
-  writing: 'slate',
-};
-
 // TOKEN_BUDGET now comes from props (maxTokenBudget from backend config)
 
 // --- Helpers ---
-
-function getRoleBadgeClasses(role: string): string {
-  // Roles collapse onto the four palette accents so a long agent
-  // tree doesn't degenerate into a rainbow. Mostly dim, with the
-  // hot statuses (security / qa / review / error-prone) flagged in
-  // warning/error tones for at-a-glance triage.
-  const tone = ROLE_COLORS[role] ?? 'gray';
-  const map: Record<string, string> = {
-    purple:   'bg-primary-container/40 border-primary/60 text-primary',
-    blue:     'bg-primary-container/40 border-primary/60 text-primary',
-    cyan:     'bg-primary-container/40 border-primary/60 text-primary',
-    indigo:   'bg-primary-container/40 border-primary/60 text-primary',
-    violet:   'bg-primary-container/40 border-primary/60 text-primary',
-    green:    'bg-tertiary-container/40 border-tertiary/60 text-tertiary',
-    emerald:  'bg-tertiary-container/40 border-tertiary/60 text-tertiary',
-    teal:     'bg-tertiary-container/40 border-tertiary/60 text-tertiary',
-    yellow:   'bg-warning-container/40 border-warning/60 text-warning',
-    orange:   'bg-warning-container/40 border-warning/60 text-warning',
-    amber:    'bg-warning-container/40 border-warning/60 text-warning',
-    red:      'bg-error-container/40 border-error/60 text-error',
-    rose:     'bg-error-container/40 border-error/60 text-error',
-    pink:     'bg-error-container/40 border-error/60 text-error',
-    slate:    'bg-surface-container-high border-outline-variant text-on-surface-variant',
-    gray:     'bg-surface-container-high border-outline-variant text-on-surface-variant',
-  };
-  return map[tone] ?? map.gray;
-}
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -147,32 +95,6 @@ function formatTokens(tokens: number): string {
 }
 
 // --- Sub-components ---
-
-function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: number }) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (endTime) return;
-    const interval = setInterval(() => setNow(Date.now()), 100);
-    return () => clearInterval(interval);
-  }, [endTime]);
-
-  const elapsed = (endTime ?? now) - startTime;
-  return <span className="tabular-nums text-xs text-on-surface-variant">{formatDuration(elapsed)}</span>;
-}
-
-function StatusIcon({ status }: { status: TrackedAgent['status'] }) {
-  switch (status) {
-    case 'running':
-      return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
-    case 'completed':
-      return <CheckCircle className="h-3.5 w-3.5 text-tertiary" />;
-    case 'failed':
-      return <XCircle className="h-3.5 w-3.5 text-error" />;
-    case 'stopped':
-      return <XCircle className="h-3.5 w-3.5 text-warning" />;
-  }
-}
 
 function CollapsibleSection({
   title,
@@ -206,72 +128,6 @@ function CollapsibleSection({
         )}
       </button>
       {open && <div className="px-3 py-2">{children}</div>}
-    </div>
-  );
-}
-
-function AgentCard({ agent }: { agent: TrackedAgent }) {
-  const [toolsOpen, setToolsOpen] = useState(false);
-
-  return (
-    <div className="rounded-xs bg-surface-container-high border border-outline-variant/40 p-2 font-mono">
-      <div className="flex items-center gap-1.5">
-        <StatusIcon status={agent.status} />
-        <span
-          className={cn(
-            'inline-block rounded-xs border px-1.5 py-0.5 text-[10px] uppercase tracking-wider leading-none',
-            getRoleBadgeClasses(agent.role),
-          )}
-        >
-          {agent.role}
-        </span>
-        <span className="ml-auto text-[10px] text-outline-variant truncate">{agent.model}</span>
-      </div>
-
-      <div className="mt-1 flex items-center gap-2 text-[11px] text-on-surface-variant tabular-nums">
-        <ElapsedTimer startTime={agent.startTime} endTime={agent.endTime} />
-        {agent.totalTokens != null && (
-          <span className="flex items-center gap-0.5">
-            <Coins className="h-3 w-3" />
-            {formatTokens(agent.totalTokens)}
-          </span>
-        )}
-        {agent.iterations != null && (
-          <span className="text-[10px]">· {agent.iterations} iter</span>
-        )}
-      </div>
-
-      {agent.error && (
-        <p className="mt-1 text-[10px] text-error truncate" title={agent.error}>
-          ! {agent.error}
-        </p>
-      )}
-
-      {agent.toolCalls.length > 0 && (
-        <div className="mt-1">
-          <button
-            type="button"
-            onClick={() => setToolsOpen((v) => !v)}
-            className="flex items-center gap-1 text-[10px] text-on-surface-variant hover:text-on-surface cursor-pointer"
-          >
-            <Wrench className="h-3 w-3" />
-            {agent.toolCalls.length} tool call{agent.toolCalls.length !== 1 ? 's' : ''}
-            {toolsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-          </button>
-          {toolsOpen && (
-            <ul className="mt-1 space-y-0.5 pl-3 border-l border-outline-variant/40">
-              {agent.toolCalls.map((tc) => (
-                <li key={tc.id} className="text-[10px] text-on-surface-variant pl-2">
-                  <span className="text-primary">›</span> <span>{tc.name}</span>
-                  {tc.argsSummary && (
-                    <span className="ml-1 text-outline">({tc.argsSummary})</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
     </div>
   );
 }

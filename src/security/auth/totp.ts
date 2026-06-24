@@ -1,16 +1,18 @@
 import crypto from 'crypto';
-import { authenticator } from 'otplib';
+import { generateSecret, generateURI, verify } from 'otplib';
 import { getConfig } from '@/config';
 import { userRepository } from '@/db/repositories/user-repository';
 import { decrypt, deriveDek, encrypt } from '@/utils/crypto';
 import { securityLogger } from '@/utils/logger';
 
-// Configure TOTP
-authenticator.options = {
-  window: 1, // Allow 1 step before/after current
-  step: 30, // 30 second intervals
-  digits: 6,
-};
+// otplib 13 moved from a stateful `authenticator` singleton to a stateless
+// functional API. The old config was `{ window: 1, step: 30, digits: 6 }`:
+// a ±1 step window over 30-second steps is a ±30s acceptance window, expressed
+// here as `epochTolerance`. 30s step and 6 digits are the library defaults, so
+// only the tolerance needs to be passed explicitly. Secrets stay Base32 (the
+// default ScureBase32Plugin is RFC 4648 compatible), so existing enrolled
+// secrets keep verifying.
+const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
 
 let encryptionKey: Buffer | null = null;
 
@@ -51,10 +53,10 @@ export class TOTPAuth {
     }
 
     // Generate secret
-    const secret = authenticator.generateSecret();
+    const secret = generateSecret();
 
     // Generate QR code URL
-    const qrCodeUrl = authenticator.keyuri(user.username, this.issuer, secret);
+    const qrCodeUrl = generateURI({ issuer: this.issuer, label: user.username, secret });
 
     // Generate backup codes
     const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -98,7 +100,7 @@ export class TOTPAuth {
     const { secret } = JSON.parse(decrypted);
 
     // Verify code
-    const isValid = authenticator.verify({ token: code, secret });
+    const { valid: isValid } = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
 
     if (!isValid) {
       securityLogger.warn({ userId }, 'Invalid TOTP code during enable');
@@ -127,7 +129,8 @@ export class TOTPAuth {
     const { secret, backupCodes } = JSON.parse(decrypted);
 
     // Try regular TOTP code
-    if (authenticator.verify({ token: code, secret })) {
+    const { valid } = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    if (valid) {
       return true;
     }
 
@@ -216,7 +219,8 @@ export class TOTPAuth {
     const { secret } = JSON.parse(decrypted);
 
     // Verify code
-    if (!authenticator.verify({ token: code, secret })) {
+    const { valid } = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    if (!valid) {
       return null;
     }
 
