@@ -1,19 +1,31 @@
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { hooks } from '@/db/schema/hooks';
+import { retentionPolicies } from '@/db/schema/retention-policies';
 import { getHookManager } from '@/hooks/manager';
 import { coreLogger } from '@/utils/logger';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
 const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
+const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
+
+/**
+ * Default age cap for finished agent rows + their events. Nobody needs an
+ * endless agent log on a test box; finished agents older than this get
+ * swept weekly. Operators can override per deployment by upserting a
+ * `retention_policies` row with purpose='agent_history' and a maxAgeDays.
+ */
+const AGENT_HISTORY_RETENTION_DAYS_DEFAULT = 14;
 
 let cronTimer: Timer | null = null;
 let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
+let lastAgentCleanup = 0;
 // Seed to boot time, NOT 0: the boot sequence already runs `indexProductDocs()`
 // (src/index.ts) before the cron loop starts, so the immediate first tick must
 // NOT re-run it. The first cron refresh fires one DOCS_REINDEX_INTERVAL_MS
@@ -131,6 +143,33 @@ async function maybeCleanupKnowledge(): Promise<void> {
   }
 }
 
+async function maybeCleanupAgents(): Promise<void> {
+  const now = Date.now();
+  if (now - lastAgentCleanup < AGENT_CLEANUP_INTERVAL_MS) return;
+  lastAgentCleanup = now;
+
+  try {
+    // Resolve the retention window: operator override row wins, else default.
+    let days = AGENT_HISTORY_RETENTION_DAYS_DEFAULT;
+    const [policy] = await getDb()
+      .select()
+      .from(retentionPolicies)
+      .where(eq(retentionPolicies.purpose, 'agent_history'))
+      .limit(1);
+    if (policy?.maxAgeDays && policy.maxAgeDays > 0) {
+      days = policy.maxAgeDays;
+    }
+
+    const cutoff = new Date(now - days * 24 * 3600_000);
+    const removed = await agentRepository.deleteCompletedBefore(cutoff);
+    if (removed > 0) {
+      coreLogger.info({ removed, days }, 'Agent cleanup: removed stale agent history + events');
+    }
+  } catch (err) {
+    coreLogger.error({ err }, 'Agent cleanup failed');
+  }
+}
+
 async function maybeReindexDocs(): Promise<void> {
   const now = Date.now();
   if (now - lastDocsReindex < DOCS_REINDEX_INTERVAL_MS) return;
@@ -156,6 +195,7 @@ async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
     await maybeCleanupKnowledge();
+    await maybeCleanupAgents();
     await maybeReindexDocs();
     const db = getDb();
     const now = new Date();

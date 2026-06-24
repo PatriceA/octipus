@@ -373,7 +373,10 @@ export class DocumentProcessor {
     // 1. Try pdfjs-dist for text extraction (no external tools needed)
     try {
       const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-      const pdf = await pdfjsLib.getDocument(filePath).promise;
+      // pdfjs-dist v6 tightened getDocument to take DocumentInitParameters
+      // (no bare path/string). Read the file and hand it the raw bytes.
+      const pdfData = new Uint8Array(await readFile(filePath));
+      const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
       const pageTexts: string[] = [];
 
       const maxPages = Math.min(pdf.numPages, 50);

@@ -26,7 +26,7 @@ export function ActiveAgents() {
     queryKey: ['agents'],
     queryFn: async () => {
       try {
-        return await api.get<Agent[] | { agents: Agent[] }>('/agents');
+        return await api.get<Agent[] | { agents: Agent[]; total?: number }>('/agents');
       } catch {
         return [];
       }
@@ -35,6 +35,7 @@ export function ActiveAgents() {
   });
 
   const agents: Agent[] = Array.isArray(data) ? data : ((data as { agents: Agent[] })?.agents || []);
+  const total = Array.isArray(data) ? data.length : ((data as { total?: number })?.total ?? agents.length);
   const anyRunning = agents.some((a) => a.status === 'running');
 
   return (
@@ -42,7 +43,7 @@ export function ActiveAgents() {
       <CardHeader>
         <CardTitle>active agents</CardTitle>
         <span className="ml-auto text-[10px] uppercase tracking-wider text-outline-variant">
-          {agents.length} total
+          {total} total
         </span>
       </CardHeader>
       <CardContent className="p-0">

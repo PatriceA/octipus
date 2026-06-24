@@ -73,7 +73,9 @@ async function initExternal(config: { url: string; poolSize: number; idleTimeout
  */
 async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
   const { PGlite } = await import('@electric-sql/pglite');
-  const { vector } = await import('@electric-sql/pglite/vector');
+  // pglite 0.5 extracted bundled extensions into standalone packages;
+  // the vector extension now ships as @electric-sql/pglite-pgvector.
+  const { vector } = await import('@electric-sql/pglite-pgvector');
   const { drizzle } = await import('drizzle-orm/pglite');
 
   // Expand ~ to home directory (HOME may be unset on Windows)

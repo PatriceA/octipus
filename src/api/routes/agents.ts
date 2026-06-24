@@ -40,6 +40,19 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       const repos = scopedRepos(principal);
 
+      // Pagination over the (potentially unbounded) historical rows. Live
+      // agents are a small, active set and are always surfaced on the first
+      // page; only DB history is paged. `limit` is clamped so a client can't
+      // ask for an arbitrarily large payload. A session-scoped request is
+      // inherently bounded to one conversation, so it keeps the higher legacy
+      // default (200) — the chat page restores a whole session's agent
+      // timeline in one shot and must not be silently truncated.
+      const sessionScoped = !!query?.sessionId;
+      const defaultLimit = sessionScoped ? 200 : 50;
+      const limit = Math.min(Math.max(Number.parseInt(String(query?.limit ?? ''), 10) || defaultLimit, 1), 200);
+      const offset = Math.max(Number.parseInt(String(query?.offset ?? ''), 10) || 0, 0);
+      const firstPage = offset === 0;
+
       // Session scope: when a sessionId is provided, ALL results (live and
       // historical) must be scoped to that session. We resolve through the
       // scoped session repo so foreign session ids return null and the
@@ -51,7 +64,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         if (!session) {
           // Foreign or missing — present as empty rather than 404 so the
           // UI can keep rendering an empty agent list.
-          return { agents: [] };
+          return { agents: [], total: 0, limit, offset, hasMore: false };
         }
         const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
         if (AGGREGATED_CHANNELS.has(session.channelType)) {
@@ -75,15 +88,28 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // Fetch historical agents from DB (exclude ones still in memory).
       // Scoped agent repo enforces user ownership in SQL.
       try {
-        let dbAgents;
+        let dbAgents: Awaited<ReturnType<typeof repos.agents.listOwn>>;
+        let total: number;
+        // The page query and its count are independent — run them together
+        // rather than paying two serial round-trips on every poll.
         if (allowedSessionIds) {
-          dbAgents = await repos.agents.findBySessions([...allowedSessionIds]);
+          const ids = [...allowedSessionIds];
+          [dbAgents, total] = await Promise.all([
+            repos.agents.findBySessions(ids, limit, offset),
+            repos.agents.countBySessions(ids),
+          ]);
         } else if (user.isAdmin) {
           // Admin sees everything
           const { agentRepository } = await import('@/db/repositories/agent-repository');
-          dbAgents = await agentRepository.listRecent();
+          [dbAgents, total] = await Promise.all([
+            agentRepository.listRecent(limit, offset),
+            agentRepository.countAll(),
+          ]);
         } else {
-          dbAgents = await repos.agents.listOwn();
+          [dbAgents, total] = await Promise.all([
+            repos.agents.listOwn(limit, offset),
+            repos.agents.countOwn(),
+          ]);
         }
 
         const historical = dbAgents
@@ -104,16 +130,26 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
             completedAt: a.completedAt,
           }));
 
-        return { agents: [...liveAgents, ...historical] };
+        // Live agents anchor the first page only; later pages are pure history.
+        const agents = firstPage ? [...liveAgents, ...historical] : historical;
+        return {
+          agents,
+          total,
+          limit,
+          offset,
+          hasMore: offset + dbAgents.length < total,
+        };
       } catch (err) {
         // Fallback to live-only if DB query fails
         apiLogger.error({ err }, 'Failed to fetch agent history from DB');
-        return { agents: liveAgents };
+        return { agents: firstPage ? liveAgents : [], total: liveAgents.length, limit, offset, hasMore: false };
       }
     },
     {
       query: t.Optional(t.Object({
         sessionId: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        offset: t.Optional(t.String()),
       })),
       detail: { tags: ['agents'] },
     }

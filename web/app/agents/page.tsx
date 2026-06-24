@@ -1,7 +1,7 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { Bot, Loader2, Square, Trash2, X } from 'lucide-react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Bot, ChevronLeft, ChevronRight, Loader2, Square, Trash2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
@@ -160,24 +160,40 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
   );
 }
 
+const PAGE_SIZE = 50;
+
+interface AgentsResponse {
+  agents: Agent[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
 export default function AgentsPage() {
   const router = useRouter();
   const [showNewAgent, setShowNewAgent] = useState(false);
+  const [offset, setOffset] = useState(0);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['agents'],
+    queryKey: ['agents', offset],
     queryFn: async () => {
       try {
-        const res = await api.get<{ agents: Agent[] }>('/agents');
-        return res?.agents || [];
+        return await api.get<AgentsResponse>(`/agents?limit=${PAGE_SIZE}&offset=${offset}`);
       } catch {
-        return [];
+        return { agents: [], total: 0, limit: PAGE_SIZE, offset, hasMore: false };
       }
     },
-    refetchInterval: 2000,
+    // Live agents only change on the first page; history is static, so we
+    // only poll page 0. Slower cadence (5s) than the old 2s to cut churn.
+    // Keep the previous page visible while the next loads to avoid flicker.
+    refetchInterval: offset === 0 ? 5000 : false,
+    placeholderData: keepPreviousData,
   });
 
-  const agents = Array.isArray(data) ? data : [];
+  const agents = data?.agents ?? [];
+  const total = data?.total ?? 0;
+  const hasMore = data?.hasMore ?? false;
 
   const handleStop = async (agentId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -293,6 +309,34 @@ export default function AgentsPage() {
           </table>
         </div>
       </div>
+
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm text-on-surface-variant">
+          <span className="font-mono text-[12px]">
+            {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+              disabled={offset === 0}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-outline-variant/20 hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => setOffset((o) => o + PAGE_SIZE)}
+              disabled={!hasMore}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-outline-variant/20 hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <NewAgentModal open={showNewAgent} onClose={() => setShowNewAgent(false)} />
     </div>
