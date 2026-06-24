@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from 'drizzle-orm';
+import { count, desc, eq, inArray, lt } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 
@@ -65,12 +65,42 @@ export class AgentRepository {
       .limit(limit);
   }
 
-  async listRecent(limit = 200): Promise<AgentRecord[]> {
+  async listRecent(limit = 200, offset = 0): Promise<AgentRecord[]> {
     return this.db
       .select()
       .from(agents)
       .orderBy(desc(agents.createdAt))
-      .limit(limit);
+      .limit(limit)
+      .offset(offset);
+  }
+
+  /** Total agent rows — admin pagination. */
+  async countAll(): Promise<number> {
+    const [row] = await this.db.select({ c: count() }).from(agents);
+    return row?.c ?? 0;
+  }
+
+  /**
+   * Delete agent rows (and their events) completed before `cutoff`.
+   * Running agents have a NULL `completedAt`, so they're never swept.
+   * Returns the number of agent rows removed. The cascade to
+   * `agent_events` is handled by the caller (there's no FK), so we
+   * delete events first to avoid orphans.
+   */
+  async deleteCompletedBefore(cutoff: Date): Promise<number> {
+    const stale = await this.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(lt(agents.completedAt, cutoff));
+    if (stale.length === 0) return 0;
+    const ids = stale.map((s) => s.id);
+    const { agentEvents } = await import('../schema/agent-events');
+    await this.db.delete(agentEvents).where(inArray(agentEvents.agentId, ids));
+    const removed = await this.db
+      .delete(agents)
+      .where(inArray(agents.id, ids))
+      .returning({ id: agents.id });
+    return removed.length;
   }
 
   /** Mark any agents still "running" as failed — called on startup to clean up zombies from previous process */

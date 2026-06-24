@@ -40,6 +40,14 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       const repos = scopedRepos(principal);
 
+      // Pagination over the (potentially unbounded) historical rows. Live
+      // agents are a small, active set and are always surfaced on the first
+      // page; only DB history is paged. `limit` is clamped so a client can't
+      // ask for an arbitrarily large payload.
+      const limit = Math.min(Math.max(Number.parseInt(String(query?.limit ?? ''), 10) || 50, 1), 200);
+      const offset = Math.max(Number.parseInt(String(query?.offset ?? ''), 10) || 0, 0);
+      const firstPage = offset === 0;
+
       // Session scope: when a sessionId is provided, ALL results (live and
       // historical) must be scoped to that session. We resolve through the
       // scoped session repo so foreign session ids return null and the
@@ -75,15 +83,20 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // Fetch historical agents from DB (exclude ones still in memory).
       // Scoped agent repo enforces user ownership in SQL.
       try {
-        let dbAgents;
+        let dbAgents: Awaited<ReturnType<typeof repos.agents.listOwn>>;
+        let total: number;
         if (allowedSessionIds) {
-          dbAgents = await repos.agents.findBySessions([...allowedSessionIds]);
+          const ids = [...allowedSessionIds];
+          dbAgents = await repos.agents.findBySessions(ids, limit, offset);
+          total = await repos.agents.countBySessions(ids);
         } else if (user.isAdmin) {
           // Admin sees everything
           const { agentRepository } = await import('@/db/repositories/agent-repository');
-          dbAgents = await agentRepository.listRecent();
+          dbAgents = await agentRepository.listRecent(limit, offset);
+          total = await agentRepository.countAll();
         } else {
-          dbAgents = await repos.agents.listOwn();
+          dbAgents = await repos.agents.listOwn(limit, offset);
+          total = await repos.agents.countOwn();
         }
 
         const historical = dbAgents
@@ -104,16 +117,26 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
             completedAt: a.completedAt,
           }));
 
-        return { agents: [...liveAgents, ...historical] };
+        // Live agents anchor the first page only; later pages are pure history.
+        const agents = firstPage ? [...liveAgents, ...historical] : historical;
+        return {
+          agents,
+          total,
+          limit,
+          offset,
+          hasMore: offset + dbAgents.length < total,
+        };
       } catch (err) {
         // Fallback to live-only if DB query fails
         apiLogger.error({ err }, 'Failed to fetch agent history from DB');
-        return { agents: liveAgents };
+        return { agents: firstPage ? liveAgents : [], total: liveAgents.length, limit, offset, hasMore: false };
       }
     },
     {
       query: t.Optional(t.Object({
         sessionId: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        offset: t.Optional(t.String()),
       })),
       detail: { tags: ['agents'] },
     }

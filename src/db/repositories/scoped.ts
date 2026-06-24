@@ -36,7 +36,7 @@
  * deployments.
  */
 
-import { and, asc, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -325,7 +325,7 @@ export class ScopedAgentRepo {
     return row[0] ?? null;
   }
 
-  async listOwn(limit = 200): Promise<AgentRecord[]> {
+  async listOwn(limit = 200, offset = 0): Promise<AgentRecord[]> {
     const filters: (SQL | undefined)[] = [eq(agents.userId, this.principal.userId)];
     filters.push(workspaceFilter(this.principal, agents.workspaceId));
     return this.db
@@ -333,7 +333,32 @@ export class ScopedAgentRepo {
       .from(agents)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(agents.createdAt))
-      .limit(limit);
+      .limit(limit)
+      .offset(offset);
+  }
+
+  /** Count agents owned by the principal — for pagination totals. */
+  async countOwn(): Promise<number> {
+    const filters: (SQL | undefined)[] = [eq(agents.userId, this.principal.userId)];
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
+    const [row] = await this.db
+      .select({ c: count() })
+      .from(agents)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
+    return row?.c ?? 0;
+  }
+
+  /** Count agents across the given sessions (owner-scoped). */
+  async countBySessions(sessionIds: string[]): Promise<number> {
+    if (sessionIds.length === 0) return 0;
+    const filters: (SQL | undefined)[] = [inArray(agents.sessionId, sessionIds)];
+    if (!isAdmin(this.principal)) filters.push(eq(agents.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
+    const [row] = await this.db
+      .select({ c: count() })
+      .from(agents)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
+    return row?.c ?? 0;
   }
 
   async findBySession(sessionId: string, limit = 50): Promise<AgentRecord[]> {
@@ -354,7 +379,7 @@ export class ScopedAgentRepo {
    * still applies — even if a foreign session id sneaks into the list,
    * its rows are silently dropped.
    */
-  async findBySessions(sessionIds: string[], limit = 200): Promise<AgentRecord[]> {
+  async findBySessions(sessionIds: string[], limit = 200, offset = 0): Promise<AgentRecord[]> {
     if (sessionIds.length === 0) return [];
     const filters: (SQL | undefined)[] = [inArray(agents.sessionId, sessionIds)];
     if (!isAdmin(this.principal)) filters.push(eq(agents.userId, this.principal.userId));
@@ -364,7 +389,8 @@ export class ScopedAgentRepo {
       .from(agents)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(agents.createdAt))
-      .limit(limit);
+      .limit(limit)
+      .offset(offset);
   }
 
   /** Create an agent pinned to the principal. Phase 4 — stamps workspace_id when set. */

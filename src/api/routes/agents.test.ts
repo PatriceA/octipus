@@ -135,6 +135,38 @@ describe.skipIf(!isIntegration)('Agents API (Integration)', () => {
     for (const a of data.agents) expect(a.sessionId).toBe(sessionId);
   });
 
+  test('GET /agents paginates via limit/offset and reports total + hasMore', async () => {
+    type Page = {
+      agents: Array<{ id: string }>;
+      total: number;
+      limit: number;
+      offset: number;
+      hasMore: boolean;
+    };
+    const page1 = (await (
+      await app.handle(new Request('http://localhost/agents?limit=1&offset=0'))
+    ).json()) as Page;
+    expect(page1.total).toBe(2); // caller owns exactly two agents
+    expect(page1.limit).toBe(1);
+    expect(page1.offset).toBe(0);
+    expect(page1.agents.length).toBe(1);
+    expect(page1.hasMore).toBe(true);
+
+    const page2 = (await (
+      await app.handle(new Request('http://localhost/agents?limit=1&offset=1'))
+    ).json()) as Page;
+    expect(page2.agents.length).toBe(1);
+    expect(page2.hasMore).toBe(false);
+    expect(page2.agents[0].id).not.toBe(page1.agents[0].id);
+  });
+
+  test('GET /agents clamps an oversized limit to the 200 cap', async () => {
+    const data = (await (
+      await app.handle(new Request('http://localhost/agents?limit=99999'))
+    ).json()) as { limit: number };
+    expect(data.limit).toBe(200);
+  });
+
   test('GET /agents/:id returns a historical agent by id', async () => {
     const res = await app.handle(
       new Request(`http://localhost/agents/${historicalAgentId}`),
@@ -179,6 +211,49 @@ describe.skipIf(!isIntegration)('Agents API (Integration)', () => {
     // The route collapses 403 into 404 to avoid leaking existence — a
     // foreign agent id looks indistinguishable from a non-existent one.
     expect(data.error).toBe('Agent not found');
+  });
+
+  // Runs LAST in this block: it deletes rows, so keep it after the read tests
+  // that assert on the seeded counts.
+  test('deleteCompletedBefore sweeps old finished agents + their events, keeps running ones', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { agents } = await import('@/db/schema/agents');
+    const { agentEvents } = await import('@/db/schema/agent-events');
+    const { agentRepository } = await import('@/db/repositories/agent-repository');
+    const { eq } = await import('drizzle-orm');
+    const db = getDb();
+
+    const oldId = randomUUID();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 3600_000);
+    await db.insert(agents).values({
+      id: oldId,
+      sessionId,
+      userId: testUserId,
+      role: 'general',
+      model: 'gpt-4',
+      topic: 'coding',
+      status: 'completed',
+      completedAt: thirtyDaysAgo,
+    });
+    await db
+      .insert(agentEvents)
+      .values({ agentId: oldId, sessionId, userId: testUserId, type: 'complete', data: {} });
+
+    const cutoff = new Date(Date.now() - 14 * 24 * 3600_000);
+    const removed = await agentRepository.deleteCompletedBefore(cutoff);
+    expect(removed).toBeGreaterThanOrEqual(1);
+
+    const remaining = await db.select().from(agents).where(eq(agents.id, oldId));
+    expect(remaining.length).toBe(0);
+    const remainingEvents = await db
+      .select()
+      .from(agentEvents)
+      .where(eq(agentEvents.agentId, oldId));
+    expect(remainingEvents.length).toBe(0);
+
+    // Running agents (NULL completedAt) are never swept.
+    const live = await db.select().from(agents).where(eq(agents.id, liveAgentId));
+    expect(live.length).toBe(1);
   });
 });
 
