@@ -1,4 +1,5 @@
 import { isCancellationError } from '@/core/swarm/errors';
+import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -65,6 +66,9 @@ export function resolvedFileChangePath(result: unknown): string | undefined {
  * timer — the agent is blocked waiting on the child, not doing work. */
 const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
 
+/** Tools that run a shell command — counted as `commandsRun` in the receipt. */
+const COMMAND_TOOLS = new Set(['shell__run', 'shell__run_background']);
+
 /**
  * One-line preview of a tool's return value for UI streaming. Strings are
  * trimmed to a single line; objects are JSON-serialized with a length cap.
@@ -92,6 +96,15 @@ export class ToolExecutor {
   private consecutiveToolErrors: number = 0;
   private _toolsDisabled: boolean = false;
 
+  /**
+   * Deterministic side-effect tally for this worker's lifetime. One executor
+   * is created per worker, so these counts scope to exactly one swarm-node
+   * run — the spawner reads them via `getSideEffectCounters()` to build a
+   * `SwarmReceipt`. Counts only events the executor actually observes; never
+   * inferred. See `src/core/swarm/receipt.ts`.
+   */
+  private counters: SideEffectCounters = emptyCounters();
+
   constructor(
     private context: AgentContext,
     private emitFn: (type: AgentEvent['type'], data: unknown) => void,
@@ -110,6 +123,35 @@ export class ToolExecutor {
   /** External caller (e.g. AgentWorker loop guard) can force-disable tools. */
   disableTools(): void {
     this._toolsDisabled = true;
+  }
+
+  /**
+   * Snapshot of the deterministic side-effect counters accumulated so far.
+   * `toolCalls`/`filesChanged`/`commandsRun` are DERIVED from `byName` here
+   * (not maintained incrementally) so they can never drift out of sync.
+   * Returns a copy so callers can't mutate internal state. Read by the swarm
+   * spawner after a child run to assemble its receipt.
+   */
+  getSideEffectCounters(): SideEffectCounters {
+    const byName = { ...this.counters.byName };
+    let toolCalls = 0;
+    let filesChanged = 0;
+    let commandsRun = 0;
+    for (const [name, n] of Object.entries(byName)) {
+      toolCalls += n;
+      if (FILE_CHANGE_TOOLS.has(name)) filesChanged += n;
+      if (COMMAND_TOOLS.has(name)) commandsRun += n;
+    }
+    return { ...this.counters, toolCalls, filesChanged, commandsRun, byName };
+  }
+
+  /**
+   * Record a tool that successfully executed (reached `tool.execute` and
+   * returned). Only `byName` is tallied; the classified/total counts are
+   * derived from it in `getSideEffectCounters`.
+   */
+  private recordExecuted(name: string): void {
+    this.counters.byName[name] = (this.counters.byName[name] ?? 0) + 1;
   }
 
   registerTool(tool: ToolHandler): void {
@@ -336,9 +378,12 @@ export class ToolExecutor {
     const parallelResults = await this.executeParallelSwarmGroups(toolCalls);
 
     for (const toolCall of toolCalls) {
-      // Swarm: if this call was handled by the parallel fan-out, skip.
+      // Swarm: if this call was handled by the parallel fan-out, skip
+      // execution but still tally it so the receipt's call count is
+      // independent of whether spawns ran in parallel or sequentially.
       if (parallelResults.has(toolCall.id)) {
         results.push(parallelResults.get(toolCall.id)!);
+        this.recordExecuted(toolCall.name);
         continue;
       }
       const tool = this.tools.get(toolCall.name);
@@ -394,6 +439,7 @@ export class ToolExecutor {
           }
 
           results.push({ toolCallId: toolCall.id, result });
+          this.recordExecuted(toolCall.name);
 
           if (tool.final) {
             this._toolsDisabled = true;
@@ -422,8 +468,10 @@ export class ToolExecutor {
           }
         } catch (error) {
           // If a final tool fails, propagate immediately — avoids a slow LLM round-trip
-          // just to relay the error message to the user
+          // just to relay the error message to the user. Count it first so the
+          // receipt records the failure (the normal branch counts it too).
           if (tool.final) {
+            if (!isCancellationError(error)) this.counters.toolErrors++;
             throw error;
           }
           {
@@ -439,6 +487,7 @@ export class ToolExecutor {
               input: activity.input,
             });
           }
+          if (!isCancellationError(error)) this.counters.toolErrors++;
           results.push({ toolCallId: toolCall.id, result: null, error: (error as Error).message });
         }
         continue;
@@ -458,6 +507,7 @@ export class ToolExecutor {
           'Tool call denied by permission policy'
         );
 
+        this.counters.permissionDenials++;
         results.push({
           toolCallId: toolCall.id,
           result: null,
@@ -480,6 +530,7 @@ export class ToolExecutor {
         const isAutonomousWorker = this.context.role && this.context.role !== 'orchestrator';
 
         if (!isAutonomousWorker) {
+          this.counters.approvalsRequired++;
           const requestId = await permissionManager.requestApproval(
             this.context.userId,
             this.context.id,
@@ -499,6 +550,7 @@ export class ToolExecutor {
           const approved = await permissionManager.waitForApproval(requestId);
 
           if (!approved) {
+            this.counters.approvalsDenied++;
             agentLogger.info(
               { agentId: this.context.id, tool: toolCall.name, requestId },
               'Tool call denied by user — aborting agent'
@@ -517,6 +569,7 @@ export class ToolExecutor {
             throw new Error(`Permission denied for "${toolCall.name}". The user rejected this action.`);
           }
         } else {
+          this.counters.autoApproved++;
           agentLogger.info(
             { agentId: this.context.id, tool: toolCall.name, role: this.context.role },
             'Auto-approving ASK-level tool for autonomous worker'
@@ -532,6 +585,7 @@ export class ToolExecutor {
         const hookManager = getHookManager();
         const preHookResult = await hookManager.triggerToolHooks('tool_pre', toolCall.name, toolId, toolCall.arguments);
         if (preHookResult.decision === 'deny') {
+          this.counters.permissionDenials++;
           results.push({
             toolCallId: toolCall.id,
             result: null,
@@ -570,6 +624,7 @@ export class ToolExecutor {
         });
 
         results.push({ toolCallId: toolCall.id, result });
+        this.recordExecuted(toolCall.name);
 
         // Emit file change events for file-modifying operations.
         // Prefer the path the tool actually wrote to (its result), not the
@@ -662,6 +717,7 @@ export class ToolExecutor {
           input: failedActivity.input,
         });
 
+        if (!cancelled) this.counters.toolErrors++;
         results.push({
           toolCallId: toolCall.id,
           result: null,

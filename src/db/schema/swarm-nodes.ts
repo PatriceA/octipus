@@ -51,6 +51,10 @@ export interface SwarmChildResult {
   durationMs: number;
   spawnedChildren: string[];
   notes?: string;
+  /** Deterministic side-effect audit, mirroring `SwarmReceipt` in
+   *  `src/core/swarm/receipt.ts`. Rides inside this `result` jsonb (queryable
+   *  via `result->'receipt'`). Typed `unknown` to avoid a db→core import. */
+  receipt?: unknown;
 }
 
 export const swarmNodes = pgTable('swarm_nodes', {
