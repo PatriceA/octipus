@@ -78,7 +78,8 @@ extensions/       installed plugins (example-plugin, github)
 eval/             YAML eval scenarios
 scripts/          migrate, setup, backup, doctor, e2e, integration, key rotation
 docs/             feature & architecture docs (see README Documentation table)
-.octipus/         design notes (swarm-design, audits, project-summary, plans)
+.octipus/         design notes (swarm-design, audits, plans)
+AGENTS.md         per-repo curated project guide (universal agents.md convention)
 ```
 
 ## Commands (Bun)

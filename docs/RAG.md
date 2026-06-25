@@ -12,8 +12,8 @@ turns and sessions, all sharing the same pgvector install:
 | **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
 
 The original RAG layer (this doc's subject) is the bottom row of the
-trio. The memory and task-state surfaces have their own design
-write-up in `.octipus/memory-redesign.md` (shipped May 2026).
+trio. The memory and task-state surfaces shipped May 2026; runtime
+behaviour lives in `src/core/memory/` and `src/db/schema/`.
 
 - **Embedding model:** anything mapped to topic `embedding` in the
   model registry (defaults to `nomic-embed-text` via Ollama through

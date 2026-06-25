@@ -102,7 +102,7 @@ research worker that was ~12k tokens of schemas against a ~2.4k system prompt â€
 and on a local iGPU that prefill re-runs every request (no cross-request
 server-side prompt caching), which took minutes and timed out the client.
 
-**Lazy tool discovery** (`docs/plans/lazy-tool-discovery.md`) advertises only a
+**Lazy tool discovery** advertises only a
 small **core** set with full schema, plus two meta-tools â€” `list_tools` (names +
 one-line descriptions, no params) and `describe_tool` (full schema for one tool).
 The long tail stays registered and callable by name; the model fetches a schema
