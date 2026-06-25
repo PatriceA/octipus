@@ -477,12 +477,6 @@ export class PipelineManager {
       timestamp: new Date(),
     });
 
-    // Auto-update project summary after pipeline completion
-    try {
-      const { autoUpdateProjectSummary } = await import('./project-summary');
-      autoUpdateProjectSummary(context, title, previousOutput).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-    } catch (err) { coreLogger.error({ err }, 'silent failure in pipeline-manager'); }
-
     getNotificationService().notify(
       pipeline.userId,
       'pipeline_complete',
@@ -842,12 +836,6 @@ export class PipelineManager {
       data: { event: 'pipeline_completed', pipelineId: pipeline.id, title: pipeline.title },
       timestamp: new Date(),
     });
-
-    // Auto-update project summary after pipeline completion
-    try {
-      const { autoUpdateProjectSummary } = await import('./project-summary');
-      autoUpdateProjectSummary(context, pipeline.title, previousOutput).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-    } catch (err) { coreLogger.error({ err }, 'silent failure in pipeline-manager'); }
 
     getNotificationService().notify(
       pipeline.userId,

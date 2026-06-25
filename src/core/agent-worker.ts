@@ -465,15 +465,6 @@ export class AgentWorker extends BaseAgentWorker {
         output: typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult),
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
 
-      // Auto-update project summary for roles that work on projects
-      const summaryRoles = ['coding', 'research', 'review', 'general', 'qa', 'devops', 'design', 'security', 'data', 'ai'];
-      if (summaryRoles.includes(this.context.role) && typeof finalResult === 'string' && finalResult.length > 50) {
-        import('@/core/orchestrator/project-summary').then(({ autoUpdateProjectSummary }) => {
-          const title = `${this.context.role} — ${this.context.topic || 'task'}`;
-          autoUpdateProjectSummary(this.context, title, finalResult).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
-        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
-      }
-
       // Close any browser tabs the agent opened via browser-ext.new_tab
       import('@/tools/browser-ext').then(({ closeAgentTabs }) => {
         closeAgentTabs(this.context.id).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));

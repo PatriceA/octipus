@@ -14,6 +14,7 @@ import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
+import { loadAgentsMd } from './agents-md';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
@@ -474,29 +475,26 @@ export async function spawnWorker(
   const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
   const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
 
-  // Inject project summary and maintenance instruction
-  const PROJECT_SUMMARY_INSTRUCTION = `\n\nCRITICAL — PROJECT DOCUMENTATION:
-Before starting work, check if .octipus/project-summary.md exists in the project root. If it does, read it to understand the project context.
-After completing your task, you MUST update .octipus/project-summary.md with:
-- Project structure overview (key directories, entry points)
-- Main technologies and frameworks used (e.g., Flutter, Bun, React)
-- Key files and their purposes
-- Available commands (test, build, lint, run)
-- Summary of what you changed
-If .octipus/ doesn't exist, create the directory first: mkdir -p .octipus
-Keep the summary under 4000 chars. This file is critical — it's injected into all future agents working on this project.
-If you cannot write files (e.g., read-only environment), include the summary content in your final response and the system will save it automatically.`;
+  // Inject the curated AGENTS.md guide and maintenance instruction.
+  // AGENTS.md (https://agents.md) is the universal project guide other agent
+  // tools also honour, so a single curated file serves every agent.
+  const AGENTS_MD_INSTRUCTION = `\n\nPROJECT GUIDE — AGENTS.md:
+Each repository carries a curated AGENTS.md at its root (the universal agent guide). Before working in a repo, read its AGENTS.md to understand structure, stack, key files, and commands. In a multi-repo workspace, read the AGENTS.md of EACH repo you touch.
+Treat AGENTS.md as a curated guide, not a changelog: keep it concise and durable (structure, entry points, frameworks, key files, build/test/lint/run commands, conventions). Update it ONLY when you learn something structurally important that future agents need — never dump raw task output or per-run history into it (run history is tracked separately).
+If a repo has no AGENTS.md and you have mapped it out, you may create one at its root.`;
 
-  // Project summary only applies to dev-mode sessions (explicit project link).
-  // Non-dev sessions: no path guessing, no workspace fallback. RAG handles recall.
+  // The curated guide applies to dev-mode sessions (explicit project link).
+  // Non-dev sessions read per-repo AGENTS.md on demand via the instruction above.
   if (devProjectPath) {
     context.metadata.projectPath = devProjectPath;
-    systemPrompt += PROJECT_SUMMARY_INSTRUCTION;
-    const projectSummary = await loadProjectSummary(devProjectPath);
-    if (projectSummary) {
+    systemPrompt += AGENTS_MD_INSTRUCTION;
+    const agentsGuide = await loadAgentsMd(devProjectPath);
+    if (agentsGuide) {
       const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
-      systemPrompt += `\n\n--- Project Summary (${projectName}) ---\n${projectSummary}`;
+      systemPrompt += `\n\n--- AGENTS.md (${projectName}) ---\n${agentsGuide}`;
     }
+  } else {
+    systemPrompt += AGENTS_MD_INSTRUCTION;
   }
 
   // Inject git status/diff for code-aware roles (gives agents awareness of pending changes)
@@ -1158,17 +1156,3 @@ async function handleWorkerFailure(
   throw new Error(`Worker "${agentRole}" failed: ${error.message}`);
 }
 
-async function loadProjectSummary(rootOverride?: string): Promise<string | null> {
-  try {
-    const root = rootOverride || getConfig().workspace?.rootPath || '.';
-    const summaryPath = resolve(root, '.octipus/project-summary.md');
-    const file = Bun.file(summaryPath);
-    if (await file.exists()) {
-      const content = await file.text();
-      return content.slice(0, 4000);
-    }
-  } catch {
-    // File doesn't exist or not readable
-  }
-  return null;
-}

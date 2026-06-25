@@ -761,13 +761,12 @@ export class OrchestratorService {
       let wsContext = `\n\nDEV MODE SESSION — Project: ${projectName}`;
       wsContext += `\nProject path: ${projectPath}`;
 
-      // Load brief summary for orchestrator (lightweight)
+      // Load the curated AGENTS.md guide for the orchestrator (lightweight brief)
       try {
-        const summaryPath = resolve(projectPath, '.octipus/project-summary.md');
-        const file = Bun.file(summaryPath);
-        if (await file.exists()) {
-          const brief = (await file.text()).slice(0, 500);
-          wsContext += `\nProject overview: ${brief}`;
+        const { loadAgentsMd } = await import('./agents-md');
+        const guide = await loadAgentsMd(projectPath);
+        if (guide) {
+          wsContext += `\nProject overview (from AGENTS.md): ${guide.slice(0, 500)}`;
         }
       } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
 
@@ -785,9 +784,15 @@ export class OrchestratorService {
       const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
       try {
         const { readdirSync, statSync: statS } = await import('fs');
+        const { hasAgentsMd } = await import('./agents-md');
+        // List sibling repos and flag which carry a curated AGENTS.md guide, so
+        // the orchestrator can point workers at it when entering a repo.
         const dirs = readdirSync(wsRoot)
           .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
-          .map(name => `  - ${name}/`);
+          .map(name => {
+            const repoRoot = resolve(wsRoot, name);
+            return hasAgentsMd(repoRoot) ? `  - ${name}/ (has AGENTS.md)` : `  - ${name}/`;
+          });
         let wsContext = `\nWORKSPACE: Root is ${wsRoot}`;
         if (dirs.length > 0 && dirs.length <= 30) {
           wsContext += `\nProjects:\n${dirs.join('\n')}`;
@@ -796,6 +801,7 @@ export class OrchestratorService {
           wsContext += `\nAdditional paths: ${wsAdditional.join(', ')}`;
         }
         wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
+        wsContext += `\n\nWhen a repo is flagged "(has AGENTS.md)", tell the worker to read that repo's AGENTS.md first — it is the curated guide to the repo's structure and commands. For cross-repo work, name every repo involved and its path.`;
         systemPrompt += wsContext;
       } catch (err) {
         // The per-user nested root may not exist yet (new user who hasn't

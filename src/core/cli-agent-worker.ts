@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'child_process';
-import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join as joinPath, resolve as resolvePath } from 'path';
 import { getConfig } from '@/config';
@@ -353,6 +353,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Gemini reads GEMINI.md, Codex reads AGENTS.md from the cwd.
     // These are cleaned up after the CLI process exits.
     const tempContextFiles: string[] = [];
+    // Context files we temporarily augmented (a real curated AGENTS.md already
+    // existed): restore the original content on cleanup instead of deleting.
+    const contextFileBackups = new Map<string, string>();
     agentLogger.info(
       { tool: toolConfig.name, hasSystemPrompt: !!systemPrompt, cwd: workspaceCwd },
       'CLI agent context',
@@ -399,15 +402,22 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const contextFileName = contextFileMap[toolConfig.name];
       if (contextFileName) {
         const contextFilePath = joinPath(workspaceCwd, contextFileName);
-        // Only write if no existing file (don't overwrite user's own)
-        if (!existsSync(contextFilePath)) {
-          try {
+        try {
+          if (!existsSync(contextFilePath)) {
+            // No existing file — write our prompt and delete it afterward.
             writeFileSync(contextFilePath, systemPrompt, 'utf-8');
             tempContextFiles.push(contextFilePath);
             agentLogger.info({ tool: toolConfig.name, file: contextFileName, path: contextFilePath }, 'Wrote temp context file for CLI agent');
-          } catch (err) {
-            agentLogger.debug({ err, file: contextFileName }, 'Failed to write temp context file');
+          } else {
+            // A real curated AGENTS.md (or GEMINI.md) already exists. Prepend our
+            // system prompt so the CLI gets both, then restore the original on exit.
+            const original = readFileSync(contextFilePath, 'utf-8');
+            contextFileBackups.set(contextFilePath, original);
+            writeFileSync(contextFilePath, `${systemPrompt}\n\n---\n\n${original}`, 'utf-8');
+            agentLogger.info({ tool: toolConfig.name, file: contextFileName, path: contextFilePath }, 'Augmented existing context file for CLI agent (will restore)');
           }
+        } catch (err) {
+          agentLogger.debug({ err, file: contextFileName }, 'Failed to write temp context file');
         }
       }
     }
@@ -418,6 +428,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const cleanupContextFiles = () => {
       for (const f of tempContextFiles) {
         try { unlinkSync(f); } catch { /* already gone */ }
+      }
+      // Restore any pre-existing context files we augmented in place.
+      for (const [f, original] of contextFileBackups) {
+        try { writeFileSync(f, original, 'utf-8'); } catch { /* best effort */ }
       }
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
