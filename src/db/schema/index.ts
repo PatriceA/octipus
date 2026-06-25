@@ -49,3 +49,4 @@ export * from './trajectory-runs';
 export * from './user-quotas';
 export * from './users';
 export * from './vault';
+export * from './workspace-repos';

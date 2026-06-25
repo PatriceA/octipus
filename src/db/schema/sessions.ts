@@ -88,6 +88,12 @@ export interface SessionContext {
   devMode?: boolean;
   projectPath?: string;
   projectName?: string;
+  /**
+   * Multi-repo binding — the registry ids (`workspace_repos.id`) this session
+   * works across, when bound to a suite rather than a single `projectPath`.
+   * See `.octipus/multi-repo-design.md`.
+   */
+  repoIds?: string[];
 }
 
 export type Session = typeof sessions.$inferSelect;

@@ -505,6 +505,13 @@
       "when": 1782394572488,
       "tag": "0071_nifty_changeling",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1782397657224,
+      "tag": "0072_quick_maximus",
+      "breakpoints": true
     }
   ]
 }
