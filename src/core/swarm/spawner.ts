@@ -23,6 +23,7 @@ import {
 } from './errors';
 import { swarmNodeRepository } from './node-repository';
 import { buildReceipt } from './receipt';
+import { type Scorer, runScorers } from './scorers';
 import {
   type AgentNode,
   BUDGET_RESERVE_FRACTION,
@@ -252,11 +253,11 @@ export class SwarmSpawner {
         'Swarm cache hit — skipping spawn',
       );
       // `result` jsonb stores a serialized ChildResult; the schema types it
-      // loosely as SwarmChildResult (receipt: unknown). Cast back to the
-      // structured type — the cached receipt, if any, came from buildReceipt.
-      // We intentionally keep the cached receipt as-is: it audits the
-      // ORIGINAL run (its `status`/side-effects describe the work that was
-      // reused), while the outer `status: 'cache_hit'` signals the reuse.
+      // loosely as SwarmChildResult (receipt/scorerOutcome: unknown). Cast
+      // back to the structured type — the cached receipt and scorerOutcome,
+      // if any, came from buildReceipt / runScorers on the original run. We
+      // keep them as-is: they audit the ORIGINAL run that was reused, while
+      // the outer `status: 'cache_hit'` signals the reuse.
       const cachedResult: ChildResult = {
         ...(cached.result as ChildResult),
         status: 'cache_hit',
@@ -419,6 +420,7 @@ export class SwarmSpawner {
       childMessage: finalChildMessage,
       reason: internal.reason ?? 'normal',
       spawnMode: params.mode ?? 'await',
+      scorers: params.scorers,
     });
 
     return result;
@@ -444,6 +446,7 @@ export class SwarmSpawner {
     childMessage: string;
     reason: 'normal' | 'escalation' | 'retry';
     spawnMode: 'await' | 'detach';
+    scorers?: Scorer[];
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -751,6 +754,32 @@ export class SwarmSpawner {
       notes,
       receipt,
     };
+
+    // ── Scorer gates ────────────────────────────────────────────────
+    // Deterministic verification of the deliverable, run only on an otherwise
+    // successful child (a failed run already surfaced its own status). A
+    // failed gate flips the result to `contract_failed` and appends the
+    // reason — fail loud so the parent can retry/correct instead of
+    // synthesizing against output that missed the brief.
+    if (status === 'ok' && opts.scorers && opts.scorers.length > 0) {
+      const outcome = await runScorers(
+        opts.scorers,
+        { output: result.output, notes: result.notes },
+        { userId: opts.parentContext.userId },
+      );
+      result.scorerOutcome = outcome;
+      if (!outcome.passed) {
+        const summary = outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ');
+        status = 'contract_failed';
+        result.status = 'contract_failed';
+        notes = notes ? `${notes}\nScorer gate failed: ${summary}` : `Scorer gate failed: ${summary}`;
+        result.notes = notes;
+        coreLogger.info(
+          { parentNodeId: opts.parent.id, childId, failures: outcome.failures.length },
+          'Swarm child failed scorer gate — marking contract_failed',
+        );
+      }
+    }
 
     // Persist completion + emit event.
     const dbStatus = mapChildResultToNodeStatus(status);
@@ -1110,6 +1139,10 @@ function mapChildResultToNodeStatus(status: ChildResultStatus): import('./types'
       return 'timeout';
     case 'tool_error':
       return 'tool_error';
+    // First-class status — kept distinct from tool_error in the column so a
+    // missed contract is queryable/visible as its own failure class.
+    case 'contract_failed':
+      return 'contract_failed';
     case 'provider_error':
       return 'provider_error';
     case 'cancelled':

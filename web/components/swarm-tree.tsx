@@ -118,6 +118,7 @@ function statusBadge(status: string): {
     timeout: { label: 'timeout', cls: 'bg-amber-900/40 text-warning', Icon: Clock },
     denied: { label: 'denied', cls: 'bg-error-container/60 text-error', Icon: XCircle },
     tool_error: { label: 'error', cls: 'bg-error-container/60 text-error', Icon: XCircle },
+    contract_failed: { label: 'contract', cls: 'bg-error-container/60 text-error', Icon: XCircle },
     provider_error: { label: 'error', cls: 'bg-error-container/60 text-error', Icon: XCircle },
     cancelled: { label: 'cancelled', cls: 'bg-surface-container-highest text-on-surface-variant', Icon: XCircle },
     concurrency_limit: { label: 'throttled', cls: 'bg-warning-container/60 text-warning', Icon: XCircle },

@@ -174,6 +174,74 @@ describe('formatChildResult', () => {
     };
     expect(formatChildResult(r)).toContain('<notes>child exceeded wall-clock</notes>');
   });
+
+  test('surfaces a failed scorer outcome in a <scorers> block', () => {
+    const r: ChildResult = {
+      nodeId: 'n3',
+      kind: 'agent',
+      status: 'contract_failed',
+      output: 'partial',
+      usedTokens: 0,
+      durationMs: 0,
+      spawnedChildren: [],
+      scorerOutcome: {
+        passed: false,
+        ran: 1,
+        failures: [{ scorer: 'contains(output)', reason: 'output does not contain "DONE"' }],
+      },
+    };
+    const s = formatChildResult(r);
+    expect(s).toContain('status="contract_failed"');
+    expect(s).toContain('<scorers passed="false">');
+    expect(s).toContain('contains(output): output does not contain "DONE"');
+  });
+
+  test('omits the <scorers> block when scorers passed', () => {
+    const r: ChildResult = {
+      nodeId: 'n4',
+      kind: 'agent',
+      status: 'ok',
+      output: 'DONE',
+      usedTokens: 0,
+      durationMs: 0,
+      spawnedChildren: [],
+      scorerOutcome: { passed: true, ran: 1, failures: [] },
+    };
+    expect(formatChildResult(r)).not.toContain('<scorers');
+  });
+});
+
+describe('validateSpawnChildArgs — scorers', () => {
+  const base = {
+    topic: 'qa',
+    subtopic: 'verify',
+    taskBrief: 'Produce a report.',
+    expectedOutput: { shape: 'markdown' },
+  };
+
+  test('parses valid scorers onto params', () => {
+    const r = validateSpawnChildArgs({
+      ...base,
+      scorers: [{ kind: 'non_empty' }, { kind: 'file_exists', path: 'report.md' }],
+    });
+    expect('params' in r).toBe(true);
+    if ('params' in r) {
+      expect(r.params.scorers).toHaveLength(2);
+      expect(r.params.scorers?.[0]).toEqual({ kind: 'non_empty' });
+    }
+  });
+
+  test('omits scorers entirely when none are provided', () => {
+    const r = validateSpawnChildArgs(base);
+    expect('params' in r).toBe(true);
+    if ('params' in r) expect(r.params.scorers).toBeUndefined();
+  });
+
+  test('rejects a malformed scorer spec loudly', () => {
+    const r = validateSpawnChildArgs({ ...base, scorers: [{ kind: 'regex' }] });
+    expect('error' in r).toBe(true);
+    if ('error' in r) expect(r.error).toContain('invalid scorers');
+  });
 });
 
 // ── parent awaits result, result converted to tool-result string ─────
