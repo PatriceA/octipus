@@ -22,6 +22,7 @@ import {
   isCancellationError,
 } from './errors';
 import { swarmNodeRepository } from './node-repository';
+import { buildReceipt } from './receipt';
 import {
   type AgentNode,
   BUDGET_RESERVE_FRACTION,
@@ -250,8 +251,14 @@ export class SwarmSpawner {
         { parentNodeId: parent.id, cachedNodeId: cached.id, briefHash, topicPath },
         'Swarm cache hit — skipping spawn',
       );
+      // `result` jsonb stores a serialized ChildResult; the schema types it
+      // loosely as SwarmChildResult (receipt: unknown). Cast back to the
+      // structured type — the cached receipt, if any, came from buildReceipt.
+      // We intentionally keep the cached receipt as-is: it audits the
+      // ORIGINAL run (its `status`/side-effects describe the work that was
+      // reused), while the outer `status: 'cache_hit'` signals the reuse.
       const cachedResult: ChildResult = {
-        ...cached.result,
+        ...(cached.result as ChildResult),
         status: 'cache_hit',
       };
       this.emitNodeCompleted(parent, {
@@ -717,6 +724,22 @@ export class SwarmSpawner {
     const durationMs = Date.now() - startTime;
     const usedTokens = worker.getTotalTokens();
 
+    // ── Deterministic receipt ───────────────────────────────────────
+    // Built from the worker's tool-execution counters, NOT from `output`
+    // (the child's prose). Lets the parent audit what the child actually
+    // did. CLI workers expose no counters → `null` → receipt marks the
+    // side-effect evidence unavailable rather than implying zero.
+    const counters = worker.getSideEffectCounters();
+    const receipt = buildReceipt({
+      nodeId: childId,
+      kind: opts.childKind,
+      status,
+      counters,
+      usedTokens,
+      tokenCap: opts.budget.tokens.cap,
+      durationMs,
+    });
+
     const result: ChildResult = {
       nodeId: childId,
       kind: opts.childKind,
@@ -726,6 +749,7 @@ export class SwarmSpawner {
       durationMs,
       spawnedChildren: [],
       notes,
+      receipt,
     };
 
     // Persist completion + emit event.

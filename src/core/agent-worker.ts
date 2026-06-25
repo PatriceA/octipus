@@ -288,6 +288,16 @@ export class AgentWorker extends BaseAgentWorker {
     return this.totalTokensUsed;
   }
 
+  /**
+   * Deterministic side-effect counters for this worker's run, sourced from
+   * the tool executor. The swarm spawner reads these to build a
+   * `SwarmReceipt`. Overrides the base default (`null`) — CLI workers own no
+   * executor and keep the null.
+   */
+  override getSideEffectCounters(): import('./swarm/receipt').SideEffectCounters {
+    return this.toolExecutor.getSideEffectCounters();
+  }
+
   registerTool(tool: import('./agent-base').ToolHandler): void {
     this.toolExecutor.registerTool(tool);
   }
