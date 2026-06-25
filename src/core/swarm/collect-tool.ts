@@ -87,7 +87,15 @@ export function formatCollectedResults(results: ChildResult[]): string {
       `nodeId="${r.nodeId}" status="${r.status}" ` +
       `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
     const notes = r.notes ? `\n  <notes>${r.notes}</notes>` : '';
-    return `<ChildResult ${meta}>\n  <output>${outStr}</output>${notes}\n</ChildResult>`;
+    // Mirror the await-path surface (formatChildResult): make a failed scorer
+    // gate explicit so a detached contract_failed child isn't overlooked.
+    const scorerFail =
+      r.scorerOutcome && !r.scorerOutcome.passed
+        ? `\n  <scorers passed="false">${r.scorerOutcome.failures
+            .map((f) => `${f.scorer}: ${f.reason}`)
+            .join('; ')}</scorers>`
+        : '';
+    return `<ChildResult ${meta}>\n  <output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
   });
   return `<CollectChildren count="${results.length}">\n${lines.join('\n')}\n</CollectChildren>`;
 }

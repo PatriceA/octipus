@@ -7,6 +7,7 @@
  */
 
 import type { AgentRole } from '@/core/orchestrator/types';
+import type { Scorer, ScorerOutcome } from './scorers';
 
 export type SwarmNodeKind = 'orchestrator' | 'agent' | 'subagent';
 
@@ -20,7 +21,8 @@ export type SwarmNodeStatus =
   | 'provider_error'
   | 'cancelled'
   | 'concurrency_limit'
-  | 'cache_hit';
+  | 'cache_hit'
+  | 'contract_failed';
 
 export type ChildResultStatus =
   | 'ok'
@@ -31,7 +33,12 @@ export type ChildResultStatus =
   | 'cancelled'
   | 'denied'
   | 'concurrency_limit'
-  | 'cache_hit';
+  | 'cache_hit'
+  // The child ran to completion but failed a deterministic scorer gate — its
+  // output did not satisfy the contract the parent attached. A first-class
+  // status: persisted to the `swarm_nodes.status` column as-is (distinct from
+  // `tool_error`) and carried on `ChildResult` for the parent. See `scorers.ts`.
+  | 'contract_failed';
 
 /**
  * Per-node hard budget envelope. Caps are enforced pre-LLM-call and on
@@ -149,6 +156,13 @@ export interface ChildResult {
   durationMs: number;
   spawnedChildren: string[];
   notes?: string;
+  /**
+   * Outcome of the deterministic scorer gates the parent attached to this
+   * spawn, if any. Present whenever scorers ran (on an `ok` child); absent
+   * when no scorers were attached. A failed outcome flips `status` to
+   * `contract_failed`. See `scorers.ts`.
+   */
+  scorerOutcome?: ScorerOutcome;
 }
 
 /**
@@ -190,6 +204,12 @@ export interface SpawnChildParams {
   parallelGroup?: string;
   /** Optional hard constraints forwarded into the child's brief. */
   constraints?: string[];
+  /**
+   * Deterministic gates the parent attaches to verify the child met its
+   * contract. Run after the child returns `ok`, before the result surfaces;
+   * any failure flips the result to `contract_failed`. See `scorers.ts`.
+   */
+  scorers?: Scorer[];
   /**
    * 'await' (default): parent blocks until child returns, result surfaced
    * inline, parent pausedMs ticks while waiting.
