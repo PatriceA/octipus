@@ -27,6 +27,9 @@ export const swarmNodeStatusEnum = pgEnum('swarm_node_status', [
   'cancelled',
   'concurrency_limit',
   'cache_hit',
+  // The child completed but failed a deterministic scorer gate — a distinct,
+  // actionable failure class kept separate from tool_error for observability.
+  'contract_failed',
 ]);
 
 /**
@@ -45,12 +48,22 @@ export interface SwarmChildResult {
     | 'cancelled'
     | 'denied'
     | 'concurrency_limit'
-    | 'cache_hit';
+    | 'cache_hit'
+    | 'contract_failed';
   output: unknown;
   usedTokens: number;
   durationMs: number;
   spawnedChildren: string[];
   notes?: string;
+  /** Deterministic side-effect audit, mirroring `SwarmReceipt` in
+   *  `src/core/swarm/receipt.ts`. Rides inside this `result` jsonb (queryable
+   *  via `result->'receipt'`). Typed `unknown` to avoid a db→core import. */
+  receipt?: unknown;
+  /** Outcome of deterministic scorer gates, mirroring `ScorerOutcome` in
+   *  `src/core/swarm/scorers.ts`. Persisted inside the `result` jsonb (the
+   *  node's `status` column carries the matching `contract_failed`). Typed
+   *  `unknown` to avoid a db→core import. */
+  scorerOutcome?: unknown;
 }
 
 export const swarmNodes = pgTable('swarm_nodes', {

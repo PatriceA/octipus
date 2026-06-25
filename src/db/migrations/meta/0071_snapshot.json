@@ -1,6 +1,6 @@
 {
-  "id": "e931fc74-72da-41b9-85c4-10bb8d3ddf00",
-  "prevId": "b997695e-e489-4d33-bb43-83d9a81833a2",
+  "id": "2b8de7f9-df28-4632-8f25-2c7405323903",
+  "prevId": "e931fc74-72da-41b9-85c4-10bb8d3ddf00",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7242,6 +7242,115 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.swarm_ledger": {
+      "name": "swarm_ledger",
+      "schema": "",
+      "columns": {
+        "seq": {
+          "name": "seq",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "root_session_id": {
+          "name": "root_session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parent_node_id": {
+          "name": "parent_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event": {
+          "name": "event",
+          "type": "swarm_ledger_event",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "swarm_ledger_root_idx": {
+          "name": "swarm_ledger_root_idx",
+          "columns": [
+            {
+              "expression": "root_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "swarm_ledger_root_seq_idx": {
+          "name": "swarm_ledger_root_seq_idx",
+          "columns": [
+            {
+              "expression": "root_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "swarm_ledger_node_idx": {
+          "name": "swarm_ledger_node_idx",
+          "columns": [
+            {
+              "expression": "node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.swarm_nodes": {
       "name": "swarm_nodes",
       "schema": "",
@@ -8628,6 +8737,16 @@
         "approved",
         "rejected",
         "promoted"
+      ]
+    },
+    "public.swarm_ledger_event": {
+      "name": "swarm_ledger_event",
+      "schema": "public",
+      "values": [
+        "spawn",
+        "result",
+        "cancel",
+        "reconcile"
       ]
     },
     "public.swarm_node_kind": {

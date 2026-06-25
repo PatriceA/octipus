@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentRole } from '@/core/orchestrator/types';
 import { coreLogger } from '@/utils/logger';
+import { parseScorers } from './scorers';
 import { getSwarmSpawner, type SwarmSpawner } from './spawner';
 import type { AgentNode, ChildResult, PendingChild, SpawnChildParams } from './types';
 
@@ -230,6 +231,12 @@ export function createSpawnChildTool(
           items: { type: 'string' },
           description: 'Optional hard constraints the child must respect (e.g. "read-only").',
         },
+        scorers: {
+          type: 'array',
+          description:
+            'Optional deterministic checks the child output MUST pass. Run after the child returns; any failure marks the result contract_failed so you can retry or correct. Kinds: {"kind":"non_empty"}, {"kind":"contains","value":"...","on":"output|notes"}, {"kind":"regex","pattern":"...","flags":"i","on":"output|notes"}, {"kind":"json","requiredKeys":["a","b"]}, {"kind":"file_exists","path":"report.md"}.',
+          items: { type: 'object' },
+        },
       },
       required: ['topic', 'subtopic', 'taskBrief', 'expectedOutput'],
     },
@@ -361,6 +368,13 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   const maxTokensNum =
     typeof maxTokens === 'number' && Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 2000;
 
+  // Scorers are opt-in deterministic gates. A malformed spec is rejected loud
+  // (not silently dropped) so the parent LLM learns to fix it.
+  const parsedScorers = parseScorers(args.scorers);
+  if ('error' in parsedScorers) {
+    return { error: `invalid scorers: ${parsedScorers.error}` };
+  }
+
   // `mode` is no longer LLM-controlled — spawn_child always detaches when the
   // depth has a detach budget, else awaits. The execute path sets params.mode
   // to reflect what actually happened (for spawn_node bookkeeping).
@@ -379,6 +393,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     constraints: Array.isArray(args.constraints)
       ? (args.constraints.filter((c) => typeof c === 'string') as string[])
       : undefined,
+    scorers: parsedScorers.scorers.length > 0 ? parsedScorers.scorers : undefined,
   };
 
   return { params };
@@ -398,5 +413,13 @@ export function formatChildResult(result: ChildResult): string {
     `nodeId="${result.nodeId}" status="${result.status}" ` +
     `tokens="${result.usedTokens}" durationMs="${result.durationMs}"`;
   const notes = result.notes ? `\n<notes>${result.notes}</notes>` : '';
-  return `<ChildResult ${meta}>\n<output>${outStr}</output>${notes}\n</ChildResult>`;
+  // Surface failed scorer gates explicitly so the parent can't overlook a
+  // contract miss buried in the output.
+  const scorerFail =
+    result.scorerOutcome && !result.scorerOutcome.passed
+      ? `\n<scorers passed="false">${result.scorerOutcome.failures
+          .map((f) => `${f.scorer}: ${f.reason}`)
+          .join('; ')}</scorers>`
+      : '';
+  return `<ChildResult ${meta}>\n<output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
 }
