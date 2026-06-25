@@ -55,6 +55,10 @@ export interface SwarmChildResult {
   durationMs: number;
   spawnedChildren: string[];
   notes?: string;
+  /** Deterministic side-effect audit, mirroring `SwarmReceipt` in
+   *  `src/core/swarm/receipt.ts`. Rides inside this `result` jsonb (queryable
+   *  via `result->'receipt'`). Typed `unknown` to avoid a db→core import. */
+  receipt?: unknown;
   /** Outcome of deterministic scorer gates, mirroring `ScorerOutcome` in
    *  `src/core/swarm/scorers.ts`. Persisted inside the `result` jsonb (the
    *  node's `status` column carries the matching `contract_failed`). Typed

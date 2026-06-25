@@ -7,6 +7,7 @@
  */
 
 import type { AgentRole } from '@/core/orchestrator/types';
+import type { SwarmReceipt } from './receipt';
 import type { Scorer, ScorerOutcome } from './scorers';
 
 export type SwarmNodeKind = 'orchestrator' | 'agent' | 'subagent';
@@ -156,6 +157,12 @@ export interface ChildResult {
   durationMs: number;
   spawnedChildren: string[];
   notes?: string;
+  /**
+   * Deterministic audit of what this child's tool calls actually did, built
+   * by the framework (not the child model). Absent on early-exit denials
+   * where no worker ran. See `src/core/swarm/receipt.ts`.
+   */
+  receipt?: SwarmReceipt;
   /**
    * Outcome of the deterministic scorer gates the parent attached to this
    * spawn, if any. Present whenever scorers ran (on an `ok` child); absent
