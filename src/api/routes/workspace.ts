@@ -5,6 +5,9 @@ import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
+import { dependenciesOf, dependentsOf } from '@/core/repos/graph';
+import { loadRepoGraph, repoToGraphNode, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
+import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 
@@ -300,5 +303,71 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       initGit: t.Optional(t.Boolean()),
     }),
     detail: { tags: ['workspace'] },
-  });
+  })
+
+  // ── Repo registry (multi-repo) — see .octipus/multi-repo-design.md ──
+
+  .get('/repos', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const { repos, edges } = await loadRepoGraph(user.id);
+    return {
+      repos: repos.map((r) => ({ ...toRepoSummary(r, edges), lastScannedAt: r.lastScannedAt })),
+      edges: edges.map((e) => ({ from: e.from, to: e.to, via: e.via, version: e.version })),
+    };
+  }, { detail: { tags: ['workspace'] } })
+
+  .post('/repos/scan', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const repos = await scanUserRepos(user.id);
+    return { scanned: repos.length, repos: repos.map((r) => ({ id: r.id, name: r.name, kind: r.kind })) };
+  }, { detail: { tags: ['workspace'] } })
+
+  .get('/repos/:id', async ({ user, params, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const repo = await repoRegistryRepository.getById(user.id, params.id);
+    if (!repo) {
+      set.status = 404;
+      return { error: 'Repo not found' };
+    }
+    const { repos, edges } = await loadRepoGraph(user.id);
+    const nodes = repos.map(repoToGraphNode);
+    // Hand-pick public fields — do not spread the row (avoids leaking userId/workspaceId).
+    return {
+      id: repo.id,
+      name: repo.name,
+      kind: repo.kind,
+      path: repo.rootPath,
+      languages: repo.languages,
+      packageName: repo.packageName,
+      remoteUrl: repo.remoteUrl,
+      defaultBranch: repo.defaultBranch,
+      hasAgentsMd: repo.hasAgentsMd,
+      repoMap: repo.repoMap,
+      lastScannedAt: repo.lastScannedAt,
+      dependencies: dependenciesOf(repo.id, nodes, edges).map((n) => ({ id: n.id, name: n.name })),
+      dependents: dependentsOf(repo.id, nodes, edges).map((n) => ({ id: n.id, name: n.name })),
+    };
+  }, { detail: { tags: ['workspace'] } })
+
+  .delete('/repos/:id', async ({ user, params, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const ok = await repoRegistryRepository.deleteById(user.id, params.id);
+    if (!ok) {
+      set.status = 404;
+      return { error: 'Repo not found' };
+    }
+    return { deleted: true };
+  }, { detail: { tags: ['workspace'] } });
 

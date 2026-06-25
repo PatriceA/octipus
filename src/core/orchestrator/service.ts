@@ -782,7 +782,35 @@ export class OrchestratorService {
       const wsConfig = getConfig();
       const wsRoot = WorkspaceFS.forAgent({ userId }).root;
       const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
+
+      // Multi-repo: when the repo registry has been scanned, inject the map of
+      // the suite (kinds + dependency edges) — the orchestrator's "mental model"
+      // — instead of a bare directory listing. See .octipus/multi-repo-design.md.
+      let injectedSuite = false;
       try {
+        const { loadRepoGraph } = await import('@/core/repos/registry-service');
+        const { repos, edges } = await loadRepoGraph(userId);
+        if (repos.length > 0) {
+          let suite = `\nWORKSPACE SUITE — ${repos.length} repos under ${wsRoot}:`;
+          for (const r of repos.slice(0, 40)) {
+            const deps = edges
+              .filter((e) => e.from === r.id)
+              .map((e) => repos.find((x) => x.id === e.to)?.name)
+              .filter(Boolean);
+            suite += `\n  - ${r.name} [${r.kind}] ${r.rootPath}`
+              + `${r.hasAgentsMd ? ' (AGENTS.md)' : ''}`
+              + `${deps.length ? ` → depends on: ${deps.join(', ')}` : ''}`;
+          }
+          suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
+          systemPrompt += suite;
+          injectedSuite = true;
+        }
+      } catch (err) {
+        coreLogger.warn({ err }, 'repo registry suite injection failed; falling back to directory listing');
+      }
+      // Registry is authoritative when present — otherwise fall back to a raw
+      // directory listing of the workspace root.
+      if (!injectedSuite) try {
         const { readdirSync, statSync: statS } = await import('fs');
         const { hasAgentsMd } = await import('./agents-md');
         // List sibling repos and flag which carry a curated AGENTS.md guide, so

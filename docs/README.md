@@ -54,6 +54,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md) | Swarm receipts, scorer gates, and the crash-resume ledger. |
 | [EXPERT-TOPIC-SKILL-ROUTING.md](EXPERT-TOPIC-SKILL-ROUTING.md) | How experts, topics, and skills are selected for a request. |
 | [TOOL-ROUTING.md](TOOL-ROUTING.md) | How tools and experts are routed to agents. |
+| [MULTI-REPO.md](MULTI-REPO.md) | Working across a suite of repos: the repo registry, dependency graph, and how agents navigate it. |
 | [API.md](API.md) | REST + WebSocket API reference, and how to get an API token. |
 | [architecture/gateway.md](architecture/gateway.md) | The gateway WS hub and command registry. |
 | [architecture/MULTI-USER.md](architecture/MULTI-USER.md) | Multi-user model and per-user isolation. |

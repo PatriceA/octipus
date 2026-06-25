@@ -207,39 +207,47 @@ The user must see what's happening across repos:
 
 ---
 
-## What shipped in this change (Phase 0)
+## What shipped
 
-The cheap, high-leverage slice that builds on the AGENTS.md migration:
-
-- **Per-repo `AGENTS.md` is now the curated guide** (`src/core/orchestrator/agents-md.ts`),
+**Phase 0 — per-repo `AGENTS.md` awareness** (with the AGENTS.md migration):
+- Per-repo `AGENTS.md` is the curated guide (`src/core/orchestrator/agents-md.ts`),
   replacing the dev-mode-only `.octipus/project-summary.md` auto-log.
-- **Workers are instructed to read each repo's `AGENTS.md`** when they enter it,
-  in single- and multi-repo workspaces (`worker-spawner.ts`
-  `AGENTS_MD_INSTRUCTION`).
-- **The orchestrator's repo listing now flags which sibling repos carry an
-  `AGENTS.md`** (`service.ts`, via `hasAgentsMd`) and tells workers to read it
-  first — the first concrete step toward suite-aware routing.
+- Workers are instructed to read each repo's `AGENTS.md` on entry.
 
-This delivers the "map inside each repo" primitive (#4) immediately, with no
-schema change, and sets the contract the registry (#1) and graph (#3) will build
-on.
+**Phases 1, 3, 4, 5 (foundational slice)** — the registry backbone:
+- **Repo registry** (#1): `workspace_repos` table (`src/db/schema/workspace-repos.ts`,
+  migration `0072`), `RepoRegistryRepository`, and a scanner
+  (`src/core/repos/scanner.ts`) that walks the workspace roots, detects
+  manifests/languages/git remote/`AGENTS.md`, and upserts. `SessionContext` gains
+  an optional `repoIds`.
+- **Manifest dependency graph** (#3): `src/core/repos/manifests.ts` parses
+  package.json / Cargo.toml / go.mod / pyproject.toml; `src/core/repos/graph.ts`
+  derives consumer→provider edges by matching declared deps to other repos'
+  published `packageName`. No second table — edges are computed over the rows.
+- **Generated repo map** (#4, basic): the scanner builds a compact structural
+  digest (top-level dirs, entry points, build/test/lint commands) stored on the
+  row. (Tree-sitter symbol outline is the deeper follow-up.)
+- **`repo_registry` agent tool** (#5): `src/tools/repo-registry/` —
+  `list_repos`, `get_repo`, `repo_dependents`, `repo_dependencies`, `scan_repos`;
+  allowlisted to architecture/coding/review/research roles.
+- **Orchestrator suite injection** (#5): when the registry is populated,
+  `service.ts` injects the suite map (repos, kinds, dependency edges) and routes
+  workers by absolute path + AGENTS.md, instead of a bare directory listing.
+- **API**: `GET /workspace/repos`, `POST /workspace/repos/scan`,
+  `GET/DELETE /workspace/repos/:id`.
 
----
-
-## Sequencing
+## Remaining
 
 | Phase | Item | Effort | Depends on |
 |---|---|---|---|
-| 0 | Per-repo `AGENTS.md` awareness | shipped | — |
-| 1 | Repo registry (`workspace_repos` + scan + session binding) | ~3-4 days | — |
-| 2 | Repo-scoped RAG (`repo_id` + scoped search) | ~2-3 days | 1 |
-| 3 | Dependency graph (manifest edges + `repo_graph` tool) | ~3-5 days | 1 |
-| 4 | Generated repo map (tree-sitter outline + cache) | ~3-4 days | 1 |
-| 5 | Orchestrator routing + cross-repo fan-out | ~3-4 days | 1,2,3 |
-| 6 | UX (Settings → Repositories, attribution, drift) | ~1 week | 1,3 |
+| 2 | Repo-scoped RAG (`embeddings.repo_id` + scoped/multi-repo search) | ~2-3 days | done #1 |
+| 4+ | Deeper repo map (tree-sitter symbol outline + commit-keyed cache) | ~3-4 days | done #1 |
+| 5+ | Cross-repo fan-out (worker per affected repo, worktree isolation) | ~3-4 days | done #1,#3 |
+| 6 | UX (Settings → Repositories, in-chat attribution, version-drift) | ~1 week | done #1,#3 |
 
-DB migrations: Phase 1 (`workspace_repos`), Phase 2 (`embeddings.repo_id`),
-Phase 3 (`repo_edges`). All via the Drizzle journal rule.
+Repo-scoped RAG is the highest-value next step: add `repo_id` to `embeddings`
+and thread a `repoIds` filter through `hybridSearch` so search targets or spans
+chosen repos instead of one undifferentiated per-user corpus.
 
 ---
 
