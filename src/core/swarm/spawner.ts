@@ -21,6 +21,7 @@ import {
   DuplicateSpawnError,
   isCancellationError,
 } from './errors';
+import { getSwarmLedger } from './ledger';
 import { swarmNodeRepository } from './node-repository';
 import {
   type AgentNode,
@@ -243,6 +244,9 @@ export class SwarmSpawner {
     }
 
     // ── Cache lookup (Q4) ───────────────────────────────────────────
+    // Note: a cache hit creates no new node and appends no ledger event — the
+    // cached node already carries its own spawn+terminal ledger history from
+    // its original run, so there is nothing in-flight to reconcile here.
     const cached = await swarmNodeRepository.findCacheHit(parent.rootSessionId, briefHash);
     if (cached && cached.result) {
       await swarmNodeRepository.incrementCacheHits(cached.id);
@@ -658,6 +662,21 @@ export class SwarmSpawner {
     } catch (err) {
       coreLogger.error({ err, childId }, 'Failed to persist swarm_node row');
     }
+
+    // Append-only ledger: record the spawn so a crash mid-run leaves a
+    // replayable history. Fire-and-forget — the write internally catches+logs,
+    // so awaiting buys no fail-loud guarantee and would only add an INSERT's
+    // latency to the spawn path. Replay tolerates a spawn that lands after its
+    // own terminal (seq-ordered fold keeps the terminal status).
+    void getSwarmLedger().recordSpawn({
+      rootSessionId: opts.parent.rootSessionId,
+      nodeId: childId,
+      parentNodeId: opts.parent.id,
+      topicPath: opts.topicPath,
+      role: opts.childRole,
+      depth: opts.childDepth,
+    });
+
     void backfillAgentLink(childId, opts.parent.id);
 
     this.emitNodeSpawned(opts.parent, {
@@ -740,6 +759,16 @@ export class SwarmSpawner {
     } catch (err) {
       coreLogger.error({ err, childId }, 'Failed to update swarm_node status');
     }
+
+    // Ledger: record the terminal transition, closing this node's history.
+    // Fire-and-forget for the same reason as recordSpawn above.
+    void getSwarmLedger().recordTerminal({
+      rootSessionId: opts.parent.rootSessionId,
+      nodeId: childId,
+      parentNodeId: opts.parent.id,
+      status: dbStatus,
+    });
+
     this.emitNodeCompleted(opts.parent, {
       nodeId: childId,
       parentNodeId: opts.parent.id,
