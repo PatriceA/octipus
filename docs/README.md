@@ -51,6 +51,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | Doc | What it covers |
 |-----|----------------|
 | [AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) | The orchestrator → agent → subagent swarm model and how a message becomes work. |
+| [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md) | Swarm receipts, scorer gates, and the crash-resume ledger. |
 | [EXPERT-TOPIC-SKILL-ROUTING.md](EXPERT-TOPIC-SKILL-ROUTING.md) | How experts, topics, and skills are selected for a request. |
 | [TOOL-ROUTING.md](TOOL-ROUTING.md) | How tools and experts are routed to agents. |
 | [API.md](API.md) | REST + WebSocket API reference, and how to get an API token. |

@@ -208,6 +208,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | | |
 |---|---|
 | **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | Tools, skills, experts, agents, swarm |
+| **[Swarm Reliability & Verification](docs/SWARM-RELIABILITY.md)** | Receipts, scorer gates, crash-resume ledger |
 | **[Tool & Expert Routing](docs/TOOL-ROUTING.md)** | What triggers which tool, role, expert |
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat, Voice, MCP |
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands across all channels |

@@ -162,6 +162,10 @@ Parent abort propagates to children via an `AbortSignal` chain rooted on the Orc
 
 Gateway events (`src/core/gateway/protocol.ts`): `swarm.node_spawned`, `swarm.node_completed`, `swarm.node_status`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`. UI subscribes with the `swarm.*` pattern and renders a live tree per session. The replay buffer keeps swarm events for reconnection; `/api/swarm/nodes?rootSessionId=…` is the REST fallback for tree rehydration after the buffer ages out.
 
+### Reliability & Verification
+
+Three additions make delegation auditable, verifiable, and resumable: **receipts** (a deterministic side-effect audit of what each child's tool calls actually did, on `ChildResult.receipt`), **scorer gates** (deterministic checks a parent attaches to `spawn_child` to verify the deliverable — a failure yields the first-class `contract_failed` status), and the **swarm ledger** (an append-only history of node transitions that lets a crash-interrupted swarm be replayed and reconciled on boot). Full reference: [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md).
+
 ### QA Retry Loop
 
 Pipeline stages can be typed as `qa_validation`. When a QA stage fails, the pipeline automatically retries the previous implementation stage with the QA feedback injected into context. This loop continues up to 3 retries (configurable via `maxRetries` on the pipeline step). After max retries are exhausted, the pipeline escalates to the user for manual approval.
