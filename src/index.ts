@@ -239,6 +239,23 @@ async function main() {
       logger.error({ err }, 'Swarm orphan reaper failed (non-fatal)');
     }
 
+    // Ledger-driven resume: reconcile swarms left in-flight by the previous
+    // process. Replays each root's append-only ledger and marks orphaned
+    // in-flight nodes terminal, recording a replayable `reconcile` event. Uses
+    // the SAME age threshold as the reaper above, so the reaper (which also
+    // handles detached-uncollected orphans) does the node-table cleanup and
+    // this pass adds the durable, replayable history on top. Idempotent and
+    // multi-instance-safe (won't cancel a sibling's freshly-running nodes).
+    try {
+      const { getSwarmLedger } = await import('@/core/swarm/ledger');
+      const { roots, reconciled } = await getSwarmLedger().reconcileAllIncomplete();
+      if (reconciled > 0) {
+        logger.warn({ roots, reconciled }, 'Swarm ledger resume reconciled in-flight nodes');
+      }
+    } catch (err) {
+      logger.error({ err }, 'Swarm ledger resume failed (non-fatal)');
+    }
+
     // task_state orphan reaper — drops typed-output rows whose session
     // was deleted (schema deliberately has no FK; see migration 0050).
     // Runs once on boot, then weekly via the cron runner.

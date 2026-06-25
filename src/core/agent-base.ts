@@ -110,6 +110,17 @@ export abstract class BaseAgentWorker {
     return 0;
   }
 
+  /**
+   * Deterministic side-effect counters for this worker's run, or `null` when
+   * the worker keeps no executor-level tally (e.g. CLI workers). The full
+   * `AgentWorker` overrides this; the swarm spawner reads it to build a
+   * receipt. Declared here so the read is type-safe and a rename breaks the
+   * build rather than silently yielding `null`.
+   */
+  getSideEffectCounters(): import('./swarm/receipt').SideEffectCounters | null {
+    return null;
+  }
+
   getElapsedMs(): number {
     return 0;
   }

@@ -87,6 +87,21 @@ export class SwarmNodeRepository {
   }
 
   /**
+   * Mark a node `cancelled` ONLY if it is still `running` — used by the
+   * ledger resume to terminalize orphaned in-flight nodes without clobbering
+   * a node that already reached a real terminal status. Returns true when a
+   * row was flipped. Idempotent: a second call finds the row non-running.
+   */
+  async cancelIfRunning(id: string, error: string): Promise<boolean> {
+    const rows = await this.db
+      .update(swarmNodes)
+      .set({ status: 'cancelled' as SwarmNodeStatus, error, completedAt: new Date() })
+      .where(and(eq(swarmNodes.id, id), eq(swarmNodes.status, 'running')))
+      .returning({ id: swarmNodes.id });
+    return rows.length > 0;
+  }
+
+  /**
    * Flip `collected_at` when the parent agent picks up a detached child.
    * Distinguishes cleanly collected detached children from forgotten ones
    * (the orphan reaper finds rows where spawn_mode='detach' AND
