@@ -5,7 +5,7 @@ export const meta: RoleMeta = {
   // per-request tool payload (thousands of tokens each, sent every turn) and a
   // researcher gets live web content via websearch's fetch_page. Re-add only if
   // JS-heavy scraping becomes a real need.
-  toolIds: ['websearch', 'knowledge', 'task_state', 'filesystem', 'profiles', 'artifacts', 'artifacts_toolbox', 'mcp'],
+  toolIds: ['websearch', 'knowledge', 'task_state', 'filesystem', 'profiles', 'artifacts', 'artifacts_toolbox', 'repo_registry', 'mcp'],
   // Lazy tool discovery (Ollama, non-small only): a research turn almost always
   // needs websearch + knowledge; the rest (filesystem, profiles, artifacts,
   // artifacts_toolbox, task_state) is the long tail reached via list_tools /
