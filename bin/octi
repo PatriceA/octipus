@@ -7,7 +7,8 @@ set -o pipefail 2>/dev/null || true
 #
 # Usage:
 #   octi start [--dev]    Start backend + web UI (server / browser)
-#   octi desktop [--build] Launch the desktop app (owns its own backend)
+#   octi desktop [opts]   Launch the desktop app (thin client; backgrounds by
+#                         default — --foreground/-f, --stop, --build)
 #   octi stop             Stop all Octipus processes
 #   octi restart [--dev]  Restart everything
 #   octi tui              Launch terminal chat interface
@@ -26,12 +27,17 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 STATE_DIR="$HOME/.octipus"
 PID_FILE_BACKEND="$STATE_DIR/backend.pid"
 PID_FILE_WEB="$STATE_DIR/web.pid"
+PID_FILE_DESKTOP="$STATE_DIR/desktop.pid"
 LOG_FILE="$STATE_DIR/backend.log"
 WEB_LOG_FILE="$STATE_DIR/web.log"
+DESKTOP_LOG_FILE="$STATE_DIR/desktop.log"
 
 # Ports (match .env defaults)
 API_PORT="${API_PORT:-3005}"
 WEB_PORT="${WEB_PORT:-3007}"
+# Desktop dev web server (tauri:webdev → next dev -p 3008). Distinct from
+# WEB_PORT so the desktop and the browser web UI never collide.
+DESKTOP_DEV_PORT="${DESKTOP_DEV_PORT:-3008}"
 
 # Detect storage mode from .env.
 # Resolution order matches the backend (src/db/postgres.ts):
@@ -399,6 +405,34 @@ kill_all_octipus() {
   rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB"
 }
 
+# Stop the desktop app — every flavor of it. Kept separate from
+# kill_all_octipus so start/restart's clean-slate never closes the desktop
+# window; only an explicit `octi stop`/`octi uninstall` reaps it. Reaps:
+#   1. the backgrounded instance we track (setsid group → negative-PID kill)
+#   2. untracked instances — a foreground launch ('octi desktop -f'), a built
+#      bundle, or a stale one whose PID file is gone — by process/port match.
+kill_desktop() {
+  kill_tracked "$PID_FILE_DESKTOP" "desktop app"
+
+  if [[ "$IS_WINDOWS" == true ]]; then
+    taskkill //F //IM "Octipus.exe" //T >/dev/null 2>&1 || true
+  else
+    # tauri dev wrapper + its desktop dev web server, and the built binary
+    # (productName "Octipus", identifier cc.octipus.desktop). Scope path-based
+    # patterns to THIS checkout so we never kill another project's `tauri dev`
+    # or another user's next server on a shared machine — the child node/bun
+    # procs carry the absolute project path in their argv. The bundle
+    # identifier is app-unique, so it needs no path scope.
+    pkill -f "${PROJECT_DIR}.*tauri dev" 2>/dev/null || true
+    pkill -f "${PROJECT_DIR}.*next dev -p ${DESKTOP_DEV_PORT}" 2>/dev/null || true
+    pkill -f "${PROJECT_DIR}/web/src-tauri/target/.*/octipus" 2>/dev/null || true
+    pkill -f "cc.octipus.desktop" 2>/dev/null || true
+    kill_port_users "$DESKTOP_DEV_PORT"
+  fi
+
+  rm -f "$PID_FILE_DESKTOP"
+}
+
 # Diagnose why the backend failed to start
 diagnose_backend_failure() {
   echo ""
@@ -488,10 +522,12 @@ diagnose_backend_failure() {
 cmd_start() {
   local dev_mode=false
   local use_tui=false
+  local backend_only=false
   for arg in "$@"; do
     case "$arg" in
       --dev|-d) dev_mode=true ;;
       --tui|-t) use_tui=true ;;
+      --backend-only|--headless|--no-web) backend_only=true ;;
     esac
   done
 
@@ -589,6 +625,25 @@ cmd_start() {
     return 1
   fi
 
+  if [[ "$backend_only" == true ]]; then
+    # Headless: backend up, no UI. Returns to the shell so you can attach any
+    # client — `octi desktop`, `octi tui`, an MCP CLI, or a remote browser.
+    echo ""
+    echo -e "  ${GREEN}${BOLD}Octipus backend is running!${NC}"
+    echo ""
+    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+    echo ""
+    echo -e "  ${BOLD}Attach a client:${NC}"
+    echo -e "  octi desktop   Launch the desktop app"
+    echo -e "  octi tui       Launch the terminal chat"
+    echo -e "  octi start     (re)start with the web UI too"
+    echo ""
+    echo -e "  octi stop      Stop the backend"
+    echo ""
+    return 0
+  fi
+
   if [[ "$use_tui" == true ]]; then
     # TUI mode — skip web UI, launch terminal interface
     echo ""
@@ -648,10 +703,13 @@ cmd_stop() {
 
   local had_processes=false
 
-  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
+  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB" \
+    || is_running "$PID_FILE_DESKTOP"; then
     had_processes=true
   fi
 
+  # Stop everything: desktop (all flavors) + backend + web UI.
+  kill_desktop
   kill_all_octipus
 
   if [[ "$had_processes" == true ]]; then
@@ -669,10 +727,12 @@ cmd_restart() {
 
   local dev_mode=false
   local use_tui=false
+  local backend_only=false
   for arg in "$@"; do
     case "$arg" in
       --dev|-d) dev_mode=true ;;
       --tui|-t) use_tui=true ;;
+      --backend-only|--headless|--no-web) backend_only=true ;;
     esac
   done
 
@@ -766,6 +826,18 @@ cmd_restart() {
     return 1
   fi
 
+  if [[ "$backend_only" == true ]]; then
+    echo ""
+    echo -e "  ${GREEN}${BOLD}Octipus backend is running!${NC}"
+    echo ""
+    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+    echo ""
+    echo -e "  ${BOLD}Attach a client:${NC} octi desktop · octi tui · octi start (adds web UI)"
+    echo ""
+    return 0
+  fi
+
   if [[ "$use_tui" == true ]]; then
     echo ""
     echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
@@ -829,6 +901,14 @@ cmd_status() {
     log_info "Web UI:   running (PID $pid) on port $WEB_PORT"
   else
     log_error "Web UI:   not running"
+  fi
+
+  # Only report the desktop app when it was backgrounded by us — a foreground
+  # ('octi desktop -f') launch has no tracked PID and isn't ours to report.
+  if is_running "$PID_FILE_DESKTOP"; then
+    local pid
+    pid=$(get_pid "$PID_FILE_DESKTOP")
+    log_info "Desktop:  running (PID $pid)"
   fi
 
   echo ""
@@ -912,11 +992,38 @@ cmd_desktop() {
   # (or when the saved backend is unreachable) the app shows a connection screen
   # to enter the backend URL.
   local build_mode=false
+  local foreground=false
+  local stop_mode=false
   for arg in "$@"; do
     case "$arg" in
       --build|-b) build_mode=true ;;
+      --foreground|-f) foreground=true ;;
+      --stop) stop_mode=true ;;
     esac
   done
+
+  # `octi desktop --stop` tears down the desktop app — the same reaper
+  # `octi stop` uses, so it gets every flavor (backgrounded, foreground, built
+  # bundle) on Linux, macOS and Windows.
+  if $stop_mode; then
+    init_state_dir
+    local was_tracked=false
+    is_running "$PID_FILE_DESKTOP" && was_tracked=true
+    log_step "Stopping desktop app…"
+    kill_desktop
+    if $was_tracked; then
+      log_info "Desktop app stopped."
+    else
+      log_info "Reaped any running desktop processes."
+    fi
+    return 0
+  fi
+
+  if is_running "$PID_FILE_DESKTOP"; then
+    log_warn "Desktop app already running (pid $(get_pid "$PID_FILE_DESKTOP"))."
+    log_hint "Stop it with 'octi desktop --stop'."
+    return 0
+  fi
 
   # Building the desktop client needs the Rust toolchain (+ Tauri system deps).
   # `octi start` doesn't — keep this check local so server installs stay lean.
@@ -945,9 +1052,34 @@ cmd_desktop() {
 
   log_step "Launching the Octipus desktop app…"
   log_hint "It connects to a backend (default http://localhost:$API_PORT) — change it in-app."
-  # Foreground GUI process: tauri:dev starts the web dev server and opens the
-  # window. Use 'octi desktop --build' for a distributable bundle.
-  exec bun run tauri:dev
+
+  if $foreground; then
+    # Attached mode: window dies when the terminal closes. tauri:dev starts the
+    # web dev server and opens the window. Use 'octi desktop --build' to bundle.
+    exec bun run tauri:dev
+  fi
+
+  # Default: detach so the GUI survives the terminal closing. Logs go to a file
+  # you can tail; we record the leader PID for 'octi desktop --stop'.
+  init_state_dir
+  if command -v setsid >/dev/null 2>&1; then
+    # Linux: setsid gives the tree (tauri + next dev + webview) its own
+    # session/group, so the tracked PID == PGID and stop reaps it with one
+    # negative-PID kill.
+    setsid bun run tauri:dev > "$DESKTOP_LOG_FILE" 2>&1 < /dev/null &
+  else
+    # macOS / Git Bash (no setsid): nohup detaches from the controlling
+    # terminal so it survives the terminal closing. No clean process group, so
+    # 'octi stop' reaps the children by process/port match (see kill_desktop).
+    nohup bun run tauri:dev > "$DESKTOP_LOG_FILE" 2>&1 < /dev/null &
+  fi
+  local dpid=$!
+  echo "$dpid" > "$PID_FILE_DESKTOP"
+  disown "$dpid" 2>/dev/null || true
+  log_info "Desktop app started in the background (pid $dpid)."
+  log_hint "Logs:  tail -f $DESKTOP_LOG_FILE"
+  log_hint "Stop:  octi desktop --stop"
+  log_hint "Attach instead next time with: octi desktop --foreground"
 }
 
 cmd_setup() {
@@ -1003,7 +1135,7 @@ cmd_help() {
   echo ""
   echo -e "  ${BOLD}Commands:${NC}"
   echo -e "    setup            Run the first-run / re-config wizard"
-  echo -e "    start [options]  Start backend + web UI (or TUI)"
+  echo -e "    start [options]  Start the backend; default also opens the web UI"
   echo -e "    stop             Stop all Octipus processes"
   echo -e "    restart [options] Restart everything"
   echo -e "    tui              Launch terminal chat — pins to current directory as project"
@@ -1012,13 +1144,18 @@ cmd_help() {
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    open             Open web UI in browser"
-  echo -e "    desktop [--build] Launch the desktop app (owns its backend); --build makes a bundle"
+  echo -e "    desktop [opts]   Launch the desktop app in the background (thin client to a backend)"
+  echo -e "                     --foreground/-f attach · --stop quit · --build make a bundle"
   echo -e "    uninstall        Remove Octipus (keeps data; --purge wipes everything)"
   echo -e "    help             Show this help message"
   echo ""
   echo -e "  ${BOLD}Options:${NC}"
   echo -e "    --dev, -d        Start in development mode (hot reload)"
-  echo -e "    --tui, -t        Launch TUI instead of web UI"
+  echo -e "  ${DIM}start/restart — pick a UI (default: web):${NC}"
+  echo -e "    --backend-only   Backend only, no UI (then: octi desktop / octi tui)"
+  echo -e "      (--headless, --no-web are aliases)"
+  echo -e "    --tui, -t        Launch the TUI instead of the web UI"
+  echo -e "  ${DIM}logs:${NC}"
   echo -e "    --web, -w        Show web UI logs instead of backend"
   echo ""
   echo -e "  ${BOLD}Environment:${NC}"
@@ -1137,6 +1274,7 @@ cmd_uninstall() {
 
   # ── Execute ────────────────────────────────────────────────────────────────
   log_step "Stopping processes..."
+  kill_desktop
   kill_all_octipus
   log_info "Processes stopped"
 
@@ -1185,7 +1323,8 @@ cmd_uninstall() {
       log_warn "App checkout at $PROJECT_DIR looks like a dev clone — left in place."
       log_hint "Delete it yourself if you want it gone."
     fi
-    rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB" "$LOG_FILE" "$WEB_LOG_FILE" 2>/dev/null || true
+    rm -f "$PID_FILE_BACKEND" "$PID_FILE_WEB" "$PID_FILE_DESKTOP" \
+      "$LOG_FILE" "$WEB_LOG_FILE" "$DESKTOP_LOG_FILE" 2>/dev/null || true
   fi
 
   echo ""

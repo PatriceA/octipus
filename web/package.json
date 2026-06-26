@@ -8,7 +8,7 @@
     "start": "next start -p 3007",
     "lint": "eslint . --max-warnings 0",
     "tauri": "tauri",
-    "tauri:webdev": "next dev -p 3008",
+    "tauri:webdev": "OCTIPUS_TAURI_DEV=true next dev -p 3008",
     "tauri:dev": "TAURI_BUILD=true tauri dev",
     "tauri:build": "TAURI_BUILD=true tauri build"
   },

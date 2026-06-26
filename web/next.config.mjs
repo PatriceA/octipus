@@ -4,11 +4,19 @@ import { dirname, resolve } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const isTauri = process.env.TAURI_BUILD === 'true';
+// The desktop *dev* server (`next dev -p 3008`) must not share `.next` with the
+// static-export build (`tauri:build` → `out/`). They compile in different modes
+// (dev vs `output: 'export'`), so a shared cache leaves the dev server reading
+// chunks from a stale production build → runtime ChunkLoadError. Give dev its
+// own distDir so the two never clobber each other.
+// Named OCTIPUS_* (not TAURI_*) to stay clear of Tauri's reserved env prefix.
+const isTauriDev = process.env.OCTIPUS_TAURI_DEV === 'true';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   output: isTauri ? 'export' : undefined,
+  distDir: isTauriDev ? '.next-desktop' : '.next',
   // Repo root, not web/ — components/pipeline-graph.tsx re-exports from
   // ../../src/core/orchestrator/pipeline-validation, so file tracing has to
   // include the parent directory.
