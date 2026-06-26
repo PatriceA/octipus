@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { documents } from './documents';
+import { workspaceRepos } from './workspace-repos';
 
 // Note: pgvector extension must be installed
 // CREATE EXTENSION IF NOT EXISTS vector;
@@ -108,6 +109,18 @@ export const embeddings = pgTable('embeddings', {
    * the constraint lands.
    */
   docId: uuid('doc_id').references((): AnyPgColumn => documents.id, { onDelete: 'cascade' }),
+  /**
+   * Multi-repo scoping (see `.octipus/multi-repo-design.md`). When the chunk
+   * comes from a registered repository's generated/curated content (repo map,
+   * AGENTS.md, …) this points at the `workspace_repos` row, so search can be
+   * scoped to one repo, a subset, or span the suite. NULL for non-repo content.
+   * `set null` on delete: the embedding outlives a deregistered repo (it just
+   * loses its scope) rather than being cascade-deleted.
+   *
+   * Note: raw source-code files are intentionally NEVER indexed (only
+   * summaries/generated artifacts carry a repoId) — see `code-detection.ts`.
+   */
+  repoId: uuid('repo_id').references((): AnyPgColumn => workspaceRepos.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   sourceIdIdx: index('embeddings_source_id_idx').on(table.sourceId),
@@ -117,6 +130,7 @@ export const embeddings = pgTable('embeddings', {
   lastAccessedAtIdx: index('embeddings_last_accessed_at_idx').on(table.lastAccessedAt),
   parentChunkIdx: index('embeddings_parent_chunk_idx').on(table.parentChunkId),
   docIdIdx: index('embeddings_doc_id_idx').on(table.docId),
+  repoIdIdx: index('embeddings_repo_id_idx').on(table.repoId),
   dedupIdx: uniqueIndex('embeddings_dedup_idx').on(table.purpose, table.sourceId, table.contentSha256),
 }));
 

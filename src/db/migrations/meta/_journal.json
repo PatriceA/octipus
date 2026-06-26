@@ -512,6 +512,13 @@
       "when": 1782397657224,
       "tag": "0072_quick_maximus",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1782466431909,
+      "tag": "0073_cloudy_glorian",
+      "breakpoints": true
     }
   ]
 }

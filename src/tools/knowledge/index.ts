@@ -1,5 +1,6 @@
 import { getKnowledgeGraph, entityRefFromSourceId, type EntityRef, type TraversalDirection } from '@/core/knowledge/graph';
 import { slugify } from '@/core/knowledge/wikilink';
+import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
 import type { AgentContext, ToolManifest } from '@/core/types';
@@ -36,6 +37,25 @@ function resolveInWorkspace(fs: WorkspaceFS, path: string): string {
     }
     throw err;
   }
+}
+
+/**
+ * Resolve a comma-separated list of repo names or ids (the `repos` arg) to a
+ * search scope of registry ids for the user. Returns undefined when nothing is
+ * requested or nothing resolves (search then spans all content).
+ */
+async function resolveRepoScope(
+  reposArg: string | undefined,
+  userId: string | undefined,
+): Promise<{ repoIds: string[] } | undefined> {
+  const refs = (reposArg ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (refs.length === 0 || !userId) return undefined;
+  const { repoRegistryRepository } = await import('@/db/repositories/repo-registry-repository');
+  const repos = await repoRegistryRepository.listByUser(userId);
+  const ids = refs
+    .map((ref) => repos.find((r) => r.id === ref || r.name.toLowerCase() === ref.toLowerCase())?.id)
+    .filter((id): id is string => Boolean(id));
+  return ids.length > 0 ? { repoIds: ids } : undefined;
 }
 
 export class KnowledgeTool extends BaseTool {
@@ -109,9 +129,10 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results to return (default: 5)', default: 5 },
-        purpose: { type: 'string', description: 'Filter by row purpose: document, code, message, image_description, knowledge_artifact, ephemeral, or omit for all. Agent outputs no longer land here — sibling-agent results live in task_state (see .octipus/memory-redesign.md Phase B).' },
+        purpose: { type: 'string', description: 'Filter by row purpose: document, message, image_description, knowledge_artifact, ephemeral, or omit for all. (Raw source code is never indexed — use the repo_registry tool to navigate code.)' },
         mode: { type: 'string', description: 'Search mode: hybrid (default), semantic (vector only), keyword (full-text only), or graph (hybrid entry points, then follow authored knowledge_links edges one hop).' },
         min_similarity: { type: 'number', description: 'Minimum cosine similarity (0–1) to keep a result. Defaults: 0.35 semantic, 0.3 hybrid, 0 keyword.' },
+        repos: { type: 'string', description: 'Optional comma-separated repo names or ids to scope the search to (multi-repo). Omit to search across all repos and non-repo content. Get repo names/ids from the repo_registry tool.' },
       }),
       async (args, context) => {
         const service = getEmbeddingService();
@@ -129,16 +150,19 @@ export class KnowledgeTool extends BaseTool {
         // bunch". Tune per-deployment via min_similarity if needed.
         const minSimilarity = userMin ?? (searchMode === 'semantic' ? 0.35 : searchMode === 'keyword' ? 0 : 0.3);
 
+        // Optional multi-repo scope: resolve repo names/ids to registry ids.
+        const scope = await resolveRepoScope(args.repos as string | undefined, context.userId);
+
         let results;
         switch (searchMode) {
           case 'semantic':
-            results = await service.search(args.query as string, limit, purpose, minSimilarity);
+            results = await service.search(args.query as string, limit, purpose, minSimilarity, undefined, scope);
             break;
           case 'keyword':
-            results = await service.ftsSearch(args.query as string, limit, purpose);
+            results = await service.ftsSearch(args.query as string, limit, purpose, undefined, scope);
             break;
           default:
-            results = await service.hybridSearch(args.query as string, limit, purpose, undefined, minSimilarity);
+            results = await service.hybridSearch(args.query as string, limit, purpose, undefined, minSimilarity, undefined, scope);
         }
 
         if (results.length === 0) {
@@ -156,6 +180,7 @@ export class KnowledgeTool extends BaseTool {
             purpose: r.purpose,
             sourceId: r.sourceId,
             filePath: r.metadata.filePath,
+            repoId: r.repoId ?? undefined,
           })),
           hint: 'Use read_knowledge with an entry ID to get the full content. Similarity is cosine (0–1); below 0.3 means the match is weak.',
         };
@@ -215,19 +240,18 @@ export class KnowledgeTool extends BaseTool {
 
     this.registerTool(
       'index_file',
-      'Index a file into the knowledge base for future retrieval.',
+      'Index a prose/document file (e.g. .md, .txt) into the knowledge base. Raw source-code files are NOT indexed by design — use the repo_registry tool to navigate code.',
       createParameterSchema({
-        path: { type: 'string', description: 'Absolute path to the file to index', required: true },
-        type: { type: 'string', description: 'Source type: document or code', default: 'document' },
+        path: { type: 'string', description: 'Absolute path to the prose/document file to index', required: true },
       }),
       async (args, context) => {
         const indexer = getFileIndexer();
         const fs = workspaceFor(context);
         const safePath = resolveInWorkspace(fs, args.path as string);
-        const chunks = await indexer.indexFile(
-          safePath,
-          (args.type as 'document' | 'code') || 'document',
-        );
+        if (isCodeFile(safePath)) {
+          return { indexed: false, error: CODE_NOT_INDEXED_MESSAGE };
+        }
+        const chunks = await indexer.indexFile(safePath, 'document');
         return { indexed: true, chunks, path: safePath };
       },
       { permissionAction: 'index' },

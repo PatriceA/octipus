@@ -1,5 +1,6 @@
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
+import { CodeFileNotIndexableError, isCodeFile } from './code-detection';
 import { getEmbeddingService } from './embeddings';
 
 export interface IndexResult {
@@ -25,9 +26,14 @@ export interface IndexGuard {
 }
 
 export class FileIndexer {
-  async indexFile(filePath: string, purpose: 'document' | 'code' = 'document', guard?: IndexGuard): Promise<number> {
+  async indexFile(filePath: string, purpose: 'document' = 'document', guard?: IndexGuard): Promise<number> {
     if (guard?.isAllowed && !guard.isAllowed(filePath)) {
       throw new Error(`Path is outside the allowed workspace: ${filePath}`);
+    }
+    // Raw code files are never indexed — regardless of the requested `purpose`,
+    // so a `**/*.ts` directory glob can't slip code in under 'document' either.
+    if (isCodeFile(filePath)) {
+      throw new CodeFileNotIndexableError(filePath);
     }
     const file = Bun.file(filePath);
     if (!(await file.exists())) {
@@ -63,6 +69,12 @@ export class FileIndexer {
         if (guard?.isAllowed && !guard.isAllowed(path)) {
           result.errors.push(`${path}: skipped — resolves outside the allowed workspace`);
           coreLogger.warn({ path, dirPath }, 'Skipped indexing file that resolves outside the workspace');
+          continue;
+        }
+        // Silently skip code files (e.g. a `**/*.ts` pattern) — not indexable by
+        // design, and not an error worth surfacing per file.
+        if (isCodeFile(path)) {
+          coreLogger.debug({ path }, 'Skipped indexing raw code file (not stored in KB by design)');
           continue;
         }
         try {
