@@ -17,6 +17,8 @@ import { type CleanupOptions, type CleanupResult, runCleanup } from './retention
  */
 export type EmbeddingPurpose =
   | 'document'
+  // Retired: raw code is never indexed (see code-detection.ts). Kept in the
+  // union only so the fail-loud backstop in indexText can reject it.
   | 'code'
   | 'image_description'
   | 'knowledge_artifact'
@@ -53,6 +55,8 @@ export interface SearchResult {
   sectionPath?: string[] | null;
   /** Heading depth for hierarchical filtering. 0=body, 1=H1, … */
   headingLevel?: number | null;
+  /** Source repository (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo content. */
+  repoId?: string | null;
 }
 
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
@@ -70,6 +74,11 @@ const DOCS_SOURCE = 'octipus-docs';
  */
 export interface SearchScope {
   globalDocsOnly?: boolean;
+  /**
+   * Restrict results to these repositories (`workspace_repos.id`). Empty or
+   * undefined = span all repos (no repo filter). See multi-repo-design.md.
+   */
+  repoIds?: string[];
 }
 
 /**
@@ -80,6 +89,16 @@ function globalDocsScopeSql(scope?: SearchScope) {
   return scope?.globalDocsOnly
     ? sql`AND user_id IS NULL AND metadata->>'source' = ${DOCS_SOURCE}`
     : sql``;
+}
+
+/**
+ * SQL fragment restricting to a set of repo ids, or empty when not requested.
+ * Shared by `ftsSearch`/`hybridSearch`.
+ */
+function repoScopeSql(scope?: SearchScope) {
+  const ids = scope?.repoIds;
+  if (!ids || ids.length === 0) return sql``;
+  return sql`AND repo_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`;
 }
 
 /**
@@ -164,6 +183,8 @@ export class EmbeddingService {
     },
     /** Owner for tenant-scoped search (e.g. notes). NULL = unscoped/global. */
     ownerUserId?: string | null,
+    /** Source repo (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo. */
+    repoId?: string | null,
   ): Promise<string> {
     const db = getDb();
     const model = this.model || await this.resolveModel().catch(() => 'unknown');
@@ -173,6 +194,7 @@ export class EmbeddingService {
       embedding,
       model,
       userId: ownerUserId ?? null,
+      repoId: repoId ?? null,
       metadata: metadata || {},
       purpose,
       contentSha256: sha256Hex(content),
@@ -187,7 +209,9 @@ export class EmbeddingService {
       // error — return the existing row id so callers can chain on it.
       .onConflictDoUpdate({
         target: [embeddings.purpose, embeddings.sourceId, embeddings.contentSha256],
-        set: { lastAccessedAt: sql`now()` },
+        // Refresh repoId on conflict too — otherwise re-indexing identical content
+        // under a (newly) different repo scope would leave the old/NULL repoId.
+        set: { lastAccessedAt: sql`now()`, repoId: sql`excluded.repo_id` },
       })
       .returning({ id: embeddings.id });
     return result[0].id;
@@ -201,12 +225,21 @@ export class EmbeddingService {
     documentId?: string,
     /** Owner for tenant-scoped search (e.g. notes). NULL = unscoped/global. */
     ownerUserId?: string | null,
+    /** Source repo (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo. */
+    repoId?: string | null,
   ): Promise<number> {
+    // Backstop for the file-extension guard in FileIndexer: the `code` purpose
+    // only ever meant "a raw source file", and raw code is not indexed. Generated
+    // code *summaries* use `knowledge_artifact`, not `code`. See code-detection.ts.
+    if (purpose === 'code') {
+      const { CodeFileNotIndexableError } = await import('./code-detection');
+      throw new CodeFileNotIndexableError(metadata?.filePath ?? sourceId);
+    }
     // Memory-redesign Phase C — pick the structural chunker when the
     // content looks like Markdown (or the caller's filePath hint says
     // so). Other content types fall through to the flat chunker.
     if (looksLikeMarkdown(content, metadata?.filePath)) {
-      return this.indexStructured(purpose, sourceId, content, metadata, documentId, ownerUserId);
+      return this.indexStructured(purpose, sourceId, content, metadata, documentId, ownerUserId, repoId);
     }
     const chunks = this.chunkText(content);
     if (chunks.length === 0) {
@@ -234,6 +267,7 @@ export class EmbeddingService {
           },
           undefined,
           ownerUserId,
+          repoId,
         );
         storedIds.push(id);
         stored++;
@@ -298,6 +332,7 @@ export class EmbeddingService {
     metadata: EmbeddingMetadata | undefined,
     documentId: string | undefined,
     ownerUserId?: string | null,
+    repoId?: string | null,
   ): Promise<number> {
     const chunks: StructuralChunk[] = chunkMarkdown(content);
     if (chunks.length === 0) return 0;
@@ -330,6 +365,7 @@ export class EmbeddingService {
             docId: documentId ?? null,
           },
           ownerUserId,
+          repoId,
         );
         insertedIds[i] = id;
         storedTexts.push(c.content);
@@ -424,7 +460,7 @@ export class EmbeddingService {
    * nothing is actually relevant — useless for small knowledge bases where
    * every entry ranks "in the top N" by default.
    */
-  async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, userId?: string): Promise<SearchResult[]> {
+  async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, userId?: string, scope?: SearchScope): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await this.generateEmbedding(query);
@@ -443,6 +479,7 @@ export class EmbeddingService {
     const filters = [
       purpose ? eq(embeddings.purpose, purpose) : undefined,
       userId ? eq(embeddings.userId, userId) : undefined,
+      scope?.repoIds?.length ? inArray(embeddings.repoId, scope.repoIds) : undefined,
     ].filter(Boolean);
     const conditions = filters.length > 0 ? and(...filters) : undefined;
 
@@ -456,6 +493,7 @@ export class EmbeddingService {
         metadata: embeddings.metadata,
         sectionPath: embeddings.sectionPath,
         headingLevel: embeddings.headingLevel,
+        repoId: embeddings.repoId,
         similarity: similarityExpr,
       })
       .from(embeddings)
@@ -474,6 +512,7 @@ export class EmbeddingService {
         metadata: (r.metadata || {}) as EmbeddingMetadata,
         sectionPath: r.sectionPath,
         headingLevel: r.headingLevel,
+        repoId: r.repoId,
       }))
       .filter(r => r.similarity >= minSimilarity);
     this.recordAccess(out.map((r) => r.id));
@@ -486,21 +525,23 @@ export class EmbeddingService {
     const purposeFilter = purpose ? sql`AND purpose = ${purpose}` : sql``;
     const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
     const scopeFilter = globalDocsScopeSql(scope);
+    const repoFilter = repoScopeSql(scope);
 
     const results = await db.execute(sql`
       SELECT id, content, abstract, purpose, source_id, metadata,
-             section_path, heading_level,
+             section_path, heading_level, repo_id,
              ts_rank_cd(content_tsv, plainto_tsquery('english', ${query})) AS similarity
       FROM embeddings
       WHERE content_tsv @@ plainto_tsquery('english', ${query})
         ${purposeFilter}
         ${userFilter}
         ${scopeFilter}
+        ${repoFilter}
       ORDER BY similarity DESC
       LIMIT ${limit}
     `);
 
-    const out = rows<{ id: string; content: string; abstract: string | null; purpose: string; source_id: string; similarity: number | string; metadata: unknown; section_path: string[] | null; heading_level: number | null }>(results).map(r => ({
+    const out = rows<{ id: string; content: string; abstract: string | null; purpose: string; source_id: string; similarity: number | string; metadata: unknown; section_path: string[] | null; heading_level: number | null; repo_id: string | null }>(results).map(r => ({
       id: r.id,
       content: r.content,
       abstract: r.abstract,
@@ -510,6 +551,7 @@ export class EmbeddingService {
       metadata: (r.metadata || {}) as EmbeddingMetadata,
       sectionPath: r.section_path,
       headingLevel: r.heading_level,
+      repoId: r.repo_id,
     }));
     this.recordAccess(out.map((r) => r.id));
     return out;
@@ -560,6 +602,8 @@ export class EmbeddingService {
     const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
     // Optional hard-scope to the global product-docs corpus (see searchGlobalDocs).
     const scopeFilter = globalDocsScopeSql(scope);
+    // Optional multi-repo scope.
+    const repoFilter = repoScopeSql(scope);
     const k = 60; // RRF constant
 
     const results = await db.execute(sql`
@@ -571,6 +615,7 @@ export class EmbeddingService {
           ${purposeFilter}
           ${userFilter}
           ${scopeFilter}
+          ${repoFilter}
         LIMIT 50
       ),
       vec AS (
@@ -582,7 +627,7 @@ export class EmbeddingService {
                row_number() OVER (ORDER BY embedding <=> ${vecLiteral}::vector) AS rank_vec,
                1 - (embedding <=> ${vecLiteral}::vector) AS cosine_sim
         FROM embeddings
-        WHERE 1=1 ${purposeFilter} ${userFilter} ${scopeFilter}
+        WHERE 1=1 ${purposeFilter} ${userFilter} ${scopeFilter} ${repoFilter}
         ORDER BY embedding <=> ${vecLiteral}::vector
         LIMIT 50
       ),
@@ -598,7 +643,7 @@ export class EmbeddingService {
       )
       SELECT c.cosine_sim AS similarity, c.rrf_score, c.has_fts_match,
              e.id, e.content, e.abstract, e.purpose, e.source_id, e.metadata,
-             e.section_path, e.heading_level
+             e.section_path, e.heading_level, e.repo_id
       FROM combined c
       JOIN embeddings e ON e.id = c.id
       ORDER BY c.rrf_score DESC
@@ -617,6 +662,7 @@ export class EmbeddingService {
       metadata: unknown;
       section_path: string[] | null;
       heading_level: number | null;
+      repo_id: string | null;
     }>(results)
       .map(r => ({
         id: r.id,
@@ -629,6 +675,7 @@ export class EmbeddingService {
         metadata: (r.metadata || {}) as EmbeddingMetadata,
         sectionPath: r.section_path,
         headingLevel: r.heading_level,
+        repoId: r.repo_id,
       }))
       // Keep when raw cosine similarity passes the bar, or when an exact
       // keyword (FTS) hit makes the entry relevant on lexical grounds alone.

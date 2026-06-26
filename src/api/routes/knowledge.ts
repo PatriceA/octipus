@@ -1,5 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
 import { type getKBReadiness, isKBReady, kbNotReadyResponse, runKBSelfCheck } from '@/core/rag/health';
 import { getFileIndexer } from '@/core/rag/indexer';
@@ -112,9 +113,11 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const notReady = ensureKBReady(set);
     if (notReady) return notReady;
 
-    const { query, mode = 'hybrid', limit = 10, purpose, minSimilarity } = body;
+    const { query, mode = 'hybrid', limit = 10, purpose, minSimilarity, repoIds } = body;
     const purposeTyped = purpose as EmbeddingPurpose | undefined;
     const service = getEmbeddingService();
+    // Optional multi-repo scope (repoIds are workspace_repos.id values).
+    const scope = repoIds && repoIds.length > 0 ? { repoIds } : undefined;
     // Apply the same defaults as the MCP tool so REST callers get useful
     // results instead of "everything in the KB at ~0.01 similarity".
     const threshold = typeof minSimilarity === 'number'
@@ -125,14 +128,14 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       let results;
       switch (mode) {
         case 'semantic':
-          results = await service.search(query, limit, purposeTyped, threshold);
+          results = await service.search(query, limit, purposeTyped, threshold, undefined, scope);
           break;
         case 'keyword':
-          results = await service.ftsSearch(query, limit, purposeTyped);
+          results = await service.ftsSearch(query, limit, purposeTyped, undefined, scope);
           break;
         case 'hybrid':
         default:
-          results = await service.hybridSearch(query, limit, purposeTyped, undefined, threshold);
+          results = await service.hybridSearch(query, limit, purposeTyped, undefined, threshold, undefined, scope);
           break;
       }
       return { results, mode, query, minSimilarity: threshold };
@@ -149,6 +152,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       limit: t.Optional(t.Number()),
       purpose: t.Optional(t.String()),
       minSimilarity: t.Optional(t.Number()),
+      repoIds: t.Optional(t.Array(t.String())),
     }),
     detail: { tags: ['knowledge'] },
   })
@@ -255,9 +259,16 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       return { error: 'Authentication required' };
     }
 
-    const { path, type = 'file', purpose = 'document', patterns } = body;
+    const { path, type = 'file', purpose, patterns } = body;
     const indexer = getFileIndexer();
-    const validPurpose = (purpose === 'code' ? 'code' : 'document') as 'document' | 'code';
+    // The 'code' purpose is retired — raw code is never indexed. Reject it at the
+    // boundary (fail loud) rather than silently coercing to 'document'.
+    if (purpose === 'code') {
+      set.status = 400;
+      return { error: CODE_NOT_INDEXED_MESSAGE };
+    }
+    // Everything indexable lands as 'document'.
+    const validPurpose = 'document' as const;
 
     // Sandbox the caller-supplied path BEFORE anything else touches it.
     // Without this, `indexer.indexFile` does `Bun.file(path).text()` on ANY
@@ -309,6 +320,13 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
         }
         return result;
       } else {
+        // Raw code files are not indexed by design — reject cleanly (400)
+        // rather than letting the indexer throw into the 500 path.
+        if (isCodeFile(safePath)) {
+          set.status = 400;
+          logger.info({ path: safePath, userId: user.id }, 'Index request rejected — raw code file');
+          return { error: CODE_NOT_INDEXED_MESSAGE };
+        }
         const chunks = await indexer.indexFile(safePath, validPurpose);
         logger.info({ path: safePath, chunks, userId: user.id }, 'File indexed');
         if (chunks === 0) {

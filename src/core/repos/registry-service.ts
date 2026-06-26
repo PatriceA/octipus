@@ -1,4 +1,5 @@
-import { resolve } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join, resolve } from 'path';
 import { getConfig } from '@/config';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
 import type { WorkspaceRepo } from '@db/schema/workspace-repos';
@@ -26,7 +27,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
   const roots = userScanRoots(userId);
   const scanned = scanRoots(roots);
   for (const r of scanned) {
-    await repoRegistryRepository.upsert({
+    const row = await repoRegistryRepository.upsert({
       userId,
       workspaceId: workspaceId ?? null,
       name: r.name,
@@ -41,9 +42,71 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
       hasAgentsMd: r.hasAgentsMd,
       lastScannedAt: new Date(),
     });
+    // Best-effort: index the repo's generated/curated content (NOT raw code)
+    // into RAG, scoped to repo_id. Never let an indexing failure (e.g. no
+    // embedding model) abort the scan.
+    await indexRepoKnowledge(row, userId).catch((err) =>
+      coreLogger.warn({ err, repo: row.name }, 'repo knowledge indexing failed (non-fatal)'),
+    );
   }
   coreLogger.info({ userId, scanned: scanned.length, roots: roots.length }, 'repo registry scan complete');
   return repoRegistryRepository.listByUser(userId);
+}
+
+/**
+ * Index a repo's GENERATED/CURATED content into RAG, scoped to its `repoId`:
+ * the structural repo-map digest and the curated `AGENTS.md`. Raw source code
+ * is deliberately never indexed (see `src/core/rag/code-detection.ts`) — these
+ * summaries are what repo-scoped search retrieves instead.
+ */
+export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): Promise<void> {
+  const { getEmbeddingService, sha256Hex } = await import('@/core/rag/embeddings');
+  const service = getEmbeddingService();
+
+  // The generated/curated content to index — never raw code.
+  const items: Array<{
+    purpose: 'knowledge_artifact' | 'document';
+    sourceId: string;
+    content: string;
+    metadata: { source: string; title: string; filePath?: string };
+  }> = [];
+
+  if (repo.repoMap?.trim()) {
+    items.push({
+      purpose: 'knowledge_artifact',
+      sourceId: `repo:${repo.id}:map`,
+      content: `# ${repo.name} — repo map\n\n${repo.repoMap}`,
+      metadata: { source: 'repo-map', title: `${repo.name} repo map` },
+    });
+  }
+  const agentsPath = join(repo.rootPath, 'AGENTS.md');
+  if (existsSync(agentsPath)) {
+    const content = readFileSync(agentsPath, 'utf-8');
+    if (content.trim()) {
+      items.push({
+        purpose: 'document',
+        sourceId: `repo:${repo.id}:agents`,
+        content,
+        metadata: { source: 'repo-agents', title: `${repo.name} AGENTS.md`, filePath: agentsPath },
+      });
+    }
+  }
+
+  for (const item of items) {
+    // Skip the expensive re-embed when the content is byte-for-byte unchanged
+    // since the last scan (fileSha stamped on the chunks).
+    if (await service.isFileIndexed(item.purpose, item.sourceId, item.content)) continue;
+    await service.deleteBySource(item.purpose, item.sourceId);
+    await service.indexText(
+      item.purpose,
+      item.sourceId,
+      item.content,
+      { ...item.metadata, fileSha: sha256Hex(item.content) },
+      undefined,
+      userId,
+      repo.id,
+    );
+  }
 }
 
 export interface RepoSummary {
