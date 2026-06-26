@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import {
   type Artifact,
@@ -221,7 +221,7 @@ export class ArtifactsRepository {
 
     await this.db
       .delete(artifactDataSnapshots)
-      .where(sql`${artifactDataSnapshots.id} = ANY(${toDelete})`);
+      .where(inArray(artifactDataSnapshots.id, toDelete));
     return toDelete.length;
   }
 

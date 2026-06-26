@@ -101,6 +101,16 @@ async function resolveOrgFromBearer(authHeader: string | undefined): Promise<{ o
 export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
   .use(apiContext)
 
+  // SCIM clients (Okta, Azure AD, OneLogin, …) send bodies as
+  // `application/scim+json` (RFC 7644 §3.1), which Elysia does not parse as
+  // JSON by default. Without this the body arrives unparsed and the route's
+  // `body` schema rejects it with a 422 *before* the handler's bearer check
+  // runs — so every authenticated POST/PATCH would 422, and unauthenticated
+  // ones surface 422 instead of the RFC-correct 401.
+  .onParse(async ({ request }, contentType) => {
+    if (contentType === 'application/scim+json') return await request.json();
+  })
+
   // ---- Users ----
 
   .get(
