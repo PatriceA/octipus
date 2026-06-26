@@ -7,7 +7,7 @@ turns and sessions, all sharing the same pgvector install:
 
 | Surface | What it stores | Schema | Hot files |
 |---|---|---|---|
-| **Knowledge base** | Document chunks, code chunks, message chunks, image captions, agent-flagged knowledge artefacts | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
+| **Knowledge base** | Document chunks, message chunks, image captions, per-repo maps + `AGENTS.md`, agent-flagged knowledge artefacts. **Never raw source code** — see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed). | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
 | **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history | `memories` (+ `memories_active` view) | `src/core/memory/*` |
 | **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
 
@@ -46,7 +46,7 @@ PR #28 / migration 0056). Valid values:
 | Purpose | What writes it | Default retention |
 |---|---|---|
 | `document` | Document uploads via `/api/documents/upload`, `index_file(path, 'document')`, and the boot/cron product-docs auto-index (`metadata.source='octipus-docs'`, see [Product docs auto-index](#product-docs-auto-index-at-boot)) | Tied to the parent `documents` row (cascade delete via FK); the auto-indexed product docs carry no `doc_id` and are refreshed in place |
-| `code` | Filesystem auto-index on `.ts`, `.py`, `.rs`, etc. and `index_file(path, 'code')` | Re-indexed on change via `content_sha256` upsert; otherwise persistent |
+| `code` | **Retired.** Raw source code is never indexed (see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed)). The value is kept only so the indexer can reject it loudly. | n/a |
 | `image_description` | Vision-LLM caption + OCR text written by `documents/processor.ts` for image uploads | Tied to the parent `documents` row |
 | `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
 | `message` | Conversation chunks indexed for recall (not currently auto-written; compaction handles long-term recall via `compaction_entries`) | 90 days |
@@ -63,10 +63,12 @@ similarity over `embeddings`.
 ### Filesystem auto-index
 
 Writes to project files via the `filesystem` tool fire a
-fire-and-forget index for the touched path:
+fire-and-forget index for the touched path — **prose only**:
 
 - `.md`, `.txt`, `.rst`, `.csv`, `.log` → `purpose = 'document'`
-- Everything else with an indexable extension → `purpose = 'code'`
+- Everything else (including all source code) → **not indexed**
+  (`autoIndexPurpose` returns `null`). Code is deliberately excluded; see
+  [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed).
 
 ### Document uploads
 
@@ -83,8 +85,11 @@ ON DELETE CASCADE FK reaps the chunks with the parent.
 - **Knowledge tool** — any agent with the `knowledge` tool can call
   `search_knowledge`, `read_knowledge`, `index_file`,
   `index_directory`, `cleanup_knowledge`, `knowledge_stats`.
+  `index_file`/`index_directory` index prose only and **reject code files**
+  (a `**/*.ts` directory glob is skipped per file).
 - **API** — `POST /api/knowledge/index` with `{ path, type:
-  'file'|'directory', purpose: 'document'|'code', patterns? }`.
+  'file'|'directory', patterns? }`. Everything indexable lands as
+  `'document'`; a code-file path or `purpose: 'code'` is rejected with `400`.
 - **MCP server** — `octipus_index_file` and `octipus_search_knowledge`
   for external models (Claude Code, Antigravity, …).
 
@@ -119,7 +124,7 @@ low-signal files are excluded (`*CHANGELOG*`, `WEEKLY-CHANGELOG-*`,
 
 ## How data gets retrieved
 
-`search_knowledge(query, limit?, purpose?, mode?, min_similarity?)`
+`search_knowledge(query, limit?, purpose?, mode?, min_similarity?, repos?)`
 runs the chosen mode against the `embeddings` table. The `mode`
 parameter:
 
@@ -144,6 +149,80 @@ remains for callers that want the full ancestor chunk objects.
 
 `read_knowledge(id)` returns the full L2 content + metadata for a
 specific entry.
+
+The optional `repos` filter scopes a search to one or more repositories — see
+[Repo-scoped knowledge](#repo-scoped-knowledge-multi-repo).
+
+## Code-exclusion policy (raw code is never indexed)
+
+**Raw source-code files are never stored in the knowledge base.** Indexing whole
+code files bloats retrieval with low-signal chunks and crowds out the curated and
+generated content that actually helps — it was tried before and hurt result
+quality. Code is meant to be *navigated* (the `repo_registry` tool, `grep`, read
+on demand), not retrieved as fuzzy vector chunks. What the KB stores for a repo
+instead are **generated summaries** — repo-map digests and `AGENTS.md` (see
+[Repo-scoped knowledge](#repo-scoped-knowledge-multi-repo)).
+
+### What counts as "code"
+
+`isCodeFile()` (`src/core/rag/code-detection.ts`) decides, by:
+
+- **Extension** — `.ts/.tsx/.js/.go/.rs/.py/.java/.rb/.php/.c/.cpp/.cs/.swift/
+  .kt/.scala/.sh/.lua/.vue/.svelte/…` (the full set is in `CODE_EXTENSIONS`).
+- **Bare filename** — extension-less build/script files: `Dockerfile`,
+  `Makefile`, `Rakefile`, `Gemfile`, `Jenkinsfile`, `Vagrantfile`, …
+
+Prose and data stay indexable: `.md`, `.txt`, `.rst`, `.csv`, `.log`.
+
+### Where it's enforced (defense in depth)
+
+The guard lives at the indexer chokepoint so **no caller can bypass it**:
+
+| Layer | Behaviour |
+|---|---|
+| `FileIndexer.indexFile` | Throws `CodeFileNotIndexableError` for a code file **regardless of the requested purpose** — this also closes the `index_directory --patterns '**/*.ts'` bypass (a glob that would otherwise index code under `'document'`). |
+| `FileIndexer.indexDirectory` | Silently skips code files (debug-logged), so a mixed glob indexes the prose and ignores the code. |
+| `EmbeddingService.indexText` | Throws on the retired `purpose='code'` — a backstop for any direct caller that doesn't go through `FileIndexer`. |
+| Knowledge tool `index_file` | Returns a clear "not indexed" message for a code file before calling the indexer. |
+| REST `POST /api/knowledge/index` | `400` for a code-file path or `purpose='code'` (fail-loud — no silent coercion to `'document'`). |
+
+The shared explanation text is `CODE_NOT_INDEXED_MESSAGE`
+(`src/core/rag/code-detection.ts`), reused everywhere so the message never drifts.
+
+## Repo-scoped knowledge (multi-repo)
+
+In a [multi-repo workspace](./MULTI-REPO.md), the knowledge base carries a
+`repo_id` dimension so search can target one repo, a chosen subset, or span the
+whole suite — instead of one undifferentiated per-user corpus.
+
+### What gets indexed per repo
+
+When the repo registry is scanned (`scan_repos` / `POST /workspace/repos/scan`),
+each repo's **generated/curated** content is indexed into `embeddings`, tagged
+with its `repo_id` — and **never any raw code**:
+
+| Content | `purpose` | `source_id` |
+|---|---|---|
+| Repo-map digest (top-level dirs, entry points, build/test/lint commands) | `knowledge_artifact` | `repo:<repoId>:map` |
+| Curated `AGENTS.md` (the project guide) | `document` | `repo:<repoId>:agents` |
+
+Re-scanning is cheap: each item is stamped with a `fileSha` and an unchanged
+repo-map/`AGENTS.md` is skipped (`isFileIndexed`), so a scan only re-embeds what
+actually changed.
+
+### Scoping a search
+
+- **Agents** — `search_knowledge(query, …, repos: "core, web")`. `repos` is a
+  comma-separated list of repo **names or ids** (get them from the
+  `repo_registry` tool); it resolves to registry ids and filters
+  `embeddings.repo_id`. Omit it to search everything (repo + non-repo content).
+- **REST** — `POST /api/knowledge/search` with `repoIds: ["<uuid>", …]`.
+- Every hit carries its `repoId`, so results are attributed to a source repo
+  without parsing file paths.
+
+Under the hood, `SearchScope.repoIds` adds a parameterized `repo_id IN (…)`
+predicate to `search` / `ftsSearch` / `hybridSearch` (both RRF CTEs). Non-repo
+surfaces (notes, the global `/docs` corpus) are unaffected.
 
 ## Roles with `knowledge` tool
 
@@ -174,7 +253,7 @@ age cap and an optional LFU axis:
 | Purpose | Max age | LFU prune below | After (days) |
 |---|---|---|---|
 | `document` | none | none | (cascade with documents) |
-| `code` | none | none | (re-indexed on change) |
+| `code` | — | — | (retired — raw code is never indexed) |
 | `image_description` | none | none | (cascade with documents) |
 | `knowledge_artifact` | 365 | < 1 access | 180 |
 | `message` | 90 | none | — |
@@ -265,11 +344,14 @@ CREATE TABLE embeddings (
   section_path       text[],              -- root → leaf heading titles
   heading_level      smallint,            -- 0=body, 1=H1, …
   doc_id             uuid REFERENCES documents(id) ON DELETE CASCADE,
+  repo_id            uuid REFERENCES workspace_repos(id) ON DELETE SET NULL,
+                                          -- multi-repo scope (0073); NULL = non-repo
   created_at         timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX embeddings_dedup_idx
   ON embeddings (purpose, source_id, content_sha256);
+CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 -- HNSW + GIN indexes created by 0055 once dimension is homogeneous.
 ```
 
@@ -296,9 +378,11 @@ CREATE UNIQUE INDEX embeddings_dedup_idx
 
 | File | Purpose |
 |---|---|
-| `src/core/rag/embeddings.ts` | `EmbeddingService` — generate, store, `search()` / `ftsSearch()` / `hybridSearch()` |
+| `src/core/rag/embeddings.ts` | `EmbeddingService` — generate, store, `search()` / `ftsSearch()` / `hybridSearch()` (incl. `SearchScope.repoIds`) |
 | `src/core/rag/retention-service.ts` | Per-purpose retention + cleanup audit |
-| `src/core/rag/indexer.ts` | `FileIndexer` — single file + directory indexing |
+| `src/core/rag/indexer.ts` | `FileIndexer` — single file + directory indexing (rejects code) |
+| `src/core/rag/code-detection.ts` | `isCodeFile()` + the code-exclusion guard / message |
+| `src/core/repos/registry-service.ts` | `indexRepoKnowledge()` — indexes each repo's map + `AGENTS.md` scoped to `repo_id` |
 | `src/core/rag/markdown-chunker.ts` | Structural Markdown chunker (heading hierarchy) |
 | `src/core/rag/health.ts` | Boot-time KB self-check (DB + embedding model + vector write round-trip) |
 | `src/core/documents/processor.ts` | Document upload pipeline (extract → categorise → summarise → index) |
@@ -310,6 +394,7 @@ CREATE UNIQUE INDEX embeddings_dedup_idx
 | `src/db/migrations/0052_embedding_hierarchy.sql` | Document hierarchy columns (`parent_chunk_id`, `section_path`, `doc_id`) |
 | `src/db/migrations/0055_vector_hnsw_when_homogeneous.sql` | Auto-pin vector dimension + create HNSW |
 | `src/db/migrations/0056_drop_source_type.sql` | Retired the legacy `source_type` column |
+| `src/db/migrations/0073_cloudy_glorian.sql` | Added `embeddings.repo_id` (multi-repo scope) + index |
 | `mcp-server/src/tools/knowledge.ts` | External-model MCP bridge |
 | `src/core/memory/{extractor,judge,retrieval,repository}.ts` | Layer 1 — long-term user-fact memory (extract → judge → apply, turn-start retrieve, supersession chain) |
 | `src/db/task-state-listener.ts` | Layer 3 — LISTEN/NOTIFY subscriber for `task_state_<session_id>` fan-out (Postgres only) |

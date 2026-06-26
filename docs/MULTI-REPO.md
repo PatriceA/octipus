@@ -63,6 +63,17 @@ repo by absolute path, telling it to read that repo's `AGENTS.md` first. For a
 cross-repo change it checks `repo_dependents` on a library before editing it and
 names every affected repo in the worker tasks.
 
+## Repo-scoped knowledge base
+
+Scanning a repo also indexes its **generated** content — the repo-map digest and
+curated `AGENTS.md` — into the knowledge base tagged with the repo's id. Agents
+can then scope a knowledge search to one repo or a subset:
+`search_knowledge(query, repos: "core, web")`. **Raw source code is never
+indexed** (it bloats retrieval and hurts quality) — code is navigated via the
+tools above and read on demand. Full details, including the enforcement points,
+are in [RAG.md → Repo-scoped knowledge](./RAG.md#repo-scoped-knowledge-multi-repo)
+and [→ Code-exclusion policy](./RAG.md#code-exclusion-policy-raw-code-is-never-indexed).
+
 ## API
 
 | Method | Path | Description |
@@ -74,8 +85,6 @@ names every affected repo in the worker tasks.
 
 ## Limitations / roadmap
 
-- **RAG is not yet repo-scoped** — indexed code lands in one per-user corpus.
-  Scoping search to a chosen repo (or subset) is the next step.
 - **Dependency edges come from manifests** (declared deps), not yet from import
   analysis. A deeper, symbol-level repo map is planned.
 - **No cross-repo fan-out yet** — a change spanning several repos is coordinated
