@@ -1,5 +1,15 @@
 import { mock } from 'bun:test';
 
+// This is a pure unit suite: every dependency below is replaced via
+// `mock.module`, which bun applies process-globally for the whole `bun test`
+// run. Under the integration runner (INTEGRATION=1) those mocks add no coverage
+// and leak into real-DB suites — e.g. the partial `model-registry` mock omits
+// `registerModel`, breaking the topics/swarm-spawner integration tests. So make
+// the global mocks no-ops and skip this suite when INTEGRATION=1; the unit pass
+// (`bun test src scripts`, INTEGRATION unset) still runs it in full.
+const inIntegration = process.env.INTEGRATION === '1';
+const mockModule: typeof mock.module = inIntegration ? (() => {}) as typeof mock.module : mock.module;
+
 // Set the env vars `loadConfig()` needs BEFORE importing anything that may
 // touch `@/config`. We can't safely mock `@/config` itself: bun's
 // `mock.module` is process-wide for the whole test run, so any partial mock
@@ -24,7 +34,7 @@ const mockComplete = async () => ({
   latencyMs: 100,
 });
 
-mock.module('@/models/providers', () => ({
+mockModule('@/models/providers', () => ({
   getProviderRouter: () => ({
     complete: mockComplete,
     stream: async function* () {},
@@ -33,7 +43,7 @@ mock.module('@/models/providers', () => ({
 }));
 
 // Also mock model-registry to avoid DB access in llmJudge
-mock.module('@/models/model-registry', () => ({
+mockModule('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getModelForTopic: async () => ({
       modelId: 'test-model',
@@ -53,6 +63,8 @@ import {
   defineEvaluator,
   ALL_EVALUATORS,
 } from './evaluators';
+
+const describeUnit = inIntegration ? describe.skip : describe;
 import type { EvalDataPoint } from './types';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -76,7 +88,7 @@ function getEvaluator(name: string) {
 
 // ── defineEvaluator factory ───────────────────────────────────
 
-describe('defineEvaluator', () => {
+describeUnit('defineEvaluator', () => {
   test('returns evaluator with correct name and description', () => {
     const ev = defineEvaluator('my-metric', 'A test metric', async () => ({
       metric: 'my-metric',
@@ -101,7 +113,7 @@ describe('defineEvaluator', () => {
 
 // ── latency evaluator ─────────────────────────────────────────
 
-describe('latency evaluator', () => {
+describeUnit('latency evaluator', () => {
   const ev = getEvaluator('latency');
 
   test('<3000ms returns PASS with score 1.0', async () => {
@@ -150,7 +162,7 @@ describe('latency evaluator', () => {
 
 // ── format-compliance evaluator ───────────────────────────────
 
-describe('format-compliance evaluator', () => {
+describeUnit('format-compliance evaluator', () => {
   const ev = getEvaluator('format-compliance');
 
   test('JSON reference + valid JSON output returns PASS', async () => {
@@ -212,7 +224,7 @@ describe('format-compliance evaluator', () => {
 
 // ── tool-accuracy evaluator ───────────────────────────────────
 
-describe('tool-accuracy evaluator', () => {
+describeUnit('tool-accuracy evaluator', () => {
   const ev = getEvaluator('tool-accuracy');
 
   test('exact match: correct name, keys, and values returns score 1.0', async () => {
@@ -291,7 +303,7 @@ describe('tool-accuracy evaluator', () => {
 
 // ── LLM-as-judge evaluators ───────────────────────────────────
 
-describe('LLM-as-judge evaluators (mocked provider)', () => {
+describeUnit('LLM-as-judge evaluators (mocked provider)', () => {
   // These tests verify the evaluators do not crash and return structurally valid scores.
   // The mocked provider router returns { score: 8, reasoning: "Good response" }.
   // Normalized score = 8/10 = 0.8 → PASS.
@@ -341,7 +353,7 @@ describe('LLM-as-judge evaluators (mocked provider)', () => {
 
 // ── ALL_EVALUATORS registry ───────────────────────────────────
 
-describe('ALL_EVALUATORS', () => {
+describeUnit('ALL_EVALUATORS', () => {
   test('contains at least 5 evaluators', () => {
     expect(ALL_EVALUATORS.length).toBeGreaterThanOrEqual(5);
   });

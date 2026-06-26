@@ -1,5 +1,16 @@
 import { describe, test, expect, beforeEach, afterAll, mock } from 'bun:test';
 import { randomBytes } from 'node:crypto';
+
+// Pure unit suite: every dependency is replaced via `mock.module`, which bun
+// applies process-globally for the whole `bun test` run. Under the integration
+// runner (INTEGRATION=1) those mocks add no coverage and leak into real-DB
+// suites — the partial `model-registry` mock omits `registerModel`, breaking
+// the topics/swarm-spawner integration tests. So no-op the global mocks and
+// skip this suite when INTEGRATION=1; the unit pass (INTEGRATION unset) runs it
+// in full.
+const inIntegration = process.env.INTEGRATION === '1';
+const mockModule: typeof mock.module = inIntegration ? (() => {}) as typeof mock.module : mock.module;
+const describeUnit = inIntegration ? describe.skip : describe;
 import { ClassifiedError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 
@@ -46,7 +57,7 @@ const modelsListImpl: { current: () => any } = {
   current: () => { throw new Error('modelsListImpl.current not set'); },
 };
 
-mock.module('openai', () => {
+mockModule('openai', () => {
   class FakeOpenAI {
     chat: any; embeddings: any; models: any;
     constructor(opts: any) {
@@ -79,7 +90,7 @@ const routerState: {
   routerStream: null,
 };
 
-mock.module('@/models/providers', () => ({
+mockModule('@/models/providers', () => ({
   ...realProviders,
   getProviderRouter: () => ({
     resolveProvider: async (_m: string) => routerState.resolveProvider,
@@ -101,7 +112,7 @@ const registryState: {
   forTopic: Record<string, any>;
 } = { byModelId: {}, forTopic: {} };
 
-mock.module('@/models/model-registry', () => ({
+mockModule('@/models/model-registry', () => ({
   ...realRegistry,
   getModelRegistry: () => ({
     getModelByModelId: async (id: string) => registryState.byModelId[id] ?? null,
@@ -198,9 +209,9 @@ afterAll(() => {
   // mock.module is process-global and cannot truly restore mid-run. We
   // re-register defensively so any module re-imported after this point at
   // least sees a factory that returns the real exports.
-  mock.module('@/models/providers', () => realProviders);
-  mock.module('@/models/model-registry', () => realRegistry);
-  mock.module('openai', () => realOpenAIMod);
+  mockModule('@/models/providers', () => realProviders);
+  mockModule('@/models/model-registry', () => realRegistry);
+  mockModule('openai', () => realOpenAIMod);
   // Several tests here call resetConfig(), leaving the config cache cleared (or
   // loaded from a temporarily mutated env). Reset once more so the *next* test
   // file in the same worker re-derives a clean config from env on first
@@ -209,7 +220,7 @@ afterAll(() => {
   (realConfig as { resetConfig: () => void }).resetConfig();
 });
 
-describe('LiteLLMClient — constructor', () => {
+describeUnit('LiteLLMClient — constructor', () => {
   test('forwards config to OpenAI client', () => {
     // Other test files in the same `bun test` run may have already cached a
     // different config — reset so this assertion reads OUR env vars.
@@ -238,7 +249,7 @@ describe('LiteLLMClient — constructor', () => {
   });
 });
 
-describe('LiteLLMClient — sanitizeToolMessages (via completeViaProxy)', () => {
+describeUnit('LiteLLMClient — sanitizeToolMessages (via completeViaProxy)', () => {
   test('drops tool messages with no matching assistant tool_call id', async () => {
     let captured: any;
     chatCreateImpl.current = (params: any) => {
@@ -321,7 +332,7 @@ describe('LiteLLMClient — sanitizeToolMessages (via completeViaProxy)', () => 
   });
 });
 
-describe('LiteLLMClient — formatMessages', () => {
+describeUnit('LiteLLMClient — formatMessages', () => {
   test('serializes assistant tool_calls arguments as JSON string', async () => {
     let captured: any;
     chatCreateImpl.current = (p: any) => { captured = p; return Promise.resolve(chatCompletion({ content: 'ok' })); };
@@ -347,7 +358,7 @@ describe('LiteLLMClient — formatMessages', () => {
   });
 });
 
-describe('LiteLLMClient — completeViaProxy', () => {
+describeUnit('LiteLLMClient — completeViaProxy', () => {
   test('returns content + usage + latency', async () => {
     chatCreateImpl.current = () => Promise.resolve(chatCompletion({
       content: 'hello',
@@ -475,7 +486,7 @@ describe('LiteLLMClient — completeViaProxy', () => {
   });
 });
 
-describe('LiteLLMClient — complete routing', () => {
+describeUnit('LiteLLMClient — complete routing', () => {
   test('routes through proxy when bound provider is litellm', async () => {
     routerState.resolveProvider = { name: 'litellm' };
     let called = false;
@@ -572,7 +583,7 @@ describe('LiteLLMClient — complete routing', () => {
   });
 });
 
-describe('LiteLLMClient — streamViaProxy', () => {
+describeUnit('LiteLLMClient — streamViaProxy', () => {
   test('yields content chunks and finish_reason', async () => {
     chatCreateImpl.current = () => asyncIter([
       { choices: [{ delta: { content: 'hel' } }] },
@@ -646,7 +657,7 @@ describe('LiteLLMClient — streamViaProxy', () => {
   });
 });
 
-describe('LiteLLMClient — stream routing', () => {
+describeUnit('LiteLLMClient — stream routing', () => {
   test('falls through to proxy when router lookup throws', async () => {
     routerState.getProvider = () => { throw new Error('not registered'); };
     chatCreateImpl.current = () => asyncIter([
@@ -666,7 +677,7 @@ describe('LiteLLMClient — stream routing', () => {
       yield { finishReason: 'stop' };
     };
     // mock.module captured initial routerStream; re-mock manually for this test:
-    mock.module('@/models/providers', () => ({
+    mockModule('@/models/providers', () => ({
       getProviderRouter: () => ({
         resolveProvider: async () => routerState.resolveProvider,
         getProvider: () => routerState.getProvider,
@@ -686,7 +697,7 @@ describe('LiteLLMClient — stream routing', () => {
   });
 });
 
-describe('LiteLLMClient — embed', () => {
+describeUnit('LiteLLMClient — embed', () => {
   test('throws when no embedding model is configured', async () => {
     const client = new LiteLLMClient();
     await expect(client.embed('hello')).rejects.toBeInstanceOf(ClassifiedError);
@@ -753,7 +764,7 @@ describe('LiteLLMClient — embed', () => {
   });
 });
 
-describe('LiteLLMClient — listModels / isModelAvailable', () => {
+describeUnit('LiteLLMClient — listModels / isModelAvailable', () => {
   test('listModels returns ids', async () => {
     modelsListImpl.current = () => Promise.resolve({ data: [{ id: 'm1' }, { id: 'm2' }] });
     const client = new LiteLLMClient();
@@ -779,7 +790,7 @@ describe('LiteLLMClient — listModels / isModelAvailable', () => {
   });
 });
 
-describe('LiteLLMClient — completeVision', () => {
+describeUnit('LiteLLMClient — completeVision', () => {
   test('proxy path when bound provider is litellm', async () => {
     routerState.resolveProvider = { name: 'litellm' };
     routerState.getProvider = { name: 'litellm' };
@@ -837,7 +848,7 @@ describe('LiteLLMClient — completeVision', () => {
   });
 });
 
-describe('LiteLLMClient — singleton', () => {
+describeUnit('LiteLLMClient — singleton', () => {
   test('getLiteLLMClient returns same instance until reset', () => {
     const a = getLiteLLMClient();
     const b = getLiteLLMClient();
