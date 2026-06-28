@@ -5,6 +5,7 @@ import { getAgentManager } from '@/core/agent-manager';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { FileRefSchema } from '@/core/gateway/protocol';
 import { getOrchestratorService } from '@/core/orchestrator';
+import { getApiTokenManager } from '@/security/api-tokens';
 import { getSessionManager } from '@/security/auth/session';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { secureCompare } from '@/utils/crypto';
@@ -487,7 +488,7 @@ export function setupWebSocket(app: Elysia): void {
   const bridge = getBrowserBridge();
 
   app.ws('/ws/browser-bridge', {
-    open(ws) {
+    async open(ws) {
       const url = new URL(ws.data?.request?.url || '', 'http://localhost');
       const token = url.searchParams.get('token');
 
@@ -496,16 +497,24 @@ export function setupWebSocket(app: Elysia): void {
         return;
       }
 
-      const config = getConfig();
-      const masterKey = config.security.masterKey;
-
-      if (!secureCompare(token, masterKey)) {
-        ws.close(4001, 'Invalid authentication token');
-        return;
+      // Authenticate with a generated API token (preferred — revocable and
+      // per-user; create one in Settings → API Tokens). The master key is
+      // still accepted as a legacy fallback so existing setups keep working.
+      let userId: string | undefined;
+      const apiAuth = await getApiTokenManager().validate(token);
+      if (apiAuth) {
+        userId = apiAuth.userId;
+      } else {
+        const masterKey = getConfig().security.masterKey;
+        if (!masterKey || !secureCompare(token, masterKey)) {
+          ws.close(4001, 'Invalid authentication token');
+          return;
+        }
       }
 
       wsData(ws)._bridgeAuthed = true;
-      apiLogger.info('Browser bridge: WebSocket connected, awaiting handshake');
+      wsData(ws).userId = userId;
+      apiLogger.info({ userId }, 'Browser bridge: WebSocket connected, awaiting handshake');
       ws.send(JSON.stringify({ type: 'ready' }));
     },
 

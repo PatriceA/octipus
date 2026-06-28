@@ -50,22 +50,16 @@ async function connect() {
   try {
     ws = new WebSocket(`${backendUrl}?token=${encodeURIComponent(apiKey)}`);
 
-    ws.onopen = async () => {
+    ws.onopen = () => {
       connected = true;
       updateBadge('ON', '#4CAF50');
-
-      // Send handshake
-      const tabs = await chrome.tabs.query({});
-      ws.send(JSON.stringify({
-        type: 'connect',
-        version: chrome.runtime.getManifest().version,
-        tabCount: tabs.length,
-        userAgent: navigator.userAgent,
-      }));
-
+      // Do NOT send the connect handshake yet. The server authenticates the
+      // token asynchronously (API-token DB lookup) and only then emits
+      // {type:'ready'}; messages sent before that are dropped. Wait for
+      // 'ready' (handled in handleBackendMessage) before handshaking.
       broadcastStatus({ connected: true });
       startHeartbeat();
-      console.log('[Octi] Connected to backend');
+      console.log('[Octi] Socket open, awaiting server ready…');
     };
 
     ws.onmessage = (event) => {
@@ -143,6 +137,19 @@ function stopHeartbeat() {
 
 async function handleBackendMessage(msg) {
   if (msg.type === 'pong') return;
+
+  // Server finished authenticating the token — now safe to handshake.
+  if (msg.type === 'ready') {
+    const tabs = await chrome.tabs.query({});
+    ws.send(JSON.stringify({
+      type: 'connect',
+      version: chrome.runtime.getManifest().version,
+      tabCount: tabs.length,
+      userAgent: navigator.userAgent,
+    }));
+    console.log('[Octi] Authenticated, sent connect handshake');
+    return;
+  }
 
   if (msg.type === 'command') {
     const { id, command, params } = msg;
