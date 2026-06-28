@@ -686,6 +686,14 @@ export class OrchestratorService {
       systemPrompt += extraSystemContext;
     }
 
+    // Anchor the orchestrator in real wall-clock time. Without this stamp the
+    // model has no notion of "now" and treats fresh worker output — today's
+    // scores, "yesterday"/"tomorrow" events, anything past its training cutoff —
+    // as hallucinated future data, then discards correct results. Surface the
+    // real date so it trusts what the arms return instead of second-guessing it.
+    const nowStamp = new Date();
+    systemPrompt += `\n\nCURRENT DATE & TIME: ${nowStamp.toUTCString()} (ISO ${nowStamp.toISOString()}). This is the real wall-clock time, authoritative over your training cutoff. Worker/tool results carrying dates at or before this are plausible by definition — do NOT dismiss them as hallucination merely because they are newer than what you remember. Events "yesterday"/"today"/"tomorrow" are relative to this timestamp.`;
+
     // Fire the before-agent-start hook so extensions and built-in
     // modules (persona, project context) can mutate the system
     // prompt before the orchestrator LLM call. Subscribers run
