@@ -539,8 +539,16 @@ function DocumentCard({
 
   return (
     <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded(!expanded);
+          }
+        }}
         className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
       >
         <div className="flex items-center gap-3 min-w-0">
@@ -605,7 +613,7 @@ function DocumentCard({
             <Trash2 className="w-4 h-4" />
           </button>
         </div>
-      </button>
+      </div>
 
       {expanded && (
         <div className="border-t border-outline-variant/10 p-4 space-y-4">
