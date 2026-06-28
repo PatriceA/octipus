@@ -365,7 +365,11 @@ export class DeepSeekProvider implements ModelProvider {
             },
           })),
         };
-        if (msg.reasoningContent) out.reasoning_content = msg.reasoningContent;
+        // Always emit reasoning_content on a tool_calls turn — DeepSeek 400s
+        // if it's absent, and it can be absent whenever capture saw an
+        // empty/whitespace reasoning or this is a recovered/synthetic call.
+        // A minimal placeholder satisfies the requirement.
+        out.reasoning_content = msg.reasoningContent || ' ';
         return out;
       }
 

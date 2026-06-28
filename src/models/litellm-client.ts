@@ -214,7 +214,13 @@ export class LiteLLMClient {
             },
           })),
         };
-        if (msg.reasoningContent) out.reasoning_content = msg.reasoningContent;
+        // DeepSeek thinking models 400 ("reasoning_content ... must be passed
+        // back") if an assistant tool_calls turn omits reasoning_content — and
+        // that happens whenever it wasn't captured: an empty/whitespace
+        // reasoning from the model (dropped by the truthy guard on capture),
+        // or a recovered/synthetic tool-call turn. Always emit the field;
+        // fall back to a minimal placeholder. Non-DeepSeek upstreams ignore it.
+        out.reasoning_content = msg.reasoningContent || ' ';
         return out;
       }
 
