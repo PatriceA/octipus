@@ -167,9 +167,16 @@ export class OllamaProvider implements ModelProvider {
       }
       const choice = response.choices[0];
 
-      // Qwen3/thinking models may put output in 'reasoning' instead of 'content'
+      // Qwen3/thinking models may return their <think> output in the
+      // 'reasoning' field with an empty 'content'. Do NOT promote reasoning
+      // into content: a thinking-only turn (the model reasoned about its next
+      // step but hasn't emitted the tool call / answer yet) would then look
+      // identical to a finished answer, and the agent loop completes on it —
+      // returning raw thinking as the deliverable. Keep them separate so the
+      // worker's empty-content retry fires and nudges the model to continue.
       const msg = choice.message as unknown as Record<string, unknown>;
-      const content = (choice.message.content || msg.reasoning || '') as string;
+      const content = (choice.message.content || '') as string;
+      const reasoning = typeof msg.reasoning === 'string' ? msg.reasoning : '';
 
       const result: CompletionResult = {
         content,
@@ -182,6 +189,7 @@ export class OllamaProvider implements ModelProvider {
         model: response.model,
         latencyMs,
       };
+      if (reasoning.trim()) result.reasoningContent = reasoning;
 
       if (choice.message.tool_calls?.length) {
         result.toolCalls = choice.message.tool_calls.map((tc) => {

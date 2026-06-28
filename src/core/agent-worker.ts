@@ -1003,17 +1003,29 @@ export class AgentWorker extends BaseAgentWorker {
         }
       }
 
-      // No tool calls — treat as final response
-      // If content is empty (e.g. thinking tokens consumed entire output), retry up to 3 times
+      // No tool calls and no visible content — the model produced a
+      // thinking-only turn (reasoning tokens consumed the whole output, e.g.
+      // qwen3 planning "let me open these pages" without yet emitting the
+      // webfetch call). This is NOT a final answer: nudge it to continue and
+      // retry up to 3 times. The nudge allows EITHER the next tool call or a
+      // final text answer, so a mid-task research agent can proceed to its
+      // planned tool instead of being forced to answer prematurely.
       if (!completion.content?.trim()) {
         this.emptyRetries = (this.emptyRetries || 0) + 1;
         if (this.emptyRetries <= 3) {
           agentLogger.warn({
             agentId: this.context.id, iteration: this.iteration,
             outputTokens: completion.usage.outputTokens, emptyRetry: this.emptyRetries,
-          }, 'Empty response (likely thinking-only output), retrying');
-          // Add a nudge to help the model produce visible output
-          this.messages.push({ role: 'user', content: 'Please provide a direct response to the question. Do not think silently — output your answer as text.', timestamp: new Date() });
+            hadReasoning: !!completion.reasoningContent,
+          }, 'Thinking-only response (no content, no tool calls), nudging to continue');
+          this.messages.push({
+            role: 'user',
+            content:
+              'You stopped after thinking without producing a visible action. ' +
+              'Continue the task now: call the next tool you need, or — if you already have enough information — write your final answer as plain text. ' +
+              'Do not end your turn on thinking alone.',
+            timestamp: new Date(),
+          });
           continue;
         }
         agentLogger.warn({ agentId: this.context.id }, 'Max empty retries reached, returning fallback');
