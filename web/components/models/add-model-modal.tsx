@@ -200,7 +200,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
   }, [isOpen]);
 
   // Fetch available models when provider changes (direct connection only)
-  const fetchAvailableModels = useCallback(async (provider: string, endpoint?: string) => {
+  const fetchAvailableModels = useCallback(async (provider: string, endpoint?: string, refresh = false) => {
     if (
       !provider
       || provider === 'cli'
@@ -229,7 +229,12 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     setAvailableModels([]);
     setProviderConfigured(null);
     try {
-      const qs = endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : '';
+      const params = new URLSearchParams();
+      if (endpoint) params.set('endpoint', endpoint);
+      // refresh=true bypasses the 6h discovery cache — for live re-scan when
+      // experimenting with locally pulled/removed models (Ollama especially).
+      if (refresh) params.set('refresh', 'true');
+      const qs = params.toString() ? `?${params.toString()}` : '';
       const data = await api.get<{ configured: boolean; models?: AvailableModel[]; error?: string; source?: string }>(
         `/models/providers/${provider}/available${qs}`
       );
@@ -590,7 +595,21 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-on-surface-variant mb-1">Model ID *</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-on-surface-variant">Model ID *</label>
+                  {connectionType === 'direct' && !isCli && formData.provider !== 'openrouter' && !formData.provider.startsWith('custom-') && (
+                    <button
+                      type="button"
+                      onClick={() => fetchAvailableModels(formData.provider, formData.endpoint || undefined, true)}
+                      disabled={loadingAvailable}
+                      title="Re-scan the provider for models, bypassing the 6h cache"
+                      className="flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingAvailable ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  )}
+                </div>
                 {connectionType === 'direct' && !isCli && formData.provider !== 'openrouter' && availableModels.length > 0 ? (
                   <select
                     value={formData.modelId}
