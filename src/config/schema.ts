@@ -309,8 +309,8 @@ export const swarmConfigSchema = z.object({
   orphanReaperIntervalMs: z.number().min(30_000).default(600_000),
   levelDefaults: z.object({
     orchestrator: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 }),
-    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 240_000, fanOut: 4, maxPendingDetached: 3 }),
-    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 240_000, fanOut: 0, maxPendingDetached: 0 }),
+    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 }),
+    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 600_000, fanOut: 0, maxPendingDetached: 0 }),
   }).prefault({}),
 });
 

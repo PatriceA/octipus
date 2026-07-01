@@ -44,7 +44,7 @@ describe('composeChildMessage — date grounding', () => {
 // ── syncParentTokenUsage: node budget reflects live worker spend ──────
 
 describe('syncParentTokenUsage', () => {
-  const makeNode = (used: number, workerTokens: number | null): AgentNode => {
+  const makeNode = (used: number, workerTokens: number | null, childTokensUsed = 0): AgentNode => {
     const node = {
       id: 'p',
       role: 'orchestrator',
@@ -55,6 +55,7 @@ describe('syncParentTokenUsage', () => {
         wallClockMs: { cap: 600_000, startedAt: Date.now() },
         fanOut: { cap: 6, used: 0 },
         depth: 0 as const,
+        childTokensUsed,
       },
     } as unknown as AgentNode;
     if (workerTokens !== null) {
@@ -88,6 +89,20 @@ describe('syncParentTokenUsage', () => {
     // when the worker had burned nearly the whole pool.
     const node = makeNode(0, 195_000);
     syncParentTokenUsage(node);
+    expect(() => deriveChildBudget(node.budget, 1)).toThrow(/Insufficient token budget/);
+  });
+
+  test('combines own worker spend with cumulative child spend', () => {
+    const node = makeNode(0, 50_000, 120_000); // own 50k + children 120k = 170k
+    syncParentTokenUsage(node);
+    expect(node.budget.tokens.used).toBe(170_000);
+  });
+
+  test('child spend alone drives the guard even without a workerRef', () => {
+    // No workerRef (own spend counts as 0), but children have burned the pool.
+    const node = makeNode(0, null, 190_000);
+    syncParentTokenUsage(node);
+    expect(node.budget.tokens.used).toBe(190_000);
     expect(() => deriveChildBudget(node.budget, 1)).toThrow(/Insufficient token budget/);
   });
 });

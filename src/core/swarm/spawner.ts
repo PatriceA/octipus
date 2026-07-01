@@ -432,6 +432,14 @@ export class SwarmSpawner {
       scorers: params.scorers,
     });
 
+    // Feed the child's actual spend back into the parent's pool accounting so
+    // later spawns (and the budget-cascade guard via `syncParentTokenUsage`)
+    // see true consumption, not just the parent's own tokens. Only genuinely
+    // executed children reach here — cache hits and pre-run denials return
+    // early above (no new tokens spent). Single-threaded async, so the
+    // read-modify-write is safe across concurrent detached children.
+    parent.budget.childTokensUsed = (parent.budget.childTokensUsed ?? 0) + (result.usedTokens ?? 0);
+
     return result;
   }
 
@@ -1111,23 +1119,28 @@ export class InsufficientBudgetError extends Error {
 }
 
 /**
- * Reconcile a parent node's `budget.tokens.used` with its worker's live spend.
+ * Reconcile a parent node's `budget.tokens.used` with true pool consumption:
+ * the node's own worker spend (`workerRef.current.getTotalTokens()`) plus the
+ * cumulative spend of its children (`budget.childTokensUsed`, accumulated in
+ * `spawnChild` as each child returns).
  *
- * The node budget's `used` counter is never otherwise incremented, so without
- * this the reserve math and `InsufficientBudgetError` guard in
- * `deriveChildBudget` always see `used = 0` and can never fire — the parent
- * looks like it has its full pool free even when nearly exhausted. The worker
- * (wired onto the node as `workerRef` by the orchestrator service / spawner)
- * tracks the real figure as `getTotalTokens()`. Monotonic (never shrinks) and a
- * no-op for legacy call sites that have no `workerRef`.
+ * Without this the `used` counter is never incremented, so the reserve math and
+ * `InsufficientBudgetError` guard in `deriveChildBudget` always see `used = 0`
+ * and can never fire — the parent looks like it has its full pool free even when
+ * nearly exhausted. Monotonic (never shrinks) and degrades gracefully: with no
+ * `workerRef` the own-spend term is 0 and only accumulated child spend counts.
  */
 export function syncParentTokenUsage(parent: AgentNode): void {
   const worker = (
     parent as unknown as { workerRef?: { current: { getTotalTokens?: () => number } | null } }
   ).workerRef?.current;
-  const used = worker?.getTotalTokens?.();
-  if (typeof used === 'number' && used > parent.budget.tokens.used) {
-    parent.budget.tokens.used = used;
+  const ownSpend = worker?.getTotalTokens?.() ?? 0;
+  // True pool consumption = the node's own worker spend + everything its
+  // children have returned so far. Both terms are monotonic; guard against
+  // shrinking `used` (a stale/lower reading must never lower the counter).
+  const target = ownSpend + (parent.budget.childTokensUsed ?? 0);
+  if (target > parent.budget.tokens.used) {
+    parent.budget.tokens.used = target;
   }
 }
 
