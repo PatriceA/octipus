@@ -18,6 +18,15 @@ import type { DeepSeekProvider } from '@/models/providers/deepseek-provider';
 import { coreLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
 
+/** LiteLLM proxy base URL + auth key from config/env, with the standard
+ *  localhost fallback. `key` is '' when neither config nor env sets one. */
+function litellmTarget(config: ReturnType<typeof getConfig>): { base: string; key: string } {
+  return {
+    base: config.litellm.proxyUrl || 'http://localhost:4000',
+    key: config.litellm.apiKey || process.env.LITELLM_MASTER_KEY || '',
+  };
+}
+
 /**
  * Resolve a custom-provider API key from an apiKeyRef.
  * Mirrors BaseCustomProvider.resolveApiKey but used at the API layer
@@ -125,8 +134,7 @@ export async function testModelConnection(
     if (provider === 'ollama') {
       // For Ollama models proxied through LiteLLM, test via LiteLLM first
       const config = getConfig();
-      const litellmBase = config.litellm.proxyUrl || 'http://localhost:4000';
-      const litellmKey = config.litellm.apiKey || process.env.LITELLM_MASTER_KEY || '';
+      const { base: litellmBase, key: litellmKey } = litellmTarget(config);
       try {
         const litellmModels = await fetch(`${litellmBase}/v1/models`, {
           headers: litellmKey ? { 'Authorization': `Bearer ${litellmKey}` } : {},
@@ -304,8 +312,7 @@ export async function testModelConnection(
 
       // Fallback: LiteLLM proxy
       const config = getConfig();
-      const litellmBase = config.litellm.proxyUrl || 'http://localhost:4000';
-      const litellmKey = config.litellm.apiKey || process.env.LITELLM_MASTER_KEY;
+      const { base: litellmBase, key: litellmKey } = litellmTarget(config);
       if (!litellmKey) {
         return { success: false, error: `No direct provider or LiteLLM proxy configured for "${provider}"` };
       }
@@ -424,8 +431,7 @@ export async function listLiteLLMModels(): Promise<
   | { error: string }
 > {
   const config = getConfig();
-  const litellmBase = config.litellm.proxyUrl || 'http://localhost:4000';
-  const litellmKey = config.litellm.apiKey || process.env.LITELLM_MASTER_KEY || '';
+  const { base: litellmBase, key: litellmKey } = litellmTarget(config);
   const headers: Record<string, string> = {};
   if (litellmKey) headers['Authorization'] = `Bearer ${litellmKey}`;
 
