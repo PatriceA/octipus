@@ -41,30 +41,57 @@ const STATUS_COLOR: Record<SessionChangeStatus, string> = {
 
 export default function ChangesTab({ sessionId }: { sessionId: string | null }) {
   const [result, setResult] = useState<SessionChangesResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Starts true: the tab only mounts when the section is opened, and it fetches
+  // immediately, so it is loading from the first render.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, SessionChangeDiff | 'loading' | 'error'>>({});
+
+  // State-free fetch shared by the mount effect and the manual refresh button.
+  const fetchChanges = useCallback(
+    () => api.get<SessionChangesResult>(`/sessions/${sessionId}/changes`),
+    [sessionId],
+  );
 
   const loadList = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<SessionChangesResult>(`/sessions/${sessionId}/changes`);
-      setResult(res);
+      setResult(await fetchChanges());
     } catch (e) {
       setError((e as Error).message);
       setResult(null);
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, fetchChanges]);
 
-  // Fetch when the tab first mounts (it only mounts when the section is opened).
+  // Fetch on mount. We call the fetch directly rather than loadList() so the
+  // effect body performs no *synchronous* setState (react-hooks/set-state-in-
+  // effect) — state updates land in the async callbacks, guarded so a
+  // resolution after unmount / session change is ignored.
   useEffect(() => {
-    void loadList();
-  }, [loadList]);
+    if (!sessionId) return;
+    let active = true;
+    fetchChanges()
+      .then((res) => {
+        if (active) setResult(res);
+      })
+      .catch((e) => {
+        if (active) {
+          setError((e as Error).message);
+          setResult(null);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [sessionId, fetchChanges]);
 
   const toggleFile = useCallback(
     async (change: SessionChange) => {
