@@ -50,6 +50,14 @@ export interface NodeBudget {
   wallClockMs: { cap: number; startedAt: number };
   fanOut: { cap: number; used: number };
   depth: 0 | 1 | 2;
+  /**
+   * Cumulative tokens spent by this node's children (sum of each returned
+   * `ChildResult.usedTokens`). Combined with the node's own worker spend by
+   * `syncParentTokenUsage` so the budget-cascade guard reflects true pool
+   * consumption, not just the parent's own tokens. Optional so existing
+   * `NodeBudget` literals default it to 0.
+   */
+  childTokensUsed?: number;
 }
 
 export interface LevelDefault {
@@ -79,8 +87,8 @@ export const LEVEL_DEFAULT: Record<0 | 1 | 2, LevelDefault> = {
   // spawn — orchestrator could not narrate, supervise, or chat with the
   // user while children ran.
   0: { tokens: 200_000, wallMs: 10 * 60_000, fanOut: 6, maxPendingDetached: 6 },
-  1: { tokens: 80_000, wallMs: 4 * 60_000, fanOut: 4, maxPendingDetached: 3 },
-  2: { tokens: 30_000, wallMs: 4 * 60_000, fanOut: 0, maxPendingDetached: 0 },
+  1: { tokens: 80_000, wallMs: 10 * 60_000, fanOut: 4, maxPendingDetached: 3 },
+  2: { tokens: 30_000, wallMs: 10 * 60_000, fanOut: 0, maxPendingDetached: 0 },
 };
 
 /**
