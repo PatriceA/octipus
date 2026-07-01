@@ -900,6 +900,14 @@ export class OrchestratorService {
         pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
       };
       orchestratorWorkerRef.current = worker as unknown as AgentWorker;
+      // Expose the worker on the node so `spawnChild` can sync the node's
+      // token budget (`budget.tokens.used`) from the worker's live spend
+      // before deriving each child's budget — otherwise `used` stays 0 and the
+      // near-exhaustion spawn guard is inert. Children get this via
+      // `childNode.workerRef` in the spawner; the orchestrator node needs it
+      // wired here.
+      (parentNode as unknown as { workerRef?: typeof orchestratorWorkerRef }).workerRef =
+        orchestratorWorkerRef;
     }
 
     // Swarm: promote parent node id + persist root swarm_node row.

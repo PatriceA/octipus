@@ -7,6 +7,7 @@ import {
   ChildTimeoutError,
   classifyChildError,
 } from './errors';
+import type { ChildResult, PendingChild } from './types';
 
 const mkCtx = (over: Partial<AgentContext> = {}): AgentContext => ({
   id: 'w-1',
@@ -98,6 +99,39 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     }
     expect(thrown).toBeInstanceOf(ChildTimeoutError);
     expect((thrown as ChildTimeoutError).metadata?.capMs).toBe(10);
+  });
+});
+
+describe('AgentWorker — detached-collect wall-clock pause', () => {
+  test('time spent waiting in collectAllDetached is excluded from elapsed()', async () => {
+    const worker = new AgentWorker(mkCtx({ id: 'w-pause' }), {
+      maxIterations: 10,
+      contextWindowSize: 100_000,
+      timeout: 600_000,
+      maxTokenBudget: 100_000,
+    });
+    const priv = worker as unknown as { startTime: number };
+    priv.startTime = Date.now() - 1_000; // 1s of active work so far
+
+    const WAIT = 150;
+    const child: ChildResult = {
+      nodeId: 'n1', kind: 'subagent', status: 'ok', output: 'done',
+      usedTokens: 5, durationMs: WAIT, spawnedChildren: [],
+    };
+    const pc: PendingChild = {
+      childId: 'c1', startedAt: Date.now(), taskBrief: 't', topic: 'research',
+      promise: new Promise<ChildResult>((resolve) => setTimeout(() => resolve(child), WAIT)),
+    };
+    worker.registerPendingChild(pc);
+
+    const before = worker.getElapsedMs();
+    const results = await worker.collectAllDetached(5_000);
+    const after = worker.getElapsedMs();
+
+    expect(results).toHaveLength(1);
+    // The ~150ms blocked wait must NOT count against the parent's clock.
+    // Without the pause, `after - before` would be ≈ WAIT; with it, ≈ 0.
+    expect(after - before).toBeLessThan(WAIT - 40);
   });
 });
 

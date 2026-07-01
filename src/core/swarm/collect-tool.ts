@@ -1,6 +1,7 @@
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentWorker } from '@/core/agent-worker';
 import { swarmNodeRepository } from './node-repository';
+import { getLevelDefault } from './types';
 import type { AgentNode, ChildResult } from './types';
 
 /**
@@ -37,7 +38,7 @@ export function createCollectChildrenTool(
       properties: {
         timeoutMs: {
           type: 'number',
-          description: 'Max wait per child (default: half of the agent’s remaining wall-clock, max 120s).',
+          description: 'Max wait per child (default: the child’s wall budget, bounded by the agent’s remaining wall-clock).',
         },
       },
     },
@@ -59,7 +60,15 @@ export function createCollectChildrenTool(
       const wallStarted = parent.budget.wallClockMs.startedAt;
       const wallCap = parent.budget.wallClockMs.cap;
       const remaining = Math.max(0, wallCap - (Date.now() - wallStarted));
-      const timeoutMs = explicit ?? Math.min(120_000, Math.max(15_000, Math.floor(remaining / 2)));
+      // A detached child can run up to its own wall budget
+      // (`getLevelDefault(1).wallMs` — 10 min by default). Waiting less than
+      // that — the old 120s clamp — reported a still-working child as
+      // `timeout`/null and dropped its result. Wait up to the child wall
+      // (+margin), bounded by the parent's own remaining wall so we don't
+      // overrun the parent's budget.
+      const childWall = getLevelDefault(1).wallMs;
+      const target = childWall + 5_000;
+      const timeoutMs = explicit ?? Math.max(15_000, remaining > 0 ? Math.min(remaining, target) : target);
 
       const results = await worker.collectAllDetached(timeoutMs);
 
