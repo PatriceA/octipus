@@ -70,13 +70,15 @@ does the same thing the installer does — see
 
 ## What it is
 
-Octipus is an open-source, self-hosted AI platform that delegates real work to a swarm of specialist agents. Send a message — research, code, audit, write, schedule — and the orchestrator picks the right experts, fans them out in parallel, and ships a result back over the channel you used (Telegram, Slack, web, voice, MCP, …).
+Driven by the ultimate "What if?", Octipus is a living ecosystem built for relentless exploration. What if there's a more elegant solution? What if an entirely new capability redefines the workflow? We thrive on constant evolution and adaptation. Every agent arm acts autonomously, perpetually seeking uncharted, optimized paths. In our philosophy, everything is mutable—the only anchors are our resilient orchestrator architecture and the dedicated purpose of our models. 
 
-You bring the models. Your data stays on your infrastructure. Every model provider, every channel, every skill is yours to configure.
+This isn't just software; it's a boundless playground for every conceivable idea, providing multi-purpose, all-spanning coverage for any use case imaginable. 
 
 ## Project goal
 
-A platform that automates digital work — the boring, the repetitive, the cross-tool — and assists you with the rest. Not a chatbot wrapper. Octipus *executes*: it reads your repo, edits your files, runs your tests, fills your forms, schedules your meetings, and tells you what it changed.
+Octipus is the definitive, omni-capable orchestrator that delegates your most ambitious digital tasks to a swarm of autonomous experts. It isn't restricted by predefined boundaries—you send a directive, and it seamlessly breaks it down, dispatches the right agents, and executes in parallel. It reads your codebase, restructures your architecture, engineers solutions, and adapts on the fly. 
+
+Designed to be infinitely extensible, Octipus gives you the ultimate sandbox. You maintain total control of your data and models, while Octipus morphs to become the exact intelligent infrastructure your imagination demands.
 
 ## Community
 

@@ -1,157 +1,128 @@
-import { describe, test, expect } from 'bun:test';
-
-// Note: ToolRegistry tests require proper tool initialization
-// These are unit tests for registry logic
+import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { ToolRegistry, getToolRegistry } from './registry';
+import type { BaseTool, ToolAvailability } from './base-tool';
 
 describe('ToolRegistry (Unit)', () => {
-  describe('tool structure', () => {
-    test('tool has required properties', () => {
-      const tool = {
-        name: 'filesystem',
-        description: 'File system operations',
-        actions: {
-          read: { description: 'Read file', parameters: {} },
-          write: { description: 'Write file', parameters: {} },
-        },
-      };
+  let registry: ToolRegistry;
 
-      expect(tool.name).toBeDefined();
-      expect(tool.description).toBeDefined();
-      expect(tool.actions).toBeDefined();
-    });
-
-    test('action has description and parameters', () => {
-      const action = {
-        description: 'Read a file from disk',
-        parameters: {
-          path: { type: 'string', required: true },
-          encoding: { type: 'string', required: false },
-        },
-      };
-
-      expect(action.description).toBeDefined();
-      expect(action.parameters).toBeDefined();
-    });
+  beforeEach(() => {
+    registry = new ToolRegistry();
   });
 
-  describe('registry operations', () => {
-    test('can track registered tools', () => {
-      const registry = new Map<string, object>();
+  const createMockTool = (id: string, handlers: any[] = []): BaseTool => {
+    return {
+      id,
+      name: `name-${id}`,
+      version: '1.0.0',
+      initialize: mock(async () => {}),
+      shutdown: mock(async () => {}),
+      checkAvailability: mock(async (): Promise<ToolAvailability> => ({ available: true })),
+      getToolHandlers: mock(() => handlers as any[]),
+      getTool: mock((name: string) => handlers.find(h => h.name === name)),
+      getManifest: mock(() => ({ id, name: `name-${id}`, version: '1.0.0', description: 'mock', tools: [] }))
+    } as any as BaseTool;
+  };
 
-      registry.set('filesystem', { name: 'filesystem' });
-      registry.set('shell', { name: 'shell' });
-
-      expect(registry.has('filesystem')).toBe(true);
-      expect(registry.has('shell')).toBe(true);
-      expect(registry.has('unknown')).toBe(false);
-    });
-
-    test('can list all tools', () => {
-      const registry = new Map<string, object>();
-      registry.set('tool1', {});
-      registry.set('tool2', {});
-
-      const tools = Array.from(registry.keys());
-
-      expect(tools).toContain('tool1');
-      expect(tools).toContain('tool2');
-      expect(tools.length).toBe(2);
-    });
-
-    test('can remove tools', () => {
-      const registry = new Map<string, object>();
-      registry.set('toRemove', {});
-
-      registry.delete('toRemove');
-
-      expect(registry.has('toRemove')).toBe(false);
-    });
+  test('can register and retrieve a tool', async () => {
+    const tool = createMockTool('mock-tool');
+    await registry.register(tool);
+    expect(registry.get('mock-tool')).toBe(tool);
+    expect(registry.has('mock-tool')).toBe(true);
+    expect(registry.count).toBe(1);
+    expect(registry.getAll()).toHaveLength(1);
   });
 
-  describe('tool definitions', () => {
-    test('generates OpenAI-compatible tool format', () => {
-      const tool = {
-        name: 'calculator',
-        actions: {
-          add: {
-            description: 'Add numbers',
-            parameters: {
-              a: { type: 'number', required: true },
-              b: { type: 'number', required: true },
-            },
-          },
-        },
-      };
-
-      const toolDef = {
-        type: 'function',
-        function: {
-          name: `${tool.name}_add`,
-          description: tool.actions.add.description,
-          parameters: {
-            type: 'object',
-            properties: {
-              a: { type: 'number' },
-              b: { type: 'number' },
-            },
-            required: ['a', 'b'],
-          },
-        },
-      };
-
-      expect(toolDef.type).toBe('function');
-      expect(toolDef.function.name).toBe('calculator_add');
-      expect(toolDef.function.parameters.required).toContain('a');
-    });
+  test('prevents duplicate registration', async () => {
+    const tool = createMockTool('mock-tool');
+    await registry.register(tool);
+    expect(registry.register(tool)).rejects.toThrow('Tool already registered: mock-tool');
   });
 
-  describe('execution context', () => {
-    test('context has required fields', () => {
-      const context = {
-        userId: 'user-123',
-        sessionId: 'session-456',
-        agentId: 'agent-789',
-      };
-
-      expect(context.userId).toBeDefined();
-      expect(context.sessionId).toBeDefined();
-      expect(context.agentId).toBeDefined();
-    });
+  test('initializes on registration by default', async () => {
+    const tool = createMockTool('mock-tool');
+    await registry.register(tool);
+    expect(tool.initialize).toHaveBeenCalled();
+    expect(registry.isInitialized('mock-tool')).toBe(true);
+    expect(registry.initializedCount).toBe(1);
   });
 
-  describe('execution result', () => {
-    test('success result structure', () => {
-      const result = {
-        success: true,
-        data: 'Operation completed',
-      };
-
-      expect(result.success).toBe(true);
-      expect(result.data).toBeDefined();
-    });
-
-    test('error result structure', () => {
-      const result = {
-        success: false,
-        error: 'Operation failed',
-      };
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
-    });
+  test('skips initialization if autoInitialize is false', async () => {
+    const tool = createMockTool('mock-tool');
+    await registry.register(tool, { autoInitialize: false });
+    expect(tool.initialize).not.toHaveBeenCalled();
+    expect(registry.isInitialized('mock-tool')).toBe(false);
   });
 
-  describe('enable/disable', () => {
-    test('tracks enabled state', () => {
-      const enabledTools = new Set<string>(['filesystem', 'git']);
+  test('initializeAll initializes all unregistered tools', async () => {
+    const tool1 = createMockTool('t1');
+    const tool2 = createMockTool('t2');
+    await registry.register(tool1, { autoInitialize: false });
+    await registry.register(tool2, { autoInitialize: false });
+    
+    await registry.initializeAll();
+    expect(tool1.initialize).toHaveBeenCalled();
+    expect(tool2.initialize).toHaveBeenCalled();
+    expect(registry.isInitialized('t1')).toBe(true);
+    expect(registry.isInitialized('t2')).toBe(true);
+  });
 
-      expect(enabledTools.has('filesystem')).toBe(true);
+  test('checkAvailability caches results', async () => {
+    const tool = createMockTool('mock-tool');
+    await registry.register(tool);
+    
+    const result1 = await registry.checkAvailability('mock-tool');
+    const result2 = await registry.checkAvailability('mock-tool');
+    
+    expect(result1.available).toBe(true);
+    expect(tool.checkAvailability).toHaveBeenCalledTimes(1); // Cached
+  });
 
-      enabledTools.delete('filesystem');
-      expect(enabledTools.has('filesystem')).toBe(false);
+  test('checkAvailability returns false if tool not found', async () => {
+    const result = await registry.checkAvailability('unknown');
+    expect(result.available).toBe(false);
+    expect(result.reason).toBe('Tool not found');
+  });
 
-      enabledTools.add('filesystem');
-      expect(enabledTools.has('filesystem')).toBe(true);
-    });
+  test('getAllToolHandlers aggregates handlers', async () => {
+    const handler1 = { name: 'h1' } as any;
+    const handler2 = { name: 'h2' } as any;
+    const tool1 = createMockTool('t1', [handler1]);
+    const tool2 = createMockTool('t2', [handler2]);
+    
+    await registry.register(tool1);
+    await registry.register(tool2);
+    
+    const handlers = registry.getAllToolHandlers();
+    expect(handlers.length).toBe(2);
+    expect(handlers).toContain(handler1);
+    expect(handlers).toContain(handler2);
+  });
+
+  test('unregister removes and shuts down tool', async () => {
+    const tool = createMockTool('mock-tool');
+    await registry.register(tool);
+    
+    await registry.unregister('mock-tool');
+    expect(registry.has('mock-tool')).toBe(false);
+    expect(registry.isInitialized('mock-tool')).toBe(false);
+    expect(tool.shutdown).toHaveBeenCalled();
+  });
+
+  test('shutdownAll shuts down all tools', async () => {
+    const tool1 = createMockTool('t1');
+    const tool2 = createMockTool('t2');
+    await registry.register(tool1);
+    await registry.register(tool2);
+    
+    await registry.shutdownAll();
+    expect(tool1.shutdown).toHaveBeenCalled();
+    expect(tool2.shutdown).toHaveBeenCalled();
+    expect(registry.initializedCount).toBe(0);
+  });
+
+  test('getToolRegistry returns singleton', () => {
+    const reg1 = getToolRegistry();
+    const reg2 = getToolRegistry();
+    expect(reg1).toBe(reg2);
   });
 });

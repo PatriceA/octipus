@@ -38,7 +38,7 @@ export async function ensureToolboxLoaded(): Promise<void> {
 
 /**
  * Dispatch a collector by id. Loud failure if the tool isn't registered
- * or the family is wrong (CLAUDE.md house rule #1 — no silent fallbacks).
+ * or the family is wrong (AGENT.md house rule #1 — no silent fallbacks).
  */
 export async function dispatchCollector(
   toolId: string,

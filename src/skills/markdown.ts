@@ -1,4 +1,6 @@
 import type { Skill } from '@/db/schema/skills';
+import { logger } from '@/utils/logger';
+import * as yaml from 'js-yaml';
 
 /** Portable skill shape used for export/import — no internal IDs, timestamps, or user refs */
 export interface PortableSkill {
@@ -119,12 +121,19 @@ function parseFrontmatter(md: string): { meta: Record<string, string>; body: str
   const frontmatter = trimmed.slice(3, endIndex).trim();
   const body = trimmed.slice(endIndex + 3).trim();
 
-  for (const line of frontmatter.split('\n')) {
-    const colonIndex = line.indexOf(':');
-    if (colonIndex === -1) continue;
-    const key = line.slice(0, colonIndex).trim();
-    const value = line.slice(colonIndex + 1).trim();
-    if (key && value) meta[key] = value;
+  try {
+    const parsed = yaml.load(frontmatter) as Record<string, any>;
+    if (parsed && typeof parsed === 'object') {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value !== null && value !== undefined) {
+          meta[key] = typeof value === 'string' ? value : String(value);
+        }
+      }
+    }
+  } catch (err) {
+    // Malformed frontmatter → fall back to an empty meta block, but log it
+    // (AGENT.md house rule #1: no silent catches).
+    logger.warn({ err: (err as Error).message }, 'skill frontmatter YAML parse failed — ignoring meta');
   }
 
   return { meta, body };

@@ -27,6 +27,13 @@ export interface MCPServerConnection {
 export class MCPBridge extends EventEmitter {
   private connections: Map<string, MCPServerConnection> = new Map();
   private serverConfigs: MCPServer[] = [];
+  // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
+  private reconnectAttempts: Map<string, number> = new Map();
+  private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private intentionalDisconnects: Set<string> = new Set();
+  private static readonly MAX_RECONNECT_ATTEMPTS = 6;
+  private static readonly RECONNECT_BASE_MS = 1_000;
+  private static readonly RECONNECT_MAX_MS = 30_000;
 
   /**
    * Load MCP server configurations from JSON file (if configured) or database.
@@ -98,6 +105,11 @@ export class MCPBridge extends EventEmitter {
 
     coreLogger.info({ serverId: server.id, transport: server.transport || 'stdio' }, 'Connecting to MCP server');
 
+    // A fresh connect clears any intentional-disconnect flag / pending reconnect
+    // so future unexpected closes on this server trigger auto-reconnect again.
+    this.intentionalDisconnects.delete(server.id);
+    this.clearReconnectTimer(server.id);
+
     const protocol = new MCPProtocol();
     const transport = this.createTransport(server);
 
@@ -134,9 +146,19 @@ export class MCPBridge extends EventEmitter {
       });
 
       transport.onClose(() => {
+        // Ignore a close fired by a connection we've already replaced/removed
+        // (e.g. the reconnect timer closing a stale transport, or a still-alive
+        // child re-firing 'close' on kill). Only the currently-registered
+        // connection may drive status + reconnect — otherwise a stale closure
+        // double-schedules and can kill the freshly-reconnected server.
+        if (this.connections.get(server.id) !== connection) return;
         coreLogger.info({ serverId: server.id }, 'MCP transport closed');
         connection.status = 'disconnected';
         this.emit('disconnected', server.id);
+        // Unexpected close (not via disconnect()) → try to recover the server.
+        if (!this.intentionalDisconnects.has(server.id)) {
+          this.scheduleReconnect(server);
+        }
       });
 
       // Send function via transport
@@ -182,6 +204,7 @@ export class MCPBridge extends EventEmitter {
       }
 
       connection.status = 'connected';
+      this.reconnectAttempts.delete(server.id);
       this.connections.set(server.id, connection);
 
       coreLogger.info({
@@ -206,6 +229,13 @@ export class MCPBridge extends EventEmitter {
    * Disconnect from an MCP server
    */
   async disconnect(serverId: string): Promise<void> {
+    // Mark intentional and cancel any pending reconnect BEFORE closing, so the
+    // transport's onClose handler doesn't schedule a reconnect for a server we
+    // are deliberately shutting down.
+    this.intentionalDisconnects.add(serverId);
+    this.clearReconnectTimer(serverId);
+    this.reconnectAttempts.delete(serverId);
+
     const connection = this.connections.get(serverId);
     if (!connection) return;
 
@@ -224,6 +254,55 @@ export class MCPBridge extends EventEmitter {
     this.connections.delete(serverId);
 
     coreLogger.info({ serverId }, 'MCP server disconnected');
+  }
+
+  private clearReconnectTimer(serverId: string): void {
+    const timer = this.reconnectTimers.get(serverId);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(serverId);
+    }
+  }
+
+  /**
+   * Schedule an exponential-backoff reconnect after an unexpected transport
+   * close (crash / OS kill). Bounded by MAX_RECONNECT_ATTEMPTS so a
+   * permanently-dead server stops retrying instead of spinning forever.
+   */
+  private scheduleReconnect(server: MCPServer): void {
+    // Dedup: never let two backoff timers run for the same server.
+    this.clearReconnectTimer(server.id);
+    const attempts = this.reconnectAttempts.get(server.id) ?? 0;
+    if (attempts >= MCPBridge.MAX_RECONNECT_ATTEMPTS) {
+      coreLogger.warn({ serverId: server.id, attempts }, 'MCP server reconnect gave up after max attempts');
+      return;
+    }
+    const delay = Math.min(
+      MCPBridge.RECONNECT_BASE_MS * 2 ** attempts,
+      MCPBridge.RECONNECT_MAX_MS,
+    );
+    this.reconnectAttempts.set(server.id, attempts + 1);
+    coreLogger.info({ serverId: server.id, attempt: attempts + 1, delayMs: delay }, 'Scheduling MCP server reconnect');
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(server.id);
+      if (this.intentionalDisconnects.has(server.id)) return;
+      // Drop the stale connection FIRST so both connect()'s has-check and the
+      // stale onClose identity-guard see it gone before we close the transport.
+      const stale = this.connections.get(server.id);
+      if (stale) {
+        this.connections.delete(server.id);
+        stale.transport.close();
+        stale.protocol.cleanup();
+      }
+      this.connect(server).catch((err: unknown) => {
+        coreLogger.error({ err, serverId: server.id }, 'MCP reconnect attempt failed');
+        this.scheduleReconnect(server);
+      });
+    }, delay);
+    // Don't let a pending reconnect keep the process alive.
+    (timer as { unref?: () => void }).unref?.();
+    this.reconnectTimers.set(server.id, timer);
   }
 
   /**
@@ -253,7 +332,13 @@ export class MCPBridge extends EventEmitter {
    * Disconnect from all servers
    */
   async disconnectAll(): Promise<void> {
-    for (const serverId of this.connections.keys()) {
+    // Cancel reconnects for servers currently between backoff attempts (dropped
+    // from `connections`, so the loop below wouldn't otherwise reach them).
+    for (const serverId of [...this.reconnectTimers.keys()]) {
+      this.intentionalDisconnects.add(serverId);
+      this.clearReconnectTimer(serverId);
+    }
+    for (const serverId of [...this.connections.keys()]) {
       await this.disconnect(serverId);
     }
   }

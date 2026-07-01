@@ -1,6 +1,6 @@
 # Octipus Documentation
 
-The map for everything under `docs/`. Start with **Getting Started**, then jump to the area you need. For repo-wide context see the top-level [`README.md`](../README.md) and [`CLAUDE.md`](../CLAUDE.md).
+The map for everything under `docs/`. Start with **Getting Started**, then jump to the area you need. For repo-wide context see the top-level [`README.md`](../README.md) and [`AGENT.md`](../AGENT.md).
 
 ## Getting Started
 

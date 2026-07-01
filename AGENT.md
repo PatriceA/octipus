@@ -1,7 +1,11 @@
-# CLAUDE.md
+# AGENT.md
 
-Guidance for AI coding agents (Claude Code, Cursor, etc.) working in this repo.
-This file is committed so it travels with the codebase — no per-machine setup.
+Guidance for AI coding agents (Claude Code, Cursor, Codex, etc.) working in
+this repo. This is the canonical agent-instructions file (the `AGENT.md`
+convention) — committed so it travels with the codebase, no per-machine setup.
+It replaces the former `CLAUDE.md`; put agent guidance here going forward.
+Note: Claude Code auto-loads `CLAUDE.md`, not `AGENT.md` — to auto-inject this
+file there, add a one-line `CLAUDE.md` containing `@AGENT.md`.
 
 > Read [DESIGN.md](./DESIGN.md) and [CONTRIBUTING.md](./CONTRIBUTING.md) before
 > making non-trivial changes. The principles in those documents override
@@ -27,7 +31,7 @@ Architecture in one line:
   for the Next.js web UI.
 - **Backend:** Elysia (HTTP + WS), Drizzle ORM, Postgres + pgvector (PGlite in
   embedded mode), Valkey (Redis-compatible) via `ioredis`.
-- **Web:** Next.js 14 + React 18 + Tailwind in `web/`.
+- **Web:** Next.js 16 + React 19 + Tailwind in `web/`.
 - **Validation:** Zod everywhere at boundaries.
 - **Lint/format:** Biome (`bun run lint`). Formatter is **off** — don't
   reformat untouched code.

@@ -74,13 +74,15 @@ export class ApprovalManager {
 
       this.pendingApprovals.set(requestId, approval);
 
-      // Auto-timeout after 1 hour
+      // Auto-timeout after 1 hour unless the context overrides it. Use ?? so an
+      // explicit 0 (schema-valid: immediate/disabled) isn't coerced back to 1h.
+      const timeoutMs = (context.metadata?.approvalTimeoutMs as number) ?? 3600000;
       const timeout = setTimeout(() => {
         if (this.pendingApprovals.has(requestId)) {
           this.pendingApprovals.delete(requestId);
           resolve({ approved: false, reason: 'Approval timed out', requestId });
         }
-      }, 3600000);
+      }, timeoutMs);
 
       // Clean up timeout when resolved
       const originalResolve = approval.resolve;
@@ -118,10 +120,11 @@ export class ApprovalManager {
   /**
    * Try to resolve a pending approval from a chat message (e.g. "yes", "approve").
    */
-  tryResolveFromMessage(message: string): boolean {
-    if (this.pendingApprovals.size !== 1) return false;
+  tryResolveFromMessage(message: string, forUserId?: string): boolean {
+    const approvals = this.getPendingApprovals(forUserId);
+    if (approvals.length !== 1) return false;
 
-    const [, approval] = [...this.pendingApprovals.entries()][0];
+    const approval = approvals[0];
     const normalized = message.trim().toLowerCase();
 
     const approvePatterns = /^(approve|yes|go\s*ahead|proceed|confirm|accept|lgtm|ship\s*it)\b/i;

@@ -48,27 +48,12 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     The messages pane already exposes `scrollUp/scrollDown`;
     wiring is a one-line change.
 
-- **Extension SDK — user-authored TypeScript hooks.** `.octipus/extensions/`
-  auto-discovery + a narrow `ExtensionAPI` (`registerTool`, `registerCommand`,
-  event subscriptions, `ctx.ui.confirm/select/notify`) on top of the existing
-  `event-bus.ts` + permission system. Hot-reload via `/reload`. Ports the
-  pi-mono examples-driven model — patterns like `permission-gate`,
-  `protected-paths`, `git-checkpoint` map directly onto our security surface.
-  Lets users extend octipus without core PRs.
-
-- **Skills — agentskills.io spec alignment.** Today `skills` table + custom
-  format. Next: scan `~/.claude/skills`, `~/.pi/agent/skills`, `.agents/skills`
-  with recursive `SKILL.md` discovery and frontmatter parsing per
-  [agentskills.io](https://agentskills.io/specification). Settings array
-  for extra dirs. Buys interop with the claude-code / pi / codex skill
-  ecosystems for free; existing seeded skills stay valid.
-
-- **Compaction — structured summary + branch summarization.** Anti-thrashing
-  `session-compaction.ts` already decides *when*. Next: harden *what* — adopt
-  pi's structured summary format (cumulative file-op tracker, iterative
-  summary chaining via `firstKeptEntryId` walk-back, `/compact <instructions>`
-  pass-through) and add branch summarization for `/tree`-style navigation.
-  Builds on the existing `CompactionState`; new `compaction_entries` table.
+- **Compaction — branch summarization.** The structured summary format
+  (cumulative file-op tracker, iterative summary chaining via
+  `firstKeptEntryId` walk-back, `/compact <instructions>` pass-through) shipped
+  on the existing `CompactionState` + `compaction_entries` table. Still open:
+  branch summarization for `/tree`-style navigation (paired with the
+  session-as-tree item under **Later**).
 
 - **RPC stdio adapter for the gateway.** Today gateway is WS-only. Add a
   second `GatewayAdapter` that speaks strict-LF JSONL over stdin/stdout with
@@ -124,6 +109,26 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-07-01 — Refactor + changes review + roadmap sweep
+
+- **Core file refactor (PR #167).** Split the four largest logic-heavy files
+  into focused modules — routes delegate to a `src/services/` layer; swarm
+  budget/validation/cache, the detached-child manager, and the tool-loop
+  detector are their own units. Pure refactor, public APIs preserved. See
+  [`CHANGELOG.md`](CHANGELOG.md#core-file-refactor-2026-07-01-pr-167).
+- **Session changes review — `/changes`.** Git-backed view of every file an
+  agent touched in a session, in the web **Changes** tab and the TUI.
+- **Orchestrator detach — activated by default.** `maxPendingDetached` 0 → 6
+  so detached child results land; swarm budget accounting reconciled
+  (600 s/level, child spend into the pool).
+- **Extension SDK shipped** (moved out of Next). `.octipus/extensions/`
+  auto-discovery + `ExtensionAPI` (`registerTool` / `registerCommand` /
+  event subscriptions / `dispose`) on `src/extensions/`. Only `/reload`
+  hot-reload polish may remain.
+- **Skills — agentskills.io spec alignment shipped** (moved out of Next).
+  Recursive `SKILL.md` discovery across `~/.claude/skills`, `~/.pi/agent/skills`,
+  `.agents/skills` via `src/skills/external-loader.ts`; seeded skills stay valid.
 
 ### 2026-06-10 — QA batch (end-user surfaces)
 
