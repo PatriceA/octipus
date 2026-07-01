@@ -1,5 +1,5 @@
 import type { Skill } from '@/db/schema/skills';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 /** Portable skill shape used for export/import — no internal IDs, timestamps, or user refs */
 export interface PortableSkill {
