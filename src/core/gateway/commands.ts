@@ -381,6 +381,56 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
+    name: 'changes',
+    aliases: [],
+    description: 'Review git changes in the workspace — /changes for the list, /changes <path> for a file diff',
+    args: [{ name: 'path', required: false, description: 'File to show a before/after diff for' }],
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      try {
+        const { WorkspaceFS } = await import('@/security/workspace-fs');
+        const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+        // Use rawArgs, not ctx.args.path: the registry splits input on
+        // whitespace, so a path containing a space would only populate the
+        // first token in args.path. rawArgs preserves the whole path.
+        const path = ctx.rawArgs?.trim();
+
+        // Per-file diff: /changes <path>
+        if (path) {
+          let absPath: string;
+          try {
+            absPath = fs.resolve(path);
+          } catch (err) {
+            return { text: `Invalid path: ${(err as Error).message}`, ephemeral: true };
+          }
+          const { getWorkspaceChangeDiff } = await import('@/core/session-changes');
+          const { computeLineDiff } = await import('@/shared/diff');
+          const diff = await getWorkspaceChangeDiff(fs.root, absPath);
+          const { patch, added, removed } = computeLineDiff(diff.original, diff.modified);
+          if (!patch.trim()) return { text: `No changes in ${diff.path}.` };
+          const trunc = diff.truncated ? '\n… (file truncated before diff)' : '';
+          return { text: `${diff.path}  (+${added} −${removed})\n${patch}${trunc}` };
+        }
+
+        // Listing: /changes
+        const { getWorkspaceChanges } = await import('@/core/session-changes');
+        const result = await getWorkspaceChanges(fs.root);
+        if (!result.isGitRepo) return { text: 'Not a git repository — no changes to show.' };
+        if (result.changes.length === 0) return { text: 'No changes in the workspace.' };
+        const label: Record<string, string> = {
+          added: 'A ', modified: 'M ', deleted: 'D ', renamed: 'R ', untracked: '??',
+        };
+        const lines = result.changes.map((c) => `  ${label[c.status] ?? '  '} ${c.path}`);
+        const head = result.branch ? `Changes on ${result.branch}:` : 'Changes:';
+        return { text: `${head}\n${lines.join('\n')}\n\nRun /changes <path> to see a file's diff.` };
+      } catch (err) {
+        coreLogger.error({ err, userId: ctx.userId }, 'changes command failed');
+        return { text: `Failed to read changes: ${(err as Error).message}` };
+      }
+    },
+  });
+
+  registry.register({
     name: 'reload-extensions',
     aliases: ['reload'],
     description: 'Re-discover and reload user extensions from .octipus/extensions/',

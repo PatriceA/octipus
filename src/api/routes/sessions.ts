@@ -325,6 +325,70 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     }
   )
 
+  // ── Session changes (git-backed review) ──────────────────────────
+  // Lists what the agent changed in this session's workspace, and returns the
+  // before/after text for a single file. Backed by git in the workspace root
+  // (WorkspaceFS.forAgent) and gracefully degrades to `isGitRepo: false` when
+  // the workspace isn't a repository. The client computes the visual diff from
+  // the `{ original, modified }` pair via `computeLineDiff`.
+  .get(
+    '/:id/changes',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const session = await scopedRepos(principal).sessions.findById(params.id);
+      if (!session) {
+        set.status = 404;
+        return { error: 'Session not found' };
+      }
+      const fs = WorkspaceFS.forAgent({ userId: session.userId });
+      const { getWorkspaceChanges } = await import('@/core/session-changes');
+      return getWorkspaceChanges(fs.root);
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: { tags: ['sessions'] },
+    }
+  )
+
+  // Before/after text for one changed path. `path` is validated through
+  // WorkspaceFS.resolve (containment + null-byte rejection) before it reaches git.
+  .get(
+    '/:id/changes/diff',
+    async ({ user, principal, params, query, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const session = await scopedRepos(principal).sessions.findById(params.id);
+      if (!session) {
+        set.status = 404;
+        return { error: 'Session not found' };
+      }
+      if (!query.path) {
+        set.status = 400;
+        return { error: 'Missing required query param: path' };
+      }
+      const fs = WorkspaceFS.forAgent({ userId: session.userId });
+      let absPath: string;
+      try {
+        absPath = fs.resolve(query.path);
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+      const { getWorkspaceChangeDiff } = await import('@/core/session-changes');
+      return getWorkspaceChangeDiff(fs.root, absPath);
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: t.Object({ path: t.Optional(t.String()) }),
+      detail: { tags: ['sessions'] },
+    }
+  )
+
   // Complete session
   .post(
     '/:id/complete',

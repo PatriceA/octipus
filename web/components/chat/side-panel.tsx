@@ -8,12 +8,14 @@ import {
   Clock,
   Coins,
   FileText,
+  GitCompare,
   Layers,
   Settings2,
 } from 'lucide-react';
 import { useState } from 'react';
 import SwarmTree, { type SwarmTreeEvent } from '@/components/swarm-tree';
 import { cn } from '@/lib/utils';
+import ChangesTab from './changes-tab';
 
 // --- Types ---
 
@@ -323,6 +325,12 @@ export default function SidePanel({
             })}
           </ul>
         )}
+      </CollapsibleSection>
+
+      {/* Git-backed review of what the agent changed in the workspace. Lazy —
+          the section only fetches when expanded (ChangesTab mounts on open). */}
+      <CollapsibleSection title="changes" icon={GitCompare} defaultOpen={false}>
+        <ChangesTab sessionId={swarmSessionId} />
       </CollapsibleSection>
 
       {/* Section 3: Swarm Tree (replaces the old Agent Activity section) */}

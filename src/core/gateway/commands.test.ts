@@ -58,6 +58,27 @@ describe('CommandRegistry', () => {
     expect(result!.text).toContain('Available commands');
   });
 
+  test('/changes on a non-git workspace reports not-a-repo', async () => {
+    // A real user id maps to a per-user workspace that doesn't exist on disk in
+    // the test env, so it is never a git repo — deterministic not-a-repo path.
+    const result = await registry.execute('/changes', {
+      userId: 'user-without-workspace',
+      clientType: 'tui',
+      trustLevel: 'user',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('Not a git repository');
+  });
+
+  test('/changes is listed in /help', async () => {
+    const result = await registry.execute('/help', {
+      userId: 'user1',
+      clientType: 'tui',
+      trustLevel: 'user',
+    });
+    expect(result!.text).toContain('/changes');
+  });
+
   test('alias /? works for /help', async () => {
     const result = await registry.execute('/?', {
       userId: 'user1',
