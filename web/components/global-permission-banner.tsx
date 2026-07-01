@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, ChevronDown, ChevronUp, Clock, Shield, Square, XCircle } from 'lucide-react';
+import { CheckCircle, ChevronDown, ChevronUp, Clock, ListChecks, Shield, Square, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { type ApprovalRequest, type PermissionRequest, usePermissions } from '@/lib/permission-context';
 
@@ -15,6 +15,7 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
   } = usePermissions();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showQueue, setShowQueue] = useState(false);
 
   // Show most recent permission or approval
   const latestPermission = permissions.length > 0 ? permissions[permissions.length - 1] : null;
@@ -33,6 +34,61 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
   return (
     <div className={inline ? 'pointer-events-none' : 'fixed bottom-0 left-0 right-0 z-50 pointer-events-none'}>
       <div className="pointer-events-auto animate-slide-up">
+        {/* Queue control — when more than one request is pending, let the user
+            review the whole queue and batch-allow permission requests instead
+            of accepting the active one blind to see what's behind it. */}
+        {totalCount > 1 && (
+          <div className="mx-4 mb-2 rounded-xs border border-outline-variant/60 bg-surface-container overflow-hidden font-mono">
+            <div className="flex items-center justify-between gap-2 px-4 py-2">
+              <button
+                onClick={() => setShowQueue((v) => !v)}
+                className="flex items-center gap-2 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
+              >
+                <ListChecks className="w-3.5 h-3.5" />
+                <span className="uppercase tracking-[0.12em] font-bold">{totalCount} pending</span>
+                {showQueue ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+              </button>
+              {permissions.length > 1 && (
+                <button
+                  onClick={() => permissions.forEach((p) => approvePermission(p.requestId))}
+                  className="text-xs px-2 py-1 rounded-xs border border-primary/50 text-primary hover:bg-primary-container/40 cursor-pointer"
+                >
+                  Allow all {permissions.length}
+                </button>
+              )}
+            </div>
+            {showQueue && (
+              <ul className="border-t border-outline-variant/40 divide-y divide-outline-variant/30 max-h-48 overflow-y-auto">
+                {permissions.map((p) => (
+                  <li key={p.requestId} className="flex items-center justify-between gap-2 px-4 py-1.5 text-xs">
+                    <span className="truncate text-on-surface-variant">
+                      <span className="font-medium">{p.skillId}</span>
+                      {' · '}
+                      {p.action}
+                    </span>
+                    <span className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => approvePermission(p.requestId)} className="text-primary hover:opacity-80 cursor-pointer" title="Allow">
+                        <CheckCircle className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => denyPermission(p.requestId)} className="text-error hover:opacity-80 cursor-pointer" title="Deny">
+                        <XCircle className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  </li>
+                ))}
+                {approvals.map((a) => (
+                  <li key={a.requestId} className="flex items-center justify-between gap-2 px-4 py-1.5 text-xs">
+                    <span className="truncate text-on-surface-variant">{a.summary || a.question}</span>
+                    <button onClick={() => denyApproval(a.requestId)} className="text-error hover:opacity-80 cursor-pointer shrink-0" title="Dismiss">
+                      <XCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {/* Show approval banner if one is pending (approvals take priority) */}
         {latestApproval && (
           <ApprovalBanner
