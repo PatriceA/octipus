@@ -13,6 +13,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { formatChangesMessage } from './changes-render';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
 import { MessagesPane } from './components/messages-pane';
@@ -262,6 +263,13 @@ export class OctipusTuiApp {
           this.cumulative = { tokens: 0, cost: 0, turns: 0 };
           this.status.setStats(this.cumulative);
           this.pushMessage('system', 'Chat cleared.');
+          return;
+        }
+        // Render the workspace changes list / file diff as a monospace code
+        // fence rather than a wrapped `/changes: …` system line.
+        if (event.name === 'changes' && !event.error && typeof event.result === 'string') {
+          const { role, content } = formatChangesMessage(event.result);
+          this.pushMessage(role, content);
           return;
         }
         const content = event.error || (typeof event.result === 'string' ? event.result : JSON.stringify(event.result));

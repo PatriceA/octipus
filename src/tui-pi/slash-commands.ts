@@ -43,6 +43,8 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   gw({ name: 'clear',     description: 'Reset orchestrator context and clear the chat',     aliases: ['cls', 'reset'] }),
   gw({ name: 'cost',      description: 'Show cumulative token usage and cost' }),
   gw({ name: 'diff',      description: 'Show git diff for workspace changes' }),
+  gw({ name: 'changes',   description: 'Review workspace changes — list, or a file diff',
+       argumentHint: '[file]' }),
   gw({ name: 'reload',    description: 'Re-discover and reload user extensions',             aliases: ['reload-extensions'] }),
   gw({ name: 'version',   description: 'Show Octipus version and build info',                aliases: ['v'] }),
 ];
