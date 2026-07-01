@@ -26,8 +26,9 @@ import {
   ChildTimeoutError,
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
-import { getLevelDefault } from './swarm/types';
 import { ToolExecutor } from './tool-executor';
+import { DetachedChildManager } from './agent-worker/detached-child-manager';
+import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import type { AgentMessage, ToolCall } from './types';
 
 // Re-export types for backward compatibility
@@ -44,50 +45,8 @@ export class AgentWorker extends BaseAgentWorker {
   private toolShimAttemptedIteration: number = -1;
   /** Log the unbound-translator skip only once per agent. */
   private toolShimUnboundLogged: boolean = false;
-  /** Track consecutive identical tool calls (same name + args) to detect loops */
-  private lastToolCallSignature: string = '';
-  private consecutiveRepeatCount: number = 0;
-  private static MAX_CONSECUTIVE_REPEATS = 3;
-
-  /** Track consecutive same-tool-name calls regardless of args — catches chatty LLMs looping on send_status_update with slightly different messages */
-  private lastToolNames: string = '';
-  private consecutiveSameNameCount: number = 0;
-  /**
-   * After this many consecutive iterations on the same tool-name signature,
-   * tools get disabled and the model is forced to a plain-text reply. The
-   * threshold has to be high enough to survive normal doer workflows
-   * (read 8 files → write 5 files often hits the same name pattern across
-   * 3-4 iterations) and low enough to still catch genuine spam loops on
-   * status/notification tools. 5 is the empirical sweet spot.
-   */
-  private static MAX_SAME_NAME_REPEATS = 5;
-  /**
-   * Tools that are LEGITIMATELY called many times in a row. The same-tool-
-   * name guard is meant to catch chatty status-report / notification loops
-   * (`send_status_update` spinning with slightly different progress
-   * messages), NOT productive work like reading or writing files. Anything
-   * that produces real side effects / new state belongs here.
-   *
-   * Matching is exact-name AND by namespace prefix (`filesystem__`,
-   * `shell__`, `git__`, `web_`, `code__`) — see callsAllowList below.
-   * Status / notification tools stay off this list so the guard still
-   * catches them.
-   */
-  private static REPEAT_ALLOWED_TOOLS = new Set<string>([
-    'spawn_child',
-    'collect_children',
-    'create_pipeline',
-    'list_pipeline_templates',
-    'request_user_approval',
-  ]);
-  /**
-   * Namespace prefixes (matched via tc.name.startsWith) for tools that
-   * always count as productive work — file I/O, shell, git, web fetches,
-   * code edits. The doer roles (coding, design, devops) routinely chain
-   * many of these in sequence and tripping the same-name guard wastes
-   * their progress.
-   */
-  private static REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'code__', 'search_'];
+  /** Tool-call loop/spam detection (same-args + same-name state machines). */
+  private loopDetector = new ToolLoopDetector();
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
@@ -124,135 +83,35 @@ export class AgentWorker extends BaseAgentWorker {
 
   /**
    * Detached subagents spawned by this worker that have not yet been
-   * picked up via `collect_children` (or auto-collect). Key is the
-   * childHandle issued by `createSpawnChildTool`.
+   * picked up via `collect_children` (or auto-collect). Delegated to the
+   * DetachedChildManager; the public API below stays identical.
    */
-  private pendingDetached: Map<string, PendingChild> = new Map();
-  private collectedDetached: Map<string, ChildResult> = new Map();
+  private detached = new DetachedChildManager(
+    this.context.id,
+    () => this.config.timeout,
+    (ms) => this.addPausedMs(ms),
+  );
 
   registerPendingChild(pc: PendingChild): void {
-    this.pendingDetached.set(pc.childId, pc);
-    // Settle eagerly into collectedDetached so auto-collect and ad-hoc
-    // collect_children calls can both find results without racing on the
-    // shared promise. We keep the entry in pendingDetached until the LLM
-    // (or framework) explicitly collects — that's what drives the cap.
-    pc.promise.then(
-      (result) => { this.collectedDetached.set(pc.childId, result); },
-      (err) => {
-        const failMsg = (err as Error)?.message || 'detached spawn threw';
-        this.collectedDetached.set(pc.childId, {
-          nodeId: pc.childId,
-          kind: 'subagent',
-          status: 'tool_error',
-          output: null,
-          usedTokens: 0,
-          durationMs: Date.now() - pc.startedAt,
-          spawnedChildren: [],
-          notes: failMsg,
-        });
-      },
-    );
+    this.detached.registerPendingChild(pc);
   }
 
   pendingDetachedCount(): number {
-    return this.pendingDetached.size;
+    return this.detached.count();
   }
 
   listPendingDetached(): PendingChild[] {
-    return [...this.pendingDetached.values()];
+    return this.detached.list();
   }
 
   /** Mark a pending child as collected. Returns its result (awaiting if needed). */
   async collectDetached(childId: string, timeoutMs: number): Promise<ChildResult | null> {
-    const pc = this.pendingDetached.get(childId);
-    if (!pc) return null;
-    const settled = this.collectedDetached.get(childId);
-    if (settled) {
-      this.pendingDetached.delete(childId);
-      return settled;
-    }
-    try {
-      const result = await Promise.race([
-        pc.promise,
-        new Promise<ChildResult>((_, reject) =>
-          setTimeout(() => reject(new Error(`collect_children timeout after ${timeoutMs}ms`)), timeoutMs),
-        ),
-      ]);
-      this.pendingDetached.delete(childId);
-      return result;
-    } catch (err) {
-      // Leave it in pending for a later retry; surface failure as a result
-      // object so the LLM keeps going instead of throwing.
-      return {
-        nodeId: childId,
-        kind: 'subagent',
-        status: 'timeout',
-        output: null,
-        usedTokens: 0,
-        durationMs: Date.now() - pc.startedAt,
-        spawnedChildren: [],
-        notes: (err as Error).message,
-      };
-    }
-  }
-
-  /**
-   * Timeout for the final auto-collect (the forget-to-collect safety net).
-   *
-   * A detached child can legitimately run up to its OWN wall budget
-   * (`getLevelDefault(1).wallMs` — 10 min by default; children of both the
-   * orchestrator and a depth-1 agent are bounded by the depth-1 cap or lower).
-   * The old formula clamped this to 60s, so a normal multi-minute research
-   * child was reported `timeout`/`null` and its completed work was silently
-   * dropped. Wait up to the child wall (+small margin) so a child that is about
-   * to finish isn't cut off — the child self-terminates at its own wall — but
-   * never longer than the parent's own wall.
-   */
-  private computeAutoCollectTimeoutMs(): number {
-    const childWall = getLevelDefault(1).wallMs;
-    const wall = this.config.timeout > 0 ? this.config.timeout : childWall;
-    return Math.max(10_000, Math.min(childWall + 5_000, wall));
-  }
-
-  /** Cancel all pending detached children. Fire-and-forget — call on worker fail/abort. */
-  private cancelAllDetached(reason: string): void {
-    if (this.pendingDetached.size === 0) return;
-    agentLogger.warn(
-      { agentId: this.context.id, pending: this.pendingDetached.size, reason },
-      'Cancelling pending detached children (parent worker terminating)',
-    );
-    for (const [, pc] of this.pendingDetached) {
-      // The detached promise is already in flight inside the spawner; we
-      // don't have a direct AbortController handle for each child. The
-      // parent's AbortController (this.abortController) has already been
-      // aborted by the fail/abort path — children that listen to the
-      // parent signal (set in spawner.ts parentSignal) will tear down.
-      // Emit a breadcrumb so ops can see the cascade in logs.
-      coreLogger.info({ childId: pc.childId, startedAt: pc.startedAt }, 'detached child cancel-cascade');
-    }
-    this.pendingDetached.clear();
+    return this.detached.collect(childId, timeoutMs);
   }
 
   /** Collect every still-pending detached child. Used by collect_children and auto-collect. */
   async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
-    const entries = [...this.pendingDetached.entries()];
-    if (entries.length === 0) return [];
-    // Time spent BLOCKED waiting on detached children must not count against
-    // the parent's own wall clock — this mirrors the await path's
-    // `onDelegationPause` (tool-executor). Without it, a detaching orchestrator
-    // is penalized for time its children spent working (elapsed() keeps
-    // ticking between spawn and collect), which can trip its own timeout and
-    // discard the very results it waited for. Children that already settled
-    // resolve instantly, so the paused amount ≈ the real blocking wait.
-    const waitStart = Date.now();
-    const results = await Promise.all(
-      entries.map(async ([childId]) => {
-        const r = await this.collectDetached(childId, timeoutMs);
-        return r;
-      }),
-    );
-    this.addPausedMs(Date.now() - waitStart);
-    return results.filter((r): r is ChildResult => r !== null);
+    return this.detached.collectAll(timeoutMs);
   }
 
   /** Milliseconds of *active* work since agent start (excludes child-wait time). */
@@ -407,10 +266,10 @@ export class AgentWorker extends BaseAgentWorker {
       // synthesize with them. If that synthesis turn doesn't produce a
       // meaningful output we fall back to `result`.
       let finalResult = result;
-      if (this.pendingDetached.size > 0) {
-        const autoTimeoutMs = this.computeAutoCollectTimeoutMs();
+      if (this.detached.count() > 0) {
+        const autoTimeoutMs = this.detached.computeAutoCollectTimeoutMs();
         agentLogger.warn(
-          { agentId: this.context.id, pending: this.pendingDetached.size, autoTimeoutMs },
+          { agentId: this.context.id, pending: this.detached.count(), autoTimeoutMs },
           'Auto-collecting forgotten detached children before finalizing',
         );
         const collected = await this.collectAllDetached(autoTimeoutMs);
@@ -515,7 +374,7 @@ export class AgentWorker extends BaseAgentWorker {
       // clear the pending map so the Promise references drop and the
       // orphan reaper can flip any `running` rows to `cancelled`.
       this.abortController.abort((error as Error).message || 'parent failed');
-      this.cancelAllDetached((error as Error).message || 'parent failed');
+      this.detached.cancelAll((error as Error).message || 'parent failed');
 
       const failDurationMs = Date.now() - this.startTime;
       const logFn = wasStopped ? agentLogger.info : agentLogger.error;
@@ -615,12 +474,13 @@ export class AgentWorker extends BaseAgentWorker {
       // turns without calling collect_children, inject a reminder. Cheap
       // way to prevent the 22h-shell anti-pattern: agents forgetting the
       // side tasks they kicked off.
-      if (this.pendingDetached.size > 0 && this.iteration > 0 && this.iteration % 5 === 0) {
-        const list = [...this.pendingDetached.values()]
+      if (this.detached.count() > 0 && this.iteration > 0 && this.iteration % 5 === 0) {
+        const pending = this.detached.list();
+        const list = pending
           .map((pc) => `${pc.childId} (topic: ${pc.topic}${pc.subtopic ? '/' + pc.subtopic : ''}, running ${Math.round((Date.now() - pc.startedAt) / 1000)}s)`)
           .join('; ');
         this.addSystemMessage(
-          `Reminder: ${this.pendingDetached.size} detached subagent${this.pendingDetached.size > 1 ? 's are' : ' is'} still running — ${list}. ` +
+          `Reminder: ${pending.length} detached subagent${pending.length > 1 ? 's are' : ' is'} still running — ${list}. ` +
             `Call \`collect_children\` before your final answer so you can synthesize with their results.`,
         );
       }
@@ -867,71 +727,47 @@ export class AgentWorker extends BaseAgentWorker {
         }
 
         // Detect repetitive tool call loops (same tool + same args N times in a row)
-        const callSignature = completion.toolCalls
-          .map(tc => `${tc.name}:${JSON.stringify(tc.arguments)}`)
-          .join('|');
-        if (callSignature === this.lastToolCallSignature) {
-          this.consecutiveRepeatCount++;
-          if (this.consecutiveRepeatCount >= AgentWorker.MAX_CONSECUTIVE_REPEATS) {
-            agentLogger.warn({
-              agentId: this.context.id, sessionId: this.context.sessionId,
-              iteration: this.iteration, tools: toolNames,
-              repeats: this.consecutiveRepeatCount,
-            }, 'Repetitive tool call loop detected, forcing completion');
-            // Close out the dangling assistant tool_calls with synthetic tool
-            // responses — strict providers (DeepSeek) 400 on orphan tool_calls.
-            this.appendSyntheticToolResults(completion.toolCalls, '[loop detected: tools not executed]');
-            // Inject a nudge to stop looping and return a final response
-            this.messages.push({
-              role: 'user' as const,
-              content: '[SYSTEM] You have called the same tool multiple times with identical arguments. The task appears complete. Stop calling tools and provide your final text response now.',
-              timestamp: new Date(),
-            });
-            continue;
-          }
-        } else {
-          this.lastToolCallSignature = callSignature;
-          this.consecutiveRepeatCount = 1;
+        const repeat = this.loopDetector.checkRepeat(completion.toolCalls);
+        if (repeat.tripped) {
+          agentLogger.warn({
+            agentId: this.context.id, sessionId: this.context.sessionId,
+            iteration: this.iteration, tools: toolNames,
+            repeats: repeat.repeats,
+          }, 'Repetitive tool call loop detected, forcing completion');
+          // Close out the dangling assistant tool_calls with synthetic tool
+          // responses — strict providers (DeepSeek) 400 on orphan tool_calls.
+          this.appendSyntheticToolResults(completion.toolCalls, '[loop detected: tools not executed]');
+          // Inject a nudge to stop looping and return a final response
+          this.messages.push({
+            role: 'user' as const,
+            content: '[SYSTEM] You have called the same tool multiple times with identical arguments. The task appears complete. Stop calling tools and provide your final text response now.',
+            timestamp: new Date(),
+          });
+          continue;
         }
 
         // Detect same-tool-name spam (different args each time, same name).
         // Catches chatty LLMs that spin on send_status_update with varying
         // messages — the per-signature loop above misses them because args
         // differ every call.
-        const toolNameSignature = [...completion.toolCalls].map(tc => tc.name).sort().join(',');
-        // Skip the guard entirely when every tool call this iteration is
-        // productive work (orchestrator meta-tools, filesystem/shell/git/web/
-        // code namespaces). Reading 8 files in sequence then writing 5 is a
-        // designer/coder doing their job — the guard is meant for notification
-        // spam (send_status_update with slightly varying progress text), not
-        // genuine file I/O bursts.
-        const callsAllowList = completion.toolCalls.every(tc =>
-          AgentWorker.REPEAT_ALLOWED_TOOLS.has(tc.name)
-          || AgentWorker.REPEAT_ALLOWED_PREFIXES.some(p => tc.name.startsWith(p)),
-        );
-        if (!callsAllowList && toolNameSignature === this.lastToolNames) {
-          this.consecutiveSameNameCount++;
-          if (this.consecutiveSameNameCount >= AgentWorker.MAX_SAME_NAME_REPEATS) {
-            agentLogger.warn({
-              agentId: this.context.id, toolNames: toolNameSignature,
-              repeats: this.consecutiveSameNameCount,
-            }, 'Same tool name called repeatedly — disabling tools, forcing plain-text reply');
-            this.toolExecutor.disableTools();
-            // Close out the dangling assistant tool_calls with synthetic tool
-            // responses — strict providers (DeepSeek) 400 on orphan tool_calls.
-            this.appendSyntheticToolResults(completion.toolCalls, '[spam detected: tools disabled]');
-            this.messages.push({
-              role: 'user' as const,
-              content:
-                `[SYSTEM] You have called \`${toolNameSignature}\` multiple times. ` +
-                `Tools are now disabled. Respond to the user with plain text using the information you already have.`,
-              timestamp: new Date(),
-            });
-            continue;
-          }
-        } else {
-          this.lastToolNames = toolNameSignature;
-          this.consecutiveSameNameCount = 1;
+        const sameName = this.loopDetector.checkSameName(completion.toolCalls);
+        if (sameName.tripped) {
+          agentLogger.warn({
+            agentId: this.context.id, toolNames: sameName.signature,
+            repeats: sameName.repeats,
+          }, 'Same tool name called repeatedly — disabling tools, forcing plain-text reply');
+          this.toolExecutor.disableTools();
+          // Close out the dangling assistant tool_calls with synthetic tool
+          // responses — strict providers (DeepSeek) 400 on orphan tool_calls.
+          this.appendSyntheticToolResults(completion.toolCalls, '[spam detected: tools disabled]');
+          this.messages.push({
+            role: 'user' as const,
+            content:
+              `[SYSTEM] You have called \`${sameName.signature}\` multiple times. ` +
+              `Tools are now disabled. Respond to the user with plain text using the information you already have.`,
+            timestamp: new Date(),
+          });
+          continue;
         }
 
         agentLogger.info({
