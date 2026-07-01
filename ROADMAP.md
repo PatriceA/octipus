@@ -48,27 +48,12 @@ This doc lists what we are exploring. Order inside each section is rough priorit
     The messages pane already exposes `scrollUp/scrollDown`;
     wiring is a one-line change.
 
-- **Extension SDK — user-authored TypeScript hooks.** `.octipus/extensions/`
-  auto-discovery + a narrow `ExtensionAPI` (`registerTool`, `registerCommand`,
-  event subscriptions, `ctx.ui.confirm/select/notify`) on top of the existing
-  `event-bus.ts` + permission system. Hot-reload via `/reload`. Ports the
-  pi-mono examples-driven model — patterns like `permission-gate`,
-  `protected-paths`, `git-checkpoint` map directly onto our security surface.
-  Lets users extend octipus without core PRs.
-
-- **Skills — agentskills.io spec alignment.** Today `skills` table + custom
-  format. Next: scan `~/.claude/skills`, `~/.pi/agent/skills`, `.agents/skills`
-  with recursive `SKILL.md` discovery and frontmatter parsing per
-  [agentskills.io](https://agentskills.io/specification). Settings array
-  for extra dirs. Buys interop with the claude-code / pi / codex skill
-  ecosystems for free; existing seeded skills stay valid.
-
-- **Compaction — structured summary + branch summarization.** Anti-thrashing
-  `session-compaction.ts` already decides *when*. Next: harden *what* — adopt
-  pi's structured summary format (cumulative file-op tracker, iterative
-  summary chaining via `firstKeptEntryId` walk-back, `/compact <instructions>`
-  pass-through) and add branch summarization for `/tree`-style navigation.
-  Builds on the existing `CompactionState`; new `compaction_entries` table.
+- **Compaction — branch summarization.** The structured summary format
+  (cumulative file-op tracker, iterative summary chaining via
+  `firstKeptEntryId` walk-back, `/compact <instructions>` pass-through) shipped
+  on the existing `CompactionState` + `compaction_entries` table. Still open:
+  branch summarization for `/tree`-style navigation (paired with the
+  session-as-tree item under **Later**).
 
 - **RPC stdio adapter for the gateway.** Today gateway is WS-only. Add a
   second `GatewayAdapter` that speaks strict-LF JSONL over stdin/stdout with

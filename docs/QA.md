@@ -1449,6 +1449,146 @@ these steps to confirm the cause and prove the fix.
 
 ---
 
+## 10. Topics page — per-topic model roles (2026-06)
+
+The Topics page is the single source of truth for topic↔model binding
+(`model_config.topicRoles`). Each canonical topic exposes three model roles:
+**primary** (the model resolved for the topic), **backup** (fallback used on
+primary failure/failover), and **executor** (a per-topic execution override
+stored as topic-config extras alongside `temperature` / `maxTokens`). All
+writes are **admin-only**.
+
+**Prereqs:**
+- At least two enabled chat models in **Settings → Models**.
+- Signed in as an admin (the binding/config routes return `403` otherwise).
+
+### 10.1 Primary model binding
+
+1. `GET /api/topics` → **expect** a `topics[]` array, each entry carrying
+   `value`, `label`, `primaryModel`, `backupModel`, `executorModel`,
+   `temperature`, `maxTokens`.
+2. In the UI (or `PUT /api/topics/coding/binding { primaryModel: "<modelA>" }`),
+   set a primary for topic `coding`. **Expect** `200` and the topic's
+   `primaryModel` now reads `<modelA>`.
+3. Verify persistence: `SELECT name, topic_roles FROM model_config WHERE
+   name = '<modelA>'` → **expect** `{"coding":"primary"}` in `topic_roles`.
+4. Send a `coding` message; **expect** the worker resolves to `<modelA>`
+   (`getModelForTopic('coding')`), visible in the run's model attribution.
+
+### 10.2 Backup (fallback) model
+
+1. Set a backup: `PUT /api/topics/coding/binding { primaryModel: "<modelA>",
+   backupModel: "<modelB>" }`. **Expect** the topic's `backupModel` = `<modelB>`
+   and `model_config.topic_roles` for `<modelB>` shows `{"coding":"backup"}`.
+2. Bind a **non-existent** model name → **expect** `400 Unknown model: <name>`
+   (no partial write).
+3. **Failover:** disable or make `<modelA>` unreachable, then send a `coding`
+   message. **Expect** resolution falls through to `<modelB>` rather than
+   erroring — confirm in model attribution / logs.
+4. Clear a role by binding `null` (`{ backupModel: null }`) → **expect**
+   `backupModel` back to `null` and the role removed from `topic_roles`.
+
+### 10.3 Executor model + extras
+
+1. `PATCH /api/topics/coding/config { executorModel: "<modelC>",
+   temperature: 0.2, maxTokens: 4096 }` → **expect** `200` echoing the
+   resolved config.
+2. **True PATCH semantics:** re-send `{ temperature: 0.5 }` only. **Expect**
+   `executorModel` and `maxTokens` **unchanged**, `temperature` now `0.5`
+   (omitted fields keep their value; a present `null` clears).
+3. `GET /api/topics` → **expect** the `coding` row reflects
+   `executorModel/temperature/maxTokens`.
+4. Non-admin `PATCH` → **expect** `403`; unknown topic → **expect** `404`.
+
+### 10.4 Assign-all
+
+1. `POST /api/topics/assign-all { model: "<modelA>" }` (bulk-bind a model as
+   primary across topics). **Expect** every canonical topic that had no
+   primary now resolves to `<modelA>`; already-bound topics are respected per
+   the route's rules. Confirm via `GET /api/topics`.
+
+## 11. Session changes review — `/changes` (2026-07)
+
+Session changes are **git-backed**: `getWorkspaceChanges` diffs the session's
+workspace against git, so every file an agent touched during the session is
+surfaced (no stored manifest). Statuses: `added` / `modified` / `deleted` /
+`renamed` / `untracked`. Exposed via `GET /api/sessions/:id/changes` (+
+`/changes/diff`), the web **Changes** tab, and the `/changes` command in web
+chat + TUI.
+
+**Prereqs:** a session whose workspace is a git repo; run an agent turn that
+edits/creates at least one file.
+
+### 11.1 Session changes — web
+
+1. After an agent edits a file, open the session's **Changes** tab. **Expect**
+   the touched file listed with the right status badge (e.g. `modified`), and
+   `untracked` for a freshly-created, unstaged file.
+2. Click a file → **expect** its diff renders (from
+   `GET /api/sessions/:id/changes/diff?file=<path>`).
+3. `GET /api/sessions/:id/changes` directly → **expect** a
+   `{ branch, changes: SessionChange[] }` shape with one entry per touched
+   file. Delete a file via the agent and re-fetch → **expect** status
+   `deleted`.
+4. **Isolation:** a file edited outside the session's workspace must **not**
+   appear (scope is the session workspace, not the whole disk).
+
+### 11.2 `/changes` — TUI
+
+1. In `octi tui`, run `/changes` after an editing turn. **Expect** a fenced
+   summary headed `Changes on <branch>:` (or `Changes:` when detached),
+   listing each file + status — rendered as a code fence, not a wrapped
+   `/changes: …` system line (see `app.ts` handling).
+2. `/changes <path>` → **expect** the unified diff for that one file.
+3. On a clean workspace (no edits) → **expect** an empty/"no changes"
+   result, not an error.
+4. In a **non-git** workspace → **expect** a graceful
+   `Failed to read changes: …` message (loud, not a crash).
+
+## 12. Agent detachments (2026-07)
+
+Detached subagents let a parent (orchestrator at depth 0, or an agent) spawn a
+child with `spawn_child mode: "detach"` and keep working, collecting the result
+later via `collect_children` — instead of blocking on `await`. Tracking lives
+in `DetachedChildManager` (`registerPendingChild` / `collect` / `collectAll` /
+`cancelAll`). Default budget: `maxPendingDetached = 6` per level.
+
+**Prereqs:** swarm enabled; orchestrator model bound; a task that fans out to
+≥1 long-running child (e.g. "research X and Y in parallel, then summarize").
+
+### 12.1 Detach + collect happy path
+
+1. Trigger a turn where the orchestrator spawns a detached child. **Expect**
+   a `swarm.node_spawned` event and the parent continuing (narration / further
+   tool calls) rather than blocking.
+2. **Expect** the parent later issues `collect_children` and the child's
+   result is folded into the final answer — the detailed child output is
+   **not dropped** (this is the regression PR #167-era work guards against;
+   `maxPendingDetached` must be > 0).
+3. Verify `SELECT status FROM swarm_nodes WHERE root_session = '<id>'` → the
+   detached child reaches a terminal `completed` status.
+
+### 12.2 Auto-collect at turn end
+
+1. Spawn a detached child but craft the turn so the parent finishes **without**
+   an explicit `collect_children`. **Expect** the pending child is
+   auto-collected before the turn returns (bounded by
+   `computeAutoCollectTimeoutMs`), not silently abandoned.
+2. **Budget accounting:** confirm time spent waiting on collection is excluded
+   from the parent's `elapsed()` (paused-ms accounting) and child token spend
+   is reflected in the shared pool — the swarm wall-clock stays the canonical
+   600 s/level.
+
+### 12.3 Cap + cancel
+
+1. Drive the parent to exceed `maxPendingDetached` (6) pending children.
+   **Expect** the 7th detach is denied/queued per the spawn guard, not a crash.
+2. Cancel the session mid-run (or hit a hard error). **Expect**
+   `cancelAll` fires — every pending detached child is aborted, no orphaned
+   workers keep running (check `swarm_nodes` for a terminal cancelled state).
+
+---
+
 ## Reporting issues
 
 If any step here doesn't behave as described:
