@@ -481,7 +481,7 @@ export class OrchestratorService {
       }
 
       if (classification.type === 'approval') {
-        const resolved = this.approvalManager.tryResolveFromMessage(message);
+        const resolved = this.approvalManager.tryResolveFromMessage(message, userId);
         if (resolved) {
           return { response: 'Got it, continuing...', sessionId: resolvedSessionId, classification };
         }

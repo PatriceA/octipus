@@ -7,6 +7,29 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Core file refactor (2026-07-01, PR #167)
+
+- **Programmer-visible:** Split the four largest logic-heavy files
+  (`api/routes/models.ts`, `core/orchestrator/service.ts`, `core/swarm/spawner.ts`,
+  `core/agent-worker.ts`) into focused sibling modules — routes now delegate to
+  a `src/services/` layer, and swarm budget/validation/cache plus the
+  detached-child manager and tool-loop detector are their own units. No
+  behavior change; every public API and import surface preserved.
+
+### Session changes review — `/changes` (2026-07-01)
+
+- **User-visible:** Review the file changes an agent made during a session. A
+  git-backed `/changes` view surfaces every touched file, with a new web
+  **Changes** tab and the same set rendered in the TUI client.
+
+### Orchestrator detach — activated + hardened (2026-07-01)
+
+- **Operator-visible:** Detached subagents are now collected by default
+  (`maxPendingDetached` 0 → 6) instead of being discarded in await-mode, so
+  long-running child results actually land. Swarm budget accounting reconciled:
+  canonical wall-clock is 600 s (10 min) per level, and child spend feeds the
+  shared pool.
+
 ### QA batch — end-user surfaces (2026-06-10)
 
 Findings from the 2026-06-10 QA pass, delivered as nine focused branches

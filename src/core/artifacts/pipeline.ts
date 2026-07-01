@@ -8,7 +8,7 @@
  *
  * Errors in one transform do not poison the whole bus — the failing entry
  * is set to `null` and an error message is collected in the returned
- * `errors` map. Loud failure (CLAUDE.md house rule #1) is preserved via
+ * `errors` map. Loud failure (AGENT.md house rule #1) is preserved via
  * the structured log line per failed transform.
  */
 

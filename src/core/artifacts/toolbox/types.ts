@@ -81,7 +81,7 @@ export interface ToolboxTool<P = Record<string, unknown>, R = unknown> {
   /**
    * Execute the tool. Implementations MUST throw on bad input; the registry
    * does basic shape checking via `params` but tools are responsible for
-   * semantic validation. No silent fallbacks (CLAUDE.md house rule #1).
+   * semantic validation. No silent fallbacks (AGENT.md house rule #1).
    */
   execute(params: P, ctx: ToolboxContext, agentCtx?: AgentContext): Promise<R>;
 }

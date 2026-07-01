@@ -962,7 +962,7 @@ export downloads, share links, real-time push, deletion, and cleanup.
    default permission `ASK`, at least one worked example, tips.
 5. *"describe art_widget_nope"* → 4xx-style error surfaced as
    `unknown tool — try art_toolbox_search`. Loud failure on missing
-   id (CLAUDE.md house rule #1).
+   id (AGENT.md house rule #1).
 
 ### D. Validator gate (no artifact written)
 

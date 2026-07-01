@@ -125,6 +125,26 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Done (recent)
 
+### 2026-07-01 — Refactor + changes review + roadmap sweep
+
+- **Core file refactor (PR #167).** Split the four largest logic-heavy files
+  into focused modules — routes delegate to a `src/services/` layer; swarm
+  budget/validation/cache, the detached-child manager, and the tool-loop
+  detector are their own units. Pure refactor, public APIs preserved. See
+  [`CHANGELOG.md`](CHANGELOG.md#core-file-refactor-2026-07-01-pr-167).
+- **Session changes review — `/changes`.** Git-backed view of every file an
+  agent touched in a session, in the web **Changes** tab and the TUI.
+- **Orchestrator detach — activated by default.** `maxPendingDetached` 0 → 6
+  so detached child results land; swarm budget accounting reconciled
+  (600 s/level, child spend into the pool).
+- **Extension SDK shipped** (moved out of Next). `.octipus/extensions/`
+  auto-discovery + `ExtensionAPI` (`registerTool` / `registerCommand` /
+  event subscriptions / `dispose`) on `src/extensions/`. Only `/reload`
+  hot-reload polish may remain.
+- **Skills — agentskills.io spec alignment shipped** (moved out of Next).
+  Recursive `SKILL.md` discovery across `~/.claude/skills`, `~/.pi/agent/skills`,
+  `.agents/skills` via `src/skills/external-loader.ts`; seeded skills stay valid.
+
 ### 2026-06-10 — QA batch (end-user surfaces)
 
 Nine focused branches from the 2026-06-10 QA pass, each independently

@@ -233,7 +233,7 @@ export async function buildPromptFragmentForMessage(opts: DiscoveryOptions): Pro
 
 **What to implement:**
 
-1. Default `SKILL_DISCOVERY_MODE=hybrid` in `.env.example`. Document the flag in `.env.example` comments and in CLAUDE.md if there's a relevant section.
+1. Default `SKILL_DISCOVERY_MODE=hybrid` in `.env.example`. Document the flag in `.env.example` comments and in AGENT.md if there's a relevant section.
 2. Run backfill script in dev → verify embeddings populated for all existing skills.
 3. Pick 3-5 representative messages, spawn workers, capture the injected systemPrompt; compare token count before/after. Record numbers in commit message.
 4. Add observability: include `discoveredSkillCount` in the existing `coreLogger.info('Worker tools resolved', ...)` log line (or adjacent log) so we can monitor skill count per spawn in production.
