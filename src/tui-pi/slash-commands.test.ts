@@ -22,7 +22,7 @@ describe('OCTIPUS_SLASH_COMMANDS', () => {
 
   test('argument hints only set on commands that accept arguments', () => {
     const withHints = OCTIPUS_SLASH_COMMANDS.filter((c) => c.argumentHint !== undefined);
-    const expected = new Set(['project', 'expert', 'compact']);
+    const expected = new Set(['project', 'expert', 'compact', 'changes']);
     for (const cmd of withHints) {
       expect(expected.has(cmd.name)).toBe(true);
     }
