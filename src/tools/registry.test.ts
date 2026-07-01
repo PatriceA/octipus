@@ -84,8 +84,8 @@ describe('ToolRegistry (Unit)', () => {
   });
 
   test('getAllToolHandlers aggregates handlers', async () => {
-    const handler1 = { name: 'h1' };
-    const handler2 = { name: 'h2' };
+    const handler1 = { name: 'h1' } as any;
+    const handler2 = { name: 'h2' } as any;
     const tool1 = createMockTool('t1', [handler1]);
     const tool2 = createMockTool('t2', [handler2]);
     
