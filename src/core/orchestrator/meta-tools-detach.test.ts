@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentWorker } from '@/core/agent-worker';
 import { LEVEL_DEFAULT, type AgentNode, type PendingChild } from '@/core/swarm/types';
+import { swarmConfigSchema } from '@/config/schema';
 import { createMetaTools, type OrchestratorSwarmRefs } from './meta-tools';
 
 /**
@@ -137,5 +138,15 @@ describe('LEVEL_DEFAULT[0] detach budget', () => {
   test('orchestrator has a non-zero maxPendingDetached after the freedom rework', () => {
     expect(LEVEL_DEFAULT[0].maxPendingDetached).toBeGreaterThan(0);
     expect(LEVEL_DEFAULT[0].maxPendingDetached).toBe(LEVEL_DEFAULT[0].fanOut);
+  });
+
+  // Regression: the runtime cap flows through getLevelDefault(0) → the config
+  // schema/defaults, NOT the LEVEL_DEFAULT type above. When the config default
+  // was 0 (while the type said 6), the orchestrator's spawn_child silently fell
+  // into blocking await, collect_children found nothing, and good child results
+  // were discarded. Guard the value the runtime actually reads.
+  test('config schema default gives the orchestrator a non-zero detach cap', () => {
+    const parsed = swarmConfigSchema.parse({});
+    expect(parsed.levelDefaults.orchestrator.maxPendingDetached).toBeGreaterThan(0);
   });
 });

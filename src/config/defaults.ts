@@ -115,7 +115,7 @@ export const defaultConfig: Partial<Config> = {
     perUserSpawnsPerMinute: 30,
     orphanReaperIntervalMs: 600_000,
     levelDefaults: {
-      orchestrator: { tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 0 },
+      orchestrator: { tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 },
       agent: { tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 },
       subagent: { tokens: 30_000, wallMs: 600_000, fanOut: 0, maxPendingDetached: 0 },
     },
