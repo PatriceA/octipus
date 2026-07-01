@@ -1,4 +1,5 @@
 import type { Skill } from '@/db/schema/skills';
+import { logger } from '@/utils/logger';
 import * as yaml from 'js-yaml';
 
 /** Portable skill shape used for export/import — no internal IDs, timestamps, or user refs */
@@ -130,7 +131,9 @@ function parseFrontmatter(md: string): { meta: Record<string, string>; body: str
       }
     }
   } catch (err) {
-    // Silently ignore parse errors to fall back to an empty meta block
+    // Malformed frontmatter → fall back to an empty meta block, but log it
+    // (AGENT.md house rule #1: no silent catches).
+    logger.warn({ err: (err as Error).message }, 'skill frontmatter YAML parse failed — ignoring meta');
   }
 
   return { meta, body };

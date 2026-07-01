@@ -289,9 +289,6 @@ export class SwarmSpawner {
     parent.budget.fanOut.used++;
 
     // ── Permission intersection ─────────────────────────────────────
-    
-    // Proactively check tool availability to avoid cache bypass issues
-    await (await import('@/tools/registry')).getToolRegistry().checkAllAvailability();
     const roleTools = getToolsForRole(childRole);
 
     if (parentContext.userId && parentContext.userId !== 'system' && parentContext.userId !== 'local') {

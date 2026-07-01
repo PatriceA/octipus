@@ -274,9 +274,6 @@ export async function spawnWorker(
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
-  
-  // Proactively check tool availability to avoid cache bypass issues
-  await (await import('@/tools/registry')).getToolRegistry().checkAllAvailability();
   let roleTools = getToolsForRole(agentRole);
 
   if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
