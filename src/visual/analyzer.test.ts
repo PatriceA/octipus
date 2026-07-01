@@ -1,16 +1,17 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import * as modelRegistry from '@/models/model-registry';
 import { VisualAnalyzer } from './analyzer';
-import type { LiteLLMClient } from '../models/litellm-client';
 
-// Mocking the model registry dynamically imported in analyzer.ts
-mock.module('@/models/model-registry', () => ({
-  getModelRegistry: () => ({
-    getModelForTopic: async (topic: string) => {
-      if (topic === 'vision') return { modelId: 'mock-vision-model' };
-      return null;
-    }
-  })
-}));
+// analyzer.ts dynamically imports getModelRegistry to resolve the vision model.
+// Spy the accessor (NOT mock.module, which is process-global in bun and leaks
+// the stub into unrelated suites — see the bun mock.module leak note) so it
+// restores cleanly after this file runs.
+const registrySpy = spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
+  getModelForTopic: async (topic: string) =>
+    topic === 'vision' ? { modelId: 'mock-vision-model' } : null,
+} as unknown as ReturnType<typeof modelRegistry.getModelRegistry>);
+
+afterAll(() => registrySpy.mockRestore());
 
 describe('VisualAnalyzer', () => {
   let mockLlmClient: any;
@@ -38,6 +39,15 @@ describe('VisualAnalyzer', () => {
     expect(mockLlmClient.complete).toHaveBeenCalled();
     const callArgs = mockLlmClient.complete.mock.calls[0][0];
     expect(callArgs.model).toBe('mock-vision-model');
+  });
+
+  test('throws a clear error when no vision model is bound', async () => {
+    // Exercise the real null-guard branch in resolveVisionModel (not the mock's
+    // forced happy path): registry returns no model for the 'vision' topic.
+    registrySpy.mockReturnValueOnce({
+      getModelForTopic: async () => null,
+    } as unknown as ReturnType<typeof modelRegistry.getModelRegistry>);
+    await expect(analyzer.analyze(mockScreenshot)).rejects.toThrow(/No vision model configured/);
   });
 
   test('analyze parses valid JSON response', async () => {

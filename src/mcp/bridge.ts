@@ -146,6 +146,12 @@ export class MCPBridge extends EventEmitter {
       });
 
       transport.onClose(() => {
+        // Ignore a close fired by a connection we've already replaced/removed
+        // (e.g. the reconnect timer closing a stale transport, or a still-alive
+        // child re-firing 'close' on kill). Only the currently-registered
+        // connection may drive status + reconnect — otherwise a stale closure
+        // double-schedules and can kill the freshly-reconnected server.
+        if (this.connections.get(server.id) !== connection) return;
         coreLogger.info({ serverId: server.id }, 'MCP transport closed');
         connection.status = 'disconnected';
         this.emit('disconnected', server.id);
@@ -264,6 +270,8 @@ export class MCPBridge extends EventEmitter {
    * permanently-dead server stops retrying instead of spinning forever.
    */
   private scheduleReconnect(server: MCPServer): void {
+    // Dedup: never let two backoff timers run for the same server.
+    this.clearReconnectTimer(server.id);
     const attempts = this.reconnectAttempts.get(server.id) ?? 0;
     if (attempts >= MCPBridge.MAX_RECONNECT_ATTEMPTS) {
       coreLogger.warn({ serverId: server.id, attempts }, 'MCP server reconnect gave up after max attempts');
@@ -279,12 +287,13 @@ export class MCPBridge extends EventEmitter {
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(server.id);
       if (this.intentionalDisconnects.has(server.id)) return;
-      // Drop the stale connection so connect() doesn't short-circuit on it.
+      // Drop the stale connection FIRST so both connect()'s has-check and the
+      // stale onClose identity-guard see it gone before we close the transport.
       const stale = this.connections.get(server.id);
       if (stale) {
+        this.connections.delete(server.id);
         stale.transport.close();
         stale.protocol.cleanup();
-        this.connections.delete(server.id);
       }
       this.connect(server).catch((err: unknown) => {
         coreLogger.error({ err, serverId: server.id }, 'MCP reconnect attempt failed');

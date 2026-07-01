@@ -74,8 +74,9 @@ export class ApprovalManager {
 
       this.pendingApprovals.set(requestId, approval);
 
-      // Auto-timeout after 1 hour or context specified
-      const timeoutMs = (context.metadata?.approvalTimeoutMs as number) || 3600000;
+      // Auto-timeout after 1 hour unless the context overrides it. Use ?? so an
+      // explicit 0 (schema-valid: immediate/disabled) isn't coerced back to 1h.
+      const timeoutMs = (context.metadata?.approvalTimeoutMs as number) ?? 3600000;
       const timeout = setTimeout(() => {
         if (this.pendingApprovals.has(requestId)) {
           this.pendingApprovals.delete(requestId);

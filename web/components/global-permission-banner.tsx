@@ -20,6 +20,9 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
   // Show most recent permission or approval
   const latestPermission = permissions.length > 0 ? permissions[permissions.length - 1] : null;
   const latestApproval = approvals.length > 0 ? approvals[approvals.length - 1] : null;
+  // The request currently rendered in the active banner (approval wins, else
+  // the latest permission) — excluded from the queue list to avoid showing it twice.
+  const shownId = latestApproval?.requestId ?? latestPermission?.requestId;
 
   // Nothing to show
   if (!latestPermission && !latestApproval) {
@@ -59,7 +62,9 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
             </div>
             {showQueue && (
               <ul className="border-t border-outline-variant/40 divide-y divide-outline-variant/30 max-h-48 overflow-y-auto">
-                {permissions.map((p) => (
+                {/* Exclude the item already shown in the active banner below
+                    (approval takes priority, else the latest permission). */}
+                {permissions.filter((p) => p.requestId !== shownId).map((p) => (
                   <li key={p.requestId} className="flex items-center justify-between gap-2 px-4 py-1.5 text-xs">
                     <span className="truncate text-on-surface-variant">
                       <span className="font-medium">{p.skillId}</span>
@@ -76,7 +81,7 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
                     </span>
                   </li>
                 ))}
-                {approvals.map((a) => (
+                {approvals.filter((a) => a.requestId !== shownId).map((a) => (
                   <li key={a.requestId} className="flex items-center justify-between gap-2 px-4 py-1.5 text-xs">
                     <span className="truncate text-on-surface-variant">{a.summary || a.question}</span>
                     <button onClick={() => denyApproval(a.requestId)} className="text-error hover:opacity-80 cursor-pointer shrink-0" title="Dismiss">
