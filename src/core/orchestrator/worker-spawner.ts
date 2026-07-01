@@ -976,26 +976,43 @@ Use these MCP tools when the task benefits from them — especially for people-r
         coreLogger.error({ err: updateErr, workerId }, 'Failed to update swarm_node on error');
       }
     }
-    return handleWorkerFailure(error as Error, worker, workerId, routing.model, agentRole, roleConfig, roleTools, task, input, context, startTime, deps);
+    return handleWorkerFailure(error as Error, worker, workerId, finalModel, agentRole, roleConfig, task, input, context, startTime, deps, {
+      systemPrompt,
+      tools: workerTools,
+      toolAdvertisement,
+    });
   }
 }
 
 /**
- * Handle worker failure with CLI fallback logic.
+ * What a failure respawn needs to recreate the ORIGINAL worker faithfully:
+ * the fully assembled system prompt (expert identity, skills, workspace,
+ * memories — not the bare role template) plus the exact tool surface. Without
+ * this, retried/fallback workers silently ran as a different, weaker persona.
+ */
+interface WorkerRespawnContext {
+  systemPrompt: string;
+  tools: import('@/core/agent-base').ToolHandler[];
+  toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
+}
+
+/**
+ * Handle worker failure: transient retry (same model) → topic backup model
+ * (Topics page "Backup" binding) → CLI-provider default fallback.
  */
 async function handleWorkerFailure(
   error: Error,
   worker: import('@/core/agent-base').BaseAgentWorker,
   workerId: string,
-  routedModel: string,
+  failedModel: string,
   agentRole: AgentRole,
   roleConfig: import('./types').RoleConfig,
-  roleTools: import('@/core/agent-base').ToolHandler[],
   task: string,
   input: string,
   context: AgentContext,
   startTime: number,
   deps: WorkerSpawnerDeps,
+  respawnCtx: WorkerRespawnContext,
 ): Promise<unknown> {
   coreLogger.error({ error, workerId, role: agentRole }, 'Worker agent failed');
 
@@ -1034,6 +1051,45 @@ async function handleWorkerFailure(
     throw new Error('Agent was stopped by user');
   }
 
+  // Respawn the ORIGINAL worker (same assembled prompt + tool surface) on a
+  // given model and run the task. Shared by the transient retry, the topic
+  // backup, and the CLI fallback below.
+  const respawnAndRun = async (model: string): Promise<string> => {
+    const agentManager = getAgentManager();
+    const retryWorker = await agentManager.spawn({
+      sessionId: context.sessionId,
+      userId: context.userId,
+      workspaceId: context.workspaceId ?? null,
+      topic: roleConfig.defaultTopic,
+      model,
+      role: agentRole,
+      systemPrompt: respawnCtx.systemPrompt,
+      tools: respawnCtx.tools,
+      toolAdvertisement: respawnCtx.toolAdvertisement,
+    });
+    const workerMessage = input
+      ? `${task}\n\n--- Context from previous steps ---\n${input}`
+      : task;
+    const result = await retryWorker.run(workerMessage);
+    deps.emit({
+      type: 'worker_completed',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: {
+        workerId: retryWorker.getContext().id,
+        role: agentRole,
+        result,
+        model,
+        iterations: retryWorker.getIteration(),
+        durationMs: Date.now() - startTime,
+        totalTokens: retryWorker.getTotalTokens(),
+        retryOf: workerId,
+      } as WorkerResult,
+      timestamp: new Date(),
+    });
+    return result;
+  };
+
   // Retry transient failures (JSON parse, rate limit) with the same model
   const isTransient = errorMsg.includes('JSON') || errorMsg.includes('parse')
     || errorMsg.includes('Unterminated') || errorMsg.includes('rate_limit')
@@ -1042,38 +1098,7 @@ async function handleWorkerFailure(
   if (isTransient) {
     coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
     try {
-      const agentManager = getAgentManager();
-      const retryWorker = await agentManager.spawn({
-        sessionId: context.sessionId,
-        userId: context.userId,
-        workspaceId: context.workspaceId ?? null,
-        topic: roleConfig.defaultTopic,
-        model: routedModel,
-        role: agentRole,
-        systemPrompt: roleConfig.systemPromptTemplate,
-        tools: roleTools,
-      });
-      const workerMessage = input
-        ? `${task}\n\n--- Context from previous steps ---\n${input}`
-        : task;
-      const retryResult = await retryWorker.run(workerMessage);
-      const retryDurationMs = Date.now() - startTime;
-      deps.emit({
-        type: 'worker_completed',
-        sessionId: context.sessionId,
-        userId: context.userId,
-        data: {
-          workerId: retryWorker.getContext().id,
-          role: agentRole,
-          result: retryResult,
-          model: routedModel,
-          iterations: retryWorker.getIteration(),
-          durationMs: retryDurationMs,
-          totalTokens: retryWorker.getTotalTokens(),
-          retryOf: workerId,
-        } as WorkerResult,
-        timestamp: new Date(),
-      });
+      const retryResult = await respawnAndRun(failedModel);
       deps.setLastWorkerResult(retryResult);
       return retryResult;
     } catch (retryError) {
@@ -1081,48 +1106,36 @@ async function handleWorkerFailure(
     }
   }
 
-  // CLI sub-agent fallback
+  // Topic backup model — the "Backup" binding from the Topics page. One
+  // attempt on the configured fallback before the last-resort CLI/default
+  // path. Skipped when unbound or when it would rerun the failed model.
   const registry = getModelRegistry();
-  const failedModel = await registry.getModelByModelId(routedModel);
-  if (failedModel?.provider === 'cli') {
-    const defaultModel = await registry.getDefaultModel();
-    if (defaultModel && defaultModel.modelId !== routedModel && defaultModel.supportsTools) {
+  try {
+    const backup = await registry.getBackupModelForTopic(roleConfig.defaultTopic);
+    if (backup && backup.modelId !== failedModel) {
       coreLogger.info(
-        { failedModel: routedModel, fallbackModel: defaultModel.modelId, role: agentRole },
+        { failedModel, backupModel: backup.modelId, topic: roleConfig.defaultTopic, role: agentRole },
+        'Worker failed on primary model, retrying with topic backup model',
+      );
+      const backupResult = await respawnAndRun(backup.modelId);
+      deps.setLastWorkerResult(backupResult);
+      return backupResult;
+    }
+  } catch (backupError) {
+    coreLogger.error({ error: backupError, role: agentRole }, 'Backup-model worker also failed');
+  }
+
+  // CLI sub-agent fallback
+  const failedModelEntry = await registry.getModelByModelId(failedModel);
+  if (failedModelEntry?.provider === 'cli') {
+    const defaultModel = await registry.getDefaultModel();
+    if (defaultModel && defaultModel.modelId !== failedModel && defaultModel.supportsTools) {
+      coreLogger.info(
+        { failedModel, fallbackModel: defaultModel.modelId, role: agentRole },
         'CLI sub-agent failed, retrying with default model',
       );
       try {
-        const agentManager = getAgentManager();
-        const fallbackWorker = await agentManager.spawn({
-          sessionId: context.sessionId,
-          userId: context.userId,
-          workspaceId: context.workspaceId ?? null,
-          topic: roleConfig.defaultTopic,
-          model: defaultModel.modelId,
-          role: agentRole,
-          systemPrompt: roleConfig.systemPromptTemplate,
-          tools: roleTools,
-        });
-        const workerMessage = input
-          ? `${task}\n\n--- Context from previous steps ---\n${input}`
-          : task;
-        const fallbackResult = await fallbackWorker.run(workerMessage);
-        const fbDurationMs = Date.now() - startTime;
-        const fallbackWorkerResult: WorkerResult = {
-          workerId: fallbackWorker.getContext().id,
-          role: agentRole,
-          result: fallbackResult,
-          model: defaultModel.modelId,
-          iterations: fallbackWorker.getIteration(),
-          durationMs: fbDurationMs,
-        };
-        deps.emit({
-          type: 'worker_completed',
-          sessionId: context.sessionId,
-          userId: context.userId,
-          data: fallbackWorkerResult,
-          timestamp: new Date(),
-        });
+        const fallbackResult = await respawnAndRun(defaultModel.modelId);
         return fallbackResult;
       } catch (fallbackError) {
         coreLogger.error({ error: fallbackError, role: agentRole }, 'Fallback worker also failed');

@@ -105,6 +105,12 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
 export function resetTelephonyProvider(): void {
   cachedProvider = null;
   cachedProviderName = null;
-  // Also invalidate the tool availability cache so the voice tool is re-checked
-  import('@/tools/registry').then(m => m.getToolRegistry().invalidateAvailabilityCache()).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+  // Re-probe the `voice` capability row, not just the tool registry's cache.
+  // The role gate (getToolsForRole) reads the capabilities TABLE — before this,
+  // configuring Twilio/Telnyx/Plivo after boot left `voice` marked unavailable
+  // until the next restart, so the communication worker spawned without the
+  // make_call tool and voice functionality appeared "lost".
+  import('@/capabilities/service')
+    .then((m) => m.getCapabilityService().reprobe('voice'))
+    .catch((err: unknown) => coreLogger.error({ err }, 'voice capability re-probe failed after telephony reset'));
 }

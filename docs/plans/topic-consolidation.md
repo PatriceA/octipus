@@ -1,7 +1,25 @@
 # Model↔Topic System — Analysis & Topic-Consolidation Plan
 
-Status: PROPOSED (analysis complete, awaiting decisions on open questions)
+Status: DECIDED — Phase 1 items implemented (backup wiring, voice re-probe,
+orchestrator expert index); topic collapse (Phases 2–3) pending.
 Date: 2026-07-01
+
+## Decisions (2026-07-01)
+
+1. **Background topics**: merge into one `background` lane — they exist to bind
+   small local models; per-feature separation isn't needed.
+2. **`voice`**: KEEP and wire it — it serves the telephony path (Twilio/Telnyx/
+   Plivo calls). Root cause of the "lost" voice functionality found and fixed:
+   configuring telephony credentials after boot only invalidated the tool
+   registry cache, never the `capabilities` table that `getToolsForRole` gates
+   on — so the communication worker spawned without `make_call` until restart.
+   `resetTelephonyProvider()` now re-probes the `voice` capability row.
+3. **Backup model**: wired. Worker failure path and swarm-child retry path now
+   try the topic's backup binding (fresh node, original prompt + tools) before
+   the CLI→default last resort.
+4. **Expert selection**: the orchestrator now receives a live AVAILABLE EXPERTS
+   index (system + the user's custom experts, read from DB each turn) and passes
+   `expertId` to spawn_child — extendable: new experts are routable immediately.
 
 ## Part 1 — How routing works today (as-built)
 

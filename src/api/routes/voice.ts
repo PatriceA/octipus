@@ -155,14 +155,21 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       expertPrompt += '\n\nWhen the caller says goodbye, thanks you and wants to end the call, or clearly wants to hang up, respond with a brief farewell and include the exact marker [END_CALL] at the end of your response. Example: "Goodbye, have a great day! [END_CALL]"';
 
       const startTime = Date.now();
+      // Honor the voice topic's configured temperature/maxTokens (Topics page)
+      // on top of the voice-tuned defaults — same override mechanism workers
+      // get via applyTopicParamOverrides in agent-worker.
+      const { applyTopicParamOverrides, getTopicConfig } = await import('@/models/topic-config');
+      const voiceParams = applyTopicParamOverrides(
+        { temperature: 0.7, maxTokens: 256 /* short responses for voice */ },
+        getTopicConfig('voice'),
+      );
       const result = await client.complete({
         model: voiceModelId,
         messages: [
           { role: 'system', content: expertPrompt, timestamp: new Date() },
           ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: new Date() })),
         ],
-        temperature: 0.7,
-        maxTokens: 256, // Short responses for voice
+        ...voiceParams,
       });
 
       let spoken = result.content || 'I didn\'t catch that.';

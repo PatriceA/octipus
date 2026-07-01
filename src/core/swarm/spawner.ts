@@ -435,7 +435,7 @@ export class SwarmSpawner {
       const result = await this.singleSpawnAndRun(opts, attemptNewNode > 0);
       lastResult = result;
       if (result.status !== 'tool_error' || attemptNewNode >= MAX_NEW_NODE_RETRIES) {
-        return result;
+        break;
       }
       // Crash retry on new node.
       coreLogger.warn(
@@ -443,6 +443,31 @@ export class SwarmSpawner {
         'Swarm child tool_error — retrying on new node',
       );
       attemptNewNode++;
+    }
+
+    // Topic backup model — the Topics page "Backup" binding. When the child
+    // still failed on a model/provider error after the retries above, make ONE
+    // more attempt on a fresh node bound to the topic's configured backup.
+    // Skipped when no backup is bound or it would rerun the same model.
+    if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
+      try {
+        const backup = await getModelRegistry().getBackupModelForTopic(opts.childRole);
+        if (backup && backup.modelId !== opts.childModel) {
+          coreLogger.warn(
+            { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childRole },
+            'Swarm child failed on primary model — retrying once on topic backup model',
+          );
+          lastResult = await this.singleSpawnAndRun(
+            { ...opts, childModel: backup.modelId, reason: 'retry' },
+            true,
+          );
+        }
+      } catch (backupErr) {
+        coreLogger.warn(
+          { err: backupErr, parentNodeId: opts.parent.id, topic: opts.childRole },
+          'Topic backup-model retry failed — surfacing original child result',
+        );
+      }
     }
     return lastResult!;
   }
