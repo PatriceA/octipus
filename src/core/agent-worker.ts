@@ -26,6 +26,7 @@ import {
   ChildTimeoutError,
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
+import { getLevelDefault } from './swarm/types';
 import { ToolExecutor } from './tool-executor';
 import type { AgentMessage, ToolCall } from './types';
 
@@ -196,12 +197,21 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /**
-   * Timeout for the final auto-collect — reserve the last ~20% of the
-   * worker's configured wall-clock so the merge-turn has budget to run.
+   * Timeout for the final auto-collect (the forget-to-collect safety net).
+   *
+   * A detached child can legitimately run up to its OWN wall budget
+   * (`getLevelDefault(1).wallMs` — 10 min by default; children of both the
+   * orchestrator and a depth-1 agent are bounded by the depth-1 cap or lower).
+   * The old formula clamped this to 60s, so a normal multi-minute research
+   * child was reported `timeout`/`null` and its completed work was silently
+   * dropped. Wait up to the child wall (+small margin) so a child that is about
+   * to finish isn't cut off — the child self-terminates at its own wall — but
+   * never longer than the parent's own wall.
    */
   private computeAutoCollectTimeoutMs(): number {
-    const wall = this.config.timeout ?? 240_000;
-    return Math.min(60_000, Math.max(10_000, Math.floor(wall * 0.2)));
+    const childWall = getLevelDefault(1).wallMs;
+    const wall = this.config.timeout > 0 ? this.config.timeout : childWall;
+    return Math.max(10_000, Math.min(childWall + 5_000, wall));
   }
 
   /** Cancel all pending detached children. Fire-and-forget — call on worker fail/abort. */
@@ -227,12 +237,21 @@ export class AgentWorker extends BaseAgentWorker {
   async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
     const entries = [...this.pendingDetached.entries()];
     if (entries.length === 0) return [];
+    // Time spent BLOCKED waiting on detached children must not count against
+    // the parent's own wall clock — this mirrors the await path's
+    // `onDelegationPause` (tool-executor). Without it, a detaching orchestrator
+    // is penalized for time its children spent working (elapsed() keeps
+    // ticking between spawn and collect), which can trip its own timeout and
+    // discard the very results it waited for. Children that already settled
+    // resolve instantly, so the paused amount ≈ the real blocking wait.
+    const waitStart = Date.now();
     const results = await Promise.all(
       entries.map(async ([childId]) => {
         const r = await this.collectDetached(childId, timeoutMs);
         return r;
       }),
     );
+    this.addPausedMs(Date.now() - waitStart);
     return results.filter((r): r is ChildResult => r !== null);
   }
 

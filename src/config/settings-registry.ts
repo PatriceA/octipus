@@ -487,6 +487,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'swarm.levelDefaults.orchestrator.maxPendingDetached',
+    category: 'swarm',
+    valueType: 'number',
+    defaultValue: 6,
+    description:
+      'Max detached (fire-and-collect) children the orchestrator can have in flight. 0 forces blocking await on every spawn.',
+    isSecret: false,
+  },
+  {
     key: 'swarm.levelDefaults.agent.tokens',
     category: 'swarm',
     valueType: 'number',

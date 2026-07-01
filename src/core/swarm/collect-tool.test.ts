@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentWorker } from '@/core/agent-worker';
 import { createCollectChildrenTool, formatCollectedResults } from './collect-tool';
+import { getLevelDefault } from './types';
 import type { AgentNode, ChildResult, PendingChild } from './types';
 
 function makeAgentParent(): AgentNode {
@@ -87,6 +88,74 @@ describe('collect_children', () => {
     expect(str).toContain('count="2"');
     expect(str).toContain('<output>first</output>');
     expect(str).toContain('<output>second</output>');
+  });
+
+  const captureTimeout = async (parent: AgentNode): Promise<number> => {
+    let captured = -1;
+    const pending: PendingChild[] = [
+      { childId: 'c1', startedAt: Date.now(), taskBrief: 't', topic: 'research', promise: Promise.resolve({} as ChildResult) },
+    ];
+    const worker = {
+      listPendingDetached: () => pending,
+      async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
+        captured = timeoutMs;
+        return [];
+      },
+    } as unknown as AgentWorker;
+    const tool = createCollectChildrenTool(parent, { current: worker });
+    await tool.execute({}, {
+      id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
+      topic: '', role: 'research', status: 'running',
+      createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    });
+    return captured;
+  };
+
+  test('when parent has ample wall, default timeout equals the full child wall budget', async () => {
+    // Regression: the default per-child wait used to be min(120s, remaining/2),
+    // dropping completed work from children that run past 120s. With ample
+    // parent wall (remaining > childWall) the target = childWall + margin must
+    // dominate — this genuinely exercises the child-wall branch (not the
+    // remaining bound).
+    const childWall = getLevelDefault(1).wallMs;
+    const parent = makeAgentParent();
+    parent.budget.wallClockMs = { cap: childWall * 3, startedAt: Date.now() }; // remaining >> childWall
+    const captured = await captureTimeout(parent);
+    expect(captured).toBe(childWall + 5_000);
+    expect(captured).toBeGreaterThan(120_000); // old clamp is gone
+  });
+
+  test('when parent wall is tighter than the child wall, timeout is bounded by parent remaining', async () => {
+    const childWall = getLevelDefault(1).wallMs;
+    const parent = makeAgentParent();
+    const remaining = Math.floor(childWall / 2);
+    parent.budget.wallClockMs = { cap: remaining, startedAt: Date.now() };
+    const captured = await captureTimeout(parent);
+    // Bounded by parent remaining (~childWall/2), not the full target.
+    expect(captured).toBeLessThanOrEqual(remaining);
+    expect(captured).toBeGreaterThan(remaining - 5_000);
+  });
+
+  test('explicit timeoutMs override is honored (clamped to [1s, 600s])', async () => {
+    const parent = makeAgentParent();
+    let captured = -1;
+    const pending: PendingChild[] = [
+      { childId: 'c1', startedAt: Date.now(), taskBrief: 't', topic: 'research', promise: Promise.resolve({} as ChildResult) },
+    ];
+    const worker = {
+      listPendingDetached: () => pending,
+      async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
+        captured = timeoutMs;
+        return [];
+      },
+    } as unknown as AgentWorker;
+    const tool = createCollectChildrenTool(parent, { current: worker });
+    await tool.execute({ timeoutMs: 30_000 }, {
+      id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
+      topic: '', role: 'research', status: 'running',
+      createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    });
+    expect(captured).toBe(30_000);
   });
 
   test('no worker ref → internal-error message, not a throw', async () => {

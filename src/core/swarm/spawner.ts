@@ -301,6 +301,11 @@ export class SwarmSpawner {
 
     // ── Budget cascade ──────────────────────────────────────────────
     // Done BEFORE reserving fan-out so a refused spawn doesn't consume a slot.
+    // Sync the parent's live token spend into its node budget first: the node's
+    // `tokens.used` is otherwise never updated (it stays 0), so the reserve
+    // math and `InsufficientBudgetError` guard in `deriveChildBudget` never
+    // reflect real consumption. No-op for legacy call sites without a workerRef.
+    syncParentTokenUsage(parent);
     let budget: NodeBudget;
     try {
       budget = deriveChildBudget(parent.budget, childDepth);
@@ -1102,6 +1107,27 @@ export class InsufficientBudgetError extends Error {
         `Parent is near token exhaustion — finalize with existing results instead of spawning.`,
     );
     this.name = 'InsufficientBudgetError';
+  }
+}
+
+/**
+ * Reconcile a parent node's `budget.tokens.used` with its worker's live spend.
+ *
+ * The node budget's `used` counter is never otherwise incremented, so without
+ * this the reserve math and `InsufficientBudgetError` guard in
+ * `deriveChildBudget` always see `used = 0` and can never fire — the parent
+ * looks like it has its full pool free even when nearly exhausted. The worker
+ * (wired onto the node as `workerRef` by the orchestrator service / spawner)
+ * tracks the real figure as `getTotalTokens()`. Monotonic (never shrinks) and a
+ * no-op for legacy call sites that have no `workerRef`.
+ */
+export function syncParentTokenUsage(parent: AgentNode): void {
+  const worker = (
+    parent as unknown as { workerRef?: { current: { getTotalTokens?: () => number } | null } }
+  ).workerRef?.current;
+  const used = worker?.getTotalTokens?.();
+  if (typeof used === 'number' && used > parent.budget.tokens.used) {
+    parent.budget.tokens.used = used;
   }
 }
 

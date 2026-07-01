@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach } from 'bun:test';
 import {
   deriveChildBudget,
   resolveChildTools,
+  syncParentTokenUsage,
   taskFingerprint,
   SwarmSpawner,
   TASK_BRIEF_PREVIEW_MAX,
@@ -37,6 +38,57 @@ describe('composeChildMessage — date grounding', () => {
     // Date and time are formatted from the same (local) clock — no UTC suffix
     // that could disagree with the local date near midnight.
     expect(msg).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+});
+
+// ── syncParentTokenUsage: node budget reflects live worker spend ──────
+
+describe('syncParentTokenUsage', () => {
+  const makeNode = (used: number, workerTokens: number | null): AgentNode => {
+    const node = {
+      id: 'p',
+      role: 'orchestrator',
+      depth: 0 as const,
+      topicPath: '',
+      budget: {
+        tokens: { cap: 200_000, used },
+        wallClockMs: { cap: 600_000, startedAt: Date.now() },
+        fanOut: { cap: 6, used: 0 },
+        depth: 0 as const,
+      },
+    } as unknown as AgentNode;
+    if (workerTokens !== null) {
+      (node as unknown as { workerRef: { current: { getTotalTokens: () => number } } }).workerRef = {
+        current: { getTotalTokens: () => workerTokens },
+      };
+    }
+    return node;
+  };
+
+  test('lifts node.tokens.used up to the worker’s live spend', () => {
+    const node = makeNode(0, 150_000);
+    syncParentTokenUsage(node);
+    expect(node.budget.tokens.used).toBe(150_000);
+  });
+
+  test('is monotonic — never shrinks a higher recorded value', () => {
+    const node = makeNode(180_000, 150_000);
+    syncParentTokenUsage(node);
+    expect(node.budget.tokens.used).toBe(180_000);
+  });
+
+  test('no-op without a workerRef (legacy call sites)', () => {
+    const node = makeNode(42, null);
+    syncParentTokenUsage(node);
+    expect(node.budget.tokens.used).toBe(42);
+  });
+
+  test('after sync, deriveChildBudget refuses a spawn near exhaustion', () => {
+    // Regression: previously `used` stayed 0, so the guard never fired even
+    // when the worker had burned nearly the whole pool.
+    const node = makeNode(0, 195_000);
+    syncParentTokenUsage(node);
+    expect(() => deriveChildBudget(node.budget, 1)).toThrow(/Insufficient token budget/);
   });
 });
 
