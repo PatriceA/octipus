@@ -24,10 +24,22 @@ import {
 import { getSwarmLedger } from './ledger';
 import { swarmNodeRepository } from './node-repository';
 import { buildReceipt } from './receipt';
+import { lookupCacheHit } from './spawn-cache';
+import {
+  deriveChildBudget,
+  InsufficientBudgetError,
+  syncParentTokenUsage,
+} from './spawn-budget';
+import {
+  checkConcurrency,
+  checkDepth,
+  checkFanOut,
+  checkSameRole,
+  denialResult as denialResultFn,
+} from './spawn-validator';
 import { type Scorer, runScorers } from './scorers';
 import {
   type AgentNode,
-  BUDGET_RESERVE_FRACTION,
   type ChildResult,
   type ChildResultStatus,
   getLevelDefault,
@@ -107,12 +119,8 @@ export class SwarmSpawner {
   ): Promise<ChildResult> {
     // ── Depth enforcement (Phase 2) ─────────────────────────────────
     // Agent (depth 1) spawns Subagent (depth 2). Subagent can NOT spawn.
-    if (parent.depth >= 2) {
-      return this.denialResult(
-        parent,
-        `spawn_child is not available at depth ${parent.depth} (hard leaf — Subagent cannot spawn children).`,
-      );
-    }
+    const depthDenial = checkDepth(parent);
+    if (depthDenial) return depthDenial;
 
     const childDepth: 1 | 2 = (parent.depth + 1) as 1 | 2;
     const childKind: 'agent' | 'subagent' = childDepth === 1 ? 'agent' : 'subagent';
@@ -128,13 +136,8 @@ export class SwarmSpawner {
     // audit, etc.). The Agent still has to justify it against the
     // "datapoint vs dependency" rule in the role prompt — the system
     // doesn't block the fan-out, but bad uses burn budget fast.
-    if (parent.role === childRole && childDepth === 1) {
-      return this.denialResult(
-        parent,
-        `spawn_child refused: child role '${childRole}' equals parent role '${parent.role}'. ` +
-          `You ARE the expert for '${childRole}' — synthesize directly instead of delegating to yourself.`,
-      );
-    }
+    const sameRoleDenial = checkSameRole(parent, childRole, childDepth);
+    if (sameRoleDenial) return sameRoleDenial;
 
     // ── Defense-in-depth: guard raw inputs BEFORE composition ───────
     // The composed child message is already guarded downstream, but
@@ -228,76 +231,29 @@ export class SwarmSpawner {
     }
 
     // ── Fan-out cap (Phase 2, per-turn = per-node lifetime) ─────────
-    if (parent.budget.fanOut.used >= parent.budget.fanOut.cap) {
-      coreLogger.warn(
-        { parentNodeId: parent.id, used: parent.budget.fanOut.used, cap: parent.budget.fanOut.cap },
-        'Swarm fan-out cap reached — refusing spawn',
-      );
-      return {
-        nodeId: '',
-        kind: childKind,
-        status: 'concurrency_limit',
-        output: null,
-        usedTokens: 0,
-        durationMs: 0,
-        spawnedChildren: [],
-        notes: `fan-out cap (${parent.budget.fanOut.cap}) reached; synthesize with existing children or respawn next turn`,
-      };
-    }
+    const fanOutDenial = checkFanOut(parent, childKind);
+    if (fanOutDenial) return fanOutDenial;
 
     // ── Cache lookup (Q4) ───────────────────────────────────────────
     // Note: a cache hit creates no new node and appends no ledger event — the
     // cached node already carries its own spawn+terminal ledger history from
     // its original run, so there is nothing in-flight to reconcile here.
-    const cached = await swarmNodeRepository.findCacheHit(parent.rootSessionId, briefHash);
-    if (cached && cached.result) {
-      await swarmNodeRepository.incrementCacheHits(cached.id);
-      coreLogger.info(
-        { parentNodeId: parent.id, cachedNodeId: cached.id, briefHash, topicPath },
-        'Swarm cache hit — skipping spawn',
-      );
-      // `result` jsonb stores a serialized ChildResult; the schema types it
-      // loosely as SwarmChildResult (receipt/scorerOutcome: unknown). Cast
-      // back to the structured type — the cached receipt and scorerOutcome,
-      // if any, came from buildReceipt / runScorers on the original run. We
-      // keep them as-is: they audit the ORIGINAL run that was reused, while
-      // the outer `status: 'cache_hit'` signals the reuse.
-      const cachedResult: ChildResult = {
-        ...(cached.result as ChildResult),
-        status: 'cache_hit',
-      };
-      this.emitNodeCompleted(parent, {
-        nodeId: cached.id,
-        parentNodeId: parent.id,
-        kind: childKind,
-        depth: childDepth,
-        topicPath,
-        role: childRole,
-        status: 'cache_hit',
-        cacheHit: true,
-      });
-      return cachedResult;
+    const cacheHit = await lookupCacheHit(parent, briefHash, topicPath, childKind, childDepth, childRole);
+    if (cacheHit) {
+      this.emitNodeCompleted(parent, cacheHit.completedPayload);
+      return cacheHit.result;
     }
 
     // ── Concurrency pre-check (Q3) ──────────────────────────────────
     const agentManager = getAgentManager();
     const maxConcurrent = getConfig().agent.maxConcurrentAgents;
-    if (agentManager.getRunningCount() >= maxConcurrent) {
-      coreLogger.warn(
-        { parentNodeId: parent.id, running: agentManager.getRunningCount(), cap: maxConcurrent },
-        'Swarm concurrency limit reached — refusing spawn',
-      );
-      return {
-        nodeId: '',
-        kind: childKind,
-        status: 'concurrency_limit',
-        output: null,
-        usedTokens: 0,
-        durationMs: 0,
-        spawnedChildren: [],
-        notes: `Max concurrent agents (${maxConcurrent}) reached`,
-      };
-    }
+    const concurrencyDenial = checkConcurrency(
+      parent,
+      childKind,
+      agentManager.getRunningCount(),
+      maxConcurrent,
+    );
+    if (concurrencyDenial) return concurrencyDenial;
 
     // ── Budget cascade ──────────────────────────────────────────────
     // Done BEFORE reserving fan-out so a refused spawn doesn't consume a slot.
@@ -1080,107 +1036,20 @@ export class SwarmSpawner {
   }
 
   private denialResult(parent: AgentNode, reason: string): ChildResult {
-    coreLogger.warn({ parentNodeId: parent.id, depth: parent.depth, reason }, 'Swarm spawn denied');
-    return {
-      nodeId: '',
-      kind: 'agent',
-      status: 'denied',
-      output: null,
-      usedTokens: 0,
-      durationMs: 0,
-      spawnedChildren: [],
-      notes: reason,
-    };
+    return denialResultFn(parent, reason);
   }
 }
 
 // ── Pure helpers (exported for unit tests) ────────────────────────────
 
-/**
- * Minimum child token pool: if parent's remaining tokens drop below this
- * we refuse to spawn rather than start a child that'll immediately hit its
- * own budget cap. Wall-clock has no equivalent floor — child gets its full
- * LEVEL_DEFAULT wallMs because the parent's timer pauses during the await.
- */
-export const MIN_CHILD_TOKENS = 4_000;
-
-/** Raised by `deriveChildBudget` when the parent's token pool is exhausted. */
-export class InsufficientBudgetError extends Error {
-  constructor(
-    public readonly available: number,
-    public readonly minimum: number,
-  ) {
-    super(
-      `Insufficient token budget for child spawn: ${available} available, ${minimum} minimum required. ` +
-        `Parent is near token exhaustion — finalize with existing results instead of spawning.`,
-    );
-    this.name = 'InsufficientBudgetError';
-  }
-}
-
-/**
- * Reconcile a parent node's `budget.tokens.used` with true pool consumption:
- * the node's own worker spend (`workerRef.current.getTotalTokens()`) plus the
- * cumulative spend of its children (`budget.childTokensUsed`, accumulated in
- * `spawnChild` as each child returns).
- *
- * Without this the `used` counter is never incremented, so the reserve math and
- * `InsufficientBudgetError` guard in `deriveChildBudget` always see `used = 0`
- * and can never fire — the parent looks like it has its full pool free even when
- * nearly exhausted. Monotonic (never shrinks) and degrades gracefully: with no
- * `workerRef` the own-spend term is 0 and only accumulated child spend counts.
- */
-export function syncParentTokenUsage(parent: AgentNode): void {
-  const worker = (
-    parent as unknown as { workerRef?: { current: { getTotalTokens?: () => number } | null } }
-  ).workerRef?.current;
-  const ownSpend = worker?.getTotalTokens?.() ?? 0;
-  // True pool consumption = the node's own worker spend + everything its
-  // children have returned so far. Both terms are monotonic; guard against
-  // shrinking `used` (a stale/lower reading must never lower the counter).
-  const target = ownSpend + (parent.budget.childTokensUsed ?? 0);
-  if (target > parent.budget.tokens.used) {
-    parent.budget.tokens.used = target;
-  }
-}
-
-export function deriveChildBudget(parent: NodeBudget, childDepth: 0 | 1 | 2): NodeBudget {
-  const defaults = getLevelDefault(childDepth);
-
-  // Parent's cap was snapshotted at node creation, but the operator may have
-  // raised `swarm.levelDefaults.*.tokens` since then. Use the current config
-  // default if it's higher — this lets settings changes take effect on the
-  // next spawn instead of requiring a session restart. We never *shrink*
-  // the parent's effective cap because `used` may already exceed a lower
-  // new value; decreases still need a restart.
-  const parentCurrentDefault = getLevelDefault(parent.depth).tokens;
-  const effectiveParentCap = Math.max(parent.tokens.cap, parentCurrentDefault);
-  if (effectiveParentCap > parent.tokens.cap) {
-    parent.tokens.cap = effectiveParentCap;
-  }
-
-  const parentRemainingTokens = Math.max(0, effectiveParentCap - parent.tokens.used);
-  const tokenReserve = Math.ceil(effectiveParentCap * BUDGET_RESERVE_FRACTION);
-  const tokenCap = Math.min(defaults.tokens, parentRemainingTokens - tokenReserve);
-
-  if (tokenCap < MIN_CHILD_TOKENS) {
-    throw new InsufficientBudgetError(tokenCap, MIN_CHILD_TOKENS);
-  }
-
-  // Wall-clock: NO cascade. Child gets its full LEVEL_DEFAULT wall cap.
-  // Parent's waiting time for this child will be excluded from the parent's
-  // own elapsed() via AgentWorker.pausedMs. Per user spec: "subagent should
-  // have the same timeout as an agent — waiting for subagent should not
-  // count against parent's timeout".
-  const wallCap = defaults.wallMs;
-
-  return {
-    tokens: { cap: tokenCap, used: 0 },
-    wallClockMs: { cap: wallCap, startedAt: Date.now() },
-    fanOut: { cap: defaults.fanOut, used: 0 },
-    depth: childDepth,
-  };
-}
+// Budget derivation + token-pool accounting moved to `spawn-budget.ts`.
+// Re-exported here so `./spawner` importers (tests, swarm/index) are unchanged.
+export {
+  deriveChildBudget,
+  InsufficientBudgetError,
+  MIN_CHILD_TOKENS,
+  syncParentTokenUsage,
+} from './spawn-budget';
 
 /**
  * `child.allowedToolIds = parent.allowedToolIds ∩ requiredToolIds`.
