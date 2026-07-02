@@ -3,20 +3,39 @@
  *
  * `runChildWithRetry` must make ONE extra attempt on the topic's backup model
  * when the child ends in provider_error / tool_error, and must not touch the
- * backup lookup on success. No DB: the registry singleton's
- * `getBackupModelForTopic` and the spawner's private `singleSpawnAndRun` are
- * instance-patched (not module-mocked, so other test files stay unaffected).
+ * backup lookup on success. No DB: `getModelRegistry` is module-mocked with a
+ * stub backup lookup and the spawner's private `singleSpawnAndRun` is
+ * instance-patched.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { getModelRegistry } from '@/models/model-registry';
-import { SwarmSpawner } from './spawner';
-import type { ChildResult } from './types';
+import { describe, expect, mock, test } from 'bun:test';
 
-type RunOpts = { childRole: string; childModel: string; parent: { id: string }; reason: string };
-
-const registry = getModelRegistry();
-const originalGetBackup = registry.getBackupModelForTopic.bind(registry);
 let backupModelId: string | null = null;
+
+// bun's `mock.module` is process-global. Sibling unit suites (evaluators,
+// litellm-client) replace `getModelRegistry` with a partial stub that omits
+// `getBackupModelForTopic`, so grabbing the real singleton here is order-
+// dependent and crashes when their mock leaks in first. Pin our own stub whose
+// backup lookup is driven by `backupModelId` (the only method this suite needs;
+// the spawner's `singleSpawnAndRun` is instance-patched below). The other
+// getters mirror the sibling stubs so this superset can only be safer if it
+// leaks forward. No-op + skip under the integration runner, whose real-DB
+// suites would break if this partial mock leaked into them.
+const inIntegration = process.env.INTEGRATION === '1';
+if (!inIntegration) {
+  mock.module('@/models/model-registry', () => ({
+    getModelRegistry: () => ({
+      getBackupModelForTopic: async () => (backupModelId ? { modelId: backupModelId } : null),
+      getModelForTopic: async () => null,
+      getModelByModelId: async () => null,
+      getDefaultModel: async () => null,
+    }),
+  }));
+}
+
+const { SwarmSpawner } = await import('./spawner');
+type ChildResult = import('./types').ChildResult;
+
+type RunOpts = { childRole: string; childLane: string; childModel: string; parent: { id: string }; reason: string };
 
 function makeSpawner(resultsByAttempt: ChildResult['status'][], calls: RunOpts[]) {
   const spawner = new SwarmSpawner({} as never);
@@ -31,18 +50,11 @@ function makeSpawner(resultsByAttempt: ChildResult['status'][], calls: RunOpts[]
   return spawner as unknown as { runChildWithRetry: (opts: RunOpts) => Promise<ChildResult> };
 }
 
-const baseOpts = (): RunOpts => ({ childRole: 'research', childModel: 'primary-id', parent: { id: 'p1' }, reason: 'normal' });
+const baseOpts = (): RunOpts => ({ childRole: 'research', childLane: 'agents', childModel: 'primary-id', parent: { id: 'p1' }, reason: 'normal' });
 
-beforeAll(() => {
-  registry.getBackupModelForTopic = (async (_topic: string) =>
-    backupModelId ? ({ modelId: backupModelId } as never) : null) as typeof registry.getBackupModelForTopic;
-});
+const suite = inIntegration ? describe.skip : describe;
 
-afterAll(() => {
-  registry.getBackupModelForTopic = originalGetBackup;
-});
-
-describe('runChildWithRetry — topic backup model', () => {
+suite('runChildWithRetry — topic backup model', () => {
   test('ok result ⇒ single attempt, no backup consultation', async () => {
     backupModelId = 'backup-id';
     const calls: RunOpts[] = [];

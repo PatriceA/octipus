@@ -149,7 +149,7 @@ export function defaultResearchDeps(userId: string): ResearchDeps {
       // since the topic consolidation, so the old two-step fallback collapsed.
       const model = await registry.getModelForTopic('agents');
       if (!model) {
-        throw new Error('No model is bound to the "research" or "general" topic — bind one in the Models page.');
+        throw new Error('No model is bound to the "agents" topic — bind one on the Topics page.');
       }
       const result = await getLiteLLMClient().complete({
         model: model.modelId,

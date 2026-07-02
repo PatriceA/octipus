@@ -325,7 +325,7 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model + expert resolution (topic binding is authoritative) ──
-    const { model: childModel, expertId, systemPrompt } = await this.resolveChildModelAndExpert(
+    const { model: childModel, lane: childLane, expertId, systemPrompt } = await this.resolveChildModelAndExpert(
       parent.model,
       childRole,
       brief.taskBrief,
@@ -374,6 +374,7 @@ export class SwarmSpawner {
       childKind,
       childRole,
       childModel,
+      childLane,
       childTools,
       systemPrompt,
       expertId,
@@ -408,6 +409,8 @@ export class SwarmSpawner {
     childKind: 'agent' | 'subagent';
     childRole: AgentRole;
     childModel: string;
+    /** Resolved model lane (expert topic or role default) — the backup binding is keyed on this, not the raw role. */
+    childLane: string;
     childTools: ToolHandler[];
     systemPrompt?: string;
     expertId?: string;
@@ -451,10 +454,10 @@ export class SwarmSpawner {
     // Skipped when no backup is bound or it would rerun the same model.
     if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
       try {
-        const backup = await getModelRegistry().getBackupModelForTopic(opts.childRole);
+        const backup = await getModelRegistry().getBackupModelForTopic(opts.childLane);
         if (backup && backup.modelId !== opts.childModel) {
           coreLogger.warn(
-            { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childRole },
+            { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
             'Swarm child failed on primary model — retrying once on topic backup model',
           );
           lastResult = await this.singleSpawnAndRun(
@@ -902,7 +905,7 @@ export class SwarmSpawner {
     childMessage: string,
     preferredExpertId?: string,
     excludeExpertId?: string,
-  ): Promise<{ model: string; expertId?: string; systemPrompt?: string }> {
+  ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string }> {
     const registry = getModelRegistry();
 
     let expertModel: string | undefined;
@@ -1046,7 +1049,7 @@ export class SwarmSpawner {
     // overrode the user's "this topic uses this model" configuration and
     // sent every child to the orchestrator's model. If cost is a concern,
     // configure it via the Models page.
-    return { model: candidate, expertId, systemPrompt };
+    return { model: candidate, lane, expertId, systemPrompt };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {
