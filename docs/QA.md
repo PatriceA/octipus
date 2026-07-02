@@ -1467,22 +1467,23 @@ writes are **admin-only**.
 1. `GET /api/topics` → **expect** a `topics[]` array, each entry carrying
    `value`, `label`, `primaryModel`, `backupModel`, `executorModel`,
    `temperature`, `maxTokens`.
-2. In the UI (or `PUT /api/topics/coding/binding { primaryModel: "<modelA>" }`),
-   set a primary for topic `coding`. **Expect** `200` and the topic's
+2. In the UI (or `PUT /api/topics/agents/binding { primaryModel: "<modelA>" }`),
+   set a primary for the `agents` lane. **Expect** `200` and the topic's
    `primaryModel` now reads `<modelA>`.
 3. Verify persistence: `SELECT name, topic_roles FROM model_config WHERE
-   name = '<modelA>'` → **expect** `{"coding":"primary"}` in `topic_roles`.
-4. Send a `coding` message; **expect** the worker resolves to `<modelA>`
-   (`getModelForTopic('coding')`), visible in the run's model attribution.
+   name = '<modelA>'` → **expect** `{"agents":"primary"}` in `topic_roles`.
+4. Send a task message (any specialist); **expect** the worker resolves to
+   `<modelA>` (`getModelForTopic('agents')` — retired role topics like
+   'coding' alias to the `agents` lane), visible in the run's model attribution.
 
 ### 10.2 Backup (fallback) model
 
-1. Set a backup: `PUT /api/topics/coding/binding { primaryModel: "<modelA>",
+1. Set a backup: `PUT /api/topics/agents/binding { primaryModel: "<modelA>",
    backupModel: "<modelB>" }`. **Expect** the topic's `backupModel` = `<modelB>`
-   and `model_config.topic_roles` for `<modelB>` shows `{"coding":"backup"}`.
+   and `model_config.topic_roles` for `<modelB>` shows `{"agents":"backup"}`.
 2. Bind a **non-existent** model name → **expect** `400 Unknown model: <name>`
    (no partial write).
-3. **Failover:** disable or make `<modelA>` unreachable, then send a `coding`
+3. **Failover:** disable or make `<modelA>` unreachable, then send a task
    message. **Expect** resolution falls through to `<modelB>` rather than
    erroring — confirm in model attribution / logs.
 4. Clear a role by binding `null` (`{ backupModel: null }`) → **expect**
@@ -1490,13 +1491,13 @@ writes are **admin-only**.
 
 ### 10.3 Executor model + extras
 
-1. `PATCH /api/topics/coding/config { executorModel: "<modelC>",
+1. `PATCH /api/topics/agents/config { executorModel: "<modelC>",
    temperature: 0.2, maxTokens: 4096 }` → **expect** `200` echoing the
    resolved config.
 2. **True PATCH semantics:** re-send `{ temperature: 0.5 }` only. **Expect**
    `executorModel` and `maxTokens` **unchanged**, `temperature` now `0.5`
    (omitted fields keep their value; a present `null` clears).
-3. `GET /api/topics` → **expect** the `coding` row reflects
+3. `GET /api/topics` → **expect** the `agents` row reflects
    `executorModel/temperature/maxTokens`.
 4. Non-admin `PATCH` → **expect** `403`; unknown topic → **expect** `404`.
 

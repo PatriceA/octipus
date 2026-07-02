@@ -41,9 +41,9 @@ export async function runReaderAction(
   argument: string | undefined,
   userId: string,
 ): Promise<ReaderActionResult> {
-  const model = await getModelRegistry().getModelForTopic('general');
+  const model = await getModelRegistry().getModelForTopic('agents');
   if (!model) {
-    throw new Error('No model is bound to the "general" topic — bind one in the Models page to use reader actions.');
+    throw new Error('No model is bound to the "agents" topic — bind one on the Topics page to use reader actions.');
   }
 
   const { system, instruction } = buildPrompt(action, argument);

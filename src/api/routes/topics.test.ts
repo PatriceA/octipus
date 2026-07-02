@@ -67,7 +67,7 @@ describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
   test('GET /topics lists canonical topics with binding + extras', async () => {
     const r = await get(adminApp, '/api/topics');
     expect(r.status).toBe(200);
-    const coding = r.body.topics.find((t: any) => t.value === 'coding');
+    const coding = r.body.topics.find((t: any) => t.value === 'agents');
     expect(coding).toBeDefined();
     expect(coding.kind).toBe('text');
     expect(coding).toHaveProperty('primaryModel');
@@ -75,12 +75,12 @@ describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
   });
 
   test('non-admin cannot PATCH topic config', async () => {
-    const r = await send(userApp, 'PATCH', '/api/topics/coding/config', { temperature: 0.1 });
+    const r = await send(userApp, 'PATCH', '/api/topics/agents/config', { temperature: 0.1 });
     expect(r.status).toBe(403);
   });
 
   test('admin PATCH config persists extras and GET reflects them', async () => {
-    const r = await send(adminApp, 'PATCH', '/api/topics/coding/config', {
+    const r = await send(adminApp, 'PATCH', '/api/topics/agents/config', {
       executorModel: 'model-b',
       temperature: 0.2,
       maxTokens: 2048,
@@ -89,7 +89,7 @@ describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
     expect(r.body.executorModel).toBe('model-b');
 
     const list = await get(adminApp, '/api/topics');
-    const coding = list.body.topics.find((t: any) => t.value === 'coding');
+    const coding = list.body.topics.find((t: any) => t.value === 'agents');
     expect(coding.executorModel).toBe('model-b');
     expect(coding.temperature).toBe(0.2);
     expect(coding.maxTokens).toBe(2048);
@@ -101,48 +101,48 @@ describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
   });
 
   test('admin PUT binding sets primary/backup, GET reflects it', async () => {
-    const r = await send(adminApp, 'PUT', '/api/topics/coding/binding', {
+    const r = await send(adminApp, 'PUT', '/api/topics/agents/binding', {
       primaryModel: 'model-a',
       backupModel: 'model-b',
     });
     expect(r.status).toBe(200);
 
     const list = await get(adminApp, '/api/topics');
-    const coding = list.body.topics.find((t: any) => t.value === 'coding');
+    const coding = list.body.topics.find((t: any) => t.value === 'agents');
     expect(coding.primaryModel).toBe('model-a');
     expect(coding.backupModel).toBe('model-b');
   });
 
   test('PUT binding swaps primary to another model (old primary demoted)', async () => {
-    await send(adminApp, 'PUT', '/api/topics/coding/binding', { primaryModel: 'model-a' });
-    await send(adminApp, 'PUT', '/api/topics/coding/binding', { primaryModel: 'model-b' });
+    await send(adminApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'model-a' });
+    await send(adminApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'model-b' });
     const list = await get(adminApp, '/api/topics');
-    const coding = list.body.topics.find((t: any) => t.value === 'coding');
+    const coding = list.body.topics.find((t: any) => t.value === 'agents');
     expect(coding.primaryModel).toBe('model-b');
   });
 
   test('PUT binding to an unknown model → 400', async () => {
-    const r = await send(adminApp, 'PUT', '/api/topics/coding/binding', { primaryModel: 'ghost-model' });
+    const r = await send(adminApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'ghost-model' });
     expect(r.status).toBe(400);
   });
 
   test('PUT binding rejects same model as primary and backup → 400', async () => {
-    const r = await send(adminApp, 'PUT', '/api/topics/coding/binding', { primaryModel: 'model-a', backupModel: 'model-a' });
+    const r = await send(adminApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'model-a', backupModel: 'model-a' });
     expect(r.status).toBe(400);
   });
 
   test('PATCH config merges (omitted field keeps current value)', async () => {
-    await send(adminApp, 'PATCH', '/api/topics/research/config', { executorModel: 'model-a', temperature: 0.5 });
+    await send(adminApp, 'PATCH', '/api/topics/chat/config', { executorModel: 'model-a', temperature: 0.5 });
     // Patch only temperature — executorModel must survive.
-    await send(adminApp, 'PATCH', '/api/topics/research/config', { temperature: 0.9 });
+    await send(adminApp, 'PATCH', '/api/topics/chat/config', { temperature: 0.9 });
     const list = await get(adminApp, '/api/topics');
-    const research = list.body.topics.find((t: any) => t.value === 'research');
+    const research = list.body.topics.find((t: any) => t.value === 'chat');
     expect(research.executorModel).toBe('model-a');
     expect(research.temperature).toBe(0.9);
   });
 
   test('non-admin cannot PUT binding', async () => {
-    const r = await send(userApp, 'PUT', '/api/topics/coding/binding', { primaryModel: 'model-a' });
+    const r = await send(userApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'model-a' });
     expect(r.status).toBe(403);
   });
 });

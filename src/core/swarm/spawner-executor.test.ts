@@ -22,7 +22,7 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
     // Topic primary for 'research' = primary-model; executor candidate = exec-model.
     await reg.registerModel({
       name: 'primary-model', provider: 'ollama', modelId: 'primary-id', isEnabled: true,
-      topicRoles: { research: 'primary' },
+      topicRoles: { agents: 'primary' },
     } as never);
     await reg.registerModel({ name: 'exec-model', provider: 'ollama', modelId: 'exec-id', isEnabled: true } as never);
 
@@ -39,21 +39,21 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
 
   test('no executorModel ⇒ resolves the topic primary (unchanged behaviour)', async () => {
     const { setTopicConfig } = await import('@/models/topic-config');
-    await setTopicConfig('research', { executorModel: null, temperature: null, maxTokens: null });
+    await setTopicConfig('agents', { executorModel: null, temperature: null, maxTokens: null });
     const r = await resolve('parent-id', 'research', 'do research');
     expect(r.model).toBe('primary-id');
   });
 
   test('executorModel set ⇒ child resolves to the executor model', async () => {
     const { setTopicConfig } = await import('@/models/topic-config');
-    await setTopicConfig('research', { executorModel: 'exec-model', temperature: null, maxTokens: null });
+    await setTopicConfig('agents', { executorModel: 'exec-model', temperature: null, maxTokens: null });
     const r = await resolve('parent-id', 'research', 'do research');
     expect(r.model).toBe('exec-id');
   });
 
   test('executorModel pointing at a missing model fails loud', async () => {
     const { setTopicConfig } = await import('@/models/topic-config');
-    await setTopicConfig('research', { executorModel: 'ghost-model', temperature: null, maxTokens: null });
+    await setTopicConfig('agents', { executorModel: 'ghost-model', temperature: null, maxTokens: null });
     await expect(resolve('parent-id', 'research', 'do research')).rejects.toThrow(/executorModel/);
   });
 });

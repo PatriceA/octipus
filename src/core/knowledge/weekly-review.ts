@@ -112,7 +112,7 @@ export async function generateWeeklyReview(
 ): Promise<{ noteId: string; slug: string }> {
   const notes = deps.notes ?? getNoteService();
   const resolveModelId = deps.resolveModelId ?? (async () => {
-    const m = await getModelRegistry().getModelForTopic('knowledge_review');
+    const m = await getModelRegistry().getModelForTopic('background');
     return m?.modelId ?? null;
   });
   const complete = deps.complete ?? ((req) => getLiteLLMClient().complete(req));
@@ -121,7 +121,7 @@ export async function generateWeeklyReview(
   if (!modelId) {
     // Fail loud — an unbound worker topic is a configuration error, not a
     // reason to silently produce nothing (house rule 2).
-    throw new Error('Weekly review needs a model bound to topic "knowledge_review". Assign one on the Models page.');
+    throw new Error('Weekly review needs a model bound to the "background" topic. Assign one on the Topics page.');
   }
 
   const ctx = await assembleReviewContext(userId, new Date());

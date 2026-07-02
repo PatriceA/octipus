@@ -325,7 +325,7 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model + expert resolution (topic binding is authoritative) ──
-    const { model: childModel, expertId, systemPrompt } = await this.resolveChildModelAndExpert(
+    const { model: childModel, lane: childLane, expertId, systemPrompt } = await this.resolveChildModelAndExpert(
       parent.model,
       childRole,
       brief.taskBrief,
@@ -374,6 +374,7 @@ export class SwarmSpawner {
       childKind,
       childRole,
       childModel,
+      childLane,
       childTools,
       systemPrompt,
       expertId,
@@ -408,6 +409,8 @@ export class SwarmSpawner {
     childKind: 'agent' | 'subagent';
     childRole: AgentRole;
     childModel: string;
+    /** Resolved model lane (expert topic or role default) — the backup binding is keyed on this, not the raw role. */
+    childLane: string;
     childTools: ToolHandler[];
     systemPrompt?: string;
     expertId?: string;
@@ -435,7 +438,7 @@ export class SwarmSpawner {
       const result = await this.singleSpawnAndRun(opts, attemptNewNode > 0);
       lastResult = result;
       if (result.status !== 'tool_error' || attemptNewNode >= MAX_NEW_NODE_RETRIES) {
-        return result;
+        break;
       }
       // Crash retry on new node.
       coreLogger.warn(
@@ -443,6 +446,31 @@ export class SwarmSpawner {
         'Swarm child tool_error — retrying on new node',
       );
       attemptNewNode++;
+    }
+
+    // Topic backup model — the Topics page "Backup" binding. When the child
+    // still failed on a model/provider error after the retries above, make ONE
+    // more attempt on a fresh node bound to the topic's configured backup.
+    // Skipped when no backup is bound or it would rerun the same model.
+    if (lastResult && (lastResult.status === 'provider_error' || lastResult.status === 'tool_error')) {
+      try {
+        const backup = await getModelRegistry().getBackupModelForTopic(opts.childLane);
+        if (backup && backup.modelId !== opts.childModel) {
+          coreLogger.warn(
+            { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
+            'Swarm child failed on primary model — retrying once on topic backup model',
+          );
+          lastResult = await this.singleSpawnAndRun(
+            { ...opts, childModel: backup.modelId, reason: 'retry' },
+            true,
+          );
+        }
+      } catch (backupErr) {
+        coreLogger.warn(
+          { err: backupErr, parentNodeId: opts.parent.id, topic: opts.childRole },
+          'Topic backup-model retry failed — surfacing original child result',
+        );
+      }
     }
     return lastResult!;
   }
@@ -877,11 +905,13 @@ export class SwarmSpawner {
     childMessage: string,
     preferredExpertId?: string,
     excludeExpertId?: string,
-  ): Promise<{ model: string; expertId?: string; systemPrompt?: string }> {
+  ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string }> {
     const registry = getModelRegistry();
 
     let expertModel: string | undefined;
     let expertId: string | undefined;
+    /** The expert's assigned model lane (experts.topic) — overrides childRole for model resolution. */
+    let expertLane: string | undefined;
     let systemPrompt: string | undefined;
     let expertSkillIds: string[] = [];
     try {
@@ -893,6 +923,7 @@ export class SwarmSpawner {
       let rows: Array<{
         id: string;
         name: string;
+        topic: string | null;
         modelPreference: string | null;
         systemPrompt: string | null;
         skillIds: unknown;
@@ -910,6 +941,7 @@ export class SwarmSpawner {
       if (expert) {
         expertId = expert.id;
         expertModel = expert.modelPreference || undefined;
+        expertLane = expert.topic || undefined;
         systemPrompt = expert.systemPrompt || undefined;
         expertSkillIds = Array.isArray(expert.skillIds) ? (expert.skillIds as string[]) : [];
       }
@@ -970,24 +1002,29 @@ export class SwarmSpawner {
 
     // Model selection — in order of preference:
     //   1. expert.modelPreference (specialist's explicit choice)
-    //   2. topic executorModel (W9 planner→executor split) — the spawned child
-    //      IS the executor, so it binds to the topic's configured executor model
+    //   2. lane executorModel (W9 planner→executor split) — the spawned child
+    //      IS the executor, so it binds to the lane's configured executor model
     //      when one is set on the Topics page.
-    //   3. topic→model mapping (registered role→model binding)
+    //   3. lane→model mapping (topic primary binding)
     //   4. fail loud — do NOT inherit parent model. The parent's model is
     //      whatever the orchestrator happened to pick; it has no claim to
     //      being right for the child's topic. Inheriting hides routing bugs.
+    //
+    // The lane is the expert's assigned topic (experts.topic) when an expert
+    // matched, else the child role — which canonicalizes to the 'agents' lane
+    // since the topic consolidation (RETIRED_TOPIC_ALIASES).
+    const lane = expertLane || childRole;
     let candidate = expertModel;
     if (!candidate) {
       // Empty executorModel ⇒ this whole block is skipped and resolution is
       // byte-for-byte today's behaviour (planner == executor).
-      const executorName = getTopicConfig(childRole).executorModel;
+      const executorName = getTopicConfig(lane).executorModel;
       if (executorName) {
         const execModel =
           (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
         if (!execModel) {
           throw new Error(
-            `Topic '${childRole}' has executorModel '${executorName}' but no such model is registered. ` +
+            `Topic '${lane}' has executorModel '${executorName}' but no such model is registered. ` +
               `Fix it on the Topics page or clear the executor binding.`,
           );
         }
@@ -995,12 +1032,12 @@ export class SwarmSpawner {
       }
     }
     if (!candidate) {
-      const topicModel = await registry.getModelForTopic(childRole);
+      const topicModel = await registry.getModelForTopic(lane);
       candidate = topicModel?.modelId;
     }
     if (!candidate) {
       throw new Error(
-        `No model bound to topic '${childRole}'. ` +
+        `No model bound to topic '${lane}'. ` +
           `Map a model to this topic in the Models page (Topics section), ` +
           `or give the '${childRole}' expert an explicit modelPreference.`,
       );
@@ -1012,7 +1049,7 @@ export class SwarmSpawner {
     // overrode the user's "this topic uses this model" configuration and
     // sent every child to the orchestrator's model. If cost is a concern,
     // configure it via the Models page.
-    return { model: candidate, expertId, systemPrompt };
+    return { model: candidate, lane, expertId, systemPrompt };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {

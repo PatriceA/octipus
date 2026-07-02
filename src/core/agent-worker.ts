@@ -1121,13 +1121,13 @@ export class AgentWorker extends BaseAgentWorker {
     // against the once-per-iteration cap (no retry storm on the failure path).
     this.toolShimAttemptedIteration = this.iteration;
 
-    const model = await getModelRegistry().getModelForTopic('tool_translation');
+    const model = await getModelRegistry().getModelForTopic('background');
     if (!model) {
       if (!this.toolShimUnboundLogged) {
         this.toolShimUnboundLogged = true;
         agentLogger.debug(
           { agentId: this.context.id },
-          'Toolshim skipped: tool_translation topic unbound',
+          'Toolshim skipped: background topic unbound (toolshim rides the background lane)',
         );
       }
       return null;

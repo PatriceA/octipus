@@ -181,6 +181,66 @@ class CapabilityService {
     return this.availableCache?.ids ?? null;
   }
 
+  /**
+   * Re-probe a single capability and upsert its row + refresh the cache.
+   * Used when a runtime config change flips a tool's availability without a
+   * restart — e.g. configuring Twilio credentials makes the `voice` tool
+   * available, and the role gate (`getToolsForRole`) reads this table. Without
+   * this, the tool stayed gated out until the next boot-time `probeAll()`.
+   */
+  async reprobe(toolId: string): Promise<CapabilityRow | null> {
+    let probe: { available: boolean; degraded?: boolean; reason?: string | null; version?: string | null; path?: string | null };
+    try {
+      const staticProbe = STATIC_PROBES[toolId];
+      if (staticProbe) {
+        probe = await staticProbe();
+      } else {
+        const registry = getToolRegistry();
+        registry.invalidateAvailabilityCache();
+        const p = await registry.checkAvailability(toolId);
+        probe = { available: p.available, degraded: p.degraded, reason: p.reason };
+      }
+    } catch (err) {
+      probe = { available: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+
+    const db = getDb();
+    const [row] = await db
+      .insert(capabilities)
+      .values({
+        toolId,
+        available: probe.available,
+        degraded: probe.degraded ?? false,
+        reason: probe.reason ?? null,
+        version: probe.version ?? null,
+        path: probe.path ?? null,
+        installerKind: INSTALLER_PATHS[toolId] ? 'bun-exec' : 'manual',
+        checkedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: capabilities.toolId,
+        set: {
+          available: probe.available,
+          degraded: probe.degraded ?? false,
+          reason: probe.reason ?? null,
+          version: probe.version ?? null,
+          path: probe.path ?? null,
+          checkedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+
+    // Rebuild the in-memory cache from the fresh table state. Nulling alone
+    // would make the synchronous gate (`getAvailableSync`) return null —
+    // "don't gate" — until someone re-warms it; re-warming here keeps the
+    // gate accurate for the very next agent spawn.
+    this.availableCache = null;
+    await this.getAvailable();
+    logger.info({ toolId, available: probe.available, reason: probe.reason ?? undefined }, 'capability re-probed');
+    return row ?? null;
+  }
+
   /** Read every row, used by `octi capabilities` and `GET /capabilities`. */
   async list(): Promise<CapabilityRow[]> {
     const db = getDb();

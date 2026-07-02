@@ -3,6 +3,16 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { experts } from '@/db/schema/experts';
+import { TOPICS } from '@/models/topics';
+
+/** Lanes an expert can be assigned to: the text-class topics (agents/chat/voice). */
+function assignableLanes(): string[] {
+  return TOPICS.filter((t) => t.kind === 'text').map((t) => t.value);
+}
+
+function isAssignableLane(topic: string): boolean {
+  return assignableLanes().includes(topic);
+}
 
 export const expertRoutes = new Elysia({ prefix: '/experts' })
   .use(apiContext)
@@ -83,6 +93,10 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         return { error: 'Not authenticated' };
       }
 
+      if (body.topic !== undefined && !isAssignableLane(body.topic)) {
+        return { error: `Unknown topic lane: ${body.topic}. Valid lanes: ${assignableLanes().join(', ')}` };
+      }
+
       const db = getDb();
 
       const [created] = await db.insert(experts).values({
@@ -91,6 +105,7 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         description: body.description,
         icon: body.icon,
         role: body.role,
+        topic: body.topic ?? 'agents',
         systemPrompt: body.systemPrompt,
         modelPreference: body.modelPreference,
         toolIds: body.toolIds ?? [],
@@ -107,6 +122,7 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         description: t.Optional(t.String()),
         icon: t.Optional(t.String()),
         role: t.String(),
+        topic: t.Optional(t.String()),
         systemPrompt: t.Optional(t.String()),
         modelPreference: t.Optional(t.String()),
         toolIds: t.Optional(t.Array(t.String())),
@@ -146,11 +162,16 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         return { error: 'Not authorized' };
       }
 
+      if (body.topic !== undefined && !isAssignableLane(body.topic)) {
+        return { error: `Unknown topic lane: ${body.topic}. Valid lanes: ${assignableLanes().join(', ')}` };
+      }
+
       const updateData: Record<string, unknown> = { updatedAt: new Date() };
       if (body.name !== undefined) updateData.name = body.name;
       if (body.description !== undefined) updateData.description = body.description;
       if (body.icon !== undefined) updateData.icon = body.icon;
       if (body.role !== undefined) updateData.role = body.role;
+      if (body.topic !== undefined) updateData.topic = body.topic;
       if (body.systemPrompt !== undefined) updateData.systemPrompt = body.systemPrompt;
       if (body.modelPreference !== undefined) updateData.modelPreference = body.modelPreference;
       if (body.toolIds !== undefined) updateData.toolIds = body.toolIds;
@@ -172,6 +193,7 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         description: t.Optional(t.String()),
         icon: t.Optional(t.String()),
         role: t.Optional(t.String()),
+        topic: t.Optional(t.String()),
         systemPrompt: t.Optional(t.String()),
         modelPreference: t.Optional(t.String()),
         toolIds: t.Optional(t.Array(t.String())),

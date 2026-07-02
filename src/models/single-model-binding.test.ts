@@ -9,6 +9,7 @@ import {
   SINGLE_MODEL_CHAT_TOPICS,
   singleModelTopicBindings,
 } from './single-model-binding';
+import { canonicalTopic } from './topics';
 
 describe('singleModelTopicBindings', () => {
   test('binds every chat topic as primary', () => {
@@ -38,12 +39,16 @@ describe('singleModelTopicBindings', () => {
 });
 
 describe('drift guard', () => {
-  test('every worker role topic is covered (minus orchestrator)', () => {
+  test('every worker role topic canonicalizes into the chat set (minus orchestrator)', () => {
+    // Role configs keep role-named defaultTopics ('coding', 'research', …);
+    // since the topic consolidation these are RETIRED aliases that must
+    // canonicalize onto a bound lane, or a one-model install would spawn
+    // workers against an unbindable topic and fail loud.
     const covered = new Set<string>(SINGLE_MODEL_CHAT_TOPICS);
     const missing: string[] = [];
     for (const [role, cfg] of Object.entries(ROLE_CONFIGS)) {
       if (role === 'orchestrator') continue;
-      if (!covered.has(cfg.defaultTopic)) missing.push(`${role} → ${cfg.defaultTopic}`);
+      if (!covered.has(canonicalTopic(cfg.defaultTopic))) missing.push(`${role} → ${cfg.defaultTopic}`);
     }
     expect(missing).toEqual([]);
   });

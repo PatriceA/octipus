@@ -7,6 +7,7 @@
 
 import { getDb } from '@/db/postgres';
 import { type NewTopicConfig, type TopicConfig, topicsConfig } from '@/db/schema/topics-config';
+import { canonicalTopic } from '@/models/topics';
 import { modelLogger } from '@/utils/logger';
 
 /** The resolvable extras for a topic (null fields ⇒ fall back to model defaults). */
@@ -36,7 +37,14 @@ function toResolved(row: TopicConfig): ResolvedTopicConfig {
 export async function loadTopicConfigs(): Promise<void> {
   const rows = await getDb().select().from(topicsConfig);
   cache.clear();
-  for (const row of rows) cache.set(row.topic, toResolved(row));
+  for (const row of rows) {
+    // Legacy rows keyed by a retired topic ('coding', 'memory_extraction', …)
+    // fold into their canonical lane, but never shadow a row that is already
+    // keyed canonically — the canonical row is authoritative.
+    const key = canonicalTopic(row.topic);
+    if (key !== row.topic && cache.has(key)) continue;
+    cache.set(key, toResolved(row));
+  }
   loaded = true;
   modelLogger.info({ count: rows.length }, 'Loaded topic configs from database');
 }
@@ -44,17 +52,22 @@ export async function loadTopicConfigs(): Promise<void> {
 /**
  * Synchronous cache read for the hot path. Returns EMPTY (all-null) for an
  * unconfigured topic — callers treat null fields as "use model defaults".
+ * Retired topic values canonicalize to their lane (see RETIRED_TOPIC_ALIASES),
+ * matching the model-registry lookups.
  */
 export function getTopicConfig(topic: string | undefined): ResolvedTopicConfig {
   if (!topic) return EMPTY;
-  return cache.get(topic) ?? EMPTY;
+  return cache.get(canonicalTopic(topic)) ?? EMPTY;
 }
 
 /** Upsert a topic's extras and refresh the cache. Returns the new resolved config. */
 export async function setTopicConfig(
-  topic: string,
+  rawTopic: string,
   patch: Partial<Pick<ResolvedTopicConfig, 'executorModel' | 'temperature' | 'maxTokens'>>,
 ): Promise<ResolvedTopicConfig> {
+  // Canonicalize on WRITE too, so a stale caller writing 'coding' lands on the
+  // same row that reads (canonicalized to 'agents') resolve.
+  const topic = canonicalTopic(rawTopic);
   const db = getDb();
   const values: NewTopicConfig = {
     topic,

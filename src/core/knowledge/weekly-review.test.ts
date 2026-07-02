@@ -81,6 +81,6 @@ describe('weekly review', () => {
   test('generateWeeklyReview fails loud when the topic is unbound', async () => {
     await expect(
       generateWeeklyReview(userId, null, { resolveModelId: async () => null }),
-    ).rejects.toThrow(/knowledge_review/);
+    ).rejects.toThrow(/background/);
   });
 });
