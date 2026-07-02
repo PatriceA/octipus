@@ -37,6 +37,12 @@ export const TOPICS: readonly TopicDef[] = [
     kind: 'text',
   },
   {
+    value: 'writing',
+    label: 'Writing',
+    description: 'Long-form text roles — Researcher, Writer, Project Manager, Communication. Split out from Agents so this class of work can run on a cheaper/faster (e.g. flash) model while Agents keeps a stronger model for coding and precision work. Unbound = these roles fall back to nothing (fail loud); bind a model here or leave them on Agents.',
+    kind: 'text',
+  },
+  {
     value: 'chat',
     label: 'Chat',
     description: 'Casual conversations and direct replies. Also preferred by the orchestrator when bound; unbound = orchestrator uses the default model.',
@@ -61,10 +67,12 @@ export const TOPICS: readonly TopicDef[] = [
 ] as const;
 
 /**
- * Retired topic values → their canonical lane. The 16 worker-role topics and
- * the 5 per-feature background topics collapsed into `agents` / `background`
- * (docs/plans/topic-consolidation.md Phase 3); `simple` and `local` had no
- * runtime consumer and fold into `chat`.
+ * Retired topic values → their canonical lane. The worker-role topics collapse
+ * into `agents` (docs/plans/topic-consolidation.md Phase 3) — except the four
+ * long-form text roles (research/communication/pm/writing) which route to the
+ * `writing` lane. The 5 per-feature background topics collapse into
+ * `background`; `simple` and `local` had no runtime consumer and fold into
+ * `chat`.
  *
  * Aliasing (not hard removal) keeps every existing caller working: role
  * configs still carry role-named `defaultTopic`s (which double as the key for
@@ -74,13 +82,11 @@ export const TOPICS: readonly TopicDef[] = [
  * lane's binding.
  */
 export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
-  // worker role topics → the one agents lane
+  // worker role topics → the one agents lane …
   general: 'agents',
   coding: 'agents',
-  research: 'agents',
   architecture: 'agents',
   review: 'agents',
-  communication: 'agents',
   design: 'agents',
   devops: 'agents',
   security: 'agents',
@@ -89,8 +95,12 @@ export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
   qa: 'agents',
   finance: 'agents',
   automation: 'agents',
-  pm: 'agents',
-  writing: 'agents',
+  // … except the long-form text roles, which route to the `writing` lane so
+  // they can run on a cheaper/faster model. (`writing` itself is a canonical
+  // lane now, so it is intentionally absent here — it resolves to itself.)
+  research: 'writing',
+  communication: 'writing',
+  pm: 'writing',
   // orchestrator-direct text topics with no distinct lane
   simple: 'chat',
   local: 'chat',
