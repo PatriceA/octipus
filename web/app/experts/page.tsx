@@ -162,7 +162,7 @@ function ExpertForm({
         <label className="block">
           <span className="block text-xs text-on-surface-variant mb-1" title="Optional: pin a specific model, overriding the lane binding.">Model override (optional)</span>
           <select className={cn(selectCls, 'w-full')} value={form.modelPreference} onChange={(e) => set({ modelPreference: e.target.value })}>
-            <option value="">— use the lane's model —</option>
+            <option value="">— use the lane&apos;s model —</option>
             {models.map((m) => (
               <option key={m.name} value={m.modelId}>{m.name}</option>
             ))}
@@ -172,7 +172,7 @@ function ExpertForm({
 
       {!laneAndModelOnly && (
         <label className="block">
-          <span className="block text-xs text-on-surface-variant mb-1">System prompt (optional — replaces the role's base prompt)</span>
+          <span className="block text-xs text-on-surface-variant mb-1">System prompt (optional — replaces the role&apos;s base prompt)</span>
           <textarea
             className={cn(inputCls, 'min-h-24 font-mono')}
             value={form.systemPrompt}
