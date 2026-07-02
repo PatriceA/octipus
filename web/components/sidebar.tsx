@@ -11,6 +11,7 @@ import {
   Fingerprint,
   FlaskConical,
   GitBranch,
+  GraduationCap,
   KeyRound,
   LayoutDashboard,
   ListTodo,
@@ -64,6 +65,7 @@ const navGroups: NavGroup[] = [
     label: 'ai & automation',
     items: [
       { name: 'agents', href: '/agents', icon: Bot },
+      { name: 'experts', href: '/experts', icon: GraduationCap },
       { name: 'research', href: '/research', icon: Telescope },
       { name: 'models', href: '/models', icon: Cpu },
       { name: 'topics', href: '/topics', icon: Tags },
