@@ -1011,8 +1011,9 @@ export class SwarmSpawner {
     //      being right for the child's topic. Inheriting hides routing bugs.
     //
     // The lane is the expert's assigned topic (experts.topic) when an expert
-    // matched, else the child role — which canonicalizes to the 'agents' lane
-    // since the topic consolidation (RETIRED_TOPIC_ALIASES).
+    // matched, else the child role — which canonicalizes via RETIRED_TOPIC_ALIASES
+    // to the 'agents' lane (or 'writing' for the long-form text roles:
+    // research/communication/pm/writing).
     const lane = expertLane || childRole;
     let candidate = expertModel;
     if (!candidate) {

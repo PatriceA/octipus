@@ -145,11 +145,11 @@ export function defaultResearchDeps(userId: string): ResearchDeps {
     now: () => new Date().toISOString(),
     complete: async (system, user) => {
       const registry = getModelRegistry();
-      // 'research' and 'general' both canonicalize to the one 'agents' lane
-      // since the topic consolidation, so the old two-step fallback collapsed.
-      const model = await registry.getModelForTopic('agents');
+      // Resolve via the 'research' role so deep research follows the same lane
+      // as the research worker — 'research' canonicalizes to the 'writing' lane.
+      const model = await registry.getModelForTopic('research');
       if (!model) {
-        throw new Error('No model is bound to the "agents" topic — bind one on the Topics page.');
+        throw new Error('No model is bound to the "writing" topic (the research lane) — bind one on the Topics page.');
       }
       const result = await getLiteLLMClient().complete({
         model: model.modelId,
