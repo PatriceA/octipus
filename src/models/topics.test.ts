@@ -32,17 +32,25 @@ describe('canonical topic registry', () => {
   });
 
   test('the canonical lanes are present with the right kinds', () => {
-    for (const lane of ['agents', 'chat', 'voice']) {
+    for (const lane of ['agents', 'writing', 'chat', 'voice']) {
       expect(TOPICS.find((t) => t.value === lane)?.kind).toBe('text');
     }
     expect(TOPICS.find((t) => t.value === 'background')?.kind).toBe('background');
   });
 
-  test('every retired worker-role topic canonicalizes to the agents lane', () => {
-    for (const role of ['general', 'coding', 'research', 'architecture', 'review', 'communication',
-      'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing']) {
+  test('most retired worker-role topics canonicalize to the agents lane', () => {
+    for (const role of ['general', 'coding', 'architecture', 'review',
+      'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation']) {
       expect(canonicalTopic(role)).toBe('agents');
     }
+  });
+
+  test('the long-form text roles canonicalize to the writing lane', () => {
+    for (const role of ['research', 'communication', 'pm']) {
+      expect(canonicalTopic(role)).toBe('writing');
+    }
+    // `writing` is its own canonical lane now — passes through unchanged.
+    expect(canonicalTopic('writing')).toBe('writing');
   });
 
   test('every retired background topic canonicalizes to the background lane', () => {

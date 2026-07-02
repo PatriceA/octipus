@@ -62,9 +62,16 @@ describe('model registry aliasing', () => {
     expect(m?.modelId).toBe('lane-primary-id');
   });
 
-  test("retired role topic 'research' resolves the agents-lane backup", async () => {
-    const m = await getModelRegistry().getBackupModelForTopic('research');
+  test("retired role topic 'review' resolves the agents-lane backup", async () => {
+    const m = await getModelRegistry().getBackupModelForTopic('review');
     expect(m?.modelId).toBe('lane-backup-id');
+  });
+
+  test("long-form role topic 'research' now resolves the writing lane (unbound here)", async () => {
+    // research → writing (not agents); this fixture binds no writing model, so
+    // it fails loud — proving the re-route, not the agents fallback.
+    const m = await getModelRegistry().getModelForTopic('research');
+    expect(m).toBeNull();
   });
 
   test('an unknown topic still fails to resolve (fail loud preserved)', async () => {
