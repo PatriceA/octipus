@@ -41,7 +41,7 @@ export function defineEvaluator(
  */
 async function llmJudge(prompt: string): Promise<{ score: number; reasoning: string }> {
   const registry = getModelRegistry();
-  const judgeModel = await registry.getModelForTopic('evaluation')
+  const judgeModel = await registry.getModelForTopic('background')
     ?? await registry.getDefaultModel();
   if (!judgeModel) {
     return { score: 0.5, reasoning: 'No model configured for evaluation' };

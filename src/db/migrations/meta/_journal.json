@@ -519,6 +519,13 @@
       "when": 1782466431909,
       "tag": "0073_cloudy_glorian",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1782981702052,
+      "tag": "0074_nappy_goliath",
+      "breakpoints": true
     }
   ]
 }

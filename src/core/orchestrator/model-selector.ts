@@ -40,6 +40,14 @@ export class ModelSelector {
       }
     }
 
+    // The 'chat' lane binding, when set, is the explicit home for the
+    // orchestrator/conversation model (topic consolidation made this real —
+    // 'chat' previously had no consumer). Unbound ⇒ default model, as before.
+    const chatModel = await registry.getModelForTopic('chat');
+    if (chatModel) {
+      return this.validateOrchestratorModel(chatModel.modelId, chatModel);
+    }
+
     const defaultModel = await registry.getDefaultModel();
     if (!defaultModel) {
       throw new Error('No default model configured. Set one in the Models page.');

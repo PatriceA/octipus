@@ -9,6 +9,7 @@
  */
 import type { NewModelConfigEntry } from '@/db/schema/models';
 import type { PullProgress } from '@/models/providers/ollama-provider';
+import { canonicalTopic } from '@/models/topics';
 import { modelLogger } from '@/utils/logger';
 import type { CatalogTopic, ModelCatalogEntry } from './types';
 
@@ -56,13 +57,17 @@ export function buildModelEntry(
   bindTopics: CatalogTopic[],
   isFirst: boolean,
 ): NewModelConfigEntry {
+  // Catalog topics still use the editorial names ('general', 'coding', …);
+  // bindings must land on the CANONICAL lanes ('agents', 'chat', 'vision', …)
+  // or getModelForTopic would never resolve them after the topic consolidation.
+  const lanes = [...new Set(bindTopics.map((t) => canonicalTopic(t)))];
   return {
     name: entry.id,
     provider: 'ollama',
     modelId: entry.id,
     contextWindow: entry.contextWindow,
-    topics: bindTopics,
-    topicRoles: Object.fromEntries(bindTopics.map((t) => [t, 'primary' as const])),
+    topics: lanes,
+    topicRoles: Object.fromEntries(lanes.map((t) => [t, 'primary' as const])),
     supportsVision: entry.topics.includes('vision'),
     isDefault: isFirst,
   };

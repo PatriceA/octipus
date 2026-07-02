@@ -84,10 +84,10 @@ async function decide(candidate: CandidateFact, closest: Memory | null, userId: 
   // Empty list shortcut — no LLM call needed.
   if (!closest) return 'ADD';
 
-  const model = await getModelRegistry().getModelForTopic('memory_extraction');
+  const model = await getModelRegistry().getModelForTopic('background');
   if (!model) {
     // No judge model configured — be conservative and skip.
-    coreLogger.debug('memory.judge: no model bound to topic="memory_extraction" — defaulting to NOOP');
+    coreLogger.debug('memory.judge: no model bound to the "background" topic — defaulting to NOOP');
     return 'NOOP';
   }
 

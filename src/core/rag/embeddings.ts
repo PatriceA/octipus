@@ -767,7 +767,7 @@ export class EmbeddingService {
     // summary calls against whatever the default model happens to be —
     // the user picks the model (cheap/local/CLI) by binding the topic.
     const { getModelRegistry } = await import('@/models/model-registry');
-    const summarizer = await getModelRegistry().getModelForTopic('summarization');
+    const summarizer = await getModelRegistry().getModelForTopic('background');
     if (!summarizer) {
       coreLogger.debug(
         { count: ids.length },

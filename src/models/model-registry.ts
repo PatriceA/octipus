@@ -5,6 +5,7 @@ import { RedisCache } from '@/db/redis';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
+import { canonicalTopic } from '@/models/topics';
 import { getUserOrgIds } from '@/services/org-membership';
 import { modelLogger } from '@/utils/logger';
 
@@ -112,8 +113,13 @@ export class ModelRegistry {
   /**
    * Get model for a specific topic.
    * Priority: topicRoles primary → topicRoles backup → legacy topics+priority → default
+   *
+   * Retired topic values (old role topics like 'coding', per-feature background
+   * topics like 'memory_extraction') are transparently canonicalized to their
+   * lane ('agents' / 'background' / 'chat') — see RETIRED_TOPIC_ALIASES.
    */
-  async getModelForTopic(topic: string): Promise<ModelConfigEntry | null> {
+  async getModelForTopic(rawTopic: string): Promise<ModelConfigEntry | null> {
+    const topic = canonicalTopic(rawTopic);
     const cached = await this.cacheGet<ModelConfigEntry>(`model:topic:${topic}`);
     if (cached) return cached;
 
@@ -154,8 +160,10 @@ export class ModelRegistry {
 
   /**
    * Get backup model for a topic (for fallback on rate limit/error).
+   * Retired topic values are canonicalized like getModelForTopic.
    */
-  async getBackupModelForTopic(topic: string): Promise<ModelConfigEntry | null> {
+  async getBackupModelForTopic(rawTopic: string): Promise<ModelConfigEntry | null> {
+    const topic = canonicalTopic(rawTopic);
     const cached = await this.cacheGet<ModelConfigEntry>(`model:topic:backup:${topic}`);
     if (cached) return cached;
 

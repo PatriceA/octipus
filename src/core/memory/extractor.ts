@@ -123,9 +123,9 @@ export function parseExtractorResponse(raw: string): CandidateFact[] {
 export async function extractFacts(input: ExtractorInput): Promise<CandidateFact[]> {
   if (!looksWorthExtracting(input.userMessage)) return [];
 
-  const model = await getModelRegistry().getModelForTopic('memory_extraction');
+  const model = await getModelRegistry().getModelForTopic('background');
   if (!model) {
-    coreLogger.debug('memory.extractor: no model bound to topic="memory_extraction" — skipping');
+    coreLogger.debug('memory.extractor: no model bound to the "background" topic — skipping');
     return [];
   }
 

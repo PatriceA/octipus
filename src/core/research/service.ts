@@ -145,19 +145,9 @@ export function defaultResearchDeps(userId: string): ResearchDeps {
     now: () => new Date().toISOString(),
     complete: async (system, user) => {
       const registry = getModelRegistry();
-      let model = await registry.getModelForTopic('research');
-      if (!model) {
-        // Fall back to the general topic, but say so loudly: a silent swap here
-        // means research runs on the default model with no error, making "wrong
-        // model" bugs invisible (see DESIGN.md house rule #1, fail loud).
-        model = await registry.getModelForTopic('general');
-        if (model) {
-          coreLogger.warn(
-            { fallbackModel: model.modelId },
-            'research: no model bound to the "research" topic — falling back to "general". Bind a model to "research" in the Models page to silence this.',
-          );
-        }
-      }
+      // 'research' and 'general' both canonicalize to the one 'agents' lane
+      // since the topic consolidation, so the old two-step fallback collapsed.
+      const model = await registry.getModelForTopic('agents');
       if (!model) {
         throw new Error('No model is bound to the "research" or "general" topic — bind one in the Models page.');
       }

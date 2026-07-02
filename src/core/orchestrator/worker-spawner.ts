@@ -85,13 +85,16 @@ export async function handleExpertMessage(
   const startTime = Date.now();
   const agentRole = expert.role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
+  // Model lane: the expert's assigned topic (see experts.topic), falling back
+  // to the role default for pre-consolidation rows.
+  const expertLane = expert.topic || roleConfig.defaultTopic;
   const context: AgentContext = {
     id: `expert-${Date.now()}`,
     sessionId,
     userId,
     workspaceId,
     model: expert.modelPreference || '',
-    topic: roleConfig.defaultTopic,
+    topic: expertLane,
     role: agentRole,
     status: 'running',
     createdAt: new Date(),
@@ -113,7 +116,7 @@ export async function handleExpertMessage(
     const registry = getModelRegistry();
     const tierModel = expert.modelPreference
       ? await registry.getModelByModelId(expert.modelPreference)
-      : await registry.getModelForTopic(roleConfig.defaultTopic);
+      : await registry.getModelForTopic(expertLane);
     if (tierModel) {
       isSmall = isSmallModel({ modelId: tierModel.modelId, metadata: tierModel.metadata }, orchCfg.routerSmallModelMaxParams);
     }
@@ -214,6 +217,7 @@ export async function handleExpertMessage(
     const result = await spawnWorker(agentRole, message, '', context, deps, {
       systemPrompt: expertPrompt,
       model: expert.modelPreference || undefined,
+      topic: expertLane,
     });
 
     // Source attribution: which expert ran, which role, which skills were
@@ -269,7 +273,7 @@ export async function spawnWorker(
   input: string,
   context: AgentContext,
   deps: WorkerSpawnerDeps,
-  overrides?: { systemPrompt?: string; model?: string; swarmParent?: WorkerSwarmParent },
+  overrides?: { systemPrompt?: string; model?: string; topic?: string; swarmParent?: WorkerSwarmParent },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
@@ -307,16 +311,40 @@ export async function spawnWorker(
     );
   }
 
+  // Auto-select the role's system expert ROW first — its assigned model lane
+  // (`experts.topic`) decides which topic binding resolves the model, so it
+  // must be known before routing. Prompt assembly from the row happens further
+  // down, once the model tier (isSmall) is known.
+  let matchingExpert: import('@/db/schema/experts').Expert | null = null;
+  if (!overrides?.systemPrompt) {
+    try {
+      const { getDb } = await import('@/db/postgres');
+      const { experts } = await import('@/db/schema/experts');
+      const { eq, and } = await import('drizzle-orm');
+      const db = getDb();
+      const [row] = await db.select().from(experts)
+        .where(and(eq(experts.role, agentRole), eq(experts.isSystem, true)))
+        .limit(1);
+      matchingExpert = row ?? null;
+    } catch (err) {
+      coreLogger.debug({ err, role: agentRole }, 'Expert auto-selection skipped');
+    }
+  }
+
+  // Model lane: explicit override (expert direct-invocation path) > the
+  // auto-selected expert's lane > the role default (canonicalizes to 'agents').
+  const lane = overrides?.topic || matchingExpert?.topic || roleConfig.defaultTopic;
+
   // Resolve the worker's model up front so we know whether it's in the small
   // (router) tier before assembling the prompt. The orchestrator already
   // shrinks itself for small models (router/lite/full); this is the mirror
   // image for workers — trim the expert scaffold and cap the tool surface so a
   // weak local model isn't handed a 14-tool list and a multi-section prompt it
-  // can't drive. Smallness is derived from the *topic* model (what runs in the
+  // can't drive. Smallness is derived from the *lane* model (what runs in the
   // single-model / router case); an explicit expert modelPreference is a rare
   // override and still benefits from a leaner prompt.
   const routing = await deps.modelSelector.selectForWorker(
-    roleConfig.defaultTopic,
+    lane,
     roleTools.length > 0,
   );
   const orchCfg = getConfig().orchestrator;
@@ -333,21 +361,15 @@ export async function spawnWorker(
     coreLogger.info({ role: agentRole, model: routing.model }, 'Worker model is small-tier — trimming prompt + tools');
   }
 
-  // Auto-select a matching expert for this role
+  // Assemble the auto-selected expert's prompt scaffold (row fetched above,
+  // before routing, so the expert's lane could steer model resolution).
   let expertPrompt: string | undefined;
   let expertModel: string | undefined;
   // Hoisted so the topic-skill dedupe below can read whichever skillIds
   // the matched expert advertised. Closed over by the topic-skill block.
   let expertSkillIdsOuter: string[] = [];
-  if (!overrides?.systemPrompt) {
+  {
     try {
-      const { getDb } = await import('@/db/postgres');
-      const { experts } = await import('@/db/schema/experts');
-      const { eq, and } = await import('drizzle-orm');
-      const db = getDb();
-      const [matchingExpert] = await db.select().from(experts)
-        .where(and(eq(experts.role, agentRole), eq(experts.isSystem, true)))
-        .limit(1);
       if (matchingExpert) {
         expertPrompt = matchingExpert.systemPrompt || undefined;
         expertModel = matchingExpert.modelPreference || undefined;
@@ -400,12 +422,12 @@ export async function spawnWorker(
         }
 
         coreLogger.info(
-          { role: agentRole, expert: matchingExpert.name, hasSkills: (matchingExpert.skillIds as string[] || []).length > 0 },
+          { role: agentRole, expert: matchingExpert.name, lane, hasSkills: (matchingExpert.skillIds as string[] || []).length > 0 },
           'Auto-selected expert for worker role',
         );
       }
     } catch (err) {
-      coreLogger.debug({ err, role: agentRole }, 'Expert auto-selection skipped');
+      coreLogger.debug({ err, role: agentRole }, 'Expert prompt assembly skipped');
     }
   }
 
@@ -418,8 +440,11 @@ export async function spawnWorker(
   try {
     const { discoverSkillIds } = await import('@/skills/discovery');
     const { getSkillRegistry } = await import('@/skills/registry');
+    // Skill assignments stay ROLE-keyed ('coding', 'research', …) after the
+    // topic consolidation — the model lane ('agents') says nothing about which
+    // domain skills fit, the role does.
     const discoveredIds = await discoverSkillIds({
-      topic: roleConfig.defaultTopic,
+      topic: agentRole,
       message: task,
     });
     const expertSkillIds = new Set<string>(expertSkillIdsOuter);
@@ -429,7 +454,7 @@ export async function spawnWorker(
     }
     coreLogger.debug(
       {
-        topic: roleConfig.defaultTopic,
+        topic: agentRole,
         discoveredSkillCount: discoveredIds.length,
         afterDedupe: noveltopicIds.length,
       },
@@ -440,7 +465,7 @@ export async function spawnWorker(
     // operation. Previously debug-level — promoted to error so misconfigs
     // (e.g. DB offline, schema drift) surface in logs.
     coreLogger.error(
-      { err, topic: roleConfig.defaultTopic },
+      { err, topic: agentRole },
       'Topic skill injection failed — worker runs WITHOUT topic skills',
     );
   }
@@ -755,7 +780,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
     sessionId: context.sessionId,
     userId: context.userId,
     workspaceId: context.workspaceId ?? null,
-    topic: roleConfig.defaultTopic,
+    topic: lane,
     model: finalModel,
     role: agentRole,
     systemPrompt,
@@ -976,7 +1001,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
         coreLogger.error({ err: updateErr, workerId }, 'Failed to update swarm_node on error');
       }
     }
-    return handleWorkerFailure(error as Error, worker, workerId, finalModel, agentRole, roleConfig, task, input, context, startTime, deps, {
+    return handleWorkerFailure(error as Error, worker, workerId, finalModel, agentRole, roleConfig, lane, task, input, context, startTime, deps, {
       systemPrompt,
       tools: workerTools,
       toolAdvertisement,
@@ -1007,6 +1032,8 @@ async function handleWorkerFailure(
   failedModel: string,
   agentRole: AgentRole,
   roleConfig: import('./types').RoleConfig,
+  /** Model lane the failed worker resolved from (expert topic or role default). */
+  lane: string,
   task: string,
   input: string,
   context: AgentContext,
@@ -1060,7 +1087,7 @@ async function handleWorkerFailure(
       sessionId: context.sessionId,
       userId: context.userId,
       workspaceId: context.workspaceId ?? null,
-      topic: roleConfig.defaultTopic,
+      topic: lane,
       model,
       role: agentRole,
       systemPrompt: respawnCtx.systemPrompt,
@@ -1111,10 +1138,10 @@ async function handleWorkerFailure(
   // path. Skipped when unbound or when it would rerun the failed model.
   const registry = getModelRegistry();
   try {
-    const backup = await registry.getBackupModelForTopic(roleConfig.defaultTopic);
+    const backup = await registry.getBackupModelForTopic(lane);
     if (backup && backup.modelId !== failedModel) {
       coreLogger.info(
-        { failedModel, backupModel: backup.modelId, topic: roleConfig.defaultTopic, role: agentRole },
+        { failedModel, backupModel: backup.modelId, topic: lane, role: agentRole },
         'Worker failed on primary model, retrying with topic backup model',
       );
       const backupResult = await respawnAndRun(backup.modelId);

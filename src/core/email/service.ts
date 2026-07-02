@@ -20,7 +20,7 @@ import { detectProvider, gmailApi, graphApi } from './providers';
 import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
 
 async function generalModelId(): Promise<string> {
-  const model = await getModelRegistry().getModelForTopic('general');
+  const model = await getModelRegistry().getModelForTopic('agents');
   if (!model) throw new Error('No model is bound to the "general" topic — bind one in the Models page.');
   return model.modelId;
 }

@@ -42,12 +42,20 @@ describe('applyTopicParamOverrides', () => {
 describe('getTopicConfig (cache read)', () => {
   test('returns the cached config for a known topic', () => {
     __setTopicConfigCacheForTest({
-      coding: { executorModel: 'fast-model', temperature: 0.2, maxTokens: 8192 },
+      agents: { executorModel: 'fast-model', temperature: 0.2, maxTokens: 8192 },
     });
-    const cfg = getTopicConfig('coding');
+    const cfg = getTopicConfig('agents');
     expect(cfg.executorModel).toBe('fast-model');
     expect(cfg.temperature).toBe(0.2);
     expect(cfg.maxTokens).toBe(8192);
+  });
+
+  test('retired topic names read the canonical lane row (aliasing)', () => {
+    __setTopicConfigCacheForTest({
+      agents: { executorModel: 'fast-model', temperature: 0.2, maxTokens: 8192 },
+    });
+    // 'coding' retired → canonicalizes to 'agents'
+    expect(getTopicConfig('coding').executorModel).toBe('fast-model');
   });
 
   test('returns all-null for an unconfigured topic', () => {
@@ -57,7 +65,7 @@ describe('getTopicConfig (cache read)', () => {
   });
 
   test('undefined topic → all-null (no override)', () => {
-    __setTopicConfigCacheForTest({ coding: { executorModel: 'x', temperature: null, maxTokens: null } });
+    __setTopicConfigCacheForTest({ agents: { executorModel: 'x', temperature: null, maxTokens: null } });
     expect(getTopicConfig(undefined)).toEqual({ executorModel: null, temperature: null, maxTokens: null });
   });
 });

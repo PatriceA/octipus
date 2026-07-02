@@ -8,6 +8,13 @@ export const experts = pgTable('presets', {
   description: text('description'),
   icon: text('icon'),
   role: text('role').notNull(),
+  /**
+   * Model lane (canonical topic, see src/models/topics.ts) this expert's
+   * workers resolve their model from. `role` stays the tool bundle + base
+   * prompt; `topic` decides WHICH model serves the expert. Defaults to the
+   * main 'agents' lane; an explicit modelPreference still wins over the lane.
+   */
+  topic: text('topic').notNull().default('agents'),
   systemPrompt: text('system_prompt'),
   modelPreference: text('model_preference'),
   toolIds: jsonb('tool_ids').$type<string[]>().default([]),

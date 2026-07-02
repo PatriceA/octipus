@@ -1,7 +1,29 @@
 # Model↔Topic System — Analysis & Topic-Consolidation Plan
 
-Status: DECIDED — Phase 1 items implemented (backup wiring, voice re-probe,
-orchestrator expert index); topic collapse (Phases 2–3) pending.
+Status: IMPLEMENTED — Phase 1 (backup wiring, voice re-probe, orchestrator
+expert index) and Phases 2–3 (topic collapse 27→7 with retired-topic aliasing,
+`experts.topic` lane assignment, data migration 0074) are in. Phase 4 remains:
+expert CRUD UI polish + surfacing `expert → topic → model` routing in the UI.
+
+Implementation notes (Phases 2–3):
+- Role configs intentionally KEEP their role-named `defaultTopic`s ('coding',
+  'research', …). Those are retired aliases now: `canonicalTopic()` maps them
+  to lanes at the model-registry/topic-config lookup layer, and the role name
+  keeps doubling as the key for role-scoped skill assignments
+  (`skill_topic_assignments` stays role-keyed by design).
+- The orchestrator prefers the `chat` lane binding when set, else the default
+  model (previously 'chat' had no consumer).
+- hwfit catalog keeps editorial topic names; `buildModelEntry` canonicalizes
+  them to lanes at bind time.
+- Migration 0074: adds `presets.topic` (default 'agents'); elects the
+  agents/background lane primary+backup from the retired-topic bindings
+  (most-covered model wins, 'general' preferred on ties); pins differing
+  per-role primaries as the role's system-expert `modelPreference`; copies
+  'general' / newest background extras rows onto the lane rows. Retired keys in
+  `topic_roles` / `topics` / `topics_config` are left in place — inert, since
+  every lookup canonicalizes first.
+- `seedExperts` no longer resyncs `modelPreference` (operator-owned; the
+  migration writes it).
 Date: 2026-07-01
 
 ## Decisions (2026-07-01)

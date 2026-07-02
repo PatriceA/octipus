@@ -907,6 +907,8 @@ export class SwarmSpawner {
 
     let expertModel: string | undefined;
     let expertId: string | undefined;
+    /** The expert's assigned model lane (experts.topic) — overrides childRole for model resolution. */
+    let expertLane: string | undefined;
     let systemPrompt: string | undefined;
     let expertSkillIds: string[] = [];
     try {
@@ -918,6 +920,7 @@ export class SwarmSpawner {
       let rows: Array<{
         id: string;
         name: string;
+        topic: string | null;
         modelPreference: string | null;
         systemPrompt: string | null;
         skillIds: unknown;
@@ -935,6 +938,7 @@ export class SwarmSpawner {
       if (expert) {
         expertId = expert.id;
         expertModel = expert.modelPreference || undefined;
+        expertLane = expert.topic || undefined;
         systemPrompt = expert.systemPrompt || undefined;
         expertSkillIds = Array.isArray(expert.skillIds) ? (expert.skillIds as string[]) : [];
       }
@@ -995,24 +999,29 @@ export class SwarmSpawner {
 
     // Model selection — in order of preference:
     //   1. expert.modelPreference (specialist's explicit choice)
-    //   2. topic executorModel (W9 planner→executor split) — the spawned child
-    //      IS the executor, so it binds to the topic's configured executor model
+    //   2. lane executorModel (W9 planner→executor split) — the spawned child
+    //      IS the executor, so it binds to the lane's configured executor model
     //      when one is set on the Topics page.
-    //   3. topic→model mapping (registered role→model binding)
+    //   3. lane→model mapping (topic primary binding)
     //   4. fail loud — do NOT inherit parent model. The parent's model is
     //      whatever the orchestrator happened to pick; it has no claim to
     //      being right for the child's topic. Inheriting hides routing bugs.
+    //
+    // The lane is the expert's assigned topic (experts.topic) when an expert
+    // matched, else the child role — which canonicalizes to the 'agents' lane
+    // since the topic consolidation (RETIRED_TOPIC_ALIASES).
+    const lane = expertLane || childRole;
     let candidate = expertModel;
     if (!candidate) {
       // Empty executorModel ⇒ this whole block is skipped and resolution is
       // byte-for-byte today's behaviour (planner == executor).
-      const executorName = getTopicConfig(childRole).executorModel;
+      const executorName = getTopicConfig(lane).executorModel;
       if (executorName) {
         const execModel =
           (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
         if (!execModel) {
           throw new Error(
-            `Topic '${childRole}' has executorModel '${executorName}' but no such model is registered. ` +
+            `Topic '${lane}' has executorModel '${executorName}' but no such model is registered. ` +
               `Fix it on the Topics page or clear the executor binding.`,
           );
         }
@@ -1020,12 +1029,12 @@ export class SwarmSpawner {
       }
     }
     if (!candidate) {
-      const topicModel = await registry.getModelForTopic(childRole);
+      const topicModel = await registry.getModelForTopic(lane);
       candidate = topicModel?.modelId;
     }
     if (!candidate) {
       throw new Error(
-        `No model bound to topic '${childRole}'. ` +
+        `No model bound to topic '${lane}'. ` +
           `Map a model to this topic in the Models page (Topics section), ` +
           `or give the '${childRole}' expert an explicit modelPreference.`,
       );

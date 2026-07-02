@@ -21,7 +21,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { reorderStages } from '../../../src/core/orchestrator/pipeline-validation';
 import { api } from '@/lib/api';
-import { AVAILABLE_TOPICS } from '@/lib/types/models';
+import { WORKER_ROLES } from '@/lib/types/models';
 
 interface PipelineStep {
   name: string;
@@ -555,7 +555,7 @@ function TemplateEditor({
                               onChange={e => updateStep(i, { topic: e.target.value })}
                               className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                             >
-                              {AVAILABLE_TOPICS.map(t => (
+                              {WORKER_ROLES.map(t => (
                                 <option key={t.value} value={t.value}>{t.label}</option>
                               ))}
                             </select>

@@ -391,12 +391,15 @@ export async function seedExperts(): Promise<void> {
     if (existing.length > 0) {
       // Resync all code-owned fields for system experts so DB tracks source.
       // User-owned experts (isSystem=false) are never touched here.
+      // modelPreference and topic are OPERATOR-owned (set via the experts API
+      // or the topic-consolidation migration, which pins per-role model
+      // bindings there) — resyncing them from code would wipe that on every
+      // boot, so they are deliberately absent from this set().
       await db.update(experts).set({
         description: expert.description,
         icon: expert.icon,
         role: expert.role,
         systemPrompt: expert.systemPrompt ?? null,
-        modelPreference: expert.modelPreference ?? null,
         toolIds: expert.toolIds ?? [],
         skillIds: expert.skillIds ?? [],
         parameters: expert.parameters ?? {},

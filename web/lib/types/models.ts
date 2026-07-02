@@ -90,38 +90,44 @@ export interface LiteLLMModel {
  * the edit-model-modal fix) silently strips it from any model bound to it.
  */
 export const AVAILABLE_TOPICS = [
-  // worker role topics (topic === role)
-  { value: 'general', label: 'General', description: 'General-purpose tasks, browser interaction' },
-  { value: 'coding', label: 'Coding', description: 'Code generation, shell, git' },
-  { value: 'research', label: 'Research', description: 'Web search, information gathering, investigation' },
-  { value: 'architecture', label: 'Architecture', description: 'Software architecture, requirements, system design' },
-  { value: 'review', label: 'Review', description: 'Code review, PR review, quality analysis' },
-  { value: 'communication', label: 'Communication', description: 'Email, calendar, contacts (Google/Microsoft)' },
-  { value: 'design', label: 'Design', description: 'UI/UX design, layout, accessibility' },
-  { value: 'devops', label: 'DevOps', description: 'CI/CD, Docker, infrastructure, deployment' },
-  { value: 'security', label: 'Security', description: 'Security analysis, threat modeling, hardening' },
-  { value: 'data', label: 'Data', description: 'Databases, data pipelines, SQL' },
-  { value: 'ai', label: 'AI/ML', description: 'Machine learning, RAG, model training' },
-  { value: 'qa', label: 'QA', description: 'Testing, browser testing, bug reports' },
-  { value: 'finance', label: 'Finance', description: 'Financial analysis, market data' },
-  { value: 'automation', label: 'Automation', description: 'Workflows, process orchestration' },
-  { value: 'pm', label: 'Project Mgmt', description: 'Project planning, tracking, coordination' },
-  { value: 'writing', label: 'Writing', description: 'Documentation, technical writing' },
-  // orchestrator-direct / capability text topics
-  { value: 'chat', label: 'Chat', description: 'Casual conversations' },
-  { value: 'simple', label: 'Simple', description: 'Trivial single-step requests routed direct (no swarm)' },
-  { value: 'local', label: 'Local', description: 'Local-model-preferred lightweight tasks' },
-  { value: 'voice', label: 'Voice', description: 'Phone call conversations — use a fast model for low latency' },
-  // automated background text tasks
-  { value: 'memory_extraction', label: 'Memory Extraction', description: 'Long-term memory extractor + judge. Runs per turn — bind a cheap, fast model. Unbound = memory tier stays off.' },
-  { value: 'knowledge_review', label: 'Knowledge Review', description: 'KB curation / review passes — bind a cheap model.' },
-  { value: 'evaluation', label: 'Evaluation', description: 'LLM-as-judge for eval/conformance — use a fast deterministic model' },
-  { value: 'summarization', label: 'Summarization', description: 'L0 abstracts for knowledge-base chunks (docs/files). Runs per chunk on import — bind a cheap/local model. Unbound = no abstracts generated.' },
-  { value: 'tool_translation', label: 'Tool Translation', description: 'Toolshim: converts a weak/local model’s prose-instead-of-tool-call into a valid tool call. Runs only on the tool-call failure path — bind a small, reliable tool-calling model. Unbound = toolshim disabled (current behaviour).' },
+  // model lanes (text)
+  { value: 'agents', label: 'Agents', description: 'All expert/worker agents — the main text lane. Every specialist resolves its model here unless the expert pins its own model or lane.' },
+  { value: 'chat', label: 'Chat', description: 'Casual conversations and direct replies. Also preferred by the orchestrator when bound; unbound = orchestrator uses the default model.' },
+  { value: 'voice', label: 'Voice', description: 'Phone call conversations (Twilio/Telnyx/Plivo) — bind a fast model for low latency. Unbound = falls back to the default model.' },
+  // automated background text tasks (one lane)
+  { value: 'background', label: 'Background', description: 'Automated background tasks: memory extraction, knowledge-base review, evaluation, chunk summarization, tool-call translation. Bind a cheap/local model. Unbound = these features stay off.' },
   // non-text model classes
   { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents' },
   { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis' },
   { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
+] as const;
+
+/**
+ * Worker roles (tool bundles + base prompts) — used where the UI picks WHO
+ * does the work (e.g. pipeline stages), as opposed to AVAILABLE_TOPICS above,
+ * which are model lanes (WHICH model serves it). Pipeline `step.topic`
+ * historically carries the role name; the backend canonicalizes it to the
+ * 'agents' lane for model resolution.
+ *
+ * KEEP IN SYNC with src/core/orchestrator/roles/<name>/config.ts.
+ */
+export const WORKER_ROLES = [
+  { value: 'general', label: 'General' },
+  { value: 'coding', label: 'Coding' },
+  { value: 'research', label: 'Research' },
+  { value: 'architecture', label: 'Architecture' },
+  { value: 'review', label: 'Review' },
+  { value: 'communication', label: 'Communication' },
+  { value: 'design', label: 'Design' },
+  { value: 'devops', label: 'DevOps' },
+  { value: 'security', label: 'Security' },
+  { value: 'data', label: 'Data' },
+  { value: 'ai', label: 'AI/ML' },
+  { value: 'qa', label: 'QA' },
+  { value: 'finance', label: 'Finance' },
+  { value: 'automation', label: 'Automation' },
+  { value: 'pm', label: 'Project Mgmt' },
+  { value: 'writing', label: 'Writing' },
 ] as const;
 
 /** Map LiteLLM provider prefix to our internal provider name */
