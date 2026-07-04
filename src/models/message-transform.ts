@@ -48,22 +48,76 @@ export function buildIdMap(messages: AgentMessage[]): Map<string, string> {
 }
 
 /**
+ * Enforce the OpenAI tool-call <-> tool-message pairing invariant in BOTH
+ * directions (hoisted from litellm-client so every direct provider path gets
+ * it, not just the proxy — A10):
+ *   (a) Drop tool messages whose tool_call_id has no matching assistant
+ *       tool_calls entry (lenient providers accept; strict ones 400).
+ *   (b) For every assistant `tool_calls` id missing a following `tool`
+ *       message, synthesize a placeholder. Prevents DeepSeek's 400
+ *       "insufficient tool messages following tool_calls message" after
+ *       compaction, history re-slices, or bailed-out agent loops.
+ */
+export function sanitizeToolMessages(messages: AgentMessage[]): AgentMessage[] {
+  const validToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.toolCalls?.length) {
+      for (const tc of msg.toolCalls) validToolCallIds.add(tc.id);
+    }
+  }
+  const filtered = messages.filter((msg) => {
+    if (msg.role !== 'tool') return true;
+    return msg.toolCallId != null && validToolCallIds.has(msg.toolCallId);
+  });
+
+  const out: AgentMessage[] = [];
+  for (let i = 0; i < filtered.length; i++) {
+    const msg = filtered[i];
+    out.push(msg);
+    if (msg.role !== 'assistant' || !msg.toolCalls?.length) continue;
+
+    const expected = new Map(msg.toolCalls.map((tc) => [tc.id, tc.name] as const));
+    let j = i + 1;
+    const seen = new Set<string>();
+    while (j < filtered.length && filtered[j].role === 'tool') {
+      const id = filtered[j].toolCallId;
+      if (id != null && expected.has(id)) seen.add(id);
+      out.push(filtered[j]);
+      j++;
+    }
+    for (const [id, name] of expected) {
+      if (!seen.has(id)) {
+        out.push({
+          role: 'tool',
+          content: '[no result recorded — tool response missing from history]',
+          toolCallId: id,
+          name,
+          timestamp: new Date(),
+        });
+      }
+    }
+    i = j - 1;
+  }
+  return out;
+}
+
+/**
  * Transform messages for cross-model compatibility.
  * - Normalizes tool call IDs
- * - Strips provider-specific thinking blocks
- * - Ensures tool results reference valid tool call IDs
+ * - Strips provider-specific thinking blocks (all providers)
+ * - Enforces tool-call/tool-message pairing (A10)
  */
 export function transformMessagesForProvider(
   messages: AgentMessage[],
-  targetProvider: string,
+  _targetProvider: string,
 ): AgentMessage[] {
   const idMap = buildIdMap(messages);
-  if (idMap.size === 0 && targetProvider !== 'anthropic') return messages;
 
-  return messages.map((msg) => {
+  // idMap normalization is only needed when there are long/invalid ids; the
+  // thinking-strip and pairing passes must run for ALL providers regardless.
+  const mapped = messages.map((msg) => {
     const transformed = { ...msg };
 
-    // Normalize tool call IDs in assistant messages
     if (transformed.role === 'assistant' && transformed.toolCalls) {
       transformed.toolCalls = transformed.toolCalls.map((tc) => ({
         ...tc,
@@ -71,18 +125,20 @@ export function transformMessagesForProvider(
       }));
     }
 
-    // Normalize tool_call_id in tool result messages
     if (transformed.role === 'tool' && transformed.toolCallId) {
       const original = transformed.toolCallId;
       transformed.toolCallId = idMap.get(original) || normalizeToolCallId(original);
     }
 
-    // Strip thinking blocks for non-supporting providers
+    // Strip thinking blocks — <thinking>, <think>, <reasoning> variants.
     if (transformed.role === 'assistant' && typeof transformed.content === 'string') {
-      // Remove <thinking>...</thinking> blocks
-      transformed.content = transformed.content.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+      transformed.content = transformed.content
+        .replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/g, '')
+        .trim();
     }
 
     return transformed;
   });
+
+  return sanitizeToolMessages(mapped);
 }

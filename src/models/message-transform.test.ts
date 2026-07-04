@@ -122,15 +122,16 @@ describe('Message Transform', () => {
       expect(result[0].content).not.toContain('<thinking>');
     });
 
-    test('no-op when no transformation needed', () => {
+    test('preserves content when no id/thinking/pairing transformation needed', () => {
       const messages: AgentMessage[] = [
         { role: 'user', content: 'Hello', timestamp: now },
         { role: 'assistant', content: 'Hi there', timestamp: now },
       ];
 
+      // The idMap early-return was removed (item 25) so thinking-strip + pairing
+      // run for every provider — the array is rebuilt but content is unchanged.
       const result = transformMessagesForProvider(messages, 'openai');
-      // Should return the original array reference when nothing to transform
-      expect(result).toBe(messages);
+      expect(result).toEqual(messages);
     });
   });
 });

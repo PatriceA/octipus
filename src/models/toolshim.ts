@@ -139,7 +139,7 @@ export function parseToolShimResponse(
     : {};
 
   return {
-    id: `call_shim_${Date.now()}`,
+    id: `call_shim_${crypto.randomUUID()}`,
     name,
     arguments: args,
   };

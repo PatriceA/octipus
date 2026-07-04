@@ -3,9 +3,10 @@ import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
@@ -50,7 +51,7 @@ export class OpenRouterProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -63,7 +64,7 @@ export class OpenRouterProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
 
       if (!response.choices?.length) {
@@ -90,30 +91,11 @@ export class OpenRouterProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments || '';
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            const repaired = repairTruncatedJson(rawArgs);
-            if (repaired) {
-              try {
-                const parsed = JSON.parse(repaired) as Record<string, unknown>;
-                modelLogger.warn(
-                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-                  'Recovered truncated tool-call JSON via repairTruncatedJson',
-                );
-                return { id: tc.id, name: tc.function.name, arguments: parsed };
-              } catch { /* fall through */ }
-            }
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
         });
       }
 
@@ -167,7 +149,7 @@ export class OpenRouterProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -178,7 +160,7 @@ export class OpenRouterProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
     } catch (err) {
       throw classifyError(err, 'openrouter');
     }
@@ -264,11 +246,12 @@ export class OpenRouterProvider implements ModelProvider {
       const remaining = data.data?.limit_remaining;
       const exhausted = remaining != null && remaining <= 0;
 
+      modelLogger.debug({ provider: this.name, creditRemaining: remaining }, 'OpenRouter credit balance');
+
       return {
         provider: this.name,
         hasQuota: !exhausted,
         exhausted,
-        tokensRemaining: remaining != null ? Math.round(remaining * 1_000_000) : undefined, // rough estimate
       };
     } catch (error) {
       return { provider: this.name, hasQuota: true, exhausted: false, lastError: (error as Error).message };
@@ -313,12 +296,12 @@ export class OpenRouterProvider implements ModelProvider {
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
           content: msg.content,
-          tool_call_id: msg.toolCallId || '',
+          tool_call_id: msg.toolCallId as string,
         };
       }
 

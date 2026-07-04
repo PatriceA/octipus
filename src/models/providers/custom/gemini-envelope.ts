@@ -26,10 +26,39 @@ export interface GenericGeminiRequest {
   responseSchema?: Record<string, unknown>;
   responseMimeType?: string;
   /**
-   * When true, sets thinkingConfig.thinkingBudget = 0 so Gemini 3 doesn't
-   * spend output tokens on internal reasoning. Map from extraBody.think:false.
+   * When true, minimize internal reasoning. Maps to a per-tier thinkingConfig
+   * (never thinkingBudget:0 on Gemini 3 — that's a hard error). From
+   * extraBody.think:false.
    */
   disableThinking?: boolean;
+  /** Tool-calling policy → functionCallingConfig.mode (AUTO/ANY/NONE). */
+  toolChoice?: 'auto' | 'required' | 'none';
+}
+
+/**
+ * Per-tier Gemini thinkingConfig (pi's rules, google.ts:410-501).
+ * Gemini 3 cannot use thinkingBudget:0; flash-lite's minimal budget is 512.
+ * Returns the `thinkingConfig` fragment or undefined to leave model defaults.
+ */
+export function geminiThinkingConfig(
+  modelId: string,
+  opts: { disable?: boolean },
+): Record<string, unknown> | undefined {
+  const id = (modelId || '').toLowerCase();
+  const isGemini3 = /gemini-3(?:\.\d+)?/.test(id);
+  const isGemini3Pro = /gemini-3(?:\.\d+)?-pro/.test(id);
+  const isFlashLite = /flash-lite/.test(id);
+  const isGemma4 = /gemma-?4/.test(id);
+
+  if (opts.disable) {
+    if (isGemini3Pro) return { thinkingLevel: 'LOW' };
+    if (isGemini3 || isGemma4) return { thinkingLevel: 'MINIMAL' };
+    return { thinkingBudget: 0 }; // Gemini 2.x supports full disable
+  }
+  // Not disabling: only guarantee a floor for 2.5 flash-lite so a burst of
+  // thinking can't starve the tool call. Everything else uses model defaults.
+  if (isFlashLite && /2\.5/.test(id)) return { thinkingBudget: 512 };
+  return undefined;
 }
 
 /** Build native Gemini `contents` array from AgentMessage[]. system messages
@@ -119,7 +148,16 @@ export function extractSystemInstruction(messages: AgentMessage[]): { parts: Arr
 
 function parseToolContent(content: string): unknown {
   if (!content) return {};
-  try { return JSON.parse(content); } catch { return { result: content }; }
+  // Gemini's functionResponse.response must be an OBJECT. A tool result that is
+  // valid JSON but a scalar/array (a number, string, boolean, or list) 400s
+  // unless wrapped — mirror the non-JSON fallback and box it as { result }.
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    return { result: parsed };
+  } catch {
+    return { result: content };
+  }
 }
 
 /**
@@ -132,10 +170,24 @@ function parseToolContent(content: string): unknown {
  *   - inject `items: { type: 'string' }` when an `array` schema has no `items`
  *   - inject `properties: {}` when an `object` schema has no `properties`
  *   - drop JSON Schema fields Gemini doesn't recognize (`default`,
- *     `additionalProperties`) — silently, so existing call sites don't break
+ *     `additionalProperties`) and JSON-Schema meta keywords ($schema, $id,
+ *     $anchor, $dynamicAnchor, $vocabulary, $comment, $defs, definitions) —
+ *     mirroring pi's sanitizeForOpenApi. `$ref` is PRESERVED (Gemini resolves
+ *     refs); only the meta-declarations are stripped.
  *
  * The result is a *copy*; the input is not mutated.
  */
+const JSON_SCHEMA_META_KEYS = new Set([
+  '$schema',
+  '$id',
+  '$anchor',
+  '$dynamicAnchor',
+  '$vocabulary',
+  '$comment',
+  '$defs',
+  'definitions',
+]);
+
 export function sanitizeSchemaForGemini(schema: unknown): unknown {
   if (Array.isArray(schema)) {
     return schema.map((entry) => sanitizeSchemaForGemini(entry));
@@ -148,6 +200,8 @@ export function sanitizeSchemaForGemini(schema: unknown): unknown {
   for (const [k, v] of Object.entries(src)) {
     // Gemini rejects unknown keywords; strip the ones we know are unsupported.
     if (k === 'default' || k === 'additionalProperties') continue;
+    // Strip JSON-Schema meta-declarations (but keep $ref).
+    if (JSON_SCHEMA_META_KEYS.has(k)) continue;
     if (k === 'properties' && v && typeof v === 'object') {
       const props: Record<string, unknown> = {};
       for (const [pk, pv] of Object.entries(v as Record<string, unknown>)) {
@@ -207,10 +261,15 @@ export function buildStandardEnvelope(req: GenericGeminiRequest): Record<string,
   if (req.stopSequences?.length) generationConfig.stopSequences = req.stopSequences;
   if (req.responseMimeType) generationConfig.responseMimeType = req.responseMimeType;
   if (req.responseSchema) generationConfig.responseSchema = req.responseSchema;
-  if (req.disableThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  const thinkingConfig = geminiThinkingConfig(req.model, { disable: req.disableThinking });
+  if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
   if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
 
-  if (req.tools?.length) body.tools = buildGeminiTools(req.tools);
+  if (req.tools?.length) {
+    body.tools = buildGeminiTools(req.tools);
+    const mode = req.toolChoice === 'required' ? 'ANY' : req.toolChoice === 'none' ? 'NONE' : 'AUTO';
+    body.toolConfig = { functionCallingConfig: { mode } };
+  }
 
   return body;
 }

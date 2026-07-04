@@ -1,8 +1,10 @@
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage, ToolCall } from '@/core/types';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
+import { transformMessagesForProvider } from '@/models/message-transform';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
+import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 
@@ -50,12 +52,12 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
 
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await fetchWithRetryAfter(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
-      });
+        signal: withTimeoutSignal(120_000, options.signal),
+      }, this.name);
     } catch (err) {
       throw classifyError(err, this.name);
     }
@@ -78,19 +80,24 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
 
     modelLogger.debug({ model: body.model, provider: this.name, url }, 'Starting streaming completion via custom-anthropic');
 
+    // Idle (read) timeout that resets per chunk — a long streamed tool-call
+    // must not be killed by a fixed total-duration cap; caller signal aborts.
+    const idle = createIdleAbort(180_000, options.signal);
     let res: Response;
     try {
       res = await fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(180_000),
+        signal: idle.signal,
       });
     } catch (err) {
+      idle.clear();
       throw classifyError(err, this.name);
     }
 
     if (!res.ok || !res.body) {
+      idle.clear();
       const errText = await res.text().catch(() => '');
       throw classifyError(
         { status: res.status, message: extractErrorMessage(errText) || `HTTP ${res.status}` },
@@ -98,7 +105,11 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       );
     }
 
-    yield* parseAnthropicSseStream(res.body, this.name);
+    try {
+      yield* parseAnthropicSseStream(res.body, this.name, idle.touch);
+    } finally {
+      idle.clear();
+    }
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {
@@ -113,7 +124,8 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
     options: CompletionOptions,
     streaming: boolean,
   ): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
-    const { system, messages } = toAnthropicMessages(options.messages);
+    // A10: id normalization + pairing enforcement before Anthropic conversion.
+    const { system, messages } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
 
     const body: Record<string, unknown> = {
       model: cfg.model?.modelId || options.model,
@@ -158,6 +170,8 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       }
     }
 
+    const cacheRead = data.usage?.cache_read_input_tokens;
+    const cacheCreate = data.usage?.cache_creation_input_tokens;
     const result: CompletionResult = {
       content: textParts.join(''),
       finishReason: mapStopReason(data.stop_reason),
@@ -165,6 +179,8 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
         inputTokens: data.usage?.input_tokens || 0,
         outputTokens: data.usage?.output_tokens || 0,
         totalTokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+        ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
+        ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
       },
       model: data.model || modelId,
       latencyMs,
@@ -208,6 +224,7 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
   const out: AnthropicMessage[] = [];
 
   const pushMerged = (role: 'user' | 'assistant', blocks: AnthropicBlock[]) => {
+    if (blocks.length === 0) return; // drop empty turns (Anthropic 400s on them)
     const prev = out[out.length - 1];
     if (prev && prev.role === role) {
       const prevBlocks = Array.isArray(prev.content)
@@ -228,6 +245,9 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
     if (msg.role === 'tool') {
       pushMerged('user', [{
         type: 'tool_result',
+        // Keep the empty-id fallback: A10's transform normalizes present ids but
+        // does not synthesize ids for genuinely-empty ones, and tool_use/
+        // tool_result fallback ids must line up (see the ordinal below).
         tool_use_id: msg.toolCallId || 'call_0',
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
       }]);
@@ -252,7 +272,9 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
       continue;
     }
 
-    // Plain user / assistant text turn.
+    // Plain user / assistant text turn — skip empty text (Anthropic rejects
+    // empty text blocks; pushMerged drops the resulting empty turn).
+    if (!msg.content?.trim()) continue;
     pushMerged(msg.role === 'assistant' ? 'assistant' : 'user', [{ type: 'text', text: msg.content }]);
   }
 
@@ -278,6 +300,9 @@ function safeParse(s: string): Record<string, unknown> {
     const v = JSON.parse(s);
     return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : { value: v };
   } catch {
+    // Degradation: an assistant tool_call's arguments weren't valid JSON. Log
+    // rather than silently sending {} so the loss is visible in triage.
+    modelLogger.warn({ provider: 'custom-anthropic', rawLength: s.length, preview: s.slice(0, 120) }, 'custom-anthropic: tool-call arguments not valid JSON — sending empty input');
     return {};
   }
 }
@@ -288,7 +313,12 @@ interface AnthropicResponse {
   content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
   stop_reason?: string;
   model?: string;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
 }
 
 function mapStopReason(reason: string | undefined): string {
@@ -318,7 +348,7 @@ function extractErrorMessage(errText: string): string {
  * Parse an Anthropic Messages SSE stream. Emits text deltas as `content` and
  * accumulates `tool_use` blocks, surfacing their partial JSON as toolCallDelta.
  */
-async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>, providerName: string): AsyncGenerator<StreamChunk> {
+async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>, providerName: string, touch?: () => void): AsyncGenerator<StreamChunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -330,6 +360,7 @@ async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>, provid
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      touch?.();
       buffer += decoder.decode(value, { stream: true });
 
       let idx: number;
@@ -337,9 +368,12 @@ async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>, provid
         const event = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 2);
 
+        // Concatenate `data:` lines WITHOUT trimming their content — trimming a
+        // continuation line corrupts a JSON payload split across `data:` lines.
+        // Per SSE, strip only a single optional leading space.
         let payload = '';
         for (const line of event.split('\n')) {
-          if (line.startsWith('data:')) payload += line.slice(5).trim();
+          if (line.startsWith('data:')) payload += line.slice(5).replace(/^ /, '');
         }
         if (!payload || payload === '[DONE]') continue;
 

@@ -1,6 +1,6 @@
 import { getConfig } from '@/config';
 import { coreLogger, modelLogger } from '@/utils/logger';
-import { classifyError } from '@/core/errors/classification';
+import { classifyError, ClassifiedError, FailoverReason } from '@/core/errors/classification';
 import { CircuitOpenError, getCircuitBreakerRegistry } from '../circuit-breaker';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { transformMessagesForProvider } from '../message-transform';
@@ -53,6 +53,30 @@ function resolveRateLimitKey(provider: ModelProvider, model: string): string {
     return 'cli-claude'; // default CLI
   }
   return provider.name;
+}
+
+/**
+ * Circuit-breaker failures should count only TRANSPORT-class problems (5xx,
+ * 429, network, timeout, provider-down) — A3. A model emitting bad JSON
+ * (TOOL_CALL_INVALID) or a config/auth error must NOT open the provider lane
+ * for everyone: one flaky small model would take down the whole provider.
+ */
+const TRANSPORT_REASONS = new Set<FailoverReason>([
+  FailoverReason.RATE_LIMIT,
+  FailoverReason.NETWORK_TIMEOUT,
+  FailoverReason.PROVIDER_DOWN,
+  FailoverReason.RETRY_TRANSIENT,
+  FailoverReason.RETRY_WITH_BACKOFF,
+]);
+
+export function isTransportFailure(error: unknown): boolean {
+  if (error instanceof ClassifiedError) return TRANSPORT_REASONS.has(error.reason);
+  const e = error as { status?: number; statusCode?: number; code?: string; message?: string } | null;
+  const status = e?.status ?? e?.statusCode;
+  if (typeof status === 'number' && (status >= 500 || status === 429)) return true;
+  if (typeof e?.code === 'string' && /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ECONNRESET|UND_ERR/i.test(e.code)) return true;
+  const msg = e?.message || '';
+  return /timeout|econn|enotfound|network|socket hang up|fetch failed|getaddrinfo/i.test(msg);
 }
 
 /** Check if an error is a 429 rate-limit response */
@@ -240,7 +264,8 @@ export class ProviderRouter {
     } catch (error) {
       const isRL = isRateLimitResponse(error);
       token.reportError(isRL);
-      circuitBreakers.recordFailure(rateLimitKey);
+      // A3: only transport-class failures trip the breaker.
+      if (isTransportFailure(error)) circuitBreakers.recordFailure(rateLimitKey);
 
       // On rate limit, only fall back to LiteLLM for providers it understands
       if (isRL && this.canFallbackToLiteLLM(provider.name) && this.hasLiteLLM()) {
@@ -278,7 +303,9 @@ export class ProviderRouter {
     try {
       circuitBreakers.checkAllowed(rateLimitKey);
     } catch (error) {
-      if (error instanceof CircuitOpenError && provider.name !== 'litellm' && this.hasLiteLLM()) {
+      // A2: use the SAME fallback gate as complete() — only litellm-bound
+      // models may fall back to the proxy.
+      if (error instanceof CircuitOpenError && this.canFallbackToLiteLLM(provider.name) && this.hasLiteLLM()) {
         modelLogger.warn({
           provider: provider.name,
           model: options.model,
@@ -303,7 +330,8 @@ export class ProviderRouter {
     } catch (error) {
       const isRL = isRateLimitResponse(error);
       token.reportError(isRL);
-      circuitBreakers.recordFailure(rateLimitKey);
+      // A3: only transport-class failures trip the breaker.
+      if (isTransportFailure(error)) circuitBreakers.recordFailure(rateLimitKey);
       throw classifyError(error, provider.name);
     } finally {
       token.release();

@@ -2,14 +2,44 @@ import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
+  ChatCompletionTool,
 } from 'openai/resources/chat/completions';
 import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import { sanitizeSchemaForGemini } from './custom/gemini-envelope';
+import { sanitizeGeminiHistory } from './gemini-history';
+import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+
+/**
+ * The Gemini flash tier burns thinking tokens before emitting the tool call; a
+ * 4096 cap lets thinking starve it. The OpenAI-compat endpoint does not expose
+ * thinkingConfig, so raise the ceiling instead (documented tradeoff — item 7).
+ */
+const GEMINI_FLASH_MIN_MAX_TOKENS = 8192;
+
+function isGeminiFlash(modelId: string): boolean {
+  return /gemini-[\d.]*-?flash/i.test(modelId) || /flash/i.test(modelId);
+}
+
+/** Run every tool's parameters through the shared Gemini schema sanitizer (G2). */
+export function sanitizeToolsForGemini(tools: ChatCompletionTool[]): ChatCompletionTool[] {
+  return tools.map((t) => {
+    if (t.type !== 'function') return t;
+    return {
+      ...t,
+      function: {
+        ...t.function,
+        parameters: sanitizeSchemaForGemini(t.function.parameters) as Record<string, unknown>,
+      },
+    };
+  });
+}
 
 /**
  * Gemini direct provider -- calls the Google Gemini API through its
@@ -24,64 +54,6 @@ export class GeminiProvider implements ModelProvider {
     return modelName.toLowerCase().startsWith('gemini-');
   }
 
-  /**
-   * Gemini rejects sequences where a function_call is not immediately followed
-   * by its function_response, or where a function_response has no preceding
-   * function_call. Compaction can break these pairs, so sanitize before send.
-   *
-   * Rules applied:
-   * 1. If an assistant(tool_calls) message lacks ALL matching tool responses
-   *    directly after it, strip the tool_calls (keep any text content, else drop).
-   * 2. If any tool_call has no matching tool response, drop that specific call.
-   * 3. Drop tool messages whose tool_call_id is not declared by the immediately
-   *    preceding assistant message.
-   */
-  private sanitizeMessages(messages: AgentMessage[]): AgentMessage[] {
-    const out: AgentMessage[] = [];
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-
-      if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        // Collect immediately following tool responses
-        const responses = new Map<string, AgentMessage>();
-        let j = i + 1;
-        while (j < messages.length && messages[j].role === 'tool') {
-          const tid = messages[j].toolCallId;
-          if (tid) responses.set(tid, messages[j]);
-          j++;
-        }
-        const keptCalls = msg.toolCalls.filter(tc => responses.has(tc.id));
-        if (keptCalls.length === 0) {
-          // No valid calls — emit text-only assistant if there's content, else drop
-          if (msg.content && String(msg.content).trim()) {
-            out.push({ ...msg, toolCalls: undefined });
-          }
-        } else {
-          // Gemini: function_call must follow a user or function_response turn.
-          // If prev emitted message isn't one of those (e.g. system summary, or
-          // another assistant), inject a synthetic user turn.
-          const prev = out[out.length - 1];
-          const prevOk = prev && (prev.role === 'user' || prev.role === 'tool');
-          if (!prevOk) {
-            out.push({ role: 'user', content: '(continuing)', timestamp: new Date() } as AgentMessage);
-          }
-          out.push({ ...msg, toolCalls: keptCalls });
-          for (const tc of keptCalls) out.push(responses.get(tc.id)!);
-        }
-        i = j - 1;
-        continue;
-      }
-
-      if (msg.role === 'tool') {
-        // Orphan tool response (preceding assistant wasn't a tool_calls msg) — drop
-        continue;
-      }
-
-      out.push(msg);
-    }
-    return out;
-  }
-
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const apiKey = await this.getApiKey();
     if (!apiKey) throw classifyError(new Error('Gemini API key not available'), 'gemini');
@@ -90,18 +62,24 @@ export class GeminiProvider implements ModelProvider {
     // Build request body — only include params that are set.
     const body: Record<string, unknown> = {
       model: options.model,
-      messages: this.formatMessagesRaw(this.sanitizeMessages(options.messages)),
+      messages: this.formatMessagesRaw(sanitizeGeminiHistory(options.messages)),
       stream: false,
     };
 
     if (options.temperature != null) body.temperature = options.temperature;
-    if (options.maxTokens != null) body.max_tokens = options.maxTokens;
+    // Raise the flash-tier ceiling so thinking can't starve the tool call
+    // (the compat endpoint doesn't accept thinkingConfig — item 7).
+    if (options.maxTokens != null) {
+      body.max_tokens = isGeminiFlash(options.model)
+        ? Math.max(options.maxTokens, GEMINI_FLASH_MIN_MAX_TOKENS)
+        : options.maxTokens;
+    }
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop = options.stopSequences;
 
     if (options.tools?.length) {
-      body.tools = options.tools;
-      body.tool_choice = 'auto';
+      body.tools = sanitizeToolsForGemini(options.tools);
+      body.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -116,12 +94,12 @@ export class GeminiProvider implements ModelProvider {
 
     let res: Response;
     try {
-      res = await fetch(`${GEMINI_BASE_URL}chat/completions`, {
+      res = await fetchWithRetryAfter(`${GEMINI_BASE_URL}chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
-      });
+        signal: withTimeoutSignal(120_000, options.signal),
+      }, this.name);
     } catch (err) {
       throw classifyError(err, 'gemini');
     }
@@ -164,8 +142,7 @@ export class GeminiProvider implements ModelProvider {
       result.toolCalls = choice.message.tool_calls.map((tc: any) => ({
         id: tc.id,
         name: tc.function.name,
-        arguments: typeof tc.function.arguments === 'string'
-          ? JSON.parse(tc.function.arguments) : tc.function.arguments,
+        arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
       }));
     }
 
@@ -240,18 +217,22 @@ export class GeminiProvider implements ModelProvider {
     // conversation while non-streaming sent the canonical one.
     const params: ChatCompletionCreateParams = {
       model: options.model,
-      messages: this.formatMessagesRaw(this.sanitizeMessages(options.messages)) as ChatCompletionMessageParam[],
+      messages: this.formatMessagesRaw(sanitizeGeminiHistory(options.messages)) as ChatCompletionMessageParam[],
       stream: true,
     };
 
     if (options.temperature != null) params.temperature = options.temperature;
-    if (options.maxTokens != null) params.max_tokens = options.maxTokens;
+    if (options.maxTokens != null) {
+      params.max_tokens = isGeminiFlash(options.model)
+        ? Math.max(options.maxTokens, GEMINI_FLASH_MIN_MAX_TOKENS)
+        : options.maxTokens;
+    }
     if (options.topP != null) params.top_p = options.topP;
     if (options.stopSequences?.length) params.stop = options.stopSequences;
 
     if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tools = sanitizeToolsForGemini(options.tools);
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -263,12 +244,15 @@ export class GeminiProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
     } catch (err) {
       throw classifyError(err, 'gemini');
     }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
+    // G7: accumulate the raw streamed tool_calls so thought_signature can
+    // round-trip on the terminal chunk (Gemini 3 degrades without it).
+    const rawToolCalls: Array<Record<string, unknown>> = [];
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
@@ -286,6 +270,10 @@ export class GeminiProvider implements ModelProvider {
           if (tc.id) buffer.id = tc.id;
           if (tc.function?.name) buffer.name = tc.function.name;
           if (tc.function?.arguments) buffer.arguments += tc.function.arguments;
+          // Preserve any provider-side signature carried on the delta.
+          const sig = (tc as unknown as Record<string, unknown>).thought_signature
+            ?? (tc.function as unknown as Record<string, unknown> | undefined)?.thought_signature;
+          if (sig != null) (buffer as unknown as Record<string, unknown>).thought_signature = sig;
 
           yield {
             toolCallDelta: {
@@ -298,7 +286,23 @@ export class GeminiProvider implements ModelProvider {
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        yield { finishReason: chunk.choices[0].finish_reason };
+        if (toolCallBuffers.size > 0) {
+          for (const buf of toolCallBuffers.values()) {
+            const bufSig = (buf as unknown as Record<string, unknown>).thought_signature;
+            rawToolCalls.push({
+              id: buf.id,
+              type: 'function',
+              function: { name: buf.name, arguments: buf.arguments },
+              ...(bufSig != null ? { thought_signature: bufSig } : {}),
+            });
+          }
+          yield {
+            finishReason: chunk.choices[0].finish_reason,
+            providerRaw: { role: 'assistant', tool_calls: rawToolCalls },
+          };
+        } else {
+          yield { finishReason: chunk.choices[0].finish_reason };
+        }
       }
     }
   }

@@ -2,6 +2,7 @@ import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '
 import { coreLogger, modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 
 const VOYAGE_BASE_URL = 'https://api.voyageai.com/v1';
 
@@ -54,7 +55,7 @@ export class VoyageProvider implements ModelProvider {
 
     modelLogger.debug({ model, inputCount: texts.length, provider: this.name }, 'Generating embeddings via Voyage AI');
 
-    const response = await fetch(`${this.baseUrl}/embeddings`, {
+    const response = await fetchWithRetryAfter(`${this.baseUrl}/embeddings`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -65,7 +66,8 @@ export class VoyageProvider implements ModelProvider {
         input: texts,
         input_type: 'document',
       }),
-    });
+      signal: withTimeoutSignal(30_000),
+    }, this.name);
 
     if (!response.ok) {
       const error = await response.text();
@@ -74,6 +76,9 @@ export class VoyageProvider implements ModelProvider {
     }
 
     const data = await response.json() as { data: Array<{ embedding: number[] }> };
+    if (!Array.isArray(data?.data)) {
+      throw classifyError(new Error('Voyage returned no embeddings data'), this.name);
+    }
     return data.data.map(d => d.embedding);
   }
 
@@ -113,6 +118,7 @@ export class VoyageProvider implements ModelProvider {
           input: ['health check'],
           input_type: 'document',
         }),
+        signal: withTimeoutSignal(10_000),
       });
 
       return {
