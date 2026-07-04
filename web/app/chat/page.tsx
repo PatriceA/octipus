@@ -58,6 +58,16 @@ interface SessionState {
 // Module-level guard to prevent React Strict Mode double WebSocket connections
 let wsInstance: WebSocket | null = null;
 
+/**
+ * When an agent reaches a terminal state, no more tool results will arrive —
+ * so any tool row still without a status must stop spinning. Mark them
+ * 'completed' (outcome unknown) rather than leaving an eternal spinner (P1.5).
+ */
+function finalizePendingToolCalls(toolCalls: ToolCallInfo[]): ToolCallInfo[] {
+  if (!toolCalls.some((tc) => !tc.status)) return toolCalls;
+  return toolCalls.map((tc) => (tc.status ? tc : { ...tc, status: 'completed' }));
+}
+
 const STORAGE_KEY_ACTIVE = 'chat_active_session';
 
 function welcomeMessage(): ChatMessageData {
@@ -257,7 +267,6 @@ export default function ChatPage() {
         const sessionAgents = agentData?.agents || [];
         for (const a of sessionAgents) {
           const toolCalls: ToolCallInfo[] = [];
-          let cliIterations = 0;
           try {
             const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
             for (const ev of evData?.events || []) {
@@ -300,14 +309,28 @@ export default function ChatPage() {
                   if (idx >= 0) toolCalls[idx] = { ...toolCalls[idx], ...patch };
                   else toolCalls.push({ id: String(d.toolCallId), name: typeof d.name === 'string' ? d.name : '', ...patch });
                 }
-                // CLI agent tool use (single tool format from cli_tool_use events)
+                // CLI agent tool use — restore with the adapter's real event id
+                // so the paired cli_tool_result below flips the same row.
                 else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
-                  cliIterations++;
                   toolCalls.push({
-                    id: Date.now().toString() + cliIterations,
+                    id: ev.data.id ? String(ev.data.id) : `cli-restore-${a.id}-${toolCalls.length}`,
                     name: String(ev.data.toolName),
+                    title: typeof ev.data.title === 'string' ? ev.data.title : undefined,
                     argsSummary: ev.data.args ? JSON.stringify(ev.data.args).slice(0, 80) : undefined,
                   });
+                }
+                // CLI agent tool result — restore the paired row's status by id.
+                else if (ev.data?.type === 'cli_tool_result') {
+                  const rid = ev.data.id ? String(ev.data.id) : undefined;
+                  const isError = Boolean(ev.data.isError || ev.data.error);
+                  const idx = rid ? toolCalls.findIndex((tc) => tc.id === rid) : -1;
+                  if (idx >= 0) {
+                    toolCalls[idx] = {
+                      ...toolCalls[idx],
+                      status: isError ? 'error' : 'completed',
+                      resultPreview: typeof ev.data.output === 'string' ? ev.data.output.slice(0, 200) : undefined,
+                    };
+                  }
                 }
                 // File change events — restore for persistence across page loads
                 else if (ev.data?.type === 'file_change' && ev.data?.path) {
@@ -334,11 +357,14 @@ export default function ChatPage() {
             role: a.role,
             model: a.model,
             status: (isFinished ? (a.status === 'failed' ? 'failed' : 'completed') : 'running') as TrackedAgent['status'],
-            toolCalls,
+            // A finished agent won't emit more results — clear any tool row that
+            // was persisted without a result so it doesn't restore as a spinner.
+            toolCalls: isFinished ? finalizePendingToolCalls(toolCalls) : toolCalls,
             startTime,
             endTime,
             durationMs: a.durationMs ?? (endTime != null ? endTime - startTime : undefined),
-            iterations: a.iteration || cliIterations || undefined,
+            // Server iteration count (turns) is authoritative — no client re-count.
+            iterations: a.iteration || undefined,
           });
         }
       } catch {}
@@ -799,7 +825,7 @@ export default function ChatPage() {
                   role: p.role || existing?.role || 'unknown',
                   model: p.model || existing?.model || '',
                   status: resolvedStatus,
-                  toolCalls: existing?.toolCalls ?? [],
+                  toolCalls: finalizePendingToolCalls(existing?.toolCalls ?? []),
                   startTime,
                   endTime: startTime + duration,
                   durationMs: duration,
@@ -923,6 +949,7 @@ export default function ChatPage() {
               totalTokens: d.totalTokens,
               iterations: d.iterations,
               error: d.error,
+              toolCalls: finalizePendingToolCalls(existing.toolCalls),
             });
           } else {
             // Agent wasn't tracked via worker_spawned (race condition or missed event)
@@ -983,6 +1010,22 @@ export default function ChatPage() {
 
   const handleAgentEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
+    // Terminal lifecycle for a tracked agent — no more tool results are
+    // coming, so stop any still-spinning tool rows (P1.5). Covers CLI agents
+    // whose finalization arrives as an agent_event rather than a swarm event.
+    if ((data.event === 'status_change' || data.event === 'complete') && data.agentId) {
+      const status = (data.data as any)?.status as string | undefined;
+      if (data.event === 'complete' || status === 'completed' || status === 'failed' || status === 'stopped') {
+        updateSessionState(sessionId, (prev) => {
+          const existing = prev.trackedAgents.get(data.agentId);
+          if (!existing || !existing.toolCalls.some((tc) => !tc.status)) return prev;
+          const next = new Map(prev.trackedAgents);
+          next.set(data.agentId, { ...existing, toolCalls: finalizePendingToolCalls(existing.toolCalls) });
+          return { ...prev, trackedAgents: next };
+        });
+      }
+      return;
+    }
     if (data.event === 'action' && data.agentId) {
       const d = data.data as any;
 
@@ -1019,60 +1062,71 @@ export default function ChatPage() {
           return { ...prev, trackedAgents: next };
         });
       }
-      // CLI agent tool use (single tool format from cli_tool_use events)
+      // CLI agent tool use (single tool format from cli_tool_use events).
+      // The adapter now supplies a stable event id (Claude tool_use.id / codex
+      // item.id), a human title, and authoritative file_change events — so we
+      // no longer mint Date.now() ids, re-count iterations (server owns turns),
+      // or re-derive file changes here.
       else if (d?.type === 'cli_tool_use' && d?.toolName) {
+        const toolId = d.id ? String(d.id) : `cli-${data.agentId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         updateSessionState(sessionId, (prev) => {
           const next = new Map(prev.trackedAgents);
           const existing = next.get(data.agentId);
+          const newCall: ToolCallInfo = {
+            id: toolId,
+            name: String(d.toolName),
+            title: typeof d.title === 'string' ? d.title : undefined,
+            argsSummary: d.args ? JSON.stringify(d.args).slice(0, 80) : undefined,
+          };
           if (existing) {
-            // Increment iteration count for CLI agents
+            next.set(data.agentId, { ...existing, toolCalls: [...existing.toolCalls, newCall] });
+          } else {
+            // Untracked agent — synthesize a running stub so the tool row shows
+            // (mirrors the tool_call_complete stub path below).
             next.set(data.agentId, {
-              ...existing,
-              iterations: (existing.iterations || 0) + 1,
-              toolCalls: [...existing.toolCalls, {
-                id: Date.now().toString(),
-                name: String(d.toolName),
-                argsSummary: d.args ? JSON.stringify(d.args).slice(0, 80) : undefined,
-              }],
+              id: data.agentId,
+              role: 'unknown',
+              model: '',
+              status: 'running',
+              toolCalls: [newCall],
+              startTime: Date.now(),
             });
           }
-          // Track file changes from CLI agents
-          const CLI_FILE_TOOL_MAP: Record<string, string> = {
-            // Claude Code
-            'Write': 'write',
-            'Edit': 'edit',
-            // Gemini CLI
-            'replace_file': 'edit',
-            'write_file': 'write',
-            'create_file': 'write',
-            'delete_file': 'delete',
-            'patch_file': 'edit',
-            'update_file': 'edit',
-            // Generic
-            'write': 'write',
-            'edit': 'edit',
-            'replace': 'edit',
-            'create': 'write',
-            'delete': 'delete',
-          };
-          const toolName = String(d.toolName);
-          const fileAction = CLI_FILE_TOOL_MAP[toolName];
-          if (fileAction && d.args) {
-            const filePath = d.args.file_path || d.args.path || d.args.filename || d.args.target || '';
-            if (filePath) {
+          return { ...prev, trackedAgents: next };
+        });
+      }
+      // CLI agent tool result — flip the matching row's status by id (C1/C9).
+      else if (d?.type === 'cli_tool_result') {
+        const toolId = d.id ? String(d.id) : undefined;
+        const isError = Boolean(d.isError || d.error);
+        updateSessionState(sessionId, (prev) => {
+          const next = new Map(prev.trackedAgents);
+          const existing = next.get(data.agentId);
+          if (!existing) return prev;
+          let matched = false;
+          const updatedCalls = existing.toolCalls.map((tc) => {
+            if (toolId && tc.id === toolId) {
+              matched = true;
               return {
-                ...prev,
-                trackedAgents: next,
-                fileChanges: [...prev.fileChanges, {
-                  path: String(filePath),
-                  action: fileAction,
-                  agentId: data.agentId,
-                  agentRole: existing?.role || 'unknown',
-                  timestamp: new Date().toISOString(),
-                }],
+                ...tc,
+                status: isError ? 'error' : 'completed',
+                resultPreview: typeof d.output === 'string' ? d.output.slice(0, 200) : tc.resultPreview,
+                error: isError && typeof d.output === 'string' ? d.output.slice(0, 200) : tc.error,
               };
             }
+            return tc;
+          });
+          // No matching start row (missing/late) — mark the most recent
+          // still-pending row for this tool instead of dropping the result.
+          if (!matched) {
+            for (let i = updatedCalls.length - 1; i >= 0; i--) {
+              if (!updatedCalls[i].status) {
+                updatedCalls[i] = { ...updatedCalls[i], status: isError ? 'error' : 'completed' };
+                break;
+              }
+            }
           }
+          next.set(data.agentId, { ...existing, toolCalls: updatedCalls });
           return { ...prev, trackedAgents: next };
         });
       }

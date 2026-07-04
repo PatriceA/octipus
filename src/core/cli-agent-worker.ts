@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
@@ -14,7 +15,8 @@ import { getQuotaTracker } from '@/models/quota-tracker';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, sweepStaleFiles } from './cli-adapters';
+import type { CLIToolConfig } from '@/models/providers/cli-provider';
 import { BudgetExceededError } from './swarm/errors';
 import { getCLIToolConfig } from './cli-agent-factory';
 import type { AgentContext, AgentMessage } from './types';
@@ -49,6 +51,19 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * the default "aborted by user" (which downstream maps to "action denied").
    */
   private abortReason: string | null = null;
+  /**
+   * Set to true on the child's 'exit' event. `ChildProcess.killed` only means
+   * a signal was *sent* (true the instant SIGTERM leaves), so the SIGKILL
+   * escalation keyed off it could never fire — a SIGTERM-ignoring CLI leaked
+   * (C7). Liveness is now this flag / `kill(pid, 0)`.
+   */
+  private processExited = false;
+  /**
+   * Failure reason reported by the CLI itself (Claude error_max_turns /
+   * is_error, codex turn.failed / error). The close handler rejects with this
+   * so an error run surfaces as failed, never a soft success (C3).
+   */
+  private runError: string | null = null;
   /**
    * Cleanup for the parent AbortSignal listener. Symmetric with `AgentWorker`
    * (Swarm Phase 2): when an ancestor aborts, the cascade reaches the CLI
@@ -205,13 +220,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       this.parentSignalCleanup();
       this.parentSignalCleanup = null;
     }
-    if (this.process && !this.process.killed) {
-      const pid = this.process.pid;
+    if (this.process && !this.processExited) {
+      const proc = this.process;
+      const pid = proc.pid;
 
-      // Destroy streams first to stop event processing immediately
-      try { this.process.stdout?.destroy(); } catch { /* ignore */ }
-      try { this.process.stderr?.destroy(); } catch { /* ignore */ }
-      try { this.process.stdin?.destroy(); } catch { /* ignore */ }
+      // Give the child a moment to flush its final result/turn.completed line
+      // before we tear the streams down — otherwise a clean SIGTERM loses the
+      // last event and the abort resolves as a soft success (low item). We do
+      // NOT destroy stdout here; the close handler drains lineBuffer.
+      try { proc.stdin?.destroy(); } catch { /* ignore */ }
 
       if (process.platform === 'win32' && pid) {
         // On Windows, SIGTERM doesn't work for shell:true processes (cmd.exe wraps child).
@@ -220,13 +237,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
           const { execSync } = require('child_process');
           execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
         } catch {
-          try { this.process.kill('SIGKILL'); } catch { /* already dead */ }
+          try { proc.kill('SIGKILL'); } catch { /* already dead */ }
         }
       } else {
-        this.process.kill('SIGTERM');
+        proc.kill('SIGTERM');
         setTimeout(() => {
-          if (this.process && !this.process.killed) {
-            this.process.kill('SIGKILL');
+          // Escalate only if the process is genuinely still alive. `killed`
+          // just means a signal was sent; probe the real pid instead (C7).
+          if (!this.processExited && pid && isProcessAlive(pid)) {
+            try { proc.kill('SIGKILL'); } catch { /* already dead */ }
           }
         }, 5000);
       }
@@ -299,7 +318,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const prompt = this.buildPrompt();
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args, stdinPrompt, useShell, env: toolEnv } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget);
+    const { binary, args, stdinPrompt, useShell, env: toolEnv } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget, this.context.id);
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
@@ -307,55 +326,76 @@ export class CLIAgentWorker extends BaseAgentWorker {
     );
     this.emit('thought', { model: this.context.model, tool: toolConfig.name, status: 'spawning' });
 
-    const parser = new CLIOutputParser(
-      this.context.id,
-      this.context.model,
-      (type, data) => this.emit(type, data),
-      () => {
-        this.iteration++;
-        // Surface iteration ticks so the chat UI can render live progress.
-        // Base `action` event with a per-tool-call entry already fires; this
-        // extra `thought` carries just the counter so the sidepanel can
-        // update `agent.iterations` without re-counting tool calls.
-        this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
-      },
-      (tokens) => {
-        this.totalTokens += tokens.total;
-        const cap = this.config.maxTokenBudget;
-        if (!this.budgetExceeded && cap > 0 && this.totalTokens >= cap) {
-          this.budgetExceeded = true;
-          agentLogger.warn(
-            { agentId: this.context.id, used: this.totalTokens, cap },
-            'CLI sub-agent exceeded token budget — killing subprocess',
-          );
-          this.stop();
-        }
-      },
-    );
-
     const startTime = Date.now();
 
-    // Resolve cwd: dev mode sessions use project path, otherwise workspace root
+    // Resolve cwd: dev mode sessions use project path, otherwise workspace root.
+    // Fail loud (C12): NEVER fall back to process.cwd() — a write-enabled CLI
+    // agent running inside the octipus server repo could corrupt it.
     let workspaceCwd: string;
-    try {
+    {
       const session = await sessionRepository.findById(this.context.sessionId);
       const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
       if (sessionCtx?.devMode && sessionCtx.projectPath) {
         workspaceCwd = resolvePath(sessionCtx.projectPath);
       } else {
-        workspaceCwd = resolvePath(getConfig().workspace.rootPath);
+        const root = getConfig().workspace.rootPath;
+        if (!root) throw new Error('CLI agent cwd resolution failed: workspace.rootPath is unset');
+        workspaceCwd = resolvePath(root);
       }
-    } catch {
-      workspaceCwd = process.cwd();
+      if (!existsSync(workspaceCwd)) {
+        throw new Error(`CLI agent cwd does not exist: ${workspaceCwd}`);
+      }
     }
+
+    const parser = new CLIOutputParser(
+      this.context.id,
+      this.context.model,
+      (type, data) => this.emit(type, data),
+      {
+        onTurn: () => {
+          // Iteration = model turns (C15). Tool-call count is tracked
+          // separately by the UI (toolCalls.length); the server owns turns.
+          this.iteration++;
+          this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
+        },
+        onTurnCount: (turns) => {
+          // Authoritative final count (Claude num_turns) — never regress.
+          if (turns > this.iteration) {
+            this.iteration = turns;
+            this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
+          }
+        },
+        onTokenUsage: (tokens) => {
+          this.totalTokens += tokens.total;
+          const cap = this.config.maxTokenBudget;
+          if (!this.budgetExceeded && cap > 0 && this.totalTokens >= cap) {
+            this.budgetExceeded = true;
+            agentLogger.warn(
+              { agentId: this.context.id, used: this.totalTokens, cap },
+              'CLI sub-agent exceeded token budget — killing subprocess',
+            );
+            this.stop();
+          }
+        },
+        onRunError: (reason) => {
+          // Record the first CLI-reported failure; the close handler rejects
+          // with it so the run surfaces as failed, not (no response) success.
+          if (!this.runError) this.runError = reason;
+        },
+      },
+      workspaceCwd,
+    );
 
     // Write temporary project context files so CLI tools pick up the expert identity.
     // Gemini reads GEMINI.md, Codex reads AGENTS.md from the cwd.
     // These are cleaned up after the CLI process exits.
     const tempContextFiles: string[] = [];
     // Context files we temporarily augmented (a real curated AGENTS.md already
-    // existed): restore the original content on cleanup instead of deleting.
-    const contextFileBackups = new Map<string, string>();
+    // existed): restore the original on cleanup — but ONLY if the file still
+    // holds exactly what we wrote (C13). A concurrent agent in the same cwd may
+    // have rewritten it; blindly restoring our `original` would clobber theirs.
+    const contextFileBackups = new Map<string, { original: string; wroteHash: string }>();
+    const sha = (s: string) => createHash('sha256').update(s).digest('hex');
     agentLogger.info(
       { tool: toolConfig.name, hasSystemPrompt: !!systemPrompt, cwd: workspaceCwd },
       'CLI agent context',
@@ -364,6 +404,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
     try {
       const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
       mkdirSync(dumpDir, { recursive: true });
+      // Cap retention — prompt dumps used to accumulate unboundedly (C13).
+      sweepStaleFiles(dumpDir, '', 7 * 24 * 3600_000);
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${toolConfig.name.replace(/\s+/g, '-')}.md`);
       const body = [
@@ -412,8 +454,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
             // A real curated AGENTS.md (or GEMINI.md) already exists. Prepend our
             // system prompt so the CLI gets both, then restore the original on exit.
             const original = readFileSync(contextFilePath, 'utf-8');
-            contextFileBackups.set(contextFilePath, original);
-            writeFileSync(contextFilePath, `${systemPrompt}\n\n---\n\n${original}`, 'utf-8');
+            const augmented = `${systemPrompt}\n\n---\n\n${original}`;
+            contextFileBackups.set(contextFilePath, { original, wroteHash: sha(augmented) });
+            writeFileSync(contextFilePath, augmented, 'utf-8');
             agentLogger.info({ tool: toolConfig.name, file: contextFileName, path: contextFilePath }, 'Augmented existing context file for CLI agent (will restore)');
           }
         } catch (err) {
@@ -429,9 +472,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       for (const f of tempContextFiles) {
         try { unlinkSync(f); } catch { /* already gone */ }
       }
-      // Restore any pre-existing context files we augmented in place.
-      for (const [f, original] of contextFileBackups) {
-        try { writeFileSync(f, original, 'utf-8'); } catch { /* best effort */ }
+      // Restore any pre-existing context files we augmented — but only if the
+      // file on disk is still exactly what we wrote (C13). If a concurrent
+      // agent rewrote it, leave theirs; the last restorer no longer wins.
+      for (const [f, { original, wroteHash }] of contextFileBackups) {
+        try {
+          if (existsSync(f) && sha(readFileSync(f, 'utf-8')) === wroteHash) {
+            writeFileSync(f, original, 'utf-8');
+          }
+        } catch { /* best effort */ }
       }
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
@@ -447,39 +496,45 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Node's shell:true escaping mangles the prompt all over again.
     const useShellForSpawn = useShell !== false && process.platform === 'win32';
     return new Promise<string>((resolve, reject) => {
-      // toolEnv carries per-tool overrides (e.g. vibe's ephemeral VIBE_HOME that
-      // registers the Octipus MCP server).
-      const env = { ...process.env, ...(toolEnv || {}) };
-      delete env.CLAUDECODE;
+      // Minimal env allowlist (C6): a CLI child running with bypassed
+      // permissions must NOT inherit the server's DB creds and all API keys.
+      // Pass only PATH/HOME/locale/TERM, the CLI's own auth var, and toolEnv.
+      const env = buildChildEnv(toolConfig, toolEnv);
 
+      this.processExited = false;
       const proc = spawn(binary, args, {
         env,
         cwd: workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: this.config.timeout,
+        // No spawn-option `timeout` — the single timeout source is the
+        // hardTimeout below, which stamps abortReason='timeout' so a timeout
+        // always surfaces as a timeout, not "exited with code null" (C8).
         shell: useShellForSpawn,
       });
+      // 'exit' fires when the process terminates (before streams flush).
+      proc.once('exit', () => { this.processExited = true; });
 
-      // Pipe prompt via stdin on Windows (avoids shell mangling of long args)
-      if (stdinPrompt && proc.stdin) {
-        proc.stdin.write(stdinPrompt);
-        proc.stdin.end();
-      } else if (proc.stdin) {
+      // EPIPE guard (low): a child that exits before reading stdin makes the
+      // write throw asynchronously — attach the handler BEFORE writing.
+      if (proc.stdin) {
+        proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
+          if (err.code !== 'EPIPE') {
+            agentLogger.debug({ err, agentId: this.context.id }, 'CLI stdin error');
+          }
+        });
+        if (stdinPrompt) proc.stdin.write(stdinPrompt);
         proc.stdin.end();
       }
 
       this.process = proc;
 
-      // Hard timeout: forcefully kill the CLI process if it exceeds the configured timeout.
-      // The spawn `timeout` option is unreliable across platforms.
-      // A timeout <= 0 means "unlimited" — matching AgentWorker.withTimeout
-      // (agent-worker.ts). Without this guard a 0 config armed setTimeout(…, 0),
-      // which fires on the next tick and instantly kills the CLI subprocess with
-      // a misleading "aborted by user" error.
+      // Single hard timeout: force-kill on overrun and stamp abortReason so
+      // run() reports "timed out" instead of "aborted by user". timeout <= 0
+      // means unlimited (matches AgentWorker.withTimeout).
       const hardTimeout =
         this.config.timeout > 0
           ? setTimeout(() => {
-              if (!this.aborted && this.process && !this.process.killed) {
+              if (!this.aborted && !this.processExited) {
                 agentLogger.warn(
                   { agentId: this.context.id, tool: toolConfig.name, timeoutMs: this.config.timeout },
                   'CLI agent exceeded hard timeout, force-killing',
@@ -491,8 +546,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
           : undefined;
 
       let accumulatedText = '';
+      // stderr ring buffer — keep only the tail so a chatty CLI can't pin
+      // memory, and we still have the last N chars to surface on failure (C4).
       let stderr = '';
+      const STDERR_TAIL = 8192;
       let lineBuffer = '';
+      let consecutiveNonJson = 0;
+      let nonJsonWarned = false;
       // Buffer-at-end tools (e.g. vibe --output json) emit their whole result as
       // one blob at process close, not incremental stream-json events. For those
       // we collect raw stdout and run parseOutput on the full buffer in `close`.
@@ -512,6 +572,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           if (!line.trim() || this.aborted) continue;
           try {
             const event = JSON.parse(line);
+            consecutiveNonJson = 0;
             const result = parser.parse(event, toolConfig.name);
             if (result) {
               if (result.replace) {
@@ -522,104 +583,176 @@ export class CLIAgentWorker extends BaseAgentWorker {
             }
           } catch {
             agentLogger.debug({ line: line.slice(0, 200) }, 'Non-JSON CLI output');
+            // JSONL discipline (low): a version banner or non-JSON preamble
+            // used to silently degrade to "(no response)". After N consecutive
+            // non-JSON lines, surface one visible warning event.
+            if (++consecutiveNonJson >= 5 && !nonJsonWarned) {
+              nonJsonWarned = true;
+              this.emit('observation', {
+                type: 'warning',
+                message: `CLI ${toolConfig.name} is emitting non-JSON output; results may be incomplete`,
+                sample: line.slice(0, 200),
+              });
+            }
           }
         }
       });
 
       proc.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString();
+        if (stderr.length > STDERR_TAIL) stderr = stderr.slice(-STDERR_TAIL);
       });
 
       proc.on('close', async (code) => {
         clearTimeout(hardTimeout);
-        cleanupContextFiles();
         this.process = null;
+        // C5: any throw in this async handler used to leave the executeCLI
+        // promise unsettled forever (agent stuck "running"). Wrap the whole
+        // body so a DB/parse error rejects instead of hanging.
+        try {
+          cleanupContextFiles();
 
-        // Buffer-at-end tools: parse the whole accumulated stdout via the tool's
-        // parseOutput (the streaming line-parser above is skipped for these).
-        if (toolConfig.bufferOutput) {
-          try {
-            const parsed = toolConfig.parseOutput(rawStdout, startTime);
-            accumulatedText = parsed.content;
-            // Usage is typically 0 for these tools (vibe reports none); only add
-            // if the parser surfaced real counts.
-            if (parsed.usage.totalTokens > 0) {
-              this.totalTokens += parsed.usage.totalTokens;
+          // Buffer-at-end tools: parse the whole accumulated stdout via the
+          // tool's parseOutput, then post-parse tool_calls into events so the
+          // UI shows what happened (no silent zero-event vibe/agy runs).
+          if (toolConfig.bufferOutput) {
+            try {
+              const parsed = toolConfig.parseOutput(rawStdout, startTime);
+              accumulatedText = parsed.content;
+              if (parsed.usage.totalTokens > 0) {
+                this.totalTokens += parsed.usage.totalTokens;
+              }
+            } catch (err) {
+              agentLogger.warn({ err, agentId: this.context.id, tool: toolConfig.name }, 'Buffer-mode parseOutput failed; falling back to raw stdout');
+              accumulatedText = rawStdout.trim();
             }
-          } catch (err) {
-            agentLogger.warn({ err, agentId: this.context.id, tool: toolConfig.name }, 'Buffer-mode parseOutput failed; falling back to raw stdout');
-            accumulatedText = rawStdout.trim();
+            try { parser.postParseBufferedEvents(toolConfig.name, rawStdout); } catch (err) {
+              agentLogger.debug({ err, agentId: this.context.id }, 'Buffered event post-parse failed');
+            }
+          } else if (lineBuffer.trim()) {
+            // Process remaining streamed line buffer
+            try {
+              const event = JSON.parse(lineBuffer);
+              const result = parser.parse(event, toolConfig.name);
+              if (result) {
+                if (result.replace) accumulatedText = result.text;
+                else accumulatedText += result.text;
+              }
+            } catch {
+              if (!accumulatedText && lineBuffer.trim()) {
+                accumulatedText = lineBuffer.trim();
+              }
+            }
           }
-        } else if (lineBuffer.trim()) {
-          // Process remaining streamed line buffer
-          try {
-            const event = JSON.parse(lineBuffer);
-            const result = parser.parse(event, toolConfig.name);
-            if (result) {
-              if (result.replace) accumulatedText = result.text;
-              else accumulatedText += result.text;
-            }
-          } catch {
-            if (!accumulatedText && lineBuffer.trim()) {
-              accumulatedText = lineBuffer.trim();
-            }
+
+          if (this.budgetExceeded) {
+            reject(new BudgetExceededError({
+              agentId: this.context.id,
+              used: this.totalTokens,
+              cap: this.config.maxTokenBudget,
+            }));
+            return;
           }
-        }
 
-        if (this.budgetExceeded) {
-          reject(new BudgetExceededError({
-            agentId: this.context.id,
-            used: this.totalTokens,
-            cap: this.config.maxTokenBudget,
-          }));
-          return;
-        }
+          if (this.aborted) {
+            // Abort surfaces via run() (which throws abortReason → stopped);
+            // resolve here with whatever was captured so the caller sees it.
+            resolve(accumulatedText || 'Task was stopped. Would you like to adjust the request or start something new?');
+            return;
+          }
 
-        if (this.aborted) {
-          resolve(accumulatedText || 'Task was stopped. Would you like to adjust the request or start something new?');
-          return;
-        }
+          if (toolConfig.isQuotaError(stderr || accumulatedText)) {
+            await quotaTracker.markExhausted(toolConfig.quotaProvider);
+            reject(new Error(`Quota exhausted for ${toolConfig.name}`));
+            return;
+          }
 
-        if (toolConfig.isQuotaError(stderr || accumulatedText)) {
-          await quotaTracker.markExhausted(toolConfig.quotaProvider);
-          reject(new Error(`Quota exhausted for ${toolConfig.name}`));
-          return;
-        }
+          // CLI reported its own failure (Claude error_max_turns/is_error,
+          // codex turn.failed/error) — never resolve as success (C3).
+          if (this.runError) {
+            reject(new Error(this.runError));
+            return;
+          }
 
-        if (code !== 0 && !accumulatedText) {
-          reject(new Error(`CLI ${binary} exited with code ${code}: ${stderr || 'no output'}`));
-          return;
-        }
+          // Non-zero exit — fail with the code + stderr tail, even when there
+          // was partial stdout. Resolving success on a crashed run hid real
+          // failures (C4).
+          if (code !== 0 && code !== null) {
+            const tail = stderr.trim().slice(-1000) || accumulatedText.slice(-500) || 'no output';
+            reject(new Error(`CLI ${binary} exited with code ${code}: ${tail}`));
+            return;
+          }
 
-        // Only persist for orchestrator (root agent) — sub-workers use handleMessage for persistence
-        if (accumulatedText && this.context.role === 'orchestrator') {
-          await messageRepository.create({
-            sessionId: this.context.sessionId,
-            role: 'assistant',
-            content: accumulatedText,
-            agentId: this.context.id,
-          });
-          await sessionRepository.incrementMessageCount(this.context.sessionId);
-        }
+          // Only persist for orchestrator (root agent) — sub-workers use handleMessage for persistence
+          if (accumulatedText && this.context.role === 'orchestrator') {
+            await messageRepository.create({
+              sessionId: this.context.sessionId,
+              role: 'assistant',
+              content: accumulatedText,
+              agentId: this.context.id,
+            });
+            await sessionRepository.incrementMessageCount(this.context.sessionId);
+          }
 
-        agentLogger.info(
-          { agentId: this.context.id, tool: toolConfig.name, durationMs: Date.now() - startTime, iterations: this.iteration },
-          'CLI sub-agent completed',
-        );
+          agentLogger.info(
+            { agentId: this.context.id, tool: toolConfig.name, durationMs: Date.now() - startTime, iterations: this.iteration },
+            'CLI sub-agent completed',
+          );
 
-        if (this.aborted) {
-          resolve(accumulatedText || 'Task was stopped. Would you like to adjust the request or start something new?');
-        } else {
           resolve(accumulatedText || '(no response)');
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
         }
       });
 
       proc.on('error', (err) => {
         clearTimeout(hardTimeout);
-        cleanupContextFiles();
+        this.processExited = true;
+        try { cleanupContextFiles(); } catch { /* best effort */ }
         this.process = null;
         reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
       });
     });
   }
+}
+
+/** True if a process with `pid` is still alive (signal 0 probe). */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = alive but not ours (still alive).
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Minimal env for a spawned CLI child (C6). Only PATH/HOME/locale/TERM, the
+ * CLI's own auth var, and per-tool overrides — NOT the server's full env
+ * (DB creds, every API key, internal secrets).
+ */
+function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>): Record<string, string> {
+  const base: Record<string, string> = {};
+  const pass = (k: string) => { const v = process.env[k]; if (v != null) base[k] = v; };
+  // Core shell/runtime env every CLI needs to find its binary + config dir.
+  for (const k of ['PATH', 'HOME', 'LANG', 'TERM', 'TZ', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR']) pass(k);
+  // Windows equivalents.
+  for (const k of ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'ComSpec', 'TEMP', 'TMP']) pass(k);
+  // Locale (LC_ALL, LC_CTYPE, …).
+  for (const k of Object.keys(process.env)) if (k.startsWith('LC_')) pass(k);
+  // The CLI's own auth vars — scoped per provider so codex doesn't see the
+  // Anthropic key, etc.
+  const authByProvider: Record<string, string[]> = {
+    anthropic: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+    openai: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+    google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'],
+    mistral: ['MISTRAL_API_KEY'],
+  };
+  for (const k of authByProvider[tool.modelProvider] || []) pass(k);
+  // Per-tool overrides (e.g. vibe's ephemeral VIBE_HOME).
+  Object.assign(base, toolEnv || {});
+  // Never let the child think it's running inside Claude Code itself.
+  delete base.CLAUDECODE;
+  return base;
 }

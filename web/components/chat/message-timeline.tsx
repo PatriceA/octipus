@@ -363,18 +363,27 @@ function ToolResultPreviewView({ result, onOpenFile }: { result: ToolResultPrevi
   }
 }
 
-function statusDot(status?: string) {
+// `terminal` = the owning agent has finished. A finished agent will never
+// send another result, so a status-less row must NOT keep spinning (P1.5) —
+// show a neutral completed dot instead.
+function statusDot(status?: string, terminal?: boolean) {
   if (status === 'error') return <XCircle className="h-3 w-3 shrink-0 text-error" />;
   if (status === 'cancelled') return <XCircle className="h-3 w-3 shrink-0 text-warning" />;
   if (status === 'ok' || status === 'completed') return <CheckCircle className="h-3 w-3 shrink-0 text-tertiary" />;
+  if (terminal) return <CheckCircle className="h-3 w-3 shrink-0 text-on-surface-variant/50" />;
   return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />;
 }
 
 // One tool call in the expanded list: a human title (falls back to the raw
-// name), an inline input subject, a duration, and a collapsible result preview.
-function ToolCallRow({ tc, onOpenFile }: { tc: ToolCall; onOpenFile?: (path: string) => void }) {
+// name), an inline input subject / args summary as a secondary line, a
+// duration, and a collapsible result preview.
+function ToolCallRow({ tc, onOpenFile, terminal }: { tc: ToolCall; onOpenFile?: (path: string) => void; terminal?: boolean }) {
   const [open, setOpen] = useState(false);
   const label = tc.title || tc.name;
+  // Secondary line: the input subject (Thread 1) or the CLI args summary
+  // (e.g. codex "git status -sb") — the raw command was previously never shown.
+  const secondary = tc.input?.value ?? tc.argsSummary;
+  const showSecondary = secondary && secondary !== label;
   const hasPreview = (tc.result && tc.result.kind !== 'empty') || !!tc.error;
   return (
     <div className="text-[11px]">
@@ -382,8 +391,8 @@ function ToolCallRow({ tc, onOpenFile }: { tc: ToolCall; onOpenFile?: (path: str
         className={cn('flex items-center gap-1.5 py-0.5', hasPreview && 'cursor-pointer hover:text-on-surface')}
         onClick={hasPreview ? () => setOpen((v) => !v) : undefined}
       >
-        {statusDot(tc.status)}
-        <span className="text-on-surface/80 truncate" title={tc.input?.value}>{label}</span>
+        {statusDot(tc.status, terminal)}
+        <span className="text-on-surface/80 truncate" title={secondary}>{label}</span>
         {tc.durationMs != null && (
           <span className="text-on-surface-variant/60 tabular-nums shrink-0">{formatDuration(tc.durationMs)}</span>
         )}
@@ -393,6 +402,11 @@ function ToolCallRow({ tc, onOpenFile }: { tc: ToolCall; onOpenFile?: (path: str
             : <ChevronRight className="h-3 w-3 text-on-surface-variant ml-auto shrink-0" />
         )}
       </div>
+      {showSecondary && (
+        <div className="ml-[18px] truncate font-mono text-[10px] text-on-surface-variant/70" title={secondary}>
+          {secondary}
+        </div>
+      )}
       {open && (
         <div className="ml-4">
           {tc.error
@@ -475,7 +489,7 @@ function AgentActivityInline({ agent, onOpenFile }: { agent: TrackedAgent; onOpe
       {toolsOpen && agent.toolCalls.length > 0 && (
         <div className="mt-1.5 space-y-0.5 border-t border-outline-variant/20 pt-1.5">
           {agent.toolCalls.map((tc) => (
-            <ToolCallRow key={tc.id} tc={tc} onOpenFile={onOpenFile} />
+            <ToolCallRow key={tc.id} tc={tc} onOpenFile={onOpenFile} terminal={agent.status !== 'running'} />
           ))}
         </div>
       )}
