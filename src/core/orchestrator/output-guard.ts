@@ -111,3 +111,50 @@ export function guardOutput(response: string, inputFlags: string[]): OutputGuard
 
   return { action: 'pass', response, flags };
 }
+
+// ── Deterministic relay guard (P1.3) ───────────────────────────────────
+
+/** A genuine relay carries at least this fraction of the collected material. */
+const RELAY_MIN_LENGTH_FRACTION = 0.4;
+/** …or quotes at least this fraction of the child's distinctive words. */
+const RELAY_MIN_OVERLAP = 0.5;
+
+function relayTokenize(s: string): string[] {
+  return s.toLowerCase().match(/[a-z0-9]{5,}/g) ?? [];
+}
+
+/** Fraction of the child's distinctive words that also appear in the answer. */
+function relayOverlap(answer: string, childText: string): number {
+  const answerWords = new Set(relayTokenize(answer));
+  const distinct = [...new Set(relayTokenize(childText))];
+  if (distinct.length === 0) return 1;
+  let hit = 0;
+  for (const w of distinct) if (answerWords.has(w)) hit++;
+  return hit / distinct.length;
+}
+
+/**
+ * After the framework auto-collects detached children (see
+ * `AgentWorker.run`), a small orchestrator sometimes answers with a meta-stub
+ * ("I've gathered the results and updated the summary") that drops the actual
+ * content the user needs — the user never sees the child output, only the
+ * reply. This deterministically detects that: if the final answer is far
+ * shorter than the collected material AND does not substantially quote it,
+ * append the formatted child results verbatim. No LLM judgment.
+ */
+export function ensureChildRelay(
+  answer: string,
+  childText: string,
+  formattedChildResults: string,
+): string {
+  const child = childText.trim();
+  if (!child) return answer;
+  const ans = (answer ?? '').trim();
+  if (ans.length >= child.length * RELAY_MIN_LENGTH_FRACTION) return answer;
+  if (relayOverlap(ans, child) >= RELAY_MIN_OVERLAP) return answer;
+  const appended = formattedChildResults.trim();
+  if (!appended) return answer;
+  return ans
+    ? `${ans}\n\n---\n\nFull results from the delegated work:\n\n${appended}`
+    : appended;
+}

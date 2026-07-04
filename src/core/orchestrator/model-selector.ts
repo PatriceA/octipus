@@ -1,5 +1,6 @@
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { hasRecentShim } from './model-capability';
 import { getSessionModel } from './session-model-override';
 
 interface ModelRouting {
@@ -67,24 +68,36 @@ export class ModelSelector {
     const registry = getModelRegistry();
     const isReasoner = modelMeta.modelId.includes('reasoner') || modelMeta.modelId.includes('thinking');
     const noTools = !modelMeta.supportsTools && modelMeta.provider !== 'cli';
-    if (!isReasoner && !noTools) return modelName;
+    // Capability floor (Phase 2.1): a model that recently needed the toolshim
+    // to emit a tool call cannot be trusted to orchestrate natively. CLI
+    // providers run their own harness and never route through the shim, so
+    // they are exempt.
+    const shimUnreliable = modelMeta.provider !== 'cli' && hasRecentShim(modelMeta.modelId);
+    if (!isReasoner && !noTools && !shimUnreliable) return modelName;
 
-    const allModels = await registry.getAllModels();
-    const suitable = allModels.find(m =>
+    const reason = isReasoner ? 'reasoner' : noTools ? 'no-tools' : 'shim-unreliable';
+    const isSuitable = (m: { modelId: string; supportsTools: boolean; provider: string }): boolean =>
       m.supportsTools &&
       !m.modelId.includes('reasoner') &&
       !m.modelId.includes('thinking') &&
-      m.provider !== 'cli',
-    );
+      m.provider !== 'cli' &&
+      m.modelId !== modelMeta.modelId &&
+      !hasRecentShim(m.modelId);
+
+    // Prefer the configured default when it clears the floor, else the first
+    // tool-reliable model.
+    const defaultModel = await registry.getDefaultModel();
+    const allModels = await registry.getAllModels();
+    const suitable = defaultModel && isSuitable(defaultModel) ? defaultModel : allModels.find(isSuitable);
     if (suitable) {
       coreLogger.warn(
-        { originalModel: modelMeta.modelId, selectedModel: suitable.modelId, reason: isReasoner ? 'reasoner' : 'no-tools' },
-        'Overriding user-selected orchestrator model — it cannot emit tool calls',
+        { originalModel: modelMeta.modelId, selectedModel: suitable.modelId, reason },
+        'Orchestrator model rerouted — it cannot reliably emit native tool calls',
       );
       return suitable.modelId;
     }
     coreLogger.warn(
-      { candidateModel: modelMeta.modelId, reason: isReasoner ? 'reasoner' : 'no-tools' },
+      { candidateModel: modelMeta.modelId, reason },
       'Candidate model unsuitable for orchestration and no alternative configured — attempting anyway',
     );
     return modelName;
