@@ -124,7 +124,10 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         role: t.String(),
         topic: t.Optional(t.String()),
         systemPrompt: t.Optional(t.String()),
-        modelPreference: t.Optional(t.String()),
+        // Nullable: `null` = no override, use the lane's model. TypeBox
+        // `Optional` alone allows only `undefined`, so the UI's explicit
+        // `modelPreference: null` used to 422 here.
+        modelPreference: t.Optional(t.Union([t.String(), t.Null()])),
         toolIds: t.Optional(t.Array(t.String())),
         skillIds: t.Optional(t.Array(t.String())),
         parameters: t.Optional(t.Object({
@@ -195,7 +198,9 @@ export const expertRoutes = new Elysia({ prefix: '/experts' })
         role: t.Optional(t.String()),
         topic: t.Optional(t.String()),
         systemPrompt: t.Optional(t.String()),
-        modelPreference: t.Optional(t.String()),
+        // `null` clears the override (fall back to the lane's model); the
+        // handler passes it through and the DB column is nullable.
+        modelPreference: t.Optional(t.Union([t.String(), t.Null()])),
         toolIds: t.Optional(t.Array(t.String())),
         skillIds: t.Optional(t.Array(t.String())),
         parameters: t.Optional(t.Object({

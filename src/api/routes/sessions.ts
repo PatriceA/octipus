@@ -261,7 +261,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Missing required query param: path' };
       }
       try {
-        const fs = WorkspaceFS.forAgent({ userId: session.userId });
+        // forSession: dev-mode sessions resolve against the project dir the
+        // agent actually ran in, not the per-user workspace (P1.8).
+        const fs = WorkspaceFS.forSession(session);
         const result = await readSessionFile(fs, query.path);
         if ('version' in result) set.headers.ETag = `"${result.version}"`;
         return result;
@@ -301,7 +303,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Missing required param: path' };
       }
       try {
-        const fs = WorkspaceFS.forAgent({ userId: session.userId });
+        const fs = WorkspaceFS.forSession(session);
         const result = await writeSessionFile(fs, path, body.content, body.baseVersion);
         set.headers.ETag = `"${result.version}"`;
         return result;
@@ -328,7 +330,8 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // ── Session changes (git-backed review) ──────────────────────────
   // Lists what the agent changed in this session's workspace, and returns the
   // before/after text for a single file. Backed by git in the workspace root
-  // (WorkspaceFS.forAgent) and gracefully degrades to `isGitRepo: false` when
+  // (WorkspaceFS.forSession — the same root the agent ran in, including the
+  // dev-mode project dir) and gracefully degrades to `isGitRepo: false` when
   // the workspace isn't a repository. The client computes the visual diff from
   // the `{ original, modified }` pair via `computeLineDiff`.
   .get(
@@ -343,7 +346,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 404;
         return { error: 'Session not found' };
       }
-      const fs = WorkspaceFS.forAgent({ userId: session.userId });
+      const fs = WorkspaceFS.forSession(session);
       const { getWorkspaceChanges } = await import('@/core/session-changes');
       return getWorkspaceChanges(fs.root);
     },
@@ -371,7 +374,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         set.status = 400;
         return { error: 'Missing required query param: path' };
       }
-      const fs = WorkspaceFS.forAgent({ userId: session.userId });
+      const fs = WorkspaceFS.forSession(session);
       let absPath: string;
       try {
         absPath = fs.resolve(query.path);
