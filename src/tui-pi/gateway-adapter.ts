@@ -310,14 +310,18 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       if (type === 'tool_call' || type === 'cli_tool_use') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
         const args = asRecord(data.args) ?? asRecord(data.input);
-        const preview = summarizeToolArgs(name, args);
+        // Prefer the adapter-supplied human title (e.g. codex "git status")
+        // over a re-derived arg summary.
+        const preview = pickString(data, 'title') ?? summarizeToolArgs(name, args);
         out.push({ kind: 'tool', tool: { state: 'pending', name, preview, mcpServer } });
         const write = extractAgentWrite(name, args);
         if (write) out.push({ kind: 'agent.write', path: write.path, newText: write.newText });
       } else if (type === 'cli_tool_result' || type === 'tool_result') {
         const name = pickString(data, 'toolName') ?? pickString(data, 'tool_name') ?? 'tool';
         const isError = Boolean(data.error || data.isError);
-        const output = pickString(data, 'output');
+        // CLI adapters emit the captured output on `output` (codex/claude);
+        // fall back to the legacy `result` string for older servers.
+        const output = pickString(data, 'output') ?? pickString(data, 'result');
         const preview = output?.split('\n')[0]?.slice(0, 80);
         out.push({
           kind: 'tool',
