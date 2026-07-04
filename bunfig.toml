@@ -10,6 +10,9 @@ sourcemaps = true
 # Test configuration
 coverage = true
 coverageDir = "coverage"
+# Reap the per-test `mkdtempSync(tmpdir(), 'octipus-…')` scratch dirs that leak
+# ~140 dirs/run and fill a tmpfs `/tmp` within days. See the file's header.
+preload = ["./src/test-helpers/tmp-cleanup.ts"]
 # tests/web/ uses @playwright/test (browser E2E). Run those via
 # `bun run test:web` (which invokes `playwright test tests/web`), not
 # `bun test`. Importing them under bun's unit runner throws "Playwright
