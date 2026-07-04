@@ -134,12 +134,15 @@ function ExpertForm({
             <input className={inputCls} value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. Tax Advisor" />
           </label>
           <label className="block">
-            <span className="block text-xs text-on-surface-variant mb-1" title="Tool bundle + base prompt. Also what the orchestrator's routing table keys on.">Role (tools)</span>
+            <span className="block text-xs text-on-surface-variant mb-1">Specialist type (tool bundle)</span>
             <select className={cn(selectCls, 'w-full')} value={form.role} onChange={(e) => set({ role: e.target.value })}>
               {WORKER_ROLES.map((r) => (
                 <option key={r.value} value={r.value}>{r.label}</option>
               ))}
             </select>
+            <span className="block text-[11px] text-on-surface-variant/80 mt-1">
+              Which tools + base prompt this expert&apos;s workers get — not a title (that&apos;s Name); several experts can share a type.
+            </span>
           </label>
           <label className="block sm:col-span-2">
             <span className="block text-xs text-on-surface-variant mb-1">Description (the orchestrator routes by this — say what the expert is good at)</span>
@@ -167,6 +170,16 @@ function ExpertForm({
               <option key={m.name} value={m.modelId}>{m.name}</option>
             ))}
           </select>
+          {/* Live resolution readout: what actually serves this expert with the
+              current form values (mirrors the backend order: override → lane). */}
+          <span className="block text-[11px] text-on-surface-variant/80 mt-1 font-mono">
+            {form.modelPreference
+              ? `Override: ${form.modelPreference} — the lane binding is ignored`
+              : `Override: — using lane '${form.topic}' → ${
+                  lanes.find((l) => l.value === form.topic)?.primaryModel
+                    ?? 'unbound (bind a model on the Topics page)'
+                }`}
+          </span>
         </label>
       </div>
 
@@ -277,8 +290,11 @@ function ExpertCard({
             )}>
               {expert.isSystem ? 'system' : 'custom'}
             </span>
-            <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-surface-container-high text-on-surface-variant font-mono">
-              role: {expert.role}
+            <span
+              className="px-1.5 py-0.5 text-[10px] rounded-full bg-surface-container-high text-on-surface-variant font-mono"
+              title="Specialist type — the tool bundle + base prompt this expert's workers run with"
+            >
+              type: {expert.role}
             </span>
           </div>
           {expert.description && <p className="text-xs text-on-surface-variant mt-0.5">{expert.description}</p>}

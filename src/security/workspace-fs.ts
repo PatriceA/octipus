@@ -195,6 +195,33 @@ export class WorkspaceFS {
   }
 
   /**
+   * Build a `WorkspaceFS` for a session's read-back surfaces (file browser,
+   * Changes tab, `/changes`). MUST mirror the cwd resolution the CLI agent
+   * worker uses when spawning (`cli-agent-worker.ts`): a dev-mode session
+   * with a `projectPath` runs the agent inside the project directory, so
+   * read-back must target that same root — pinning it to the per-user
+   * workspace 404s the file browser and blinds the Changes tab. Non-dev
+   * sessions keep the `forAgent` per-user workspace.
+   *
+   * Trust note: `projectPath` is only honored together with `devMode` —
+   * the same (pre-existing) trust decision that lets the CLI agent run
+   * with that directory as cwd; this helper adds no new reach.
+   */
+  static forSession(
+    session: { userId?: string | null; context?: unknown },
+    options: WorkspaceFsOptions = {},
+  ): WorkspaceFS {
+    const ctx = session.context as
+      | { devMode?: boolean; projectPath?: string }
+      | null
+      | undefined;
+    if (ctx?.devMode && ctx.projectPath) {
+      return WorkspaceFS.withRoot(pathResolve(ctx.projectPath), options);
+    }
+    return WorkspaceFS.forAgent({ userId: session.userId ?? undefined }, options);
+  }
+
+  /**
    * Ensure the workspace root exists on disk. Idempotent. Call this
    * before the first write — `resolve()` does NOT create directories so
    * that read-only callers don't trigger filesystem mutation.
