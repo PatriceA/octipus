@@ -3,9 +3,10 @@ import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -13,8 +14,22 @@ import type { ModelProvider, ProviderHealthStatus } from './interface';
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
 /** Model names / prefixes supported by the OpenAI API */
-const SUPPORTED_PREFIXES = ['gpt-', 'o1-', 'o3-', 'text-embedding-'];
+const SUPPORTED_PREFIXES = ['gpt-', 'text-embedding-'];
 const SUPPORTED_EXACT = new Set(['chatgpt-4o-latest', 'dall-e-3']);
+/** o-series reasoning models: o1, o3, o4, … */
+const O_SERIES = /^o\d/;
+
+/**
+ * o-series (o1/o3/o4) and gpt-5 reject `max_tokens` (want `max_completion_tokens`)
+ * and o-series also reject a non-default `temperature`.
+ */
+function usesMaxCompletionTokens(model: string): boolean {
+  const lower = model.toLowerCase();
+  return O_SERIES.test(lower) || lower.startsWith('gpt-5');
+}
+function omitsTemperature(model: string): boolean {
+  return O_SERIES.test(model.toLowerCase());
+}
 
 /**
  * OpenAI direct provider -- calls the OpenAI API without going through
@@ -27,33 +42,42 @@ export class OpenAIProvider implements ModelProvider {
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();
     if (SUPPORTED_EXACT.has(lower)) return true;
+    if (O_SERIES.test(lower)) return true;
     return SUPPORTED_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  }
+
+  /**
+   * Build shared completion params (minus `stream`, which the caller sets as a
+   * literal so the SDK's overload discriminates the return type). Honors the
+   * o-series/gpt-5 param quirks.
+   */
+  private buildParams(options: CompletionOptions): Omit<ChatCompletionCreateParams, 'stream'> {
+    const params: Omit<ChatCompletionCreateParams, 'stream'> = {
+      model: options.model,
+      messages: this.formatMessages(options.messages),
+      top_p: options.topP,
+      stop: options.stopSequences,
+      response_format: options.responseFormat,
+    };
+    if (!omitsTemperature(options.model)) params.temperature = options.temperature;
+    if (usesMaxCompletionTokens(options.model)) {
+      (params as Record<string, unknown>).max_completion_tokens = options.maxTokens;
+    } else {
+      params.max_tokens = options.maxTokens;
+    }
+    if (options.tools?.length) {
+      params.tools = options.tools;
+      params.tool_choice = options.toolChoice ?? 'auto';
+    }
+    if (options.extraBody) Object.assign(params, options.extraBody);
+    return params;
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const client = await this.createClient();
     const startTime = Date.now();
 
-    const params: ChatCompletionCreateParams = {
-      model: options.model,
-      messages: this.formatMessages(options.messages),
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-      top_p: options.topP,
-      stop: options.stopSequences,
-      response_format: options.responseFormat,
-      stream: false,
-    };
-
-    if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = 'auto';
-    }
-
-    // Merge extra body parameters
-    if (options.extraBody) {
-      Object.assign(params, options.extraBody);
-    }
+    const params: ChatCompletionCreateParams = { ...this.buildParams(options), stream: false };
 
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
@@ -61,7 +85,7 @@ export class OpenAIProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'openai');
@@ -85,30 +109,11 @@ export class OpenAIProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments || '';
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            const repaired = repairTruncatedJson(rawArgs);
-            if (repaired) {
-              try {
-                const parsed = JSON.parse(repaired) as Record<string, unknown>;
-                modelLogger.warn(
-                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-                  'Recovered truncated tool-call JSON via repairTruncatedJson',
-                );
-                return { id: tc.id, name: tc.function.name, arguments: parsed };
-              } catch { /* fall through */ }
-            }
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
         });
       }
 
@@ -134,31 +139,13 @@ export class OpenAIProvider implements ModelProvider {
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const client = await this.createClient();
 
-    const params: ChatCompletionCreateParams = {
-      model: options.model,
-      messages: this.formatMessages(options.messages),
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-      top_p: options.topP,
-      stop: options.stopSequences,
-      stream: true,
-    };
-
-    if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = 'auto';
-    }
-
-    // Merge extra body parameters
-    if (options.extraBody) {
-      Object.assign(params, options.extraBody);
-    }
+    const params: ChatCompletionCreateParams = { ...this.buildParams(options), stream: true };
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via OpenAI');
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
     } catch (err) {
       throw classifyError(err, 'openai');
     }
@@ -268,12 +255,13 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    // A10: pairing + id normalization + thinking-strip, shared across providers.
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
           content: msg.content,
-          tool_call_id: msg.toolCallId || '',
+          tool_call_id: msg.toolCallId as string,
         };
       }
 

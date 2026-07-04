@@ -4,11 +4,13 @@ import type {
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
 import { getConfig } from '@/config';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 /**
@@ -17,8 +19,6 @@ import type { ModelProvider, ProviderHealthStatus } from './interface';
  */
 const CLOUD_PREFIXES = [
   'gpt-',
-  'o1-',
-  'o3-',
   'claude-',
   'gemini-',
   'deepseek-',
@@ -29,7 +29,23 @@ const CLOUD_PREFIXES = [
   'whisper-',
   'tts-',
   'voyage-',
+  // Mistral cloud families (A8) — sibling MistralProvider SUPPORTED_PREFIXES.
+  'mistral-',
+  'magistral-',
+  'codestral-',
+  'ministral-',
+  'devstral-',
+  'pixtral-',
+  'voxtral-',
+  'open-mistral-',
+  'open-mixtral-',
+  // xAI
+  'grok-',
+  'xai/',
 ];
+
+/** OpenAI o-series (o1/o3/o4…) — cloud, not Ollama. */
+const O_SERIES_PREFIX = /^o\d/;
 
 /** Reject model names that look like OpenRouter slugs (contain `/` but aren't `cli/`) */
 function looksLikeOpenRouterSlug(name: string): boolean {
@@ -115,6 +131,7 @@ export class OllamaProvider implements ModelProvider {
     if (!this.fixedEndpoint && !getConfig().ollama.url) return false;
     const lower = modelName.toLowerCase();
     if (CLOUD_PREFIXES.some((prefix) => lower.startsWith(prefix))) return false;
+    if (O_SERIES_PREFIX.test(lower)) return false;
     if (looksLikeOpenRouterSlug(lower)) return false;
     return true;
   }
@@ -146,7 +163,7 @@ export class OllamaProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters (but NOT think:false — that goes to native endpoint)
@@ -160,7 +177,7 @@ export class OllamaProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
@@ -196,30 +213,11 @@ export class OllamaProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments || '';
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            const repaired = repairTruncatedJson(rawArgs);
-            if (repaired) {
-              try {
-                const parsed = JSON.parse(repaired) as Record<string, unknown>;
-                modelLogger.warn(
-                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-                  'Recovered truncated tool-call JSON via repairTruncatedJson',
-                );
-                return { id: tc.id, name: tc.function.name, arguments: parsed };
-              } catch { /* fall through */ }
-            }
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
         });
       }
 
@@ -271,7 +269,10 @@ export class OllamaProvider implements ModelProvider {
       model: options.model,
       messages,
       stream: false,
-      think: false,
+      // Only force think:false when the CALLER asked to disable thinking. When we
+      // route here purely for native JSON mode, leave the model's default so a
+      // reasoning model isn't silently lobotomized.
+      ...(options.extraBody?.think === false ? { think: false } : {}),
       // Keep the model resident in VRAM between calls so we don't pay the
       // (slow on iGPU) cold-load every request — the root cause of timeout loops.
       keep_alive: getConfig().ollama.keepAlive,
@@ -311,25 +312,33 @@ export class OllamaProvider implements ModelProvider {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (options.apiKey) headers['Authorization'] = `Bearer ${options.apiKey}`;
 
-    const response = await fetch(`${resolvedEndpoint}/api/chat`, {
+    const response = await fetchWithRetryAfter(`${resolvedEndpoint}/api/chat`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(getConfig().ollama.requestTimeout),
-    });
+      signal: withTimeoutSignal(getConfig().ollama.requestTimeout, options.signal),
+    }, this.name);
 
     if (!response.ok) {
       const err = await response.text().catch(() => '');
       throw classifyError({ status: response.status, message: err || 'Ollama native API error' }, 'ollama');
     }
 
-    const data = await response.json() as {
-      message: { role: string; content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
+    let data: {
+      message?: { role: string; content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
       done: boolean;
       done_reason?: string;
       prompt_eval_count?: number;
       eval_count?: number;
     };
+    try {
+      data = await response.json();
+    } catch (err) {
+      throw classifyError(new Error(`Ollama native API returned invalid JSON: ${(err as Error).message}`), 'ollama');
+    }
+    if (!data?.message) {
+      throw classifyError(new Error('Ollama native API returned no message'), 'ollama');
+    }
 
     const latencyMs = Date.now() - startTime;
 
@@ -345,10 +354,13 @@ export class OllamaProvider implements ModelProvider {
       latencyMs,
     };
 
-    // Parse tool calls from native response
+    // Parse tool calls from native response. Ids must be unique PER TURN — the
+    // old `call_${i}` collided across turns, breaking tool-message pairing on
+    // multi-round conversations.
     if (data.message.tool_calls?.length) {
+      const turnStamp = Date.now();
       result.toolCalls = data.message.tool_calls.map((tc, i) => ({
-        id: `call_${i}`,
+        id: `call_${turnStamp}_${i}`,
         name: tc.function.name,
         arguments: tc.function.arguments,
       }));
@@ -371,10 +383,10 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    // think:false must go through native /api/chat (the /v1 endpoint
-    // ignores the flag). Implement as non-streamed native completion
-    // yielded as a single chunk — matches complete()'s branch on line 76.
-    if (options.extraBody?.think === false) {
+    // think:false OR json_object must go through native /api/chat (the /v1
+    // endpoint ignores both). Implement as a non-streamed native completion
+    // yielded as a single chunk — mirrors complete()'s routing.
+    if (options.extraBody?.think === false || options.responseFormat?.type === 'json_object') {
       const result = await this.completeNative(options);
       if (result.content) yield { content: result.content };
       if (result.toolCalls?.length) {
@@ -407,7 +419,7 @@ export class OllamaProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters (e.g. { think: false } for Qwen3)
@@ -417,18 +429,27 @@ export class OllamaProvider implements ModelProvider {
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Ollama');
 
-    const stream = await client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+    } catch (err) {
+      throw classifyError(err, this.name);
+    }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
-      // Qwen3/thinking models may stream output in 'reasoning' instead of 'content'
+      // Do NOT promote 'reasoning' deltas into content — mirrors complete()'s
+      // deliberate separation. A thinking-only turn must not look like a final
+      // answer (the agent loop would complete on raw reasoning). Surface it
+      // separately so the worker's empty-content retry can nudge instead.
       const deltaAny = delta as Record<string, unknown> | undefined;
-      const text = delta?.content || (deltaAny?.reasoning as string | undefined);
-      if (text) {
-        yield { content: text };
+      if (delta?.content) {
+        yield { content: delta.content };
+      } else if (typeof deltaAny?.reasoning === 'string' && deltaAny.reasoning) {
+        yield { reasoningContent: deltaAny.reasoning };
       }
 
       if (delta?.tool_calls) {
@@ -569,7 +590,8 @@ export class OllamaProvider implements ModelProvider {
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    // A10: pairing + id normalization + thinking-strip shared across providers.
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         // Ollama's OpenAI-compat endpoint requires tool_call_id to match the
         // assistant's tool_calls[].id exactly, and content must be a string.
@@ -577,7 +599,7 @@ export class OllamaProvider implements ModelProvider {
         return {
           role: 'tool' as const,
           content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-          tool_call_id: msg.toolCallId || 'call_0',
+          tool_call_id: msg.toolCallId as string,
         };
       }
 

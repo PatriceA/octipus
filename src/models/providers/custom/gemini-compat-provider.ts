@@ -1,7 +1,10 @@
 import { classifyError } from '@/core/errors/classification';
 import type { ToolCall } from '@/core/types';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
+import { sanitizeGeminiHistory } from '../gemini-history';
+import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 import {
@@ -39,12 +42,12 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
 
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await fetchWithRetryAfter(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
-      });
+        signal: withTimeoutSignal(120_000, options.signal),
+      }, this.name);
     } catch (err) {
       throw classifyError(err, this.name);
     }
@@ -71,19 +74,25 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
       'Starting streaming completion via custom-gemini',
     );
 
+    // Idle (read) timeout, not a 180s total-duration cap, so a long streamed
+    // tool-call isn't killed mid-flight; the clock resets on every chunk and
+    // the caller signal still aborts.
+    const idle = createIdleAbort(180_000, options.signal);
     let res: Response;
     try {
       res = await fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(180_000),
+        signal: idle.signal,
       });
     } catch (err) {
+      idle.clear();
       throw classifyError(err, this.name);
     }
 
     if (!res.ok || !res.body) {
+      idle.clear();
       const errText = await res.text().catch(() => '');
       throw classifyError(
         { status: res.status, message: extractErrorMessage(errText) || `HTTP ${res.status}` },
@@ -91,7 +100,11 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
       );
     }
 
-    yield* parseGeminiSseStream(res.body);
+    try {
+      yield* parseGeminiSseStream(res.body, idle.touch);
+    } finally {
+      idle.clear();
+    }
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {
@@ -107,12 +120,13 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
   ): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
     const generic: GenericGeminiRequest = {
       model: (cfg.model?.modelId || options.model),
-      messages: options.messages,
+      messages: sanitizeGeminiHistory(options.messages),
       temperature: options.temperature,
       maxTokens: options.maxTokens,
       topP: options.topP,
       stopSequences: options.stopSequences,
       tools: options.tools,
+      toolChoice: options.toolChoice,
       stream: streaming,
       responseMimeType: (options.extraBody?.responseMimeType as string | undefined)
         || (options.extraBody?.response_mime_type as string | undefined),
@@ -133,6 +147,9 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
 
     const path = cfg.custom.pathOverride || this.defaultPath((cfg.model?.modelId || options.model), streaming);
     const { headers, queryParams } = this.buildHeaders(cfg.custom, cfg.apiKey);
+    // A5: the SSE parser only accepts `data:` lines — :streamGenerateContent
+    // returns a JSON array unless alt=sse is requested.
+    if (streaming) queryParams.alt = 'sse';
     const url = this.appendQuery(`${cfg.baseUrl}${path}`, queryParams);
 
     return { url, body, headers };
@@ -162,14 +179,16 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
         toolCalls.push({
           id: part.functionCall.id || `call_${toolCallIdx++}`,
           name: part.functionCall.name,
-          arguments: part.functionCall.args || {},
+          arguments: parseToolCallArguments(part.functionCall.args, part.functionCall.name, this.name),
         });
       }
     }
 
     const result: CompletionResult = {
       content: textParts.join(''),
-      finishReason: mapFinishReason(candidate.finishReason),
+      // Gemini reports STOP even on tool-call turns — normalize to tool_calls
+      // when we parsed any (item 39).
+      finishReason: toolCalls.length ? 'tool_calls' : mapFinishReason(candidate.finishReason),
       usage: {
         inputTokens: data.usageMetadata?.promptTokenCount || 0,
         outputTokens: data.usageMetadata?.candidatesTokenCount || 0,
@@ -237,17 +256,23 @@ function extractErrorMessage(errText: string): string {
 }
 
 /** Parse a Gemini SSE stream (`data: {...}\n\n` events with full chunk shape) */
-async function* parseGeminiSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamChunk> {
+async function* parseGeminiSseStream(
+  body: ReadableStream<Uint8Array>,
+  touch?: () => void,
+): AsyncGenerator<StreamChunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   const toolCallBuffers = new Map<string, ToolCall>();
+  const rawToolCalls: Array<Record<string, unknown>> = [];
   let finishReason: string | undefined;
+  let sawToolCall = false;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      touch?.();
       buffer += decoder.decode(value, { stream: true });
 
       // Split on double newline (SSE event boundary)
@@ -274,12 +299,24 @@ async function* parseGeminiSseStream(body: ReadableStream<Uint8Array>): AsyncGen
               yield { content: part.text };
             }
             if (part.functionCall) {
+              sawToolCall = true;
               const id = part.functionCall.id || `call_${toolIdx++}`;
               if (!toolCallBuffers.has(id)) {
                 toolCallBuffers.set(id, {
                   id,
                   name: part.functionCall.name,
                   arguments: part.functionCall.args || {},
+                });
+                // Capture thought_signature so streamed Gemini 3 tool calls can
+                // round-trip it on the terminal chunk (item 40).
+                const sig = part.functionCall.thoughtSignature ?? part.thoughtSignature;
+                rawToolCalls.push({
+                  functionCall: {
+                    name: part.functionCall.name,
+                    args: part.functionCall.args || {},
+                    ...(part.functionCall.id ? { id: part.functionCall.id } : {}),
+                    ...(sig ? { thoughtSignature: sig } : {}),
+                  },
                 });
                 yield {
                   toolCallDelta: {
@@ -302,5 +339,13 @@ async function* parseGeminiSseStream(body: ReadableStream<Uint8Array>): AsyncGen
     reader.releaseLock();
   }
 
-  if (finishReason) yield { finishReason };
+  // Gemini reports STOP even on tool-call turns — normalize (item 39).
+  if (sawToolCall) {
+    yield {
+      finishReason: 'tool_calls',
+      providerRaw: { content: { role: 'model', parts: rawToolCalls } },
+    };
+  } else if (finishReason) {
+    yield { finishReason };
+  }
 }

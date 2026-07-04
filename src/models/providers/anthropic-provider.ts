@@ -3,9 +3,10 @@ import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -44,7 +45,7 @@ export class AnthropicProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters
@@ -65,7 +66,7 @@ export class AnthropicProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'anthropic');
@@ -89,30 +90,11 @@ export class AnthropicProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments || '';
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            const repaired = repairTruncatedJson(rawArgs);
-            if (repaired) {
-              try {
-                const parsed = JSON.parse(repaired) as Record<string, unknown>;
-                modelLogger.warn(
-                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-                  'Recovered truncated tool-call JSON via repairTruncatedJson',
-                );
-                return { id: tc.id, name: tc.function.name, arguments: parsed };
-              } catch { /* fall through */ }
-            }
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: this.name,
-              metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
         });
       }
 
@@ -145,12 +127,13 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       top_p: options.topP,
       stop: options.stopSequences,
+      response_format: options.responseFormat,
       stream: true,
     };
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters
@@ -162,7 +145,7 @@ export class AnthropicProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
     } catch (err) {
       throw classifyError(err, 'anthropic');
     }
@@ -197,6 +180,12 @@ export class AnthropicProvider implements ModelProvider {
       }
 
       if (chunk.choices[0]?.finish_reason) {
+        // Surface the fully-accumulated tool calls so a consumer that only
+        // reads final state still gets complete calls (the per-delta yields
+        // above only stream partial argument fragments).
+        for (const buffer of toolCallBuffers.values()) {
+          yield { toolCallDelta: { id: buffer.id, name: buffer.name, arguments: buffer.arguments } };
+        }
         yield { finishReason: chunk.choices[0].finish_reason };
       }
     }
@@ -268,12 +257,12 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
           content: msg.content,
-          tool_call_id: msg.toolCallId || '',
+          tool_call_id: msg.toolCallId as string,
         };
       }
 

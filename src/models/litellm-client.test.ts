@@ -672,6 +672,8 @@ describeUnit('LiteLLMClient — stream routing', () => {
 
   test('routes through router.stream for non-litellm providers', async () => {
     routerState.getProvider = { name: 'ollama' };
+    // A2: stream() now resolves via resolveProvider (DB-first), not getProvider.
+    routerState.resolveProvider = { name: 'ollama' };
     routerState.routerStream = async function* () {
       yield { content: 'from-router' };
       yield { finishReason: 'stop' };

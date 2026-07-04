@@ -3,13 +3,14 @@ import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
-import { BaseCustomProvider } from './base-custom-provider';
+import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 
 /**
  * Custom OpenAI-compatible provider.
@@ -31,10 +32,9 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
   protected readonly providerName = 'custom-openai';
 
   /**
-   * supportsModel returns true unconditionally — actual routing is done by
-   * ProviderRouter.resolveProvider() which matches by `provider` column on the
-   * model row. The name-based heuristic path will not reach this provider since
-   * no caller dispatches by name without a DB lookup for custom providers.
+   * Routed by DB `provider` column via ProviderRouter.resolveProvider(), not by
+   * the name heuristic — so this returns false (no caller dispatches a custom
+   * provider by model-name alone).
    */
   supportsModel(_modelName: string): boolean {
     return false;
@@ -42,7 +42,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const cfg = await this.resolveModelConfig(options.model, options);
-    const client = this.createClient(cfg.baseUrl, cfg.apiKey, cfg.custom.extraHeaders);
+    const client = this.createClient(cfg);
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = {
@@ -58,7 +58,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) Object.assign(params, options.extraBody);
@@ -69,7 +69,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
       const choice = response.choices?.[0];
       if (!choice) {
@@ -96,33 +96,11 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments;
-          if (typeof rawArgs !== 'string') {
-            return { id: tc.id, name: tc.function.name, arguments: (rawArgs as Record<string, unknown>) || {} };
-          }
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            const repaired = repairTruncatedJson(rawArgs);
-            if (repaired) {
-              try {
-                const parsed = JSON.parse(repaired) as Record<string, unknown>;
-                modelLogger.warn(
-                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-                  'Recovered truncated tool-call JSON via repairTruncatedJson',
-                );
-                return { id: tc.id, name: tc.function.name, arguments: parsed };
-              } catch { /* fall through */ }
-            }
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: this.name,
-              metadata: { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
         });
       }
 
@@ -135,7 +113,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const cfg = await this.resolveModelConfig(options.model, options);
-    const client = this.createClient(cfg.baseUrl, cfg.apiKey, cfg.custom.extraHeaders);
+    const client = this.createClient(cfg);
 
     const params: ChatCompletionCreateParams = {
       model: cfg.model?.modelId || options.model,
@@ -149,14 +127,19 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) Object.assign(params, options.extraBody);
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via custom-openai');
 
-    const stream = await client.chat.completions.create(params);
+    let stream;
+    try {
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+    } catch (err) {
+      throw classifyError(err, this.name);
+    }
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
@@ -199,23 +182,42 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
   // ── Private ──
 
-  private createClient(baseUrl: string, apiKey: string, extraHeaders?: Record<string, string>): OpenAI {
+  /**
+   * Build the OpenAI SDK client honoring the model row's custom-provider auth
+   * (A4). Previously buildHeaders() was never called (header/query auth 401'd,
+   * always Bearer), pathOverride was ignored, and `/v1` was double-appended.
+   *
+   * The SDK always requests `${baseURL}/chat/completions`, so we derive baseURL
+   * from pathOverride (default `/v1/chat/completions`) by stripping the trailing
+   * `/chat/completions`. Auth: bearer → SDK apiKey (its native path); header/
+   * query → buildHeaders()/query params, SDK apiKey unused.
+   */
+  private createClient(cfg: ResolvedCustomConfig): OpenAI {
+    const { headers, queryParams } = this.buildHeaders(cfg.custom, cfg.apiKey);
+    const path = cfg.custom.pathOverride || '/v1/chat/completions';
+    const prefix = path.replace(/\/chat\/completions\/?$/, '');
+    const baseURL = this.appendQuery(`${cfg.baseUrl}${prefix}`, queryParams);
+    const isBearer = cfg.custom.auth.type === 'bearer';
     return new OpenAI({
-      baseURL: `${baseUrl}/v1`,
-      apiKey,
+      baseURL,
+      // Non-bearer auth travels in defaultHeaders/query; the SDK still requires
+      // a non-empty apiKey placeholder. ponytail: an extra Authorization header
+      // may ride along on header/query auth — harmless for every gateway seen.
+      apiKey: isBearer ? cfg.apiKey : 'unused',
       timeout: 120_000,
       maxRetries: 2,
-      defaultHeaders: extraHeaders,
+      defaultHeaders: headers,
     });
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    // A10: pairing + id normalization + thinking-strip shared across providers.
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
           content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-          tool_call_id: msg.toolCallId || 'call_0',
+          tool_call_id: msg.toolCallId as string,
         };
       }
 
@@ -223,8 +225,8 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
         return {
           role: 'assistant' as const,
           content: msg.content || '',
-          tool_calls: msg.toolCalls.map((tc, i) => ({
-            id: tc.id || `call_${i}`,
+          tool_calls: msg.toolCalls.map((tc) => ({
+            id: tc.id,
             type: 'function' as const,
             function: {
               name: tc.name,

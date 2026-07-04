@@ -208,4 +208,41 @@ describe('sanitizeSchemaForGemini', () => {
     expect((input as any).items).toBeUndefined();
     expect(out.items).toEqual({ type: 'string' });
   });
+
+  it('strips JSON-Schema meta keywords but preserves $ref (G2)', () => {
+    const out = sanitizeSchemaForGemini({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: 'urn:x',
+      $anchor: 'a',
+      $dynamicAnchor: 'd',
+      $vocabulary: {},
+      $comment: 'note',
+      $defs: { X: { type: 'string' } },
+      definitions: { Y: { type: 'number' } },
+      type: 'object',
+      properties: { ref: { $ref: '#/$defs/X' } },
+    }) as any;
+    expect(out.$schema).toBeUndefined();
+    expect(out.$id).toBeUndefined();
+    expect(out.$anchor).toBeUndefined();
+    expect(out.$dynamicAnchor).toBeUndefined();
+    expect(out.$vocabulary).toBeUndefined();
+    expect(out.$comment).toBeUndefined();
+    expect(out.$defs).toBeUndefined();
+    expect(out.definitions).toBeUndefined();
+    expect(out.properties.ref.$ref).toBe('#/$defs/X');
+  });
+
+  it('does not mutate input when stripping meta keys', () => {
+    const input = { $schema: 'x', $defs: { A: {} }, type: 'object' as const, properties: {} };
+    const before = JSON.stringify(input);
+    sanitizeSchemaForGemini(input);
+    expect(JSON.stringify(input)).toBe(before);
+  });
+
+  it('handles an empty-params tool schema', () => {
+    expect(sanitizeSchemaForGemini({})).toEqual({});
+    const out = sanitizeSchemaForGemini({ type: 'object', properties: {} }) as any;
+    expect(out.properties).toEqual({});
+  });
 });

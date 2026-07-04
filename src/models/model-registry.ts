@@ -253,7 +253,7 @@ export class ModelRegistry {
       .catch((err) => modelLogger.debug({ err, model: data.name }, 'capability warning check skipped'));
 
     // Clear relevant caches
-    await this.invalidateCache(data.name);
+    await this.invalidateCache(data.name, data.modelId);
 
     return result[0];
   }
@@ -270,7 +270,7 @@ export class ModelRegistry {
 
     if (result[0]) {
       modelLogger.info({ model: name }, 'Model updated');
-      await this.invalidateCache(name);
+      await this.invalidateCache(name, result[0].modelId);
     }
 
     return result[0] ?? null;
@@ -288,7 +288,7 @@ export class ModelRegistry {
 
     if (result.length > 0) {
       modelLogger.info({ model: name, enabled }, 'Model status changed');
-      await this.invalidateCache(name);
+      await this.invalidateCache(name, result[0].modelId);
       return true;
     }
 
@@ -336,7 +336,7 @@ export class ModelRegistry {
 
     if (result.length > 0) {
       modelLogger.info({ model: name }, 'Model deleted');
-      await this.invalidateCache(name);
+      await this.invalidateCache(name, result[0].modelId);
       return true;
     }
 
@@ -351,10 +351,14 @@ export class ModelRegistry {
    */
 
   /**
-   * Invalidate cache for a model
+   * Invalidate cache for a model.
+   * `modelId` (when known) clears the `model:mid:${modelId}` key that feeds
+   * resolveProvider() — A7: without it a changed provider/apiKeyRef kept routing
+   * to the old target for up to 5 min.
    */
-  private async invalidateCache(name: string): Promise<void> {
+  private async invalidateCache(name: string, modelId?: string | null): Promise<void> {
     await this.cacheDelete(`model:${name}`);
+    if (modelId) await this.cacheDelete(`model:mid:${modelId}`);
     await this.cacheDelete('model:default');
     // Clear all topic caches. Built from the canonical single-model text-topic
     // set (the source of truth that includes memory_extraction / knowledge_review
