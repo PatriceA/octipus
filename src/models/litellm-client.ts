@@ -9,7 +9,7 @@ import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '
 import type { AgentMessage, ToolCall } from '@/core/types';
 import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
@@ -22,6 +22,19 @@ export interface CompletionOptions {
   stream?: boolean;
   stopSequences?: string[];
   responseFormat?: { type: 'text' | 'json_object' };
+  /**
+   * Tool-calling policy. Maps per provider: OpenAI-style `tool_choice`,
+   * Anthropic `tool_choice.{type}`, native Gemini `functionCallingConfig.mode`.
+   * 'required' forces at least one tool call (Gemini ANY); used by the
+   * agent-worker's one-shot escalation after a recovered/shimmed turn.
+   */
+  toolChoice?: 'auto' | 'required' | 'none';
+  /**
+   * Caller abort signal. Threaded into every provider's fetch/SDK call so
+   * AgentWorker.stop() cancels in-flight requests instead of letting a
+   * 30-min DeepSeek / 60-min Grok timeout run to completion.
+   */
+  signal?: AbortSignal;
   /** Extra body parameters forwarded to the provider (e.g. { think: false } for Ollama Qwen3) */
   extraBody?: Record<string, unknown>;
   /** Per-model endpoint override (e.g. second Ollama instance) */
@@ -84,6 +97,127 @@ export interface StreamChunk {
     arguments?: string;
   };
   finishReason?: string;
+  /**
+   * Provider-specific opaque payload (e.g. Gemini `thought_signature`) carried
+   * on the terminal chunk so streamed tool calls can round-trip signatures.
+   */
+  providerRaw?: Record<string, unknown>;
+  /** DeepSeek/Magistral reasoning chain surfaced on the final chunk. */
+  reasoningContent?: string;
+}
+
+const THINKING_KEYS = new Set(['thought', 'thinking', 'reasoning']);
+
+/** Extract the leading balanced JSON object from a string, or null. */
+function leadingJsonObject(s: string): string | null {
+  const start = s.search(/\{/);
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\' && inStr) { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return s.slice(start, i + 1);
+  }
+  return null;
+}
+
+function isPureThinkingObject(obj: unknown): boolean {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  const keys = Object.keys(obj);
+  return keys.length > 0 && keys.every((k) => THINKING_KEYS.has(k));
+}
+
+/**
+ * Strip a leaked JSON thinking wrapper ({"thought":"…"}) from content WITHOUT
+ * corrupting real structured output (A1).
+ *   - Whole content is valid JSON: strip only if it's a pure thinking object
+ *     (all keys ∈ {thought,thinking,reasoning}); otherwise keep — it's a real
+ *     JSON/ReAct response.
+ *   - Otherwise, if content starts with a thinking wrapper: peel the leading
+ *     balanced object off and keep the remainder; if that object is truncated/
+ *     malformed (gemma4 preamble), blank the whole thing.
+ */
+export function stripJsonThinkingLeak(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return trimmed;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isPureThinkingObject(parsed) ? '' : content;
+  } catch { /* not whole-JSON — fall through */ }
+
+  if (!/^\s*\{\s*"(?:thought|thinking|reasoning)"\s*:/.test(trimmed)) return content;
+  const lead = leadingJsonObject(trimmed);
+  if (!lead) return ''; // truncated/malformed thinking preamble
+  try {
+    if (isPureThinkingObject(JSON.parse(lead))) return trimmed.slice(lead.length).trim();
+  } catch { /* malformed */ }
+  return '';
+}
+
+const THINK_OPEN = '<think>';
+const THINK_CLOSE = '</think>';
+
+/** Longest suffix of `s` that is a proper prefix of `tag` (for split-tag carry). */
+function partialTagSuffix(s: string, tag: string): number {
+  const max = Math.min(s.length, tag.length - 1);
+  for (let n = max; n > 0; n--) {
+    if (tag.startsWith(s.slice(s.length - n))) return n;
+  }
+  return 0;
+}
+
+/**
+ * Streaming `<think>…</think>` filter that survives tags split across chunk
+ * boundaries (item 24). `push` returns emittable text; `flush` returns any
+ * remainder at stream end — an unclosed think block is emitted as content
+ * (never silently swallowed) with `discarded=false` so the caller can log.
+ */
+export function createThinkStreamFilter() {
+  let carry = '';
+  let inside = false;
+  return {
+    push(text: string): string {
+      carry += text;
+      let out = '';
+      for (;;) {
+        if (inside) {
+          const close = carry.indexOf(THINK_CLOSE);
+          if (close === -1) break; // retain buffered think content; wait for close
+          carry = carry.slice(close + THINK_CLOSE.length);
+          inside = false;
+          continue;
+        }
+        const open = carry.indexOf(THINK_OPEN);
+        if (open === -1) {
+          // Hold back a possible partial open tag at the tail.
+          const keep = partialTagSuffix(carry, THINK_OPEN);
+          out += carry.slice(0, carry.length - keep);
+          carry = carry.slice(carry.length - keep);
+          break;
+        }
+        out += carry.slice(0, open);
+        carry = carry.slice(open + THINK_OPEN.length);
+        inside = true;
+      }
+      return out;
+    },
+    /**
+     * @returns leftover text + whether a think block was left unclosed. When
+     * unclosed, `text` is the buffered think content — emit it as content so an
+     * unterminated <think> can never silently swallow the whole stream.
+     */
+    flush(): { text: string; unclosed: boolean } {
+      const text = carry;
+      const unclosed = inside;
+      carry = '';
+      inside = false;
+      return { text, unclosed };
+    },
+  };
 }
 
 /**
@@ -123,71 +257,12 @@ export class LiteLLMClient {
   }
 
   /**
-   * Enforce the OpenAI tool-call <-> tool-message pairing invariant in BOTH
-   * directions:
-   *   (a) Drop tool messages whose tool_call_id has no matching assistant
-   *       tool_calls entry (lenient providers accept; strict ones don't).
-   *   (b) For every assistant `tool_calls` id that's missing a following
-   *       `tool` message in the slice sent upstream, synthesize a placeholder
-   *       tool message. Prevents DeepSeek's 400
-   *       "insufficient tool messages following tool_calls message"
-   *       after compaction, history re-slices, or bailed-out agent loops.
-   */
-  private sanitizeToolMessages(messages: AgentMessage[]): AgentMessage[] {
-    // (a) Collect tool_call ids declared on assistant messages.
-    const validToolCallIds = new Set<string>();
-    for (const msg of messages) {
-      if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        for (const tc of msg.toolCalls) validToolCallIds.add(tc.id);
-      }
-    }
-    const filtered = messages.filter((msg) => {
-      if (msg.role !== 'tool') return true;
-      return msg.toolCallId && validToolCallIds.has(msg.toolCallId);
-    });
-
-    // (b) Walk forward; after each assistant-with-tool_calls, make sure the
-    // immediately-following `tool` messages cover every expected id. Missing
-    // ones get a placeholder inserted at the boundary.
-    const out: AgentMessage[] = [];
-    for (let i = 0; i < filtered.length; i++) {
-      const msg = filtered[i];
-      out.push(msg);
-      if (msg.role !== 'assistant' || !msg.toolCalls?.length) continue;
-
-      const expected = new Map(msg.toolCalls.map((tc) => [tc.id, tc.name] as const));
-      let j = i + 1;
-      const seen = new Set<string>();
-      while (j < filtered.length && filtered[j].role === 'tool') {
-        const id = filtered[j].toolCallId;
-        if (id && expected.has(id)) seen.add(id);
-        out.push(filtered[j]);
-        j++;
-      }
-      for (const [id, name] of expected) {
-        if (!seen.has(id)) {
-          out.push({
-            role: 'tool',
-            content: '[no result recorded — tool response missing from history]',
-            toolCallId: id,
-            name,
-            timestamp: new Date(),
-          });
-        }
-      }
-      i = j - 1;
-    }
-    return out;
-  }
-
-  /**
    * Convert internal message format to OpenAI format.
-   * Applies cross-model message transformation (ID normalization, thinking block
-   * stripping) before sanitizing orphaned tool messages.
+   * Cross-model transformation (ID normalization, thinking-block stripping,
+   * tool-call/tool-message pairing) now lives in transformMessagesForProvider.
    */
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    const transformed = transformMessagesForProvider(messages, 'litellm');
-    const sanitized = this.sanitizeToolMessages(transformed);
+    const sanitized = transformMessagesForProvider(messages, 'litellm');
     return sanitized.map((msg) => {
       if (msg.role === 'tool') {
         return {
@@ -351,7 +426,7 @@ export class LiteLLMClient {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters (e.g. { think: false } for Ollama/Qwen3/Gemma4)
@@ -363,28 +438,32 @@ export class LiteLLMClient {
     modelLogger.info({ model: params.model, provider: 'litellm', messageCount: options.messages.length }, 'LLM request');
 
     try {
-      const response = await this.client.chat.completions.create(params);
+      const response = await this.client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'litellm');
       }
       const choice = response.choices[0];
 
-      // Strip thinking/reasoning blocks from models that include them as content
+      // Strip thinking/reasoning blocks from models that include them as content.
+      // A1: skip JSON-style stripping under json_object — a JSON-mode/ReAct
+      // orchestration legitimately produces {"thought":…}-shaped output. XML
+      // stripping is always safe.
       let content = choice.message.content || '';
-      // XML-style: <think>...</think>, <thinking>...</thinking>
       content = content.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/g, '').trim();
-      // JSON-style: {"thought":"..."} or {"thinking":"..."}  (gemma4, etc.)
-      content = content.replace(/\{"(?:thought|thinking|reasoning)"\s*:\s*"[\s\S]*?"\s*\}/g, '').trim();
-      // Partial/malformed thinking JSON at start of response (e.g. {"thought": "<channel|>{")
-      if (/^\s*\{"(?:thought|thinking|reasoning)"\s*:/.test(content)) {
-        content = '';
+      if (options.responseFormat?.type !== 'json_object') {
+        content = stripJsonThinkingLeak(content);
       }
 
       // Capture reasoning_content for deepseek-reasoner routed via LiteLLM
       // (the field travels outside the OpenAI SDK's typed shape). Round-tripped
       // back into the next assistant message by formatMessages above.
       const reasoningContent = (choice.message as { reasoning_content?: string }).reasoning_content;
+
+      // Cache tokens where the upstream reports them (OpenAI/Anthropic-via-proxy
+      // expose prompt_tokens_details.cached_tokens). Left undefined otherwise.
+      const cachedTokens = (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)
+        ?.prompt_tokens_details?.cached_tokens;
 
       const result: CompletionResult = {
         content,
@@ -393,6 +472,7 @@ export class LiteLLMClient {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
+          ...(cachedTokens != null ? { cacheReadTokens: cachedTokens } : {}),
         },
         model: response.model,
         latencyMs,
@@ -437,30 +517,11 @@ export class LiteLLMClient {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from litellm: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments || '';
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            const repaired = repairTruncatedJson(rawArgs);
-            if (repaired) {
-              try {
-                const parsed = JSON.parse(repaired) as Record<string, unknown>;
-                modelLogger.warn(
-                  { toolName: tc.function.name, rawLength: rawArgs.length, provider: 'litellm' },
-                  'Recovered truncated tool-call JSON via repairTruncatedJson',
-                );
-                return { id: tc.id, name: tc.function.name, arguments: parsed };
-              } catch { /* fall through */ }
-            }
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from litellm for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: 'litellm',
-              metadata: { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, 'litellm'),
+          };
         });
       }
 
@@ -490,22 +551,43 @@ export class LiteLLMClient {
    * Tries a direct provider first, falls through to LiteLLM proxy.
    */
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    // Try direct provider first
     const resolvedModel = options.model || this.defaultModel;
+
+    // A2: DB-first resolution (resolveProvider), not the name-based heuristic —
+    // so a model like "deepseek-ocr" configured on Ollama streams from the
+    // right provider. Only fall back to the proxy when the direct stream failed
+    // BEFORE yielding anything; re-streaming mid-flight duplicates partial
+    // output, so once a chunk is out we must propagate the error, not retry.
+    let router: import('@/models/providers').ProviderRouter | undefined;
+    let provider: import('@/models/providers').ModelProvider | undefined;
     try {
       const { getProviderRouter } = await import('@/models/providers');
-      const router = getProviderRouter();
-      const provider = router.getProvider(resolvedModel);
-      if (provider.name !== 'litellm') {
-        modelLogger.info(
-          { model: resolvedModel, provider: provider.name, messageCount: options.messages.length, stream: true },
-          'LLM request',
-        );
-        yield* router.stream({ ...options, model: resolvedModel });
-        return;
-      }
+      router = getProviderRouter();
+      provider = await router.resolveProvider(resolvedModel);
     } catch {
-      // Fall through to LiteLLM proxy path
+      provider = undefined;
+    }
+
+    if (router && provider && provider.name !== 'litellm') {
+      modelLogger.info(
+        { model: resolvedModel, provider: provider.name, messageCount: options.messages.length, stream: true },
+        'LLM request',
+      );
+      let yielded = false;
+      try {
+        for await (const chunk of router.stream({ ...options, model: resolvedModel })) {
+          yielded = true;
+          yield chunk;
+        }
+        return;
+      } catch (err) {
+        if (yielded) throw classifyError(err, provider.name);
+        modelLogger.warn(
+          { model: resolvedModel, provider: provider.name, err: (err as Error).message },
+          'Direct stream failed before first chunk — falling back to LiteLLM proxy',
+        );
+        // fall through to proxy
+      }
     }
 
     modelLogger.info(
@@ -532,7 +614,7 @@ export class LiteLLMClient {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters (e.g. { think: false } for Ollama Qwen3)
@@ -544,48 +626,20 @@ export class LiteLLMClient {
 
     let stream;
     try {
-      stream = await this.client.chat.completions.create(params);
+      stream = await this.client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
     } catch (err) {
       throw classifyError(err, 'litellm');
     }
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
-    let insideThinkBlock = false;
-    let thinkBuffer = '';
+    const think = createThinkStreamFilter();
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
-        // Filter out <think>...</think> blocks from streaming content
-        let text = delta.content;
-        if (insideThinkBlock) {
-          thinkBuffer += text;
-          const closeIdx = thinkBuffer.indexOf('</think>');
-          if (closeIdx !== -1) {
-            insideThinkBlock = false;
-            text = thinkBuffer.substring(closeIdx + 8);
-            thinkBuffer = '';
-            if (text) yield { content: text };
-          }
-          continue;
-        }
-        const openIdx = text.indexOf('<think>');
-        if (openIdx !== -1) {
-          const before = text.substring(0, openIdx);
-          if (before) yield { content: before };
-          insideThinkBlock = true;
-          thinkBuffer = text.substring(openIdx + 7);
-          const closeIdx = thinkBuffer.indexOf('</think>');
-          if (closeIdx !== -1) {
-            insideThinkBlock = false;
-            const after = thinkBuffer.substring(closeIdx + 8);
-            thinkBuffer = '';
-            if (after) yield { content: after };
-          }
-          continue;
-        }
-        yield { content: text };
+        const emit = think.push(delta.content);
+        if (emit) yield { content: emit };
       }
 
       if (delta?.tool_calls) {
@@ -609,9 +663,26 @@ export class LiteLLMClient {
       }
 
       if (chunk.choices[0]?.finish_reason) {
+        // Flush any held text (partial tag) / unclosed think buffer BEFORE the
+        // terminal chunk so it's never swallowed silently.
+        const { text, unclosed } = think.flush();
+        if (unclosed) {
+          modelLogger.warn(
+            { model: params.model },
+            'Stream ended inside an unclosed <think> block — emitting remaining buffer as content',
+          );
+        }
+        if (text) yield { content: text };
         yield { finishReason: chunk.choices[0].finish_reason };
       }
     }
+
+    // Stream ended without an explicit finish_reason — still flush.
+    const tail = think.flush();
+    if (tail.unclosed) {
+      modelLogger.warn({ model: params.model }, 'Stream ended inside an unclosed <think> block (no finish_reason) — emitting buffer');
+    }
+    if (tail.text) yield { content: tail.text };
   }
 
   /**

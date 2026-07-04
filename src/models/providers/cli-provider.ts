@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -70,13 +71,18 @@ const claudeCodeConfig: CLIToolConfig = {
       const data = JSON.parse(stdout);
       // claude --output-format json returns { result: string, ... }
       const content = typeof data === 'string' ? data : (data.result || data.content || JSON.stringify(data));
+      // C18: total must sum the SAME resolved input/output values. The old
+      // code summed only the top-level fields while input/output fell back to
+      // nested `usage.*`, so nested-usage payloads reported a zero total.
+      const inputTokens = data.input_tokens || data.usage?.input_tokens || 0;
+      const outputTokens = data.output_tokens || data.usage?.output_tokens || 0;
       return {
         content,
         finishReason: 'stop',
         usage: {
-          inputTokens: data.input_tokens || data.usage?.input_tokens || 0,
-          outputTokens: data.output_tokens || data.usage?.output_tokens || 0,
-          totalTokens: (data.input_tokens || 0) + (data.output_tokens || 0),
+          inputTokens,
+          outputTokens,
+          totalTokens: inputTokens + outputTokens,
         },
         model: 'cli/claude-code',
         latencyMs: Date.now() - startTime,
@@ -288,6 +294,15 @@ const vibeCliConfig: CLIToolConfig = {
   },
 };
 
+/** Workspace root for one-shot CLI completions (falls back to cwd). */
+function resolveWorkspaceRoot(): string {
+  try {
+    return getConfig().workspace.rootPath || process.cwd();
+  } catch {
+    return process.cwd();
+  }
+}
+
 /** All registered CLI tool configs */
 export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig];
 
@@ -336,7 +351,7 @@ export class CLIProvider implements ModelProvider {
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
 
     try {
-      const stdout = await this.execCli(tool.binaryPath, args, options.maxTokens);
+      const stdout = await this.execCli(tool.binaryPath, args);
       const result = tool.parseOutput(stdout, startTime);
 
       // Track usage
@@ -462,26 +477,36 @@ export class CLIProvider implements ModelProvider {
     return parts.join('\n\n');
   }
 
-  private execCli(binary: string, args: string[], maxTokens?: number): Promise<string> {
+  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number }): Promise<string> {
     return new Promise((resolve, reject) => {
-      const timeout = maxTokens ? Math.max(120_000, maxTokens * 100) : 300_000; // 5 min default
+      // Fixed generous default, not a maxTokens*100ms heuristic (which could
+      // arm a sub-second timeout for a small budget or a 3h one for a big
+      // batch). CLI subscription tools are slow; 10 min is a safe ceiling.
+      const timeout = opts?.timeoutMs ?? 600_000;
+      // agy is a native binary — shell:true on Windows would re-tokenize its
+      // argv (breaking the prompt); only .cmd wrappers need the shell.
+      const noShell = binary === 'agy';
       const proc = spawn(binary, args, {
+        // Run in the workspace root, not wherever the server was launched — a
+        // CLI completion must not read/write the octipus repo by default.
+        cwd: resolveWorkspaceRoot(),
         env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout,
-        // On Windows, CLI tools are .cmd wrappers — shell: true is required to resolve them
-        shell: process.platform === 'win32',
+        shell: process.platform === 'win32' && !noShell,
       });
 
+      // Bound output buffers so a runaway CLI can't exhaust memory.
+      const MAX_BUF = 4 * 1024 * 1024;
       let stdout = '';
       let stderr = '';
 
       proc.stdout.on('data', (data: Buffer) => {
-        stdout += data.toString();
+        if (stdout.length < MAX_BUF) stdout += data.toString();
       });
 
       proc.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString();
+        if (stderr.length < MAX_BUF) stderr += data.toString();
       });
 
       proc.on('close', (code) => {
@@ -501,7 +526,7 @@ export class CLIProvider implements ModelProvider {
   private async checkToolAvailable(tool: CLIToolConfig): Promise<boolean> {
     const cmd = process.platform === 'win32' ? 'where' : 'which';
     try {
-      await this.execCli(cmd, [tool.binaryPath]);
+      await this.execCli(cmd, [tool.binaryPath], { timeoutMs: 5_000 });
       return true;
     } catch {
       // Recoverable: binary not found → tool simply marked unavailable

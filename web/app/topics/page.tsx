@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Layers, Loader2, Save, Tags } from 'lucide-react';
 import { useState } from 'react';
+import { OrchestratorModelNote } from '@/components/models/orchestrator-model-note';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -277,6 +278,8 @@ export default function TopicsPage() {
       {!canEdit && (
         <p className="text-sm text-warning">Read-only — admin access is required to change topic configuration.</p>
       )}
+
+      <OrchestratorModelNote />
 
       {canEdit && models.length > 0 && <AssignAllPanel models={models} onApplied={onAssignedAll} />}
 

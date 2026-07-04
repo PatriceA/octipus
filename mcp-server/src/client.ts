@@ -200,9 +200,14 @@ export class OctiClient {
   }
 
   async spawnAgent(message: string, model?: string, topic?: string): Promise<Agent> {
+    // POST /api/agents requires a sessionId (body schema: `sessionId: t.String()`).
+    // Without one the spawn 422s ("Invalid request data"), which made
+    // `octipus_spawn_agent` fail unconditionally. Create a session first so the
+    // spawned agent has a home for its messages/events, then spawn into it.
+    const session = await this.createSession({ channelType: 'mcp', title: 'MCP agent' });
     return this.request<Agent>('/api/agents', {
       method: 'POST',
-      body: JSON.stringify({ message, model, topic }),
+      body: JSON.stringify({ sessionId: session.id, message, model, topic }),
     });
   }
 

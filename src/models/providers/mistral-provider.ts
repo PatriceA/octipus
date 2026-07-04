@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -38,6 +41,12 @@ function isMistralReasoningModel(modelName: string): boolean {
   return /magistral|reasoning/.test(lower);
 }
 
+/** Mistral tool-call ids must be exactly 9 alphanumeric chars. Deterministic. */
+function toMistralToolId(id: string): string {
+  if (/^[a-zA-Z0-9]{9}$/.test(id)) return id;
+  return createHash('sha256').update(id).digest('hex').replace(/[^a-zA-Z0-9]/g, '').slice(0, 9).padEnd(9, '0');
+}
+
 /**
  * Mistral direct provider — calls the Mistral API (OpenAI-compatible
  * `/v1/chat/completions`) without going through the LiteLLM proxy. API key is
@@ -64,7 +73,7 @@ export class MistralProvider implements ModelProvider {
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
-      messages: this.formatMessages(options.messages),
+      messages: this.formatMessages(options.messages, isMistralReasoningModel(options.model)),
       temperature: options.temperature,
       max_tokens: options.maxTokens,
       top_p: options.topP,
@@ -75,7 +84,7 @@ export class MistralProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     // Merge extra body parameters
@@ -89,7 +98,7 @@ export class MistralProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'mistral');
@@ -118,19 +127,11 @@ export class MistralProvider implements ModelProvider {
           if (tc.type !== 'function') {
             throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
           }
-          const rawArgs = tc.function.arguments || '';
-          try {
-            return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs) as Record<string, unknown> };
-          } catch (parseErr) {
-            throw new ClassifiedError({
-              reason: FailoverReason.TOOL_CALL_INVALID,
-              recovery: RecoveryAction.RETRY_NOW,
-              message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-              providerHint: this.name,
-              metadata: { toolName: tc.function.name, rawLength: rawArgs.length, raw: rawArgs.slice(0, 300) },
-              cause: parseErr,
-            });
-          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
         });
       }
 
@@ -158,7 +159,7 @@ export class MistralProvider implements ModelProvider {
 
     const params: ChatCompletionCreateParams = {
       model: options.model,
-      messages: this.formatMessages(options.messages),
+      messages: this.formatMessages(options.messages, isMistralReasoningModel(options.model)),
       temperature: options.temperature,
       max_tokens: options.maxTokens,
       top_p: options.topP,
@@ -168,7 +169,7 @@ export class MistralProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -179,7 +180,7 @@ export class MistralProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
     } catch (err) {
       throw classifyError(err, 'mistral');
     }
@@ -311,13 +312,25 @@ export class MistralProvider implements ModelProvider {
     });
   }
 
-  private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+  private formatMessages(messages: AgentMessage[], isReasoning: boolean): ChatCompletionMessageParam[] {
+    const src = transformMessagesForProvider(messages, this.name);
+
+    // Mistral rejects tool-call ids that aren't exactly 9 alphanumeric chars.
+    // Remap deterministically, keeping assistant tool_calls and their tool
+    // replies in sync via a shared old→new id map.
+    const idMap = new Map<string, string>();
+    for (const m of src) {
+      if (m.role === 'assistant' && m.toolCalls) {
+        for (const tc of m.toolCalls) idMap.set(tc.id, toMistralToolId(tc.id));
+      }
+    }
+
+    return src.map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,
           content: msg.content,
-          tool_call_id: msg.toolCallId || '',
+          tool_call_id: msg.toolCallId != null ? (idMap.get(msg.toolCallId) ?? toMistralToolId(msg.toolCallId)) : '',
         };
       }
 
@@ -326,7 +339,7 @@ export class MistralProvider implements ModelProvider {
           role: 'assistant' as const,
           content: msg.content || null,
           tool_calls: msg.toolCalls.map((tc) => ({
-            id: tc.id,
+            id: idMap.get(tc.id) ?? toMistralToolId(tc.id),
             type: 'function' as const,
             function: {
               name: tc.name,
@@ -334,7 +347,7 @@ export class MistralProvider implements ModelProvider {
             },
           })),
         };
-        if (msg.reasoningContent) out.reasoning_content = msg.reasoningContent;
+        if (isReasoning && msg.reasoningContent) out.reasoning_content = msg.reasoningContent;
         return out;
       }
 
@@ -342,7 +355,7 @@ export class MistralProvider implements ModelProvider {
         role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
       };
-      if (msg.role === 'assistant' && msg.reasoningContent) {
+      if (isReasoning && msg.role === 'assistant' && msg.reasoningContent) {
         base.reasoning_content = msg.reasoningContent;
       }
       return base;

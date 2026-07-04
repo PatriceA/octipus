@@ -7,6 +7,7 @@ import { AddModelModal } from '@/components/models/add-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';
 import { EditModelModal } from '@/components/models/edit-model-modal';
 import { ModelCard } from '@/components/models/model-card';
+import { OrchestratorModelNote } from '@/components/models/orchestrator-model-note';
 import { RecommendedModelsPanel } from '@/components/models/recommended-models-panel';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -139,6 +140,8 @@ export default function ModelsPage() {
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>
       )}
+
+      <OrchestratorModelNote />
 
       <RecommendedModelsPanel onInstalled={fetchModels} />
 

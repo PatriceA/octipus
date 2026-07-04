@@ -50,6 +50,21 @@ export class AgentWorker extends BaseAgentWorker {
   private toolShimUnboundLogged: boolean = false;
   /** Guards the terminal `complete` event so stop() and run() never double-fire it. */
   private terminalEmitted: boolean = false;
+  /**
+   * G1 escalation: set after a turn whose tool calls had to be recovered from
+   * prose (text-parse/shim). Makes the NEXT model call request toolChoice
+   * 'required' (one-shot), then resets — a small model that emitted prose once
+   * gets forced to a structured call before we degrade further.
+   */
+  private forceToolChoiceNextTurn: boolean = false;
+  /**
+   * G5: one-shot native retry when a turn was truncated ('length') or the
+   * provider reported a malformed function call — before falling back to
+   * text-parse/toolshim. `lengthRetryBoost` bumps the next call's maxTokens so
+   * thinking can't starve the tool call a second time.
+   */
+  private lengthRetried: boolean = false;
+  private lengthRetryBoost: number = 0;
   /** Tool-call loop/spam detection (same-args + same-name state machines). */
   private loopDetector = new ToolLoopDetector();
 
@@ -735,6 +750,8 @@ export class AgentWorker extends BaseAgentWorker {
       }
       // Reset retry counter on success
       this.llmRetries = 0;
+      // Once a turn comes back untruncated, drop the G5 maxTokens boost.
+      if (completion.finishReason !== 'length') this.lengthRetryBoost = 0;
       this.totalTokensUsed += completion.usage.totalTokens;
 
       agentLogger.info({
@@ -869,6 +886,31 @@ export class AgentWorker extends BaseAgentWorker {
 
         // Drain steering queue before next LLM call
         this.drainSteeringQueue();
+        continue;
+      }
+
+      // G5: a truncated ('length') or MALFORMED_FUNCTION_CALL turn that surfaced
+      // as prose is a native-call problem, not a prompt problem — retry the
+      // model ONCE with more headroom before the text-parse/toolshim fallbacks
+      // (those otherwise manufacture a `call_shim_…` for a capable model).
+      if (
+        !completion.toolCalls?.length &&
+        !this.lengthRetried &&
+        !this.toolExecutor.toolsDisabled &&
+        (completion.finishReason === 'length' ||
+          completion.finishReason === 'MALFORMED_FUNCTION_CALL' ||
+          /MALFORMED_FUNCTION_CALL/.test(completion.content || ''))
+      ) {
+        this.lengthRetried = true;
+        this.lengthRetryBoost = 4096;
+        agentLogger.warn({
+          agentId: this.context.id, iteration: this.iteration,
+          finishReason: completion.finishReason,
+        }, 'Truncated/malformed turn — retrying native call with more maxTokens before recovery');
+        // Drop the truncated assistant turn so it isn't replayed.
+        if (this.messages.length && this.messages[this.messages.length - 1].role === 'assistant') {
+          this.messages.pop();
+        }
         continue;
       }
 
@@ -1299,6 +1341,7 @@ export class AgentWorker extends BaseAgentWorker {
       endpoint: model.endpoint || undefined,
       apiKey,
       userId: this.context.userId,
+      signal: this.abortController.signal,
     };
 
     let result: CompletionResult;
@@ -1329,6 +1372,9 @@ export class AgentWorker extends BaseAgentWorker {
    * drain the steer queue. Shared so both recovery paths behave identically.
    */
   private async executeRecoveredToolCalls(toolCalls: ToolCall[], source: string): Promise<void> {
+    // Recovering a tool call from prose means the model didn't emit a structured
+    // one this turn — force it next turn (G1 one-shot escalation).
+    this.forceToolChoiceNextTurn = true;
     // Normalize near-miss names before the persisted assistant message + emit,
     // same coherence requirement as the structured path.
     this.toolExecutor.normalizeToolCallNames(toolCalls);
@@ -1416,13 +1462,24 @@ export class AgentWorker extends BaseAgentWorker {
 
     // Per-topic overrides (W10) take precedence over the model's own defaults
     // when set on the Topics page — applied here so they reach the LLM call.
+    // G1 one-shot escalation: if the PREVIOUS turn's tool calls had to be
+    // recovered from prose (text-parse/shim), force the next call to emit a
+    // structured tool call (toolChoice 'required'), then fall back to 'auto'.
+    const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0;
+    this.forceToolChoiceNextTurn = false;
+
     const completionOpts = applyTopicParamOverrides(
       {
         model: litellmModel,
         messages: this.messages,
         tools: tools.length > 0 ? tools : undefined,
-        temperature: model.defaultTemperature || 0.7,
-        maxTokens: model.defaultMaxTokens || model.maxTokens || 4096,
+        // G6: nullish coalescing — a configured temperature of 0 must survive
+        // (|| turned it into 0.7, hurting small-model tool-call fidelity).
+        temperature: model.defaultTemperature ?? 0.7,
+        maxTokens: (model.defaultMaxTokens ?? model.maxTokens ?? 4096) + this.lengthRetryBoost,
+        ...(escalateToolChoice ? { toolChoice: 'required' as const } : {}),
+        // A9: cancel the in-flight model call when the worker is stopped.
+        signal: this.abortController.signal,
         extraBody,
         endpoint: model.endpoint || undefined,
         apiKey,

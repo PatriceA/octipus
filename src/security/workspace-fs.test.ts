@@ -232,3 +232,40 @@ describe('WorkspaceFS.forAgent — sentinel vs real user layout', () => {
       .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
   });
 });
+
+describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)', () => {
+  test('dev-mode session with projectPath roots at the project dir', () => {
+    const fs = WorkspaceFS.forSession({
+      userId: 'alice-uuid',
+      context: { devMode: true, projectPath: dataRoot },
+    });
+    expect(fs.root).toBe(dataRoot);
+  });
+
+  test('devMode without projectPath falls back to the user workspace', () => {
+    const fs = WorkspaceFS.forSession(
+      { userId: 'alice-uuid', context: { devMode: true } },
+      { dataRoot },
+    );
+    expect(fs.root)
+      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+
+  test('projectPath without devMode is ignored (mirrors cli-agent-worker)', () => {
+    const fs = WorkspaceFS.forSession(
+      { userId: 'alice-uuid', context: { projectPath: '/somewhere/else' } },
+      { dataRoot },
+    );
+    expect(fs.root)
+      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+
+  test('non-dev session gets the per-user nested root', () => {
+    const fs = WorkspaceFS.forSession(
+      { userId: 'alice-uuid', context: {} },
+      { dataRoot },
+    );
+    expect(fs.root)
+      .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+});
