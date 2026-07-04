@@ -316,7 +316,7 @@ export class AgentManager {
 
     // Stop the local agent.
     if (agent) {
-      agent.stop();
+      agent.stop(cascade ? 'cascade_cancelled_from_ancestor' : 'manual stop');
       agentLogger.info({ agentId, cascade }, 'Agent stopped');
     } else {
       // Agent not in memory — may be a zombie DB record. Mark it as stopped.
@@ -372,7 +372,7 @@ export class AgentManager {
           // already transitive).
           const worker = this.agents.get(row.id);
           if (worker) {
-            try { worker.stop(); } catch { /* best effort */ }
+            try { worker.stop('cascade_cancelled_from_ancestor'); } catch { /* best effort */ }
           }
           // Mark row as cancelled.
           try {

@@ -1,7 +1,35 @@
 import { describe, test, expect } from 'bun:test';
-import { validateSpawnChildArgs, formatChildResult, createSpawnChildTool } from './swarm-tool';
+import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
 import { SwarmSpawner } from './spawner';
+
+// ── applyRoleFit (Phase 2.6 deterministic role-fit) ──────────────────
+
+describe('applyRoleFit', () => {
+  test('rewrites an advisory role to coding when the task classifies coding-like', () => {
+    const fit = applyRoleFit('architecture', 'implement the feature and fix the bug in the backend code');
+    expect(fit.role).toBe('coding');
+    expect(fit.rewrittenFrom).toBe('architecture');
+  });
+
+  test('rewrites review → coding for a hands-on coding task', () => {
+    const fit = applyRoleFit('review', 'refactor the module and add a unit test for the new function');
+    expect(fit.role).toBe('coding');
+    expect(fit.rewrittenFrom).toBe('review');
+  });
+
+  test('leaves an advisory role untouched for a genuine advisory task', () => {
+    const fit = applyRoleFit('architecture', 'design the system architecture and write an architecture decision record');
+    expect(fit.role).toBe('architecture');
+    expect(fit.rewrittenFrom).toBeUndefined();
+  });
+
+  test('never touches a non-advisory role', () => {
+    const fit = applyRoleFit('coding', 'implement and fix the bug');
+    expect(fit.role).toBe('coding');
+    expect(fit.rewrittenFrom).toBeUndefined();
+  });
+});
 
 // ── validateSpawnChildArgs ───────────────────────────────────────────
 

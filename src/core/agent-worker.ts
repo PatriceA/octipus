@@ -18,8 +18,11 @@ import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import type { ToolHandler } from './agent-base';
+import { recordModelToolCall } from './orchestrator/model-capability';
+import { ensureChildRelay } from './orchestrator/output-guard';
 import { isLongTailHandler } from './orchestrator/tool-split';
 import { ClassifiedError } from './errors/classification';
+import { formatCollectedResults } from './swarm/collect-tool';
 import {
   BudgetExceededError,
   CascadedCancellationError,
@@ -45,6 +48,8 @@ export class AgentWorker extends BaseAgentWorker {
   private toolShimAttemptedIteration: number = -1;
   /** Log the unbound-translator skip only once per agent. */
   private toolShimUnboundLogged: boolean = false;
+  /** Guards the terminal `complete` event so stop() and run() never double-fire it. */
+  private terminalEmitted: boolean = false;
   /** Tool-call loop/spam detection (same-args + same-name state machines). */
   private loopDetector = new ToolLoopDetector();
 
@@ -274,16 +279,30 @@ export class AgentWorker extends BaseAgentWorker {
         );
         const collected = await this.collectAllDetached(autoTimeoutMs);
         if (collected.length > 0) {
+          // P1.2 — give each child a real relay budget instead of a 500-char
+          // stub (which turned multi-thousand-char research summaries into two
+          // fragments and produced the vague meta-answer). Budget per child is
+          // 2–12k chars, and the whole block is bounded to ~half the context
+          // window (≈3 chars/token) so a wide fan-out can't overflow.
+          const ctxBudgetChars = Math.floor(this.config.contextWindowSize * 3 * 0.5);
+          const totalMax = Math.max(12_000, Math.min(48_000, ctxBudgetChars || 48_000));
+          const perChild = Math.max(2_000, Math.min(12_000, Math.floor(totalMax / collected.length)));
           const summary = collected
             .map((r) => {
               const out = typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
-              return `- [${r.status}] node ${r.nodeId}: ${out.slice(0, 500)}${(r.notes ? ` (${r.notes})` : '')}`;
+              const clipped = out.length > perChild
+                ? `${out.slice(0, perChild)}\n…[truncated ${out.length - perChild} chars]`
+                : out;
+              return `<child status="${r.status}" node="${r.nodeId}">\n${clipped}${r.notes ? `\n(notes: ${r.notes})` : ''}\n</child>`;
             })
-            .join('\n');
+            .join('\n\n');
           this.addSystemMessage(
-            `SYSTEM: You had ${collected.length} detached subagent${collected.length > 1 ? 's' : ''} ` +
-              `you did not collect before finalizing. Results auto-collected:\n${summary}\n\n` +
-              `Synthesize these into your final answer now.`,
+            `SYSTEM: ${collected.length} detached subagent${collected.length > 1 ? 's' : ''} finished, ` +
+              `but you did not call collect_children. Their full results are below:\n\n${summary}\n\n` +
+              `Relay this content to the user as your final answer. Reproduce the substantive findings, ` +
+              `code, and data from each child verbatim or lightly edited — the user cannot see the child ` +
+              `output, only your reply. Do NOT answer with a meta-summary that merely states you have the ` +
+              `results; pass the actual deliverable through.`,
           );
           try {
             const withMerge = await this.loop();
@@ -296,11 +315,21 @@ export class AgentWorker extends BaseAgentWorker {
               'Auto-collect synthesis turn failed; returning pre-merge result',
             );
           }
+
+          // P1.3 — deterministic relay fallback: if the synthesized answer
+          // dropped the child content (a stub far shorter than the collected
+          // material that doesn't quote it), append the formatted results
+          // verbatim rather than trusting a small model to relay.
+          const childText = collected
+            .map((r) => (typeof r.output === 'string' ? r.output : JSON.stringify(r.output)))
+            .join('\n\n');
+          finalResult = ensureChildRelay(finalResult, childText, formatCollectedResults(collected));
         }
       }
 
       this.context.status = 'completed';
       this.context.completedAt = new Date();
+      this.terminalEmitted = true;
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result: finalResult });
 
@@ -363,11 +392,23 @@ export class AgentWorker extends BaseAgentWorker {
 
       this.context.status = terminalStatus;
       this.context.completedAt = new Date();
-      // stop() already emitted status_change:stopped; don't double-fire.
+      // P1.7 — a stopped child must emit a complete-shaped terminal event so
+      // the UI spinner resolves and a detached-parent finalizes. stop() emits
+      // it directly for the common manual/cascade path; this covers a pure
+      // parentSignal abort that never routed through stop(). Guarded so we
+      // never double-fire.
       if (!wasStopped) {
         this.emit('status_change', { status: 'failed' });
         this.emit('error', { error: (error as Error).message });
+      } else if (!this.terminalEmitted) {
+        this.emit('status_change', { status: 'stopped' });
+        this.emit('complete', {
+          result: (error as Error).message || 'Agent stopped',
+          stopped: true,
+          reason: (error as Error).message,
+        });
       }
+      this.terminalEmitted = true;
 
       // Cancel-cascade: detached children never see a collect, and their
       // parent AbortSignal is already aborted (this.abortController). We
@@ -532,6 +573,14 @@ export class AgentWorker extends BaseAgentWorker {
       // Wall-clock cap — skip if a final/delegation tool already completed
       // (tools are disabled after delegation; we just need one more LLM call for the summary).
       if (this.config.timeout > 0 && this.elapsed() > this.config.timeout && !this.toolExecutor.toolsDisabled) {
+        // Phase 3.5 / 2.2 — the root orchestrator has no parent to receive a
+        // structured timeout, so a bare timeout error would surface straight to
+        // the user. Instead run one final no-tools summary turn. A child (any
+        // non-root worker) still throws ChildTimeoutError so its parent gets a
+        // ChildResult status='timeout' and can synthesize partial results.
+        if (this.context.role === 'orchestrator') {
+          return await this.finalizeGracefully('wall-clock budget reached');
+        }
         this.abortController.abort(`timeout:${this.elapsed()}ms`);
         throw new ChildTimeoutError({
           agentId: this.context.id,
@@ -706,6 +755,10 @@ export class AgentWorker extends BaseAgentWorker {
         this.toolExecutor.normalizeToolCallNames(completion.toolCalls);
         const toolNames = completion.toolCalls.map(tc => tc.name);
 
+        // Capability floor signal (Phase 2.1): the model emitted tool calls
+        // natively — the good sample that heals a prior shim streak.
+        recordModelToolCall(this.context.model, false);
+
         // Detect hallucinated "respond" tools — smaller models sometimes invent
         // a tool to deliver their answer instead of returning plain text.
         // Extract the message and treat it as the final response.
@@ -790,8 +843,17 @@ export class AgentWorker extends BaseAgentWorker {
         // Final/delegation tools (spawn_child, create_pipeline) manage their own timeouts.
         // Don't race the orchestrator timeout against them — a pipeline can legitimately
         // run for much longer than the orchestrator's own timeout.
-        const isFinalTool = this.toolExecutor.hasFinalToolCall(completion.toolCalls);
-        const toolMessages = isFinalTool
+        //
+        // Phase 2.2 — `collect_children` blocks while detached children run.
+        // That idle-wait is credited back to the parent's clock via pausedMs,
+        // but raceTimeout computes its deadline BEFORE the wait, so racing it
+        // would kill the parent mid-collect (the 1.3 "orchestrator failed while
+        // blocked on children" bug). It bounds its own wait internally, so skip
+        // the race — like a self-timed final tool.
+        const isSelfTimedTool =
+          this.toolExecutor.hasFinalToolCall(completion.toolCalls) ||
+          completion.toolCalls.some((tc) => tc.name === 'collect_children');
+        const toolMessages = isSelfTimedTool
           ? await this.toolExecutor.handleToolCalls(completion.toolCalls)
           : await this.raceTimeout(
               this.toolExecutor.handleToolCalls(completion.toolCalls),
@@ -943,7 +1005,55 @@ export class AgentWorker extends BaseAgentWorker {
       return response;
     }
 
-    throw new Error(`Max iterations (${this.config.maxIterations}) reached`);
+    // Phase 3.5 — iteration budget exhausted. Rather than ending on a bare
+    // "Max iterations reached" error string, run one final no-tools turn so the
+    // worker returns a summary of what it did and what remains (hermes pattern).
+    return await this.finalizeGracefully('iteration budget reached');
+  }
+
+  /**
+   * Graceful exit (Phase 3.5): a worker that hits its iteration or wall-clock
+   * budget must not end with a bare error string. Disable tools and run one
+   * final LLM turn asking for a plain-text summary of progress + what remains.
+   * Falls back to a deterministic recap of the last tool result if that call
+   * fails, so this NEVER throws.
+   */
+  private async finalizeGracefully(reason: string): Promise<string> {
+    agentLogger.warn(
+      { agentId: this.context.id, role: this.context.role, reason, iteration: this.iteration },
+      'Graceful exit — running final no-tools summary turn',
+    );
+    this.toolExecutor.disableTools();
+    this.messages.push({
+      role: 'user',
+      content:
+        `[SYSTEM] You have reached your ${reason}. Do NOT call any tools. ` +
+        `In plain text, summarize what you accomplished and what remains unfinished, ` +
+        `using the information already gathered. This is your final answer.`,
+      timestamp: new Date(),
+    });
+    try {
+      const completion = await this.getCompletion();
+      if (this.context.role === 'orchestrator') {
+        await sessionRepository
+          .incrementMessageCount(this.context.sessionId, completion.usage.totalTokens)
+          .catch(() => { /* best-effort accounting */ });
+      }
+      const text = (completion.content || '').trim();
+      if (text) return text;
+    } catch (err) {
+      agentLogger.error(
+        { err, agentId: this.context.id },
+        'Graceful summary turn failed — falling back to deterministic recap',
+      );
+    }
+    // Deterministic fallback — never return a bare error.
+    const lastTool = [...this.messages].reverse().find((m) => m.role === 'tool');
+    if (lastTool?.content) {
+      const body = typeof lastTool.content === 'string' ? lastTool.content : JSON.stringify(lastTool.content);
+      return `I reached my ${reason} before fully finishing. Here is where things stand based on the work so far:\n\n${body}`;
+    }
+    return `I reached my ${reason} before fully finishing the task. Some steps may remain incomplete — let me know if you'd like me to continue.`;
   }
 
   /**
@@ -1151,6 +1261,11 @@ export class AgentWorker extends BaseAgentWorker {
     });
     if (!toolCall) return null;
 
+    // Capability floor signal (Phase 2.1): this model failed to emit a native
+    // tool call and needed the shim. Recorded per model — a recent shim streak
+    // bars it from orchestrating (validateOrchestratorModel).
+    recordModelToolCall(this.context.model, true);
+
     agentLogger.info(
       { agentId: this.context.id, iteration: this.iteration, tool: toolCall.name, translator: model.modelId },
       'Toolshim translated prose into a tool call',
@@ -1232,8 +1347,10 @@ export class AgentWorker extends BaseAgentWorker {
       })),
     });
 
-    const isFinalTool = this.toolExecutor.hasFinalToolCall(toolCalls);
-    const toolMessages = isFinalTool
+    const isSelfTimedTool =
+      this.toolExecutor.hasFinalToolCall(toolCalls) ||
+      toolCalls.some((tc) => tc.name === 'collect_children');
+    const toolMessages = isSelfTimedTool
       ? await this.toolExecutor.handleToolCalls(toolCalls)
       : await this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls');
     this.messages.push(...toolMessages);
@@ -1387,15 +1504,27 @@ export class AgentWorker extends BaseAgentWorker {
     }
   }
 
-  stop(): void {
-    this.abortController.abort();
+  override stop(reason?: string): void {
+    const stopReason = reason || 'stopped';
+    this.abortController.abort(stopReason);
     if (this.parentSignalCleanup) {
       this.parentSignalCleanup();
       this.parentSignalCleanup = null;
     }
+    // Already finalized (completed / failed / a prior stop) — just ensure the
+    // abort fired; don't emit a second terminal event.
+    if (this.terminalEmitted) {
+      agentLogger.info({ agentId: this.context.id, reason: stopReason }, 'Agent stop() after terminal — abort only');
+      return;
+    }
+    this.terminalEmitted = true;
     this.context.status = 'stopped';
     this.context.completedAt = new Date();
-    this.emit('status_change', { status: 'stopped' });
-    agentLogger.info({ agentId: this.context.id }, 'Agent stopped');
+    // P1.7 — emit BOTH status_change:stopped and a complete-shaped terminal
+    // event so the UI spinner resolves and a detached parent finalizes. The
+    // reason (manual / cascade) rides along.
+    this.emit('status_change', { status: 'stopped', reason: stopReason });
+    this.emit('complete', { result: `Agent stopped: ${stopReason}`, stopped: true, reason: stopReason });
+    agentLogger.info({ agentId: this.context.id, reason: stopReason }, 'Agent stopped');
   }
 }

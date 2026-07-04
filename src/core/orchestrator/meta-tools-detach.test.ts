@@ -66,19 +66,22 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
     expect(parentNode.allowedToolIds.has('collect_children')).toBe(true);
   });
 
-  test('lite mode: only spawn_child + remember_this, flat schema, no collect/pipeline', () => {
+  test('lite mode: spawn_child + collect_children + remember_this, flat spawn schema, no pipeline', () => {
     const parentNode = makeOrchestratorNode();
     const refs = makeRefs();
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
       { parentNode, swarmRefs: refs, lite: true },
     );
+    // P1.2 — lite orchestrators can now detach + collect explicitly instead of
+    // always falling into the auto-collect safety net. Pipeline/pii/reflect
+    // stay dropped for the small-model tool surface.
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['remember_this', 'spawn_child']);
+    expect(names).toEqual(['collect_children', 'remember_this', 'spawn_child']);
     // Flat lite schema: role + taskBrief only.
     const spawn = tools.find((t) => t.name === 'spawn_child');
     expect(spawn?.parameters.required).toEqual(['role', 'taskBrief']);
-    expect(parentNode.allowedToolIds.has('collect_children')).toBe(false);
+    expect(parentNode.allowedToolIds.has('collect_children')).toBe(true);
   });
 
   test('detach hook indirection: tool reads ref lazily so post-spawn wiring works', () => {

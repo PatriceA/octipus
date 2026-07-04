@@ -38,6 +38,8 @@ import {
   denialResult as denialResultFn,
 } from './spawn-validator';
 import { type Scorer, runScorers } from './scorers';
+import { applyRoleFit } from './swarm-tool';
+import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
   type AgentNode,
   type ChildResult,
@@ -362,9 +364,13 @@ export class SwarmSpawner {
     }
     const securityReminder =
       guarded.action === 'warn' ? buildSecurityReminder(guarded.flags) : '';
-    const finalChildMessage = guarded.action === 'warn'
-      ? `${childMessage}\n\n${securityReminder}`
-      : childMessage;
+    // Phase 2.5 — inject sibling scope: files already changed this session (+
+    // overlapping siblings' final reports) so this child doesn't clobber prior
+    // work unaware.
+    const siblingScope = buildSiblingScopeBrief(parent.rootSessionId, { topicPath });
+    const finalChildMessage = [childMessage, guarded.action === 'warn' ? securityReminder : '', siblingScope]
+      .filter(Boolean)
+      .join('\n\n');
 
     // ── Attempt child spawn + run, with bounded retry per §Failure Modes ──
     const result = await this.runChildWithRetry({
@@ -396,6 +402,32 @@ export class SwarmSpawner {
     // early above (no new tokens spent). Single-threaded async, so the
     // read-modify-write is safe across concurrent detached children.
     parent.budget.childTokensUsed = (parent.budget.childTokensUsed ?? 0) + (result.usedTokens ?? 0);
+
+    // Phase 2.5 — record this child's touched paths (from its file_change
+    // events) + final report so subsequent siblings in the session are warned.
+    if (result.nodeId) {
+      try {
+        const paths: string[] = [];
+        for (const { event } of getAgentManager().getEvents(result.nodeId)) {
+          const data = event.data as { type?: string; path?: string } | undefined;
+          if (event.type === 'action' && data?.type === 'file_change' && data.path) {
+            paths.push(data.path);
+          }
+        }
+        const report = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+        if (paths.length > 0 || report) {
+          recordChildScope(parent.rootSessionId, {
+            nodeId: result.nodeId,
+            role: childRole,
+            topicPath,
+            paths,
+            report,
+          });
+        }
+      } catch (err) {
+        coreLogger.debug({ err, childId: result.nodeId }, 'sibling-scope recording skipped');
+      }
+    }
 
     return result;
   }
@@ -887,7 +919,18 @@ export class SwarmSpawner {
         'SpawnChildParams.role is required — validator must have populated it before reaching the spawner',
       );
     }
-    return params.role;
+    // Phase 2.6 — deterministic role-fit: an advisory role picked for a task
+    // the classifier reads as coding is a misroute (an "architect" doing code
+    // changes). Rewrite to `coding` and log; prompt hints don't hold for small
+    // orchestrator models.
+    const fit = applyRoleFit(params.role, params.taskBrief);
+    if (fit.rewrittenFrom) {
+      coreLogger.info(
+        { from: fit.rewrittenFrom, to: fit.role, taskBrief: params.taskBrief.slice(0, 120) },
+        'Role-fit rewrite: advisory role chosen for a coding task',
+      );
+    }
+    return fit.role;
   }
 
   private buildTopicPath(parentPath: string, topic: string, subtopic: string): string {

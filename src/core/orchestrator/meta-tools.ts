@@ -63,19 +63,27 @@ export function createMetaTools(
   // refs (legacy unit-test callers) the tool stays in await-only mode.
   if (options?.parentNode) {
     const refs = options.swarmRefs;
-    if (refs && !lite) {
+    if (refs) {
+      // Full AND lite: enable detach + `collect_children`. Lite keeps the flat
+      // spawn_child schema but can now fan out and pick up results explicitly
+      // (P1.2) instead of always falling into the auto-collect safety net.
       const detachHookRef = refs.detachHookRef;
       tools.push(
-        createSpawnChildTool(options.parentNode, undefined, {
-          registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
-          pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
-          maxPendingDetached: () => getLevelDefault(0).maxPendingDetached,
-        }),
+        createSpawnChildTool(
+          options.parentNode,
+          undefined,
+          {
+            registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
+            pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
+            maxPendingDetached: () => getLevelDefault(0).maxPendingDetached,
+          },
+          lite ? { lite: true } : undefined,
+        ),
       );
       tools.push(createCollectChildrenTool(options.parentNode, refs.workerRef));
       options.parentNode.allowedToolIds.add('collect_children');
     } else {
-      // Lite (or no refs): await-only single spawn. Lite uses the flat schema.
+      // No refs (legacy unit-test call-sites): await-only single spawn.
       tools.push(createSpawnChildTool(options.parentNode, undefined, undefined, lite ? { lite: true } : undefined));
     }
   }
@@ -495,7 +503,9 @@ export function createMetaTools(
   );
 
   if (lite) {
-    return tools.filter((t) => t.name === 'spawn_child' || t.name === 'remember_this');
+    return tools.filter(
+      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this',
+    );
   }
   return tools;
 }

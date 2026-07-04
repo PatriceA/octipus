@@ -66,7 +66,8 @@ export abstract class BaseAgentWorker {
   }
 
   abstract run(userMessage?: string): Promise<string>;
-  abstract stop(): void;
+  /** Stop the worker. `reason` (manual / cascade) rides on the terminal event. */
+  abstract stop(reason?: string): void;
   abstract registerTool(tool: ToolHandler): void;
   abstract registerTools(tools: ToolHandler[]): void;
   abstract addSystemMessage(content: string): void;

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { ToolHandler } from '@/core/agent-worker';
+import { classifyMessage } from '@/core/orchestrator/classifier';
 import type { AgentRole } from '@/core/orchestrator/types';
 import { coreLogger } from '@/utils/logger';
 import { parseScorers } from './scorers';
@@ -96,6 +97,39 @@ const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
 export const SPAWN_CHILD_ROLES: readonly AgentRole[] = CHILD_ROLES_ENUM;
 
 /**
+ * Advisory roles that read/plan/review but must NOT silently absorb hands-on
+ * implementation work — their tool grants and prompts assume documents, not
+ * code changes. When the orchestrator LLM picks one of these for a task the
+ * classifier reads as coding, that's a misroute (see plan §1.8).
+ */
+const ADVISORY_ROLES: ReadonlySet<AgentRole> = new Set(['architecture', 'review', 'pm']);
+
+/**
+ * Classifier topics that mean "hands-on coding/ops". An advisory pick for one
+ * of these is rewritten to `coding`.
+ */
+const CODING_TOPICS: ReadonlySet<string> = new Set(['coding', 'devops', 'automation']);
+
+/**
+ * Deterministic role-fit guard (Phase 2.6). Before spawning, validate the
+ * LLM's role choice against the classifier's read of the task text: if an
+ * advisory role was chosen but the task classifies coding-like, rewrite to
+ * `coding`. A fixed mapping table beats prompt hints for small orchestrator
+ * models. Returns `rewrittenFrom` when it changed the role so the caller logs.
+ */
+export function applyRoleFit(
+  role: AgentRole,
+  taskText: string,
+): { role: AgentRole; rewrittenFrom?: AgentRole } {
+  if (!ADVISORY_ROLES.has(role)) return { role };
+  const topic = classifyMessage(taskText).topic;
+  if (topic && CODING_TOPICS.has(topic)) {
+    return { role: 'coding', rewrittenFrom: role };
+  }
+  return { role };
+}
+
+/**
  * Resolve a specialist role from an explicit role arg and/or a topic, using the
  * same ladder `spawn_child` validation uses:
  *   1. explicit `role` if it's a valid role
@@ -129,6 +163,71 @@ export function createSpawnChildTool(
   hooks?: SpawnChildHooks,
   opts?: { lite?: boolean },
 ): ToolHandler {
+  // Detach-or-await execute, shared by the lite and full schemas so both
+  // behave identically. Every spawn returns a pending handle immediately when
+  // detach is possible (hooks wired + depth has a detach budget) so the parent
+  // stays free to spawn siblings, narrate, or absorb a mid-run message; the
+  // parent picks results up with `collect_children` (or the framework
+  // auto-collects before the final answer). Falls back to a blocking await when
+  // detach isn't possible: no hooks (legacy call-sites / CLI workers) or no
+  // detach budget (depth-2 subagents: maxPendingDetached=0).
+  const executeSpawn: ToolHandler['execute'] = async (args, context) => {
+    const validated = validateSpawnChildArgs(args);
+    if ('error' in validated) return `spawn_child: ${validated.error}`;
+    const params = validated.params;
+
+    const cap = hooks?.maxPendingDetached() ?? 0;
+    if (hooks && cap > 0) {
+      if (hooks.pendingCount() >= cap) {
+        return `spawn_child: already at max pending detached (${cap}). Call collect_children to pick up results before spawning more.`;
+      }
+      params.mode = 'detach';
+      const childHandle = randomUUID();
+      const promise = (async () => {
+        try {
+          return await spawner.spawnChild(parent, params, context);
+        } catch (err) {
+          coreLogger.error(
+            { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
+            'Detached spawn_child execution threw',
+          );
+          return {
+            nodeId: childHandle,
+            kind: 'subagent' as const,
+            status: 'tool_error' as const,
+            output: null,
+            usedTokens: 0,
+            durationMs: 0,
+            spawnedChildren: [],
+            notes: (err as Error).message || 'spawn failed',
+          };
+        }
+      })();
+      hooks.registerPending({
+        childId: childHandle,
+        startedAt: Date.now(),
+        taskBrief: params.taskBrief,
+        topic: params.topic,
+        subtopic: params.subtopic,
+        promise,
+      });
+      return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Subagent started in the background. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
+    }
+
+    // ── Await fallback (no detach budget / no hooks) ─────────────────
+    try {
+      params.mode = 'await';
+      const result = await spawner.spawnChild(parent, params, context);
+      return formatChildResult(result);
+    } catch (err) {
+      coreLogger.error(
+        { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
+        'spawn_child execution threw',
+      );
+      return `spawn_child failed: ${(err as Error).message || 'spawn failed'}`;
+    }
+  };
+
   // Lite schema for small models: just `role` + `taskBrief`. topic/subtopic/
   // expectedOutput are synthesized by the validator. A flatter schema means
   // far fewer malformed tool calls from ≤14B models.
@@ -155,17 +254,7 @@ export function createSpawnChildTool(
         },
         required: ['role', 'taskBrief'],
       },
-      execute: async (args, context) => {
-        const validated = validateSpawnChildArgs(args);
-        if ('error' in validated) return `spawn_child: ${validated.error}`;
-        try {
-          const result = await spawner.spawnChild(parent, validated.params, context);
-          return formatChildResult(result);
-        } catch (err) {
-          coreLogger.error({ err, parentNodeId: parent.id }, 'lite spawn_child execution threw');
-          return `spawn_child failed: ${(err as Error).message || 'spawn failed'}`;
-        }
-      },
+      execute: executeSpawn,
     };
   }
 
@@ -240,73 +329,7 @@ export function createSpawnChildTool(
       },
       required: ['topic', 'subtopic', 'taskBrief', 'expectedOutput'],
     },
-    execute: async (args, context) => {
-      const validated = validateSpawnChildArgs(args);
-      if ('error' in validated) {
-        return `spawn_child: ${validated.error}`;
-      }
-      const params = validated.params;
-
-      // ── Always-detach ───────────────────────────────────────────────
-      // Every spawn returns a pending handle immediately so the parent stays
-      // free between iterations — to spawn siblings, narrate, or absorb a
-      // mid-run user message. The parent picks results up with
-      // `collect_children` (or the framework auto-collects before the final
-      // answer). Falls back to a blocking await only when detach isn't
-      // possible: no hooks wired (legacy call-sites / CLI workers) or this
-      // depth has no detach budget (depth-2 subagents: maxPendingDetached=0).
-      const cap = hooks?.maxPendingDetached() ?? 0;
-      if (hooks && cap > 0) {
-        if (hooks.pendingCount() >= cap) {
-          return `spawn_child: already at max pending detached (${cap}). Call collect_children to pick up results before spawning more.`;
-        }
-        params.mode = 'detach';
-        const childHandle = randomUUID();
-        const promise = (async () => {
-          try {
-            return await spawner.spawnChild(parent, params, context);
-          } catch (err) {
-            coreLogger.error(
-              { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
-              'Detached spawn_child execution threw',
-            );
-            return {
-              nodeId: childHandle,
-              kind: 'subagent' as const,
-              status: 'tool_error' as const,
-              output: null,
-              usedTokens: 0,
-              durationMs: 0,
-              spawnedChildren: [],
-              notes: (err as Error).message || 'spawn failed',
-            };
-          }
-        })();
-        hooks.registerPending({
-          childId: childHandle,
-          startedAt: Date.now(),
-          taskBrief: params.taskBrief,
-          topic: params.topic,
-          subtopic: params.subtopic,
-          promise,
-        });
-        return `<ChildResult nodeId="${childHandle}" status="pending" mode="detach">\n<output>Subagent started in the background. Result is NOT yet available — call collect_children (or let the framework auto-collect before your final answer) to retrieve it.</output>\n</ChildResult>`;
-      }
-
-      // ── Await fallback (no detach budget / no hooks) ─────────────────
-      try {
-        params.mode = 'await';
-        const result = await spawner.spawnChild(parent, params, context);
-        return formatChildResult(result);
-      } catch (err) {
-        coreLogger.error(
-          { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
-          'spawn_child execution threw',
-        );
-        const msg = (err as Error).message || 'spawn failed';
-        return `spawn_child failed: ${msg}`;
-      }
-    },
+    execute: executeSpawn,
   };
 }
 

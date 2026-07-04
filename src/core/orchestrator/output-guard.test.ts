@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { guardOutput } from './output-guard';
+import { ensureChildRelay, guardOutput } from './output-guard';
 
 describe('guardOutput', () => {
   // ── Normal responses pass through ────────────────────────
@@ -98,5 +98,46 @@ describe('guardOutput', () => {
     const response = "Sorry, I can't help build a tool that scrapes personal data without consent. That would be unethical.";
     const result = guardOutput(response, ['harmful_request']);
     expect(result.action).toBe('pass');
+  });
+});
+
+describe('ensureChildRelay (P1.3 deterministic relay fallback)', () => {
+  const childA = `Alpha findings: ${'the quarterly revenue grew across regions. '.repeat(80)}`;
+  const childB = `Beta findings: ${'latency dropped after the caching rollout shipped. '.repeat(80)}`;
+  const childText = `${childA}\n\n${childB}`;
+  const formatted = `<CollectChildren count="2">\n<ChildResult>${childA}</ChildResult>\n<ChildResult>${childB}</ChildResult>\n</CollectChildren>`;
+
+  test('appends formatted child results verbatim when the answer is a stub', () => {
+    const stub = 'I have gathered the results and updated the summary.';
+    const out = ensureChildRelay(stub, childText, formatted);
+    expect(out).not.toBe(stub);
+    expect(out).toContain(stub);
+    // Verbatim child content is now present in the reply.
+    expect(out).toContain(childA.slice(0, 200));
+    expect(out).toContain(childB.slice(0, 200));
+    expect(out).toContain(formatted);
+  });
+
+  test('empty answer → returns the formatted results alone', () => {
+    const out = ensureChildRelay('', childText, formatted);
+    expect(out).toBe(formatted.trim());
+  });
+
+  test('does NOT append when the answer already carries the content (length gate)', () => {
+    const fullRelay = `Here is everything the agents found.\n\n${childText}`;
+    const out = ensureChildRelay(fullRelay, childText, formatted);
+    expect(out).toBe(fullRelay);
+  });
+
+  test('does NOT append when a shorter answer substantially quotes the child content (overlap gate)', () => {
+    // Half of each child, but every distinctive word is present → overlap high.
+    const quoting = childA.slice(0, childA.length / 2) + childB.slice(0, childB.length / 2);
+    const out = ensureChildRelay(quoting, childText, formatted);
+    expect(out).toBe(quoting);
+  });
+
+  test('no children → returns the answer untouched', () => {
+    const out = ensureChildRelay('short answer', '', '');
+    expect(out).toBe('short answer');
   });
 });
