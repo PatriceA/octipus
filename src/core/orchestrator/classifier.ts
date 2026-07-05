@@ -266,27 +266,39 @@ function classifyMessageBase(message: string): MessageClassification {
   // Single-word keywords use word boundary matching to avoid substring false positives
   let bestCategory: string | null = null;
   let bestScore = 0;
+  // Tie-break by earliest keyword position: the leading clause is the primary
+  // intent. "call me and tell me about X" ties communication ('call me', +1.5)
+  // with research ('tell me about', +1.5); without this, insertion order alone
+  // hands it to research — starving the agent of the voice tool — even though
+  // the message opens with an explicit "call me" command.
+  let bestPos = Infinity;
 
   for (const [category, keywords] of Object.entries(TASK_KEYWORDS)) {
     let score = 0;
+    let firstPos = Infinity;
     for (const keyword of keywords) {
       const isMultiWord = keyword.includes(' ');
+      let matchIdx = -1;
       if (isMultiWord) {
         // Multi-word: exact substring match is fine, give bonus weight
         if (normalized.includes(keyword)) {
           score += 1.5;
+          matchIdx = normalized.indexOf(keyword);
         }
       } else {
         // Single-word: use word boundary to avoid "develop" matching "developments"
-        const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-        if (regex.test(normalized)) {
+        const m = new RegExp(`\\b${keyword}\\b`, 'i').exec(normalized);
+        if (m) {
           score += 1;
+          matchIdx = m.index;
         }
       }
+      if (matchIdx >= 0 && matchIdx < firstPos) firstPos = matchIdx;
     }
-    if (score > bestScore) {
+    if (score > bestScore || (score === bestScore && score > 0 && firstPos < bestPos)) {
       bestScore = score;
       bestCategory = category;
+      bestPos = firstPos;
     }
   }
 

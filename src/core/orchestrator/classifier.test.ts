@@ -69,3 +69,16 @@ describe('classifyMessage — review routing (push-review hooks)', () => {
     expect(classifyMessage('Research the best caching strategies and summarize the tradeoffs').topic).toBe('research');
   });
 });
+
+describe('classifyMessage — call/delivery intent beats topical tie', () => {
+  // "call me" (communication) and "tell me about" (research) both score 1.5;
+  // the leading phone-call command must win so the agent gets the voice tool.
+  test('"call me and tell me about X" routes to communication, not research', () => {
+    expect(classifyMessage('call me and tell me about octipus').topic).toBe('communication');
+    expect(classifyMessage('ring me and tell me about the weather').topic).toBe('communication');
+  });
+
+  test('a plain "tell me about X" (no call) still routes to research', () => {
+    expect(classifyMessage('tell me about octipus').topic).toBe('research');
+  });
+});
