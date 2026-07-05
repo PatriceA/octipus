@@ -900,7 +900,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'voice',
     valueType: 'string',
     defaultValue: null,
-    description: 'Your phone number (E.164 format, e.g., +1234567890). Auto-detected from Twilio if not set.',
+    description: 'Caller ID for OUTBOUND calls — the provider number to call FROM (E.164, e.g. +14155551234). Must be a number you own on your telephony account, NOT your personal number: if it equals the person being called, the provider rejects the call (Twilio 21210, From == To). Leave empty to fall back to the vault secret twilio_phone_number.',
     isSecret: false,
   },
   {
