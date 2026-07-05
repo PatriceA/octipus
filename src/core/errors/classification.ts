@@ -459,3 +459,34 @@ export function isTransientError(err: unknown): boolean {
     r === FailoverReason.RETRY_WITH_BACKOFF
   );
 }
+
+/** True for the transient DNS blip glibc/Node report as EAI_AGAIN. */
+export function isTransientDnsError(errMsg: string): boolean {
+  return (
+    errMsg.includes('Temporary failure in name resolution') ||
+    errMsg.includes('EAI_AGAIN')
+  );
+}
+
+/**
+ * True when an error message denotes a *permanently* unreachable model endpoint
+ * — a dead container, refused connection, or non-existent host — where retrying
+ * only burns time until the user fixes the endpoint (start the container, change
+ * the model/URL).
+ *
+ * The transient DNS blip EAI_AGAIN ("Temporary failure in name resolution") is
+ * explicitly NOT fatal: the resolver was briefly unreachable and a backoff retry
+ * usually clears it. Contrast NXDOMAIN ("Name or service not known" / ENOTFOUND),
+ * a permanent lookup failure that stays fatal.
+ */
+export function isFatalConnectionError(errMsg: string): boolean {
+  if (isTransientDnsError(errMsg)) return false;
+  return (
+    errMsg.includes('APIConnectionError') ||
+    errMsg.includes('Cannot connect to host') ||
+    errMsg.includes('ECONNREFUSED') ||
+    errMsg.includes('Name or service not known') ||
+    errMsg.includes('ENOTFOUND') ||
+    errMsg.includes('getaddrinfo')
+  );
+}

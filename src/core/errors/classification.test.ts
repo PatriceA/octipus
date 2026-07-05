@@ -6,6 +6,8 @@ import {
   RecoveryAction,
   isRateLimitError,
   isTransientError,
+  isFatalConnectionError,
+  isTransientDnsError,
 } from './classification';
 
 describe('classifyError — rate limit variants', () => {
@@ -334,5 +336,20 @@ describe('helper predicates', () => {
     expect(isTransientError({ status: 503 })).toBe(true);
     expect(isTransientError({ code: 'ETIMEDOUT', message: 'x' })).toBe(true);
     expect(isTransientError({ status: 401 })).toBe(false);
+  });
+
+  test('isFatalConnectionError: dead/misconfigured endpoints are fatal', () => {
+    expect(isFatalConnectionError('ECONNREFUSED 127.0.0.1:11434')).toBe(true);
+    expect(isFatalConnectionError('getaddrinfo ENOTFOUND api.example.com')).toBe(true);
+    expect(isFatalConnectionError('Name or service not known')).toBe(true);
+    expect(isFatalConnectionError('APIConnectionError')).toBe(true);
+  });
+
+  test('isFatalConnectionError: transient DNS blip (EAI_AGAIN) is NOT fatal', () => {
+    // the actual DeepSeek/litellm message that surfaced as recoverable:false
+    const msg = 'Cannot connect to host api.deepseek.com:443 ssl:default [Temporary failure in name resolution]';
+    expect(isTransientDnsError(msg)).toBe(true);
+    expect(isFatalConnectionError(msg)).toBe(false);
+    expect(isFatalConnectionError('getaddrinfo EAI_AGAIN api.deepseek.com')).toBe(false);
   });
 });

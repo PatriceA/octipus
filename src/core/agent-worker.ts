@@ -21,7 +21,7 @@ import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './orchestrator/model-capability';
 import { ensureChildRelay } from './orchestrator/output-guard';
 import { isLongTailHandler } from './orchestrator/tool-split';
-import { ClassifiedError } from './errors/classification';
+import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
 import {
   BudgetExceededError,
@@ -675,17 +675,13 @@ export class AgentWorker extends BaseAgentWorker {
       } catch (err) {
         const errMsg = (err as Error).message || '';
 
-        // Connection failures to upstream model providers (DNS, refused, unreachable host)
-        // are not transient — they indicate a dead container or misconfigured endpoint.
-        // Surface to the user immediately so they can react (start container, change model)
-        // instead of spinning through 14s of retries that will all fail the same way.
-        const isConnectionError = errMsg.includes('APIConnectionError')
-          || errMsg.includes('Cannot connect to host')
-          || errMsg.includes('ECONNREFUSED')
-          || errMsg.includes('Name or service not known')
-          || errMsg.includes('ENOTFOUND')
-          || errMsg.includes('getaddrinfo');
-        if (isConnectionError) {
+        // Connection failures to upstream model providers (refused, dead container,
+        // NXDOMAIN) are not transient — they indicate a dead container or misconfigured
+        // endpoint. Surface to the user immediately so they can react (start container,
+        // change model) instead of spinning through 14s of retries that all fail the same
+        // way. The EAI_AGAIN DNS blip is deliberately excluded — see isFatalConnectionError —
+        // so it falls through to the transient-retry path below.
+        if (isFatalConnectionError(errMsg)) {
           this.emit('error', {
             error: `Model "${this.context.model}" unreachable: ${errMsg}`,
             recoverable: false,
@@ -723,6 +719,7 @@ export class AgentWorker extends BaseAgentWorker {
         // object, but can't find closing '}' symbol") are retried instead of
         // surfacing as raw JSON to the user.
         const isTransient = (err instanceof ClassifiedError && err.isRetryable)
+          || isTransientDnsError(errMsg)
           || errMsg.includes('JSON') || errMsg.includes('parse')
           || errMsg.includes('Unterminated') || errMsg.includes('500')
           || errMsg.includes('502') || errMsg.includes('503')
