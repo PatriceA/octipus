@@ -589,6 +589,28 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     } catch (err) { coreLogger.error({ err }, 'silent failure in worker-spawner'); }
   }
 
+  // Prior swarm activity this session — so a freshly-spawned worker sees what
+  // its siblings already completed (which calls/messages/actions ran and how
+  // they ended) and doesn't blindly repeat them or re-notify the user about the
+  // same thing. Terminal siblings only (self is still 'running'); best-effort.
+  try {
+    const { swarmNodeRepository } = await import('@/core/swarm/node-repository');
+    const priorNodes = await swarmNodeRepository.findByRootSession(context.sessionId);
+    const done = priorNodes
+      .filter(n => n.taskBriefPreview && n.status !== 'running')
+      .slice(0, 8); // newest-first from the repo
+    if (done.length > 0) {
+      const lines = done.map(n => {
+        const out = n.result && typeof n.result === 'object'
+          ? String((n.result as { output?: unknown }).output ?? '')
+          : '';
+        const outStr = out ? ` → ${out.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+        return `- [${n.role}, ${n.status}] ${n.taskBriefPreview}${outStr}`;
+      });
+      systemPrompt += `\n\nPRIOR ACTIONS THIS SESSION (sibling agents already ran these — do NOT repeat completed work, re-send the same message, or re-notify the user about the same thing):\n${lines.join('\n')}`;
+    }
+  } catch (err) { coreLogger.warn({ err }, 'prior-actions context injection failed'); }
+
   // Inject workspace context
   if (isDevMode && devProjectPath) {
     // Dev mode: workspace is the specific project
