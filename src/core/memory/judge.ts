@@ -182,7 +182,16 @@ export async function judgeAndApply(
       limit: 1,
     });
     const closest = similar[0] ?? null;
-    const action = await decide(candidate, closest, ctx.userId);
+    // Deterministic duplicate guard: NOOP without the (small, lenient) LLM judge
+    // ONLY when the candidate is a VERBATIM restatement of the closest memory.
+    // A pure similarity threshold is unsafe — a contradiction ("prefers spaces"
+    // vs stored "prefers tabs") embeds close to the fact it negates, so it must
+    // still reach decide() to become an UPDATE/DELETE. Identical text cannot be a
+    // contradiction, so short-circuiting it is safe (and skips the judge call).
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    const action = closest && norm(closest.content) === norm(candidate.content)
+      ? 'NOOP'
+      : await decide(candidate, closest, ctx.userId);
     const matchedAgainst = closest
       ? { id: closest.id, content: closest.content, similarity: closest.similarity }
       : undefined;

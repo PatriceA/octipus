@@ -8,6 +8,31 @@ import {
 } from '@/core/swarm/types';
 import type { OrchestratorService } from './service';
 
+// Session-scoped idempotency for `remember_this`. A spinning orchestrator (esp.
+// a weak model idling while children run) can call it many times with the same
+// or trivially reworded fact. Short-circuit an exact repeat within the session
+// so we neither run the slow LLM judge nor mint duplicate rows. Per-process Map,
+// 30-min TTL; check-only vs mark-on-success split mirrors the messaging dedup
+// (mark only after a real outcome so a transient judge failure can still retry).
+const REMEMBERED_THIS_SESSION = new Map<string, number>(); // key -> expiresAt (epoch ms)
+const REMEMBER_TTL_MS = 30 * 60_000;
+function rememberKey(userId: string, sessionId: string, factType: string, fact: string): string {
+  // Normalize only case + whitespace — do NOT strip punctuation. Stripping
+  // sign/symbol chars collapsed distinct facts (e.g. "+5 hours" vs "-5 hours")
+  // into one key and silently dropped the second. factType is part of the key
+  // so the same text under different types stays distinct.
+  const norm = fact.toLowerCase().replace(/\s+/g, ' ').trim();
+  return `${userId}|${sessionId}|${factType}|${norm}`;
+}
+function recentlyRemembered(key: string): boolean {
+  const now = Date.now();
+  for (const [k, exp] of REMEMBERED_THIS_SESSION) if (exp <= now) REMEMBERED_THIS_SESSION.delete(k);
+  return (REMEMBERED_THIS_SESSION.get(key) ?? 0) > now;
+}
+function markRemembered(key: string): void {
+  REMEMBERED_THIS_SESSION.set(key, Date.now() + REMEMBER_TTL_MS);
+}
+
 /**
  * Hook refs the orchestrator passes in so we can wire `spawn_child`'s
  * detach hooks and `collect_children` BEFORE the worker is created. The
@@ -309,6 +334,15 @@ export function createMetaTools(
           ? Math.max(0.5, Math.min(1.0, args.confidence as number))
           : 1.0;
 
+        // Session idempotency: skip the (slow) judge if we already handled this
+        // exact fact earlier in the session — stops a spinning orchestrator from
+        // re-remembering the same thing over and over.
+        const sessionId = context.sessionId ?? '';
+        const dedupKey = sessionId ? rememberKey(context.userId, sessionId, factType, fact) : '';
+        if (dedupKey && recentlyRemembered(dedupKey)) {
+          return { stored: false, action: 'NOOP', reason: 'already handled this fact earlier in the session' };
+        }
+
         const { judgeAndApply } = await import('@/core/memory');
         const outcomes = await judgeAndApply(
           [{ factType, content: fact, confidence }],
@@ -321,6 +355,7 @@ export function createMetaTools(
         );
         const outcome = outcomes[0];
         if (!outcome) return { stored: false, reason: 'judge returned no outcome' };
+        if (dedupKey) markRemembered(dedupKey); // record only after a real outcome
         return {
           stored: outcome.action !== 'NOOP',
           action: outcome.action,
