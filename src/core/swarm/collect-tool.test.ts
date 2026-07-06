@@ -178,6 +178,17 @@ describe('collect_children', () => {
       { nodeId: 'n1', kind: 'subagent', status: 'timeout', output: null, usedTokens: 0, durationMs: 30_000, spawnedChildren: [], notes: 'wall timeout' },
     ]);
     expect(out).toContain('status="timeout"');
+    // Child exhausted its OWN wall budget (terminal) — keep its own notes.
     expect(out).toContain('<notes>wall timeout</notes>');
+  });
+
+  test('formatCollectedResults: a collect-path timeout says STILL RUNNING (do not re-spawn)', () => {
+    const out = formatCollectedResults([
+      { nodeId: 'n1', kind: 'subagent', status: 'timeout', output: null, usedTokens: 0, durationMs: 5_000, spawnedChildren: [], notes: 'collect_children timeout after 5000ms' },
+    ]);
+    expect(out).toContain('STILL RUNNING');
+    expect(out).toContain('Do NOT spawn a retry');
+    // The raw "collect_children timeout" note is replaced by the guidance.
+    expect(out).not.toContain('collect_children timeout after 5000ms');
   });
 });

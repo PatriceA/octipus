@@ -54,8 +54,12 @@ export function createCollectChildrenTool(
 
       // Resolve timeout: either explicit override, or half the remaining
       // wall budget of the parent (computed from node budget, clamped).
+      // Floor an explicit override at 15s. A trivially short poll (e.g. 5s) on a
+      // child still doing real work (a phone call polls for ~minutes) comes back
+      // status="timeout", which weak orchestrators misread as failure and answer
+      // by spawning duplicate retry children. 15s matches the non-explicit floor.
       const explicit = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)
-        ? Math.max(1_000, Math.min(args.timeoutMs, 600_000))
+        ? Math.max(15_000, Math.min(args.timeoutMs, 600_000))
         : null;
       const wallStarted = parent.budget.wallClockMs.startedAt;
       const wallCap = parent.budget.wallClockMs.cap;
@@ -95,7 +99,16 @@ export function formatCollectedResults(results: ChildResult[]): string {
     const meta =
       `nodeId="${r.nodeId}" status="${r.status}" ` +
       `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
-    const notes = r.notes ? `\n  <notes>${r.notes}</notes>` : '';
+    // A collect-path timeout (the wait elapsed, `notes` = "collect_children
+    // timeout after Xms" from detached-child-manager) means the child is STILL
+    // RUNNING, not failed — say so loudly, because a weak orchestrator otherwise
+    // reads status="timeout" as failure and answers by spawning duplicate retry
+    // children. A child that exhausted its OWN wall budget is terminal and keeps
+    // its own notes, so gate on the collect-timeout signature specifically.
+    const stillRunning = r.status === 'timeout' && /collect_children timeout/i.test(r.notes ?? '');
+    const notes = stillRunning
+      ? '\n  <notes>STILL RUNNING — did not finish within the wait window; it was NOT cancelled and is still working. Do NOT spawn a retry or duplicate child. Call collect_children again to keep waiting for it.</notes>'
+      : r.notes ? `\n  <notes>${r.notes}</notes>` : '';
     // Mirror the await-path surface (formatChildResult): make a failed scorer
     // gate explicit so a detached contract_failed child isn't overlooked.
     const scorerFail =
