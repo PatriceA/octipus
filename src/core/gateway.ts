@@ -77,6 +77,18 @@ export class Gateway {
       const cleanupAgents = agentManager.startPeriodicCleanup();
       this.cleanupHandlers.push(cleanupAgents);
 
+      // Swarm orphan reaper — runs once now (awaited, so later boot steps
+      // that assume the node-table cleanup already happened are correctly
+      // ordered), then on a recurring interval so a node orphaned
+      // mid-process gets cleaned up without waiting for the next restart.
+      // Non-fatal: a reaper failure must not abort the whole boot.
+      try {
+        const { startPeriodicOrphanReaper } = await import('@/core/swarm/orphan-reaper');
+        this.cleanupHandlers.push(await startPeriodicOrphanReaper());
+      } catch (err) {
+        coreLogger.error({ err }, 'Swarm orphan reaper failed to start (non-fatal)');
+      }
+
       // Knowledge-base self-check: verify DB + embedding provider + vector
       // store write path before marking the gateway ready. Never blocks
       // startup — a failure here surfaces via LOUD log + KB endpoints return

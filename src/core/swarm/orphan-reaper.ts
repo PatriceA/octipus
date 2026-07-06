@@ -1,11 +1,12 @@
 /**
  * Swarm Phase 3 — orphan reaper.
  *
- * On process start, marks any `swarm_nodes` row with `status='running'`
- * older than the configured threshold (`config.swarm.orphanReaperIntervalMs`,
- * default 10 minutes) as `cancelled` with `error='orphaned_at_restart'`.
- * Mirrors the agent-manager stale cleanup and is called once during the
- * gateway hub boot sequence in `src/index.ts`.
+ * Marks any `swarm_nodes` row with `status='running'` older than the
+ * configured threshold (`config.swarm.orphanReaperIntervalMs`, default 10
+ * minutes) as `cancelled` with `error='orphaned_at_restart'`. Runs once at
+ * boot AND on the same interval thereafter via `startPeriodicOrphanReaper`
+ * (wired in `src/core/gateway.ts`), so a worker orphaned mid-process (not
+ * just one left over from a crashed prior process) is also cleaned up.
  *
  * Safe to run multiple times — idempotent (only flips `running` rows). No
  * effect on completed / cancelled / errored rows.
@@ -93,4 +94,41 @@ export async function reapOrphanedSwarmNodes(
   }
 
   return { reaped, olderThanMs, uncollectedDetached };
+}
+
+/**
+ * How often the periodic loop checks for orphans. Deliberately NOT the same
+ * config value as the row-staleness age threshold (`orphanReaperIntervalMs`,
+ * user-facing as "Orphan reaper cadence (ms)") — that field is read fresh by
+ * `reapOrphanedSwarmNodes()` on every tick to decide which rows are stale.
+ * Coupling the two would mean lowering the cadence for faster sweeps also
+ * lowers the staleness cutoff, cancelling nodes that are still legitimately
+ * running.
+ */
+const DEFAULT_CHECK_INTERVAL_MS = 120_000;
+
+/**
+ * Run the reaper immediately (awaited, so boot-sequence steps that assume
+ * the initial pass has completed — e.g. ledger reconcile — are ordered
+ * correctly), then on a recurring interval. Returns a stop function (call on
+ * shutdown), mirroring `AgentManager.startPeriodicCleanup`.
+ *
+ * Without the recurring part, orphans created after boot (a worker orphaned
+ * mid-process, not just one left over from a crashed prior run) are only
+ * ever cleaned up on the next restart.
+ */
+export async function startPeriodicOrphanReaper(
+  checkIntervalMs: number = DEFAULT_CHECK_INTERVAL_MS,
+): Promise<() => void> {
+  const tick = () => {
+    reapOrphanedSwarmNodes().catch(err =>
+      coreLogger.error({ err }, 'Periodic swarm orphan reaper tick failed'),
+    );
+  };
+
+  await reapOrphanedSwarmNodes().catch(err =>
+    coreLogger.error({ err }, 'Initial swarm orphan reaper pass failed'),
+  );
+  const timer = setInterval(tick, checkIntervalMs);
+  return () => clearInterval(timer);
 }

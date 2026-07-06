@@ -226,18 +226,8 @@ async function main() {
       logger.error({ err }, 'Extension loading failed (non-fatal)');
     }
 
-    // Reap orphaned swarm_nodes left `running` by a previous process. Must
-    // run after DB init (done in gateway.start above) and alongside the
-    // agent-manager stale cleanup so the live swarm tree hydrates cleanly.
-    try {
-      const { reapOrphanedSwarmNodes } = await import('@/core/swarm/orphan-reaper');
-      const { reaped } = await reapOrphanedSwarmNodes();
-      if (reaped > 0) {
-        logger.warn({ reaped }, 'Swarm orphan reaper cleaned stale running nodes');
-      }
-    } catch (err) {
-      logger.error({ err }, 'Swarm orphan reaper failed (non-fatal)');
-    }
+    // Swarm orphan reaper is started (boot pass + recurring interval) inside
+    // gateway.start() above, alongside the agent-manager stale cleanup.
 
     // Ledger-driven resume: reconcile swarms left in-flight by the previous
     // process. Replays each root's append-only ledger and marks orphaned

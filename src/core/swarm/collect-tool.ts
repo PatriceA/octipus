@@ -8,9 +8,10 @@ import type { AgentNode, ChildResult } from './types';
  * `collect_children` — agent-depth (1) tool for picking up the results of
  * detached subagents spawned earlier in this turn.
  *
- * Default: wait for ALL still-pending detached children on this worker.
- * With `childIds`: wait only for the named ones (useful when the agent
- * wants partial results and plans to poll again later).
+ * Default (and only mode): wait for ALL still-pending detached children on
+ * this worker. There is no selective/`childIds` mode — a per-child wait
+ * would still need to poll every other pending child to keep their promises
+ * from being dropped, so it wouldn't save anything.
  *
  * Results are returned as entries (not thrown) — a failed detached child
  * surfaces as `{ status: 'tool_error'|'timeout', notes: '...' }` so the

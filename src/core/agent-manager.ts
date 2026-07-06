@@ -210,6 +210,8 @@ export class AgentManager {
       agentEventRepository.create({
         agentId: event.agentId,
         sessionId: context.sessionId,
+        userId: context.userId,
+        workspaceId: context.workspaceId,
         type: event.type,
         data: event.data,
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-manager'));
