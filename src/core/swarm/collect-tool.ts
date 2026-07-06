@@ -72,7 +72,12 @@ export function createCollectChildrenTool(
       // overrun the parent's budget.
       const childWall = getLevelDefault(1).wallMs;
       const target = childWall + 5_000;
-      const timeoutMs = explicit ?? Math.max(15_000, remaining > 0 ? Math.min(remaining, target) : target);
+      // Clamp an explicit timeout to the parent's own remaining wall so the 15s
+      // floor above can't force a near-budget caller to block past its deadline
+      // and trip the hard agent-timeout instead of returning STILL RUNNING.
+      const timeoutMs = explicit != null
+        ? (remaining > 0 ? Math.min(explicit, remaining) : explicit)
+        : Math.max(15_000, remaining > 0 ? Math.min(remaining, target) : target);
 
       const results = await worker.collectAllDetached(timeoutMs);
 

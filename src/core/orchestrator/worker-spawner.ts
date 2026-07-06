@@ -596,16 +596,24 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   try {
     const { swarmNodeRepository } = await import('@/core/swarm/node-repository');
     const priorNodes = await swarmNodeRepository.findByRootSession(context.sessionId);
+    // Sessions are reused per (user, channel) with NO TTL, so findByRootSession
+    // spans every past turn in this channel. Keep only the current turn's
+    // siblings via a recency window — otherwise a stale action from an earlier,
+    // unrelated request could make this worker wrongly skip a genuinely new one.
+    const RECENT_WINDOW_MS = 15 * 60_000;
+    const now = Date.now();
     const done = priorNodes
-      .filter(n => n.taskBriefPreview && n.status !== 'running')
+      .filter(n => n.taskBriefPreview && n.status !== 'running'
+        && now - new Date(n.createdAt).getTime() < RECENT_WINDOW_MS)
       .slice(0, 8); // newest-first from the repo
     if (done.length > 0) {
       const lines = done.map(n => {
+        const brief = String(n.taskBriefPreview).replace(/\s+/g, ' ').slice(0, 200);
         const out = n.result && typeof n.result === 'object'
           ? String((n.result as { output?: unknown }).output ?? '')
           : '';
         const outStr = out ? ` → ${out.replace(/\s+/g, ' ').slice(0, 200)}` : '';
-        return `- [${n.role}, ${n.status}] ${n.taskBriefPreview}${outStr}`;
+        return `- [${n.role}, ${n.status}] ${brief}${outStr}`;
       });
       systemPrompt += `\n\nPRIOR ACTIONS THIS SESSION (sibling agents already ran these — do NOT repeat completed work, re-send the same message, or re-notify the user about the same thing):\n${lines.join('\n')}`;
     }
