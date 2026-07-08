@@ -69,6 +69,10 @@ export function buildModelEntry(
     topics: lanes,
     topicRoles: Object.fromEntries(lanes.map((t) => [t, 'primary' as const])),
     supportsVision: entry.topics.includes('vision'),
+    // Persist the exact param count so the orchestrator mode selector and the
+    // capability gate use a real number instead of parsing the model id tag
+    // (RC7). The catalog already has it; buildModelEntry previously dropped it.
+    metadata: { paramCount: entry.params },
     isDefault: isFirst,
   };
 }

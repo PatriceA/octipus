@@ -400,7 +400,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
       return { mode: null, label: null, description: 'No default model set' };
     }
     const mode = resolveOrchestratorMode(
-      { modelId: model.modelId, metadata: model.metadata },
+      { modelId: model.modelId, metadata: model.metadata, provider: model.provider },
       {
         mode: orch.mode,
         routerSmallModelMaxParams: orch.routerSmallModelMaxParams,

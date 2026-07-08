@@ -71,7 +71,7 @@ export async function runOrchestrator(
   const orchCfg = getConfig().orchestrator;
   const modelMeta = await getModelRegistry().getModelByModelId(modelName);
   const orchestratorMode = resolveOrchestratorMode(
-    { modelId: modelName, metadata: modelMeta?.metadata },
+    { modelId: modelName, metadata: modelMeta?.metadata, provider: modelMeta?.provider },
     {
       mode: orchCfg.mode,
       routerSmallModelMaxParams: orchCfg.routerSmallModelMaxParams,

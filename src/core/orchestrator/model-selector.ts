@@ -9,6 +9,47 @@ interface ModelRouting {
 }
 
 /**
+ * If `modelId` can't do tool-calling, find a local model that can. Returns the
+ * replacement (+reason) or null when no swap is needed or possible. Shared by
+ * the worker model selector and the swarm spawner's capability gate (RC7) so
+ * both reroute identically. Only falls back to local (ollama) models to avoid
+ * unexpected API costs.
+ */
+export async function findToolCapableFallback(
+  modelId: string,
+): Promise<{ model: string; reason: string } | null> {
+  const registry = getModelRegistry();
+  const model = await registry.getModelByModelId(modelId);
+  if (!model || model.supportsTools || model.provider === 'cli') {
+    return null; // already supports tools, or CLI (frontier) — no change
+  }
+
+  const localProviders = ['ollama'];
+
+  const defaultModel = await registry.getDefaultModel();
+  if (
+    defaultModel && defaultModel.supportsTools
+    && defaultModel.modelId !== modelId
+    && localProviders.includes(defaultModel.provider)
+  ) {
+    return { model: defaultModel.modelId, reason: 'routed model does not support tool calling' };
+  }
+
+  const allModels = await registry.getAllModels();
+  const toolModel = allModels.find((m) =>
+    m.supportsTools
+    && m.provider !== 'cli'
+    && localProviders.includes(m.provider)
+    && m.modelId !== modelId,
+  );
+  if (toolModel) {
+    return { model: toolModel.modelId, reason: `using ${toolModel.name} for tool support` };
+  }
+
+  return null;
+}
+
+/**
  * Encapsulates model selection logic for the orchestrator and worker agents.
  */
 export class ModelSelector {
@@ -138,55 +179,23 @@ export class ModelSelector {
   private async ensureToolSupport(routing: ModelRouting): Promise<ModelRouting | null> {
     const registry = getModelRegistry();
     const model = await registry.getModelByModelId(routing.model);
+    // Only the "can't do tools" case is interesting — a supported/CLI model
+    // short-circuits with no log (findToolCapableFallback returns null too).
+    if (!model || model.supportsTools || model.provider === 'cli') return null;
 
-    if (!model || model.supportsTools || model.provider === 'cli') {
-      return null; // Already supports tools or is CLI — no change needed
-    }
-
-    coreLogger.info(
-      { model: routing.model },
-      'Routed model does not support tools, finding alternative',
-    );
-
-    // Only fall back to local models (ollama) to avoid unexpected API costs
-    const localProviders = ['ollama'];
-
-    // Try default model first
-    const defaultModel = await registry.getDefaultModel();
-    if (defaultModel && defaultModel.supportsTools
-        && defaultModel.modelId !== routing.model
-        && localProviders.includes(defaultModel.provider)) {
-      return {
-        model: defaultModel.modelId,
-        reason: 'Fallback: routed model does not support tool calling',
-      };
-    }
-
-    // Find any local model with tool support
-    const allModels = await registry.getAllModels();
-    const toolModel = allModels.find(m =>
-      m.supportsTools
-      && m.provider !== 'cli'
-      && localProviders.includes(m.provider)
-      && m.modelId !== routing.model
-    );
-
-    if (toolModel) {
-      coreLogger.info(
-        { fallbackModel: toolModel.modelId },
-        'Found alternative local model with tool support',
+    const alt = await findToolCapableFallback(routing.model);
+    if (!alt) {
+      coreLogger.warn(
+        { model: routing.model },
+        'No local model with tool support found — proceeding without tools',
       );
-      return {
-        model: toolModel.modelId,
-        reason: `Fallback: using ${toolModel.name} for tool support`,
-      };
+      return null;
     }
-
-    coreLogger.warn(
-      { model: routing.model },
-      'No local model with tool support found — proceeding without tools',
+    coreLogger.info(
+      { from: routing.model, to: alt.model },
+      'Routed model does not support tools — rerouting to a tool-capable local model',
     );
-    return null;
+    return { model: alt.model, reason: `Fallback: ${alt.reason}` };
   }
 
   /**

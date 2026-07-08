@@ -63,8 +63,27 @@ describe('resolveOrchestratorMode', () => {
     expect(resolveOrchestratorMode({ modelId: 'qwen2.5:32b' }, cfg)).toBe('full');
   });
 
-  test('auto: unknown size falls back to lite', () => {
+  test('auto: unknown size with no provider falls back to lite', () => {
     expect(resolveOrchestratorMode({ modelId: 'gpt-4o' }, cfg)).toBe('lite');
+  });
+
+  test('auto: unknown size on a cloud provider → full, not lite (RC7)', () => {
+    // gpt-4o / claude-* have no `Nb` tag; they must not be throttled to lite.
+    expect(resolveOrchestratorMode({ modelId: 'gpt-4o', provider: 'openai' }, cfg)).toBe('full');
+    expect(resolveOrchestratorMode({ modelId: 'claude-sonnet-5', provider: 'anthropic' }, cfg)).toBe('full');
+    expect(resolveOrchestratorMode({ modelId: 'some-cli-model', provider: 'cli' }, cfg)).toBe('full');
+  });
+
+  test('auto: unknown size on a local-weight provider stays lite', () => {
+    // A local runner with an unparseable id is the genuinely risky case.
+    expect(resolveOrchestratorMode({ modelId: 'my-custom-model', provider: 'ollama' }, cfg)).toBe('lite');
+  });
+
+  test('auto: explicit metadata.paramCount wins over an unparseable id', () => {
+    // RC7 populates paramCount at install so this path is the common one.
+    expect(
+      resolveOrchestratorMode({ modelId: 'my-model', metadata: { paramCount: 32e9 }, provider: 'ollama' }, cfg),
+    ).toBe('full');
   });
 
   test('explicit mode pins regardless of size', () => {
