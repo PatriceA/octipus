@@ -37,6 +37,13 @@ import type { AgentMessage, ToolCall } from './types';
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
 
+/**
+ * Absolute backstop for a self-timed tool wait (RC5 D5). Generous by design —
+ * 2h is far above any legitimate `collect_children`/pipeline duration, so it
+ * only trips on a wedged wait that never resolves, never on real long work.
+ */
+export const DEFAULT_SELF_TIMED_TOOL_CEILING_MS = 2 * 60 * 60_000;
+
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
   private abortController: AbortController;
@@ -574,6 +581,34 @@ export class AgentWorker extends BaseAgentWorker {
     }
   }
 
+  /**
+   * Race a promise against an ABSOLUTE ceiling from now (RC5 D5). Unlike
+   * `raceTimeout`, the deadline is not adjusted for `elapsed()`/`pausedMs`, so a
+   * self-timed tool that discounts its wait can't defeat it. This is a
+   * last-resort backstop against a never-resolving tool promise, NOT a wall cap
+   * — the ceiling is generous (hours), so a legitimately-long pipeline/collect
+   * is unaffected; only a truly wedged wait trips it.
+   */
+  private async raceAbsolute<T>(promise: Promise<T>, label: string, ceilingMs: number): Promise<T> {
+    if (ceilingMs <= 0) return promise;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ceilingPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const msg = `Self-timed tool exceeded the absolute ceiling (${Math.round(ceilingMs / 60_000)}min) during ${label} — treating as a wedged wait`;
+        agentLogger.error(
+          { agentId: this.context.id, iteration: this.iteration, phase: label, ceilingMs },
+          msg,
+        );
+        reject(new Error(msg));
+      }, ceilingMs);
+    });
+    try {
+      return await Promise.race([promise, ceilingPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private async loop(): Promise<string> {
     while (this.iteration < this.config.maxIterations) {
       // Abort from parent (cascade) or explicit stop(). Swarm Phase 2: surface
@@ -954,15 +989,33 @@ export class AgentWorker extends BaseAgentWorker {
         // would kill the parent mid-collect (the 1.3 "orchestrator failed while
         // blocked on children" bug). It bounds its own wait internally, so skip
         // the race — like a self-timed final tool.
-        const isSelfTimedTool =
-          this.toolExecutor.hasFinalToolCall(completion.toolCalls) ||
-          completion.toolCalls.some((tc) => tc.name === 'collect_children');
-        const toolMessages = isSelfTimedTool
-          ? await this.toolExecutor.handleToolCalls(completion.toolCalls)
-          : await this.raceTimeout(
-              this.toolExecutor.handleToolCalls(completion.toolCalls),
-              'handleToolCalls',
-            );
+        // Three cases:
+        //  - `final` tools (create_pipeline, delegation handoffs) legitimately
+        //    block on external events — a pipeline stage can AWAIT human approval
+        //    for hours (approvalTimeoutMs). NEVER race these; any ceiling risks
+        //    killing a run while a human is still deciding.
+        //  - collect_children self-bounds to ~the child wall, but gets a generous
+        //    absolute backstop (RC5 D5) so a never-settling wait can't pin the
+        //    worker forever. Its real waits (~10 min) are far under the ceiling,
+        //    so the backstop only fires on a genuine wedge.
+        //  - everything else races the normal wall clock.
+        const isFinal = this.toolExecutor.hasFinalToolCall(completion.toolCalls);
+        const isCollect = completion.toolCalls.some((tc) => tc.name === 'collect_children');
+        let toolMessages: AgentMessage[];
+        if (isFinal) {
+          toolMessages = await this.toolExecutor.handleToolCalls(completion.toolCalls);
+        } else if (isCollect) {
+          toolMessages = await this.raceAbsolute(
+            this.toolExecutor.handleToolCalls(completion.toolCalls),
+            'handleToolCalls:collect_children',
+            this.config.selfTimedToolCeilingMs ?? DEFAULT_SELF_TIMED_TOOL_CEILING_MS,
+          );
+        } else {
+          toolMessages = await this.raceTimeout(
+            this.toolExecutor.handleToolCalls(completion.toolCalls),
+            'handleToolCalls',
+          );
+        }
         this.messages.push(...toolMessages);
 
         agentLogger.info({
