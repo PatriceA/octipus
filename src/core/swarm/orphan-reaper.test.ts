@@ -31,11 +31,16 @@ function makeRepoMock(reapedCount: number, detachedOrphans: number = 0): {
 }
 
 describe('reapOrphanedSwarmNodes', () => {
+  // Inject a no-op stopper by default so unit tests stay hermetic (don't reach
+  // the real AgentManager). Tests that care assert on `stopped`.
+  const noopStop = () => {};
+
   test('returns reaped count when rows are stale', async () => {
     const { repo, calls } = makeRepoMock(3);
     const result = await reapOrphanedSwarmNodes({
       olderThanMs: 600_000,
       repo,
+      stopWorker: noopStop,
     });
     expect(result.reaped).toBe(3);
     expect(result.olderThanMs).toBe(600_000);
@@ -47,6 +52,7 @@ describe('reapOrphanedSwarmNodes', () => {
     const result = await reapOrphanedSwarmNodes({
       olderThanMs: 600_000,
       repo,
+      stopWorker: noopStop,
     });
     expect(result.reaped).toBe(0);
     expect(calls).toEqual([600_000]);
@@ -62,7 +68,7 @@ describe('reapOrphanedSwarmNodes', () => {
     loadConfig();
 
     const { repo, calls } = makeRepoMock(1);
-    await reapOrphanedSwarmNodes({ repo });
+    await reapOrphanedSwarmNodes({ repo, stopWorker: noopStop });
     // Default from config is 600_000 (10 min). Accept whatever the loaded
     // config says — this covers both env-provided overrides and defaults.
     expect(calls).toHaveLength(1);
@@ -81,6 +87,7 @@ describe('reapOrphanedSwarmNodes', () => {
     const result = await reapOrphanedSwarmNodes({
       olderThanMs: 600_000,
       repo: throwingRepo,
+      stopWorker: noopStop,
     });
     // Must not throw — boot path can't crash on a DB blip.
     expect(result.reaped).toBe(0);
@@ -89,7 +96,33 @@ describe('reapOrphanedSwarmNodes', () => {
 
   test('reports detached-uncollected orphans in second pass', async () => {
     const { repo } = makeRepoMock(0, 2);
-    const result = await reapOrphanedSwarmNodes({ olderThanMs: 600_000, repo });
+    const result = await reapOrphanedSwarmNodes({ olderThanMs: 600_000, repo, stopWorker: noopStop });
     expect(result.uncollectedDetached).toBe(2);
+  });
+
+  test('stops detached-uncollected orphans but NOT age-based ones', async () => {
+    // RC5 D4: detached orphans (parent terminal) must actually be stopped, not
+    // just relabeled. Age-based reap is DB-only — it keys on createdAt and would
+    // otherwise kill healthy long-running agents.
+    const { repo } = makeRepoMock(2, 3); // 2 age-based, 3 detached
+    const stopped: string[] = [];
+    await reapOrphanedSwarmNodes({
+      olderThanMs: 600_000,
+      repo,
+      stopWorker: (id) => stopped.push(id),
+    });
+    expect(stopped.sort()).toEqual(['detached-0', 'detached-1', 'detached-2']);
+  });
+
+  test('does not invoke the stopper when there are no detached orphans', async () => {
+    // Age-based reaps alone (no detached orphans) must not stop any worker.
+    const { repo } = makeRepoMock(5, 0);
+    let called = 0;
+    await reapOrphanedSwarmNodes({
+      olderThanMs: 600_000,
+      repo,
+      stopWorker: () => { called += 1; },
+    });
+    expect(called).toBe(0);
   });
 });

@@ -392,6 +392,21 @@ export class AgentWorker extends BaseAgentWorker {
         closeAgentTabs(this.context.id).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
 
+      // RC5 (D3): on NORMAL completion, cancel any detached child still pending
+      // after auto-collect. We are returning our final answer now, so their
+      // output can never be relayed — leaving them running produces an orphan
+      // that outlives us (the run-743d4b66 child ran 30 min past its parent this
+      // way). Mirror the catch path: aborting our controller tears down children
+      // chained to it via parentSignal; cancelAll clears the pending map.
+      if (this.detached.count() > 0) {
+        agentLogger.warn(
+          { agentId: this.context.id, pending: this.detached.count() },
+          'Cancelling detached children still pending at normal completion',
+        );
+        this.abortController.abort('parent completed without collecting all children');
+        this.detached.cancelAll('parent completed without collecting all children');
+      }
+
       return finalResult;
     } catch (error) {
       // Distinguish clean cancellation from a real failure. Both the

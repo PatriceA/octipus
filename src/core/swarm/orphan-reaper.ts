@@ -43,6 +43,11 @@ export async function reapOrphanedSwarmNodes(
     olderThanMs?: number;
     /** Override repository (tests). */
     repo?: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'>;
+    /**
+     * Stop a reaped worker by id (node id == agent id). Injected for tests;
+     * defaults to `AgentManager.stop(id, { cascade: true })`.
+     */
+    stopWorker?: (id: string) => void;
   } = {},
 ): Promise<ReapResult> {
   const cfg = getConfig();
@@ -51,6 +56,11 @@ export async function reapOrphanedSwarmNodes(
 
   let reaped = 0;
   let uncollectedDetached = 0;
+  // Node id == agent id (1:1). Only UNAMBIGUOUS orphans go here — detached
+  // children whose parent already terminated (second pass). The age-based
+  // reapOrphans is DB-relabel only: it keys on createdAt, so a match can be a
+  // healthy long-running agent we must not kill mid-work.
+  const orphanIds = new Set<string>();
 
   try {
     reaped = await repo.reapOrphans(olderThanMs);
@@ -79,6 +89,7 @@ export async function reapOrphanedSwarmNodes(
     if (repo.reapUncollectedDetached) {
       const rows = await repo.reapUncollectedDetached();
       uncollectedDetached = rows.length;
+      for (const r of rows) orphanIds.add(r.id);
       if (uncollectedDetached > 0) {
         coreLogger.warn(
           { uncollectedDetached, sample: rows.slice(0, 5) },
@@ -91,6 +102,33 @@ export async function reapOrphanedSwarmNodes(
       { err },
       'Swarm orphan reaper uncollected-detached pass failed',
     );
+  }
+
+  // Actually stop the detached-orphan workers. Relabeling the row alone leaves
+  // a live orphaned worker running and burning budget until killed (RC5 D4 —
+  // the run-743d4b66 child ran 30 min past its parent). Safe because these are
+  // detached children whose parent is already terminal, so no legitimate work
+  // is in flight. `stop(cascade)` handles both an in-memory worker and a
+  // cross-process zombie (no-op if neither).
+  if (orphanIds.size > 0) {
+    try {
+      let stop = opts.stopWorker;
+      if (!stop) {
+        const { getAgentManager } = await import('@/core/agent-manager');
+        const mgr = getAgentManager();
+        stop = (id: string) => mgr.stop(id, { cascade: true });
+      }
+      for (const id of orphanIds) {
+        try {
+          stop(id);
+        } catch (err) {
+          coreLogger.error({ err, id }, 'Orphan reaper — failed to stop worker');
+        }
+      }
+      coreLogger.warn({ stopped: orphanIds.size }, 'Orphan reaper — stopped orphaned workers');
+    } catch (err) {
+      coreLogger.error({ err }, 'Orphan reaper — could not load AgentManager to stop workers');
+    }
   }
 
   return { reaped, olderThanMs, uncollectedDetached };

@@ -88,24 +88,33 @@ Defects:
   child parked in a blocking tool can exceed 10 min of real time. Combined with
   D3/D4, once orphaned nothing external enforces the wall.
 
-**Smallest fixes, ranked by leverage (for review — NOT yet applied):**
-1. **Kill the worker in the reaper, don't just relabel** (fixes D4, makes D3
-   survivable). In `orphan-reaper.ts`, after reaping, look each id up in
-   `AgentManager` and call `stop()`/abort. One periodic site caps every orphan
-   class. Tighten the staleness cutoff toward the wall cap.
-2. **Add the cancel-cascade to the normal-completion path** (fixes D3 at
-   source). The two lines already exist at `:432-433`; also run them on the
-   success return (`:345-395`). Reuses existing code.
-3. **Stop trusting provider usage; estimate when it's 0/absent** (fixes D1). At
-   `:752`, when `totalTokens` is 0/missing, fall back to a char/4 estimate over
+**Smallest fixes, ranked by leverage:**
+1. **Kill the worker in the reaper, don't just relabel** (fixes D4). ✅ DONE —
+   but SCOPED to the unambiguous orphans: only `reapUncollectedDetached`
+   (detached child whose parent is already terminal) is actively `stop()`ed. The
+   age-based `reapOrphans` stays DB-relabel only, because it keys on `createdAt`
+   and would otherwise kill a healthy agent legitimately alive >10 min (e.g. an
+   orchestrator waiting on children). See follow-up below.
+2. **Add the cancel-cascade to the normal-completion path** (fixes D3). ✅ DONE —
+   `agent-worker.ts` success return now aborts + `cancelAll()`s any detached
+   child still pending after auto-collect, mirroring the catch path. This catches
+   the run-743d4b66 case at the source (parent answered the user → child killed).
+3. **Stop trusting provider usage; estimate when it's 0/absent** (fixes D1). TODO.
+   At `:752`, when `totalTokens` is 0/missing, fall back to a char/4 estimate over
    request+response and count image inputs by encoded size.
-4. **Make the token gate a pre-flight** (fixes D2). Before the LLM call (~`:668`)
-   estimate the request size and abort if `used + estimate >= cap`.
-5. **(optional) Race self-timed tools against a hard ceiling** (tightens D5).
+4. **Make the token gate a pre-flight** (fixes D2). TODO. Before the LLM call
+   (~`:668`) estimate the request size and abort if `used + estimate >= cap`.
+5. **(optional) Race self-timed tools against a hard ceiling** (tightens D5). TODO.
 
-**Effort:** fixes 1 and 2 are the smallest diffs (reuse existing code) and stop
-the unbounded runtime; 3 and 4 fix the token cap. Higher risk (touches the agent
-loop) — do behind tests. Decision pending: which of 1–4 to take first.
+**Follow-up — heartbeat-based reap (unblocks active age-based kill).** To make
+the wall cap actually bind for the age-based orphan class WITHOUT killing healthy
+long-runners, the reaper needs to match on last-activity (a heartbeat / `updatedAt`
+bumped each iteration), not `createdAt`. Then an agent that is genuinely stuck
+(no progress > cap) can be killed while one that is actively working/paused is
+spared. Deferred — needs a heartbeat column + write path.
+
+**Status:** #1 (scoped) and #2 shipped. #3/#4 (token cap, the 1.9× overrun)
+remain — the next budget-binding work. Higher risk (agent loop) — behind tests.
 
 ### RC7 — capability gate at model binding (from the post-mortem)
 
