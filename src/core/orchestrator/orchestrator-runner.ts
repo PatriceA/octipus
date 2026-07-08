@@ -230,7 +230,14 @@ export async function runOrchestrator(
   }
 
   if (classification.topic) {
-    systemPrompt += `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as the child role when calling spawn_child. Delegate to specialists via spawn_child (one or more calls per turn) for any substantive task — writing or refactoring code, research, design, security review, devops work, etc. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review"). Narrow exception: if the request is plainly trivial — a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition — answer directly without spawning. When in doubt between delegating and answering directly, delegate. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
+    // Lite mode gets a contradiction-free version: the lite prompt says
+    // "Delegate ONCE per request", so this appendix must NOT say "one or more
+    // calls per turn" (small models are literal — that conflict is what drove
+    // the rule-breaking second spawn in run 743d4b66) and must NOT advertise
+    // create_pipeline, which the lite spawn schema doesn't expose.
+    systemPrompt += isLite
+      ? `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as the child role. For any substantive task, call spawn_child EXACTLY ONCE and then relay the child's result. Only answer directly (no spawn) for a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition. When in doubt, delegate.`
+      : `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as the child role when calling spawn_child. Delegate to specialists via spawn_child (one or more calls per turn) for any substantive task — writing or refactoring code, research, design, security review, devops work, etc. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review"). Narrow exception: if the request is plainly trivial — a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition — answer directly without spawning. When in doubt between delegating and answering directly, delegate. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
   }
   if (classification.type === 'ambiguous') {
     systemPrompt += `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`;

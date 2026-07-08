@@ -126,6 +126,19 @@ export class WebSearchTool extends BaseTool {
       snippet: r.content || '',
     }));
 
+    // Distinguish "genuinely no results" from "the engines are dead". A dead
+    // SearXNG returns HTTP 200 with 0 results AND a populated
+    // `unresponsive_engines` list (network/DNS down inside the container). That
+    // is an infra failure, not an answer — throw so the browser fallback in
+    // `search()` engages. Reporting it as an empty-but-ok result is exactly the
+    // silent failure that let a small model confabulate "my tools are disabled".
+    const unresponsive = (data.unresponsive_engines || []) as unknown[];
+    if (results.length === 0 && unresponsive.length > 0) {
+      throw new Error(
+        `SearXNG returned no results and ${unresponsive.length} engine(s) are unresponsive — treating as infra failure`,
+      );
+    }
+
     return { query, resultCount: results.length, results };
   }
 
@@ -292,8 +305,13 @@ export class WebSearchTool extends BaseTool {
         return { error: `URL blocked: ${addrCheck.reason}` };
       }
 
-      // Wait briefly for dynamic content
-      await page.waitForTimeout(1000);
+      // Let JS-heavy SPAs (fifa.com, most modern sites) actually render. A fixed
+      // 1s timeout returned empty bodies as silent "ok" successes. `networkidle`
+      // returns as soon as the network settles; the 3s cap bounds the tax on
+      // pages that never idle (streaming/analytics/websockets) — waiting longer
+      // there rarely changes the extracted text, but multiplies across a fan-out.
+      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+      await page.waitForTimeout(500);
 
       // Extract text content
       const text = await page.evaluate(() => {
@@ -314,13 +332,33 @@ export class WebSearchTool extends BaseTool {
         .trim()
         .slice(0, maxLength);
 
-      toolLogger.debug({ url, textLength: trimmedText.length }, 'Page fetched via browser');
+      const title = await page.title();
+
+      // Surface renders-nothing and bot-wall pages as warnings, not silent
+      // successes. An empty body or a "verify you're human / enable JavaScript"
+      // interstitial is NOT evidence the information is absent — a small model
+      // reading `text: ""` with `status: ok` will conclude exactly that and
+      // fabricate a reason. Name the failure so it can't be mistaken for data.
+      // Only treat interstitial signatures as a bot-wall when the page has
+      // little real content — a long article that merely mentions "captcha" or
+      // "cloudflare" is legitimate content, not a wall. Interstitials are short.
+      const botWall = trimmedText.length < 800
+        && /enable javascript|verify (you'?re|that you'?re|you are).*(human|robot)|are you a robot|complete the captcha|access denied|just a moment/i.test(text.slice(0, 2000));
+      let warning: string | undefined;
+      if (trimmedText.length === 0) {
+        warning = 'Page rendered no extractable text (JS-heavy SPA, empty render, or bot-wall). This is NOT confirmation the information is absent — try another source.';
+      } else if (botWall) {
+        warning = 'Page looks like a bot-wall / CAPTCHA / "enable JavaScript" interstitial, not real content — treat this text as unreliable and try another source.';
+      }
+
+      toolLogger.debug({ url, textLength: trimmedText.length, warning }, 'Page fetched via browser');
 
       return {
         url,
-        title: await page.title(),
+        title,
         textLength: trimmedText.length,
         text: trimmedText,
+        ...(warning ? { warning } : {}),
       };
     } catch (error) {
       toolLogger.error({ error, url }, 'Browser page fetch failed');

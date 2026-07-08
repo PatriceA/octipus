@@ -1520,6 +1520,14 @@ export class AgentWorker extends BaseAgentWorker {
     };
     this.messages.push(octiMessage);
 
+    // Log the model's actual text (truncated) — not just {model, messageCount}.
+    // Without this a post-mortem can't see WHY an agent pivoted (run 743d4b66:
+    // a research child silently drifted to writing docs and the reasoning was
+    // unrecoverable). Only emit when there's prose to record.
+    if (result.content && result.content.trim()) {
+      this.emit('thought', { text: result.content.slice(0, 1000), truncated: result.content.length > 1000 });
+    }
+
     return result;
   }
 

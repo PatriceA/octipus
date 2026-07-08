@@ -92,7 +92,11 @@ const SYSTEM_EXPERTS: Array<{
     description: 'Investigates topics using web search, producing thorough research reports.',
     icon: 'search',
     role: 'research',
-    skillIds: ['technical-writing'],
+    // No skill: 'technical-writing' made a 9B researcher confabulate a Diátaxis
+    // documentation task when its real (football) task stalled. The research
+    // role's prompt.md + criticalRules already carry the right guidance; a
+    // domain-knowledge skill here is wrong knowledge, not missing knowledge.
+    skillIds: [],
     criticalRules: [
       'Always cite sources — never present information without attribution',
       'Distinguish clearly between facts, opinions, and speculation',
