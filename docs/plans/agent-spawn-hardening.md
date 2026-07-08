@@ -99,11 +99,18 @@ Defects:
    `agent-worker.ts` success return now aborts + `cancelAll()`s any detached
    child still pending after auto-collect, mirroring the catch path. This catches
    the run-743d4b66 case at the source (parent answered the user → child killed).
-3. **Stop trusting provider usage; estimate when it's 0/absent** (fixes D1). TODO.
-   At `:752`, when `totalTokens` is 0/missing, fall back to a char/4 estimate over
-   request+response and count image inputs by encoded size.
-4. **Make the token gate a pre-flight** (fixes D2). TODO. Before the LLM call
-   (~`:668`) estimate the request size and abort if `used + estimate >= cap`.
+3. **Stop trusting provider usage; estimate when it's 0/absent** (fixes D1).
+   ✅ DONE. `estimateRequestTokens()` (chars/4) is used via `accountedTokens()`
+   whenever the provider reports 0/absent usage, at all three accounting sites
+   (budget + both session message-counts). Image handling is split: a base64
+   blob in STRING content counts full length (the text-model incident), a
+   structured `image_url` part counts a fixed ~1500 (so vision agents aren't
+   false-aborted).
+4. **Make the token gate a pre-flight** (fixes D2). ✅ DONE. Right before the LLM
+   call (post-compaction), abort if `used + estimateRequestTokens() >= cap` — so
+   one giant call can't overshoot in a single step. Known minor conservatism:
+   for prompt-caching models the full-input estimate can stop an agent slightly
+   early once context alone nears the cap (safe direction).
 5. **(optional) Race self-timed tools against a hard ceiling** (tightens D5). TODO.
 
 **Follow-up — heartbeat-based reap (unblocks active age-based kill).** To make
@@ -113,8 +120,10 @@ bumped each iteration), not `createdAt`. Then an agent that is genuinely stuck
 (no progress > cap) can be killed while one that is actively working/paused is
 spared. Deferred — needs a heartbeat column + write path.
 
-**Status:** #1 (scoped) and #2 shipped. #3/#4 (token cap, the 1.9× overrun)
-remain — the next budget-binding work. Higher risk (agent loop) — behind tests.
+**Status:** #1 (scoped), #2, #3, #4 shipped. The 1.9× token overrun and the
+orphan/8.5× wall class are both closed. Remaining: #5 (self-timed tool ceiling,
+optional) and the heartbeat-based reap (to safely enforce the age-based wall
+class). RC5 is otherwise done.
 
 ### RC7 — capability gate at model binding (from the post-mortem)
 

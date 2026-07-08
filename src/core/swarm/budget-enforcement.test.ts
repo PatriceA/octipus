@@ -100,6 +100,72 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     expect(thrown).toBeInstanceOf(ChildTimeoutError);
     expect((thrown as ChildTimeoutError).metadata?.capMs).toBe(10);
   });
+
+  test('pre-flight refuses a single oversized request before the LLM call (RC5 D2)', async () => {
+    // used is BELOW the cap (so the loop-top gate passes) but the pending
+    // request's estimated input would cross it — the pre-flight must abort
+    // BEFORE getCompletion, else one giant call (a 373 KB image) overshoots.
+    const worker = new AgentWorker(mkCtx({ id: 'w-preflight', userId: 'system' }), {
+      maxIterations: 10,
+      contextWindowSize: 1_000_000,
+      timeout: 60_000,
+      maxTokenBudget: 100,
+    });
+    const priv = worker as unknown as {
+      startTime: number;
+      totalTokensUsed: number;
+      messages: Array<{ role: string; content: unknown }>;
+      loop: () => Promise<string>;
+      getCompletion: () => Promise<never>;
+    };
+    priv.startTime = Date.now();
+    priv.totalTokensUsed = 50; // below cap → loop-top gate passes
+    priv.messages = [{ role: 'user', content: 'x'.repeat(400) }]; // ceil(400/4)=100 est
+    priv.getCompletion = async () => {
+      throw new Error('getCompletion should not be reached');
+    };
+
+    let thrown: unknown = null;
+    try {
+      await priv.loop();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(BudgetExceededError);
+    // projected = 50 (spent) + 100 (estimated input) = 150 ≥ cap 100
+    expect((thrown as BudgetExceededError).metadata?.used).toBe(150);
+    expect((thrown as BudgetExceededError).metadata?.cap).toBe(100);
+  });
+
+  test('estimateRequestTokens: text = chars/4; image part = fixed (not base64 length)', () => {
+    const worker = new AgentWorker(mkCtx(), {
+      maxIterations: 1,
+      contextWindowSize: 1000,
+      timeout: 1000,
+      maxTokenBudget: 0,
+    });
+    const priv = worker as unknown as {
+      messages: Array<{ role: string; content: unknown }>;
+      estimateRequestTokens: () => number;
+    };
+    // Plain string: 40 chars → 10 tokens.
+    priv.messages = [{ role: 'user', content: 'a'.repeat(40) }];
+    expect(priv.estimateRequestTokens()).toBe(10);
+
+    // A huge base64 blob dumped into a STRING (what a text model gets — the
+    // run-743d4b66 case) is counted at full length so it trips the cap.
+    priv.messages = [{ role: 'user', content: 'x'.repeat(400_000) }];
+    expect(priv.estimateRequestTokens()).toBe(100_000);
+
+    // The SAME-sized blob as a structured image_url part (vision model) is a
+    // fixed ~1500, NOT length/4 — otherwise a legit vision agent false-aborts.
+    priv.messages = [
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:${'b'.repeat(400_000)}` } }] },
+    ];
+    const imgEst = priv.estimateRequestTokens();
+    expect(imgEst).toBe(1_500);
+    expect(imgEst).toBeLessThan(10_000); // nowhere near the 100k a length-based count would give
+  });
 });
 
 describe('AgentWorker — detached-collect wall-clock pause', () => {
