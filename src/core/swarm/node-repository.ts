@@ -128,6 +128,14 @@ export class SwarmNodeRepository {
    * `cancelled` with `error='orphaned_at_restart'`. Returns number of rows
    * updated.
    *
+   * DB-relabel only — deliberately does NOT stop the workers. The filter keys
+   * on `createdAt` (spawn time), not last activity, so a match can be a healthy
+   * agent legitimately alive >olderThanMs (an orchestrator waiting on children);
+   * actively killing those mid-work would destroy in-flight work. The
+   * unambiguous orphans (detached child whose parent already terminated) are
+   * killed via `reapUncollectedDetached` instead. Active kill by wall-clock
+   * needs a last-activity heartbeat first (see agent-spawn-hardening plan).
+   *
    * Runs on process boot; catches rows left stale when the server was
    * killed mid-swarm. Mirrors `agent-manager.ts` stale-agent cleanup but
    * targets the sibling `swarm_nodes` table.
