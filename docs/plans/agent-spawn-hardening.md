@@ -154,16 +154,22 @@ exist; they were just under-populated and unused on the swarm path.
    `findToolCapableFallback` (extracted from the worker path's `ensureToolSupport`
    so both reroute identically). Warn-and-reroute — never blocks a spawn.
 
-**Deferred (needs signals that don't exist yet):**
-- Per-task vision / context-window gating at spawn — the spawner can't reliably
-  know a child will receive images or how much context it needs, so only the
-  deterministic small-model warning + tool reroute are wired. Add when task-need
-  signals exist.
-- Persisting discovery-fetched capabilities (OpenRouter/Ollama) for models
-  created outside the hwfit catalog — currently they only feed the picker UI, so
-  a manually-created model can keep default `contextWindow=128000` /
-  `supportsVision=false`. (Ollama `/api/show` enrichment, explicitly out of scope
-  this pass.)
+**Context-window gate — ✅ DONE.** At spawn, after composing the child's initial
+brief, warn if its estimated tokens already exceed 90% of the bound model's
+`contextWindow` — the model would truncate/fail before doing any work. Warn-only.
+
+**Still deferred:**
+- Per-task VISION gating at spawn — the spawner can't know a child will receive
+  images (they arrive from tool output mid-run), so there's no deterministic
+  signal to gate on. Would need a per-task "expects images" hint.
+- Persisting discovery-fetched capabilities for non-hwfit models. Bigger than it
+  looks: `discover()` returns only the *curated shortlist* (hides non-tool /
+  preview / deprecated models, so the model being registered may be absent),
+  needs the user's credentials, and hits the vendor API — none of which belongs
+  in the DB create path. Better fixed at the UI layer: have create-from-discovery
+  pass `contextWindow`/`supportsVision`/`supportsTools` (the create route already
+  accepts them), or add a dedicated un-curated `discover-by-id` lookup with cred
+  threading. Left for a focused change.
 
 ## Status
 
