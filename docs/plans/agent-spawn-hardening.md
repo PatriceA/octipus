@@ -118,12 +118,16 @@ Defects:
    block on human approval (`approvalTimeoutMs`, hours), so any ceiling there
    would kill a run mid-approval.
 
-**Follow-up — heartbeat-based reap (unblocks active age-based kill).** To make
-the wall cap actually bind for the age-based orphan class WITHOUT killing healthy
-long-runners, the reaper needs to match on last-activity (a heartbeat / `updatedAt`
-bumped each iteration), not `createdAt`. Then an agent that is genuinely stuck
-(no progress > cap) can be killed while one that is actively working/paused is
-spared. Deferred — needs a heartbeat column + write path.
+**Heartbeat-based reap — ✅ DONE.** The reaper no longer trusts `createdAt`
+alone. AgentWorker keeps an in-memory heartbeat (`lastActivityAt`, bumped each
+iteration) and a `blockedSince` flag (set while awaiting a tool, an LLM call, or
+human approval). `getActivity()` exposes both. The age-based pass now
+`findRunningOlderThan` → per-candidate liveness: a worker not in memory (zombie)
+or in memory + not blocked + no heartbeat for >30 min (wedged) is
+cancelled+stopped; a blocked or recently-active worker is left running (its row
+stays `running` instead of being falsely relabeled). No DB migration or
+per-iteration DB write — the heartbeat is in memory, cross-referenced via the
+AgentManager. This completes the active age-based kill RC5 #1 deferred.
 
 **Status:** #1 (scoped), #2, #3, #4 shipped. The 1.9× token overrun and the
 orphan/8.5× wall class are both closed. Remaining: #5 (self-timed tool ceiling,

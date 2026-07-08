@@ -49,6 +49,19 @@ export class AgentWorker extends BaseAgentWorker {
   private abortController: AbortController;
   private totalTokensUsed: number = 0;
   private startTime: number = 0;
+  /**
+   * Heartbeat: wall-clock of the last loop iteration start. A healthy worker
+   * bumps this every iteration; a genuinely wedged one stops. The orphan reaper
+   * reads it (via getActivity) to tell a hung worker from one still progressing.
+   */
+  private lastActivityAt: number = 0;
+  /**
+   * Non-null while the worker is inside a legitimately-long blocking wait it
+   * DOESN'T bump activity during — collect_children / detached auto-collect, or
+   * a pipeline `final` tool awaiting human approval. The reaper must NOT kill a
+   * worker in this state (it looks idle but is waiting on purpose).
+   */
+  private blockedSince: number | null = null;
   private emptyRetries: number = 0;
   private llmRetries: number = 0;
   /** Iteration index at which toolshim last ran — caps it to once per iteration. */
@@ -149,6 +162,32 @@ export class AgentWorker extends BaseAgentWorker {
   /** Public elapsed time for status reporting (active only). */
   override getElapsedMs(): number {
     return this.startTime > 0 ? this.elapsed() : 0;
+  }
+
+  /**
+   * Liveness snapshot for the orphan reaper. `lastActivityAt` is the last loop
+   * iteration start; `blockedSince` is non-null while the worker sits in a
+   * legitimately-long blocking wait (approval / collect). The reaper treats a
+   * blocked worker as alive, and a non-blocked worker with a stale
+   * `lastActivityAt` as wedged.
+   */
+  getActivity(): { lastActivityAt: number; blockedSince: number | null } {
+    return { lastActivityAt: this.lastActivityAt, blockedSince: this.blockedSince };
+  }
+
+  /**
+   * Run a legitimately-long blocking wait while marking the worker `blocked` so
+   * the reaper won't mistake the idle-looking wait for a wedge. Cleared in
+   * `finally` even on throw. Nested waits keep the earliest `blockedSince`.
+   */
+  private async whileBlocked<T>(fn: () => Promise<T>): Promise<T> {
+    const already = this.blockedSince !== null;
+    if (!already) this.blockedSince = Date.now();
+    try {
+      return await fn();
+    } finally {
+      if (!already) this.blockedSince = null;
+    }
   }
 
   /** Optional parent AbortSignal — chained so that parent abort cascades down. */
@@ -314,6 +353,7 @@ export class AgentWorker extends BaseAgentWorker {
 
     this.context.status = 'running';
     this.startTime = Date.now();
+    this.lastActivityAt = this.startTime; // a started worker is active until proven stale (reaper heartbeat)
     this.emit('status_change', { status: 'running' });
 
     try {
@@ -352,7 +392,7 @@ export class AgentWorker extends BaseAgentWorker {
           { agentId: this.context.id, pending: this.detached.count(), autoTimeoutMs },
           'Auto-collecting forgotten detached children before finalizing',
         );
-        const collected = await this.collectAllDetached(autoTimeoutMs);
+        const collected = await this.whileBlocked(() => this.collectAllDetached(autoTimeoutMs));
         if (collected.length > 0) {
           // P1.2 — give each child a real relay budget instead of a 500-char
           // stub (which turned multi-thousand-char research summaries into two
@@ -622,6 +662,7 @@ export class AgentWorker extends BaseAgentWorker {
       }
 
       this.iteration++;
+      this.lastActivityAt = Date.now(); // heartbeat — see getActivity()
       agentLogger.info({
         agentId: this.context.id, sessionId: this.context.sessionId,
         iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -999,23 +1040,32 @@ export class AgentWorker extends BaseAgentWorker {
         //    worker forever. Its real waits (~10 min) are far under the ceiling,
         //    so the backstop only fires on a genuine wedge.
         //  - everything else races the normal wall clock.
-        const isFinal = this.toolExecutor.hasFinalToolCall(completion.toolCalls);
-        const isCollect = completion.toolCalls.some((tc) => tc.name === 'collect_children');
-        let toolMessages: AgentMessage[];
-        if (isFinal) {
-          toolMessages = await this.toolExecutor.handleToolCalls(completion.toolCalls);
-        } else if (isCollect) {
-          toolMessages = await this.raceAbsolute(
-            this.toolExecutor.handleToolCalls(completion.toolCalls),
-            'handleToolCalls:collect_children',
-            this.config.selfTimedToolCeilingMs ?? DEFAULT_SELF_TIMED_TOOL_CEILING_MS,
-          );
-        } else {
-          toolMessages = await this.raceTimeout(
-            this.toolExecutor.handleToolCalls(completion.toolCalls),
+        const toolCalls = completion.toolCalls; // narrowed non-undefined by the guard above
+        const isFinal = this.toolExecutor.hasFinalToolCall(toolCalls);
+        const isCollect = toolCalls.some((tc) => tc.name === 'collect_children');
+        // A worker running ANY tool is legitimately busy, not wedged — mark it
+        // blocked for the whole execution so the reaper's heartbeat check
+        // doesn't kill a healthy worker mid tool call (a long deep-research /
+        // shell / MCP fetch can outlast the reaper's inactivity window). The
+        // wall race below still bounds normal tools independently.
+        const toolMessages: AgentMessage[] = await this.whileBlocked(() => {
+          if (isFinal) {
+            // Legitimately long (may await human approval) — no wall race.
+            return this.toolExecutor.handleToolCalls(toolCalls);
+          }
+          if (isCollect) {
+            // Self-bounds (~child wall); keep a generous absolute backstop.
+            return this.raceAbsolute(
+              this.toolExecutor.handleToolCalls(toolCalls),
+              'handleToolCalls:collect_children',
+              this.config.selfTimedToolCeilingMs ?? DEFAULT_SELF_TIMED_TOOL_CEILING_MS,
+            );
+          }
+          return this.raceTimeout(
+            this.toolExecutor.handleToolCalls(toolCalls),
             'handleToolCalls',
           );
-        }
+        });
         this.messages.push(...toolMessages);
 
         agentLogger.info({
@@ -1536,9 +1586,14 @@ export class AgentWorker extends BaseAgentWorker {
     const isSelfTimedTool =
       this.toolExecutor.hasFinalToolCall(toolCalls) ||
       toolCalls.some((tc) => tc.name === 'collect_children');
-    const toolMessages = isSelfTimedTool
-      ? await this.toolExecutor.handleToolCalls(toolCalls)
-      : await this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls');
+    // Mark blocked for the whole execution (same as the structured path) so the
+    // reaper's heartbeat check doesn't kill a healthy worker mid tool call —
+    // including a recovered `final` tool awaiting human approval.
+    const toolMessages = await this.whileBlocked(() =>
+      isSelfTimedTool
+        ? this.toolExecutor.handleToolCalls(toolCalls)
+        : this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls'),
+    );
     this.messages.push(...toolMessages);
 
     this.drainSteeringQueue();

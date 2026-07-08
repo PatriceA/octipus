@@ -3,22 +3,34 @@ import { reapOrphanedSwarmNodes } from './orphan-reaper';
 import type { SwarmNodeRepository } from './node-repository';
 
 /**
- * Orphan reaper unit tests — mock the repo so we don't need a live DB.
- * The integration behaviour (actual SQL update) is exercised by the
- * admin-API integration slice once the test DB is wired up.
+ * Orphan reaper unit tests — mock the repo + liveness so we don't need a live
+ * DB or a running AgentManager. The age-based pass is now liveness-gated: it
+ * cancels only wedged in-memory workers and cross-process zombies, and leaves
+ * healthy/blocked workers running.
  */
 
-function makeRepoMock(reapedCount: number, detachedOrphans: number = 0): {
-  repo: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'>;
+type Activity = { lastActivityAt: number; blockedSince: number | null };
+
+function makeRepoMock(
+  candidateIds: string[],
+  detachedOrphans: number = 0,
+): {
+  repo: Pick<SwarmNodeRepository, 'findRunningOlderThan' | 'cancelNodes' | 'reapUncollectedDetached'>;
+  cancelled: string[];
   calls: number[];
 } {
   const calls: number[] = [];
+  const cancelled: string[] = [];
   return {
     calls,
+    cancelled,
     repo: {
-      async reapOrphans(olderThanMs: number): Promise<number> {
+      async findRunningOlderThan(olderThanMs: number): Promise<string[]> {
         calls.push(olderThanMs);
-        return reapedCount;
+        return candidateIds;
+      },
+      async cancelNodes(ids: string[]): Promise<void> {
+        cancelled.push(...ids);
       },
       async reapUncollectedDetached(): Promise<Array<{ id: string; parentNodeId: string | null }>> {
         return Array.from({ length: detachedOrphans }, (_, i) => ({
@@ -30,56 +42,121 @@ function makeRepoMock(reapedCount: number, detachedOrphans: number = 0): {
   };
 }
 
-describe('reapOrphanedSwarmNodes', () => {
-  // Inject a no-op stopper by default so unit tests stay hermetic (don't reach
-  // the real AgentManager). Tests that care assert on `stopped`.
+describe('reapOrphanedSwarmNodes — liveness-gated age-based pass', () => {
   const noopStop = () => {};
 
-  test('returns reaped count when rows are stale', async () => {
-    const { repo, calls } = makeRepoMock(3);
+  test('cancels a wedged worker but leaves healthy / slow ones running', async () => {
+    const now = Date.now();
+    const { repo, cancelled } = makeRepoMock(['healthy', 'slow', 'wedged']);
+    const activity: Record<string, Activity> = {
+      healthy: { lastActivityAt: now, blockedSince: null }, // just bumped
+      // 12 min since last heartbeat but under the 30-min wedge window — e.g. a
+      // slow un-instrumented gap; NOT wedged.
+      slow: { lastActivityAt: now - 12 * 60_000, blockedSince: null },
+      // >30 min with no activity and not blocked → genuinely wedged.
+      wedged: { lastActivityAt: now - 40 * 60_000, blockedSince: null },
+    };
+    const stopped: string[] = [];
     const result = await reapOrphanedSwarmNodes({
       olderThanMs: 600_000,
       repo,
-      stopWorker: noopStop,
+      getActivity: (id) => activity[id] ?? null,
+      stopWorker: (id) => stopped.push(id),
     });
-    expect(result.reaped).toBe(3);
-    expect(result.olderThanMs).toBe(600_000);
-    expect(calls).toEqual([600_000]);
+    expect(cancelled).toEqual(['wedged']);
+    expect(stopped).toEqual(['wedged']);
+    expect(result.reaped).toBe(1);
   });
 
-  test('returns 0 when nothing is stale (fresh rows untouched)', async () => {
-    const { repo, calls } = makeRepoMock(0);
+  test('leaves a worker busy in a long tool alone (blockedSince set)', async () => {
+    const now = Date.now();
+    const { repo, cancelled } = makeRepoMock(['in-long-tool']);
+    const stopped: string[] = [];
+    await reapOrphanedSwarmNodes({
+      olderThanMs: 600_000,
+      repo,
+      // Heartbeat is 40 min stale, but the worker is blocked (executing a tool)
+      // → must NOT be killed.
+      getActivity: () => ({ lastActivityAt: now - 40 * 60_000, blockedSince: now - 40 * 60_000 }),
+      stopWorker: (id) => stopped.push(id),
+    });
+    expect(cancelled).toEqual([]);
+    expect(stopped).toEqual([]);
+  });
+
+  test('leaves a legitimately-blocked worker alone (awaiting approval/children)', async () => {
+    const now = Date.now();
+    const { repo, cancelled } = makeRepoMock(['blocked']);
+    const stopped: string[] = [];
+    await reapOrphanedSwarmNodes({
+      olderThanMs: 600_000,
+      repo,
+      // Old lastActivityAt, but blockedSince set → it's waiting on purpose.
+      getActivity: () => ({ lastActivityAt: now - 900_000, blockedSince: now - 900_000 }),
+      stopWorker: (id) => stopped.push(id),
+    });
+    expect(cancelled).toEqual([]);
+    expect(stopped).toEqual([]);
+  });
+
+  test('cancels a cross-process zombie (not in this process memory)', async () => {
+    const { repo, cancelled } = makeRepoMock(['zombie']);
+    const stopped: string[] = [];
+    await reapOrphanedSwarmNodes({
+      olderThanMs: 600_000,
+      repo,
+      getActivity: () => null, // not in memory
+      stopWorker: (id) => stopped.push(id),
+    });
+    expect(cancelled).toEqual(['zombie']);
+    expect(stopped).toEqual(['zombie']);
+  });
+
+  test('no candidates → no cancel, no stop', async () => {
+    const { repo, cancelled, calls } = makeRepoMock([]);
+    let stopCalls = 0;
     const result = await reapOrphanedSwarmNodes({
       olderThanMs: 600_000,
       repo,
-      stopWorker: noopStop,
+      getActivity: () => null,
+      stopWorker: () => { stopCalls += 1; },
     });
+    expect(cancelled).toEqual([]);
+    expect(stopCalls).toBe(0);
     expect(result.reaped).toBe(0);
     expect(calls).toEqual([600_000]);
   });
 
+  test('detached-uncollected orphans are still cancelled + stopped', async () => {
+    const { repo } = makeRepoMock([], 3);
+    const stopped: string[] = [];
+    const result = await reapOrphanedSwarmNodes({
+      olderThanMs: 600_000,
+      repo,
+      getActivity: () => null,
+      stopWorker: (id) => stopped.push(id),
+    });
+    expect(result.uncollectedDetached).toBe(3);
+    expect(stopped.sort()).toEqual(['detached-0', 'detached-1', 'detached-2']);
+  });
+
   test('uses config default when olderThanMs is omitted', async () => {
-    // This is the one case that reads getConfig() (for the default threshold).
-    // Reset + reload the config cache from this worker's test env so the result
-    // can't depend on a half-mutated singleton an earlier test left behind
-    // (T1 — the source of the cross-file ordering flake).
     const { resetConfig, loadConfig } = await import('@/config');
     resetConfig();
     loadConfig();
-
-    const { repo, calls } = makeRepoMock(1);
-    await reapOrphanedSwarmNodes({ repo, stopWorker: noopStop });
-    // Default from config is 600_000 (10 min). Accept whatever the loaded
-    // config says — this covers both env-provided overrides and defaults.
+    const { repo, calls } = makeRepoMock([]);
+    await reapOrphanedSwarmNodes({ repo, getActivity: () => null, stopWorker: noopStop });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toBeGreaterThanOrEqual(30_000);
   });
 
-  test('fails safe: repo throw returns 0 and does not propagate', async () => {
-    const throwingRepo: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'> = {
-      async reapOrphans(): Promise<number> {
-        throw new Error('db_down');
-      },
+  test('fails safe: a repo throw does not propagate', async () => {
+    const throwingRepo: Pick<
+      SwarmNodeRepository,
+      'findRunningOlderThan' | 'cancelNodes' | 'reapUncollectedDetached'
+    > = {
+      async findRunningOlderThan(): Promise<string[]> { throw new Error('db_down'); },
+      async cancelNodes(): Promise<void> { throw new Error('db_down'); },
       async reapUncollectedDetached(): Promise<Array<{ id: string; parentNodeId: string | null }>> {
         throw new Error('db_down');
       },
@@ -87,42 +164,10 @@ describe('reapOrphanedSwarmNodes', () => {
     const result = await reapOrphanedSwarmNodes({
       olderThanMs: 600_000,
       repo: throwingRepo,
+      getActivity: () => null,
       stopWorker: noopStop,
     });
-    // Must not throw — boot path can't crash on a DB blip.
     expect(result.reaped).toBe(0);
     expect(result.uncollectedDetached).toBe(0);
-  });
-
-  test('reports detached-uncollected orphans in second pass', async () => {
-    const { repo } = makeRepoMock(0, 2);
-    const result = await reapOrphanedSwarmNodes({ olderThanMs: 600_000, repo, stopWorker: noopStop });
-    expect(result.uncollectedDetached).toBe(2);
-  });
-
-  test('stops detached-uncollected orphans but NOT age-based ones', async () => {
-    // RC5 D4: detached orphans (parent terminal) must actually be stopped, not
-    // just relabeled. Age-based reap is DB-only — it keys on createdAt and would
-    // otherwise kill healthy long-running agents.
-    const { repo } = makeRepoMock(2, 3); // 2 age-based, 3 detached
-    const stopped: string[] = [];
-    await reapOrphanedSwarmNodes({
-      olderThanMs: 600_000,
-      repo,
-      stopWorker: (id) => stopped.push(id),
-    });
-    expect(stopped.sort()).toEqual(['detached-0', 'detached-1', 'detached-2']);
-  });
-
-  test('does not invoke the stopper when there are no detached orphans', async () => {
-    // Age-based reaps alone (no detached orphans) must not stop any worker.
-    const { repo } = makeRepoMock(5, 0);
-    let called = 0;
-    await reapOrphanedSwarmNodes({
-      olderThanMs: 600_000,
-      repo,
-      stopWorker: () => { called += 1; },
-    });
-    expect(called).toBe(0);
   });
 });
