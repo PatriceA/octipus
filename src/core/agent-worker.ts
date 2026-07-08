@@ -187,6 +187,59 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /**
+   * Rough token estimate of the current request (≈ chars / 4). Used ONLY as a
+   * fallback when the provider reports 0/absent usage — CLI providers report
+   * `{tokens: 0}` on purpose and Ollama's `eval_count` ignores image-input
+   * tokens (RC5 D1) — and by the pre-flight (D2). Without it the budget cap is
+   * a permanent no-op for those models.
+   *
+   * Image handling matters: a base64 blob dumped into a STRING content (what a
+   * text model receives — the run-743d4b66 373 KB screenshot) is counted at its
+   * full encoded length, so it correctly trips the cap. But a structured
+   * `image_url` part sent to a VISION model costs only ~fixed tokens, not its
+   * base64 length — counting it by length would false-abort a legitimate vision
+   * agent the moment an image enters context. So image parts get a fixed cost.
+   *
+   * Deliberately a slight over-estimate otherwise: a budget cap must fail safe
+   * toward stopping, never toward running forever.
+   */
+  private estimateRequestTokens(): number {
+    const IMAGE_TOKENS = 1_500; // rough fixed cost of one image to a vision model
+    let chars = 0;
+    let imageTokens = 0;
+    for (const m of this.messages) {
+      const c = (m as { content?: unknown }).content;
+      if (typeof c === 'string') {
+        chars += c.length;
+      } else if (Array.isArray(c)) {
+        for (const part of c as Array<{ type?: string; text?: string }>) {
+          if (part?.type === 'image_url' || part?.type === 'image') {
+            imageTokens += IMAGE_TOKENS;
+          } else if (typeof part?.text === 'string') {
+            chars += part.text.length;
+          } else if (part) {
+            chars += JSON.stringify(part).length;
+          }
+        }
+      } else if (c) {
+        chars += JSON.stringify(c).length;
+      }
+    }
+    return Math.ceil(chars / 4) + imageTokens;
+  }
+
+  /**
+   * Tokens to charge for a completion: the provider's reported count, or the
+   * request estimate when it reports 0/absent (CLI / image-blind Ollama). One
+   * source so budget accounting AND session/cost accounting agree (RC5 D1).
+   */
+  private accountedTokens(completion: CompletionResult): number {
+    return completion.usage.totalTokens > 0
+      ? completion.usage.totalTokens
+      : this.estimateRequestTokens();
+  }
+
+  /**
    * Deterministic side-effect counters for this worker's run, sourced from
    * the tool executor. The swarm spawner reads these to build a
    * `SwarmReceipt`. Overrides the base default (`null`) — CLI workers own no
@@ -679,6 +732,23 @@ export class AgentWorker extends BaseAgentWorker {
         }, 'Messages compacted');
       }
 
+      // RC5 D2: pre-flight budget check. The loop-top gate only sees tokens
+      // ALREADY spent, so a single call that ingests a huge input (the 373 KB
+      // base64 screenshot) can blow past the cap in one step before the next
+      // iteration's check. Project this call's input (post-compaction) and abort
+      // BEFORE spending it if it would cross the cap.
+      if (this.config.maxTokenBudget > 0) {
+        const projected = this.totalTokensUsed + this.estimateRequestTokens();
+        if (projected >= this.config.maxTokenBudget) {
+          this.abortController.abort(`budget_exceeded_preflight:${projected}/${this.config.maxTokenBudget}`);
+          throw new BudgetExceededError({
+            agentId: this.context.id,
+            used: projected,
+            cap: this.config.maxTokenBudget,
+          });
+        }
+      }
+
       // Get completion from LLM (with retry for transient failures)
       const llmStart = Date.now();
       let completion: CompletionResult;
@@ -764,13 +834,18 @@ export class AgentWorker extends BaseAgentWorker {
       this.llmRetries = 0;
       // Once a turn comes back untruncated, drop the G5 maxTokens boost.
       if (completion.finishReason !== 'length') this.lengthRetryBoost = 0;
-      this.totalTokensUsed += completion.usage.totalTokens;
+      // RC5 D1: trust the provider's count only when it reported one. A 0/absent
+      // usage (CLI providers, image-blind Ollama) falls back to an estimate so
+      // the budget cap still binds instead of being a permanent no-op.
+      const reportedTokens = completion.usage.totalTokens;
+      this.totalTokensUsed += this.accountedTokens(completion);
 
       agentLogger.info({
         agentId: this.context.id, sessionId: this.context.sessionId,
         iteration: this.iteration, elapsedMs: this.elapsed(),
         phase: 'getCompletion', llmLatencyMs: Date.now() - llmStart,
         inputTokens: completion.usage.inputTokens, outputTokens: completion.usage.outputTokens,
+        tokenEstimated: reportedTokens <= 0,
         totalTokensUsed: this.totalTokensUsed,
         hasToolCalls: !!(completion.toolCalls?.length), finishReason: completion.finishReason,
       }, 'LLM call completed');
@@ -1053,7 +1128,7 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
       if (this.context.role === 'orchestrator') {
-        await sessionRepository.incrementMessageCount(this.context.sessionId, completion.usage.totalTokens);
+        await sessionRepository.incrementMessageCount(this.context.sessionId, this.accountedTokens(completion));
       }
 
       return response;
@@ -1090,7 +1165,7 @@ export class AgentWorker extends BaseAgentWorker {
       const completion = await this.getCompletion();
       if (this.context.role === 'orchestrator') {
         await sessionRepository
-          .incrementMessageCount(this.context.sessionId, completion.usage.totalTokens)
+          .incrementMessageCount(this.context.sessionId, this.accountedTokens(completion))
           .catch(() => { /* best-effort accounting */ });
       }
       const text = (completion.content || '').trim();
