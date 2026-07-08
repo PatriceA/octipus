@@ -72,7 +72,9 @@ const DEFAULT_ASSIGNMENTS: Array<{ skillId: string; topic: string; isActive: boo
   { skillId: 'api-design', topic: 'writing', isActive: true },
 
   // ── Research topic ──
-  { skillId: 'technical-writing', topic: 'research', isActive: true },
+  // Intentionally no skill assignment: 'technical-writing' here made a small
+  // research model drift into writing documentation instead of researching.
+  // See docs/postmortems/2026-07-07-run-743d4b66-world-cup-research.md (RC3).
 
   // ── Caveman — attached to all worker topics, inactive by default ──
   { skillId: 'caveman', topic: 'coding', isActive: false },
@@ -97,8 +99,34 @@ const DEFAULT_ASSIGNMENTS: Array<{ skillId: string; topic: string; isActive: boo
  * Seed skill-topic assignments into the database.
  * Idempotent — skips assignments that already exist by (skillId, topic).
  */
+/**
+ * Assignments removed from DEFAULT_ASSIGNMENTS that must also be DELETED from
+ * existing databases (the insert loop below never deletes). Without this the
+ * retired row survives and keeps feeding the child via topic discovery.
+ */
+const RETIRED_ASSIGNMENTS: Array<{ skillId: string; topic: string }> = [
+  // See docs/postmortems/2026-07-07-run-743d4b66-world-cup-research.md (RC3):
+  // made a small research model drift into writing documentation.
+  { skillId: 'technical-writing', topic: 'research' },
+];
+
 export async function seedSkillTopicAssignments(): Promise<void> {
   const db = getDb();
+
+  for (const retired of RETIRED_ASSIGNMENTS) {
+    const deleted = await db
+      .delete(skillTopicAssignments)
+      .where(
+        and(
+          eq(skillTopicAssignments.skillId, retired.skillId),
+          eq(skillTopicAssignments.topic, retired.topic),
+        ),
+      )
+      .returning({ id: skillTopicAssignments.id });
+    if (deleted.length > 0) {
+      logger.info({ skillId: retired.skillId, topic: retired.topic }, 'Removed retired skill-topic assignment');
+    }
+  }
 
   for (const assignment of DEFAULT_ASSIGNMENTS) {
     const existing = await db

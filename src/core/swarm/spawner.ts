@@ -5,7 +5,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
-import { getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
+import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import type { AgentRole } from '@/core/orchestrator/types';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -957,6 +957,7 @@ export class SwarmSpawner {
     let expertLane: string | undefined;
     let systemPrompt: string | undefined;
     let expertSkillIds: string[] = [];
+    let expertCriticalRules: string[] = [];
     try {
       const { getDb } = await import('@/db/postgres');
       const { experts } = await import('@/db/schema/experts');
@@ -970,6 +971,7 @@ export class SwarmSpawner {
         modelPreference: string | null;
         systemPrompt: string | null;
         skillIds: unknown;
+        criticalRules: unknown;
       }> = [];
       if (preferredExpertId) {
         rows = (await db.select().from(experts).where(eq(experts.id, preferredExpertId)).limit(1)) as typeof rows;
@@ -987,6 +989,7 @@ export class SwarmSpawner {
         expertLane = expert.topic || undefined;
         systemPrompt = expert.systemPrompt || undefined;
         expertSkillIds = Array.isArray(expert.skillIds) ? (expert.skillIds as string[]) : [];
+        expertCriticalRules = Array.isArray(expert.criticalRules) ? (expert.criticalRules as string[]) : [];
       }
     } catch (err) {
       // Expert lookup failure is recoverable (falls back to role defaults)
@@ -1020,10 +1023,17 @@ export class SwarmSpawner {
       // via skill_topic_assignments. No assertion — the user may or may not
       // have assigned any; it's not a bug if none are configured.
       const { discoverSkillIds } = await import('@/skills/discovery');
-      const discoveredIds = await discoverSkillIds({
+      const discoveredRaw = await discoverSkillIds({
         topic: childRole,
         message: childMessage,
       });
+      // Dedup against the expert's own skills — otherwise the same skill's
+      // domain-knowledge block is injected twice (once as "expert", once as
+      // "topic"), doubling its weight in a small model's attention. For a 9B
+      // model this is how "technical-writing" ended up dominating a football
+      // question badly enough to produce ai-docs/ spam.
+      const expertSkillSet = new Set(expertSkillIds);
+      const discoveredIds = discoveredRaw.filter((id) => !expertSkillSet.has(id));
       const topicFragment = discoveredIds.length > 0
         ? await skillReg.buildPromptFragment(discoveredIds)
         : '';
@@ -1039,8 +1049,24 @@ export class SwarmSpawner {
       );
     }
 
+    // Role-prompt fallback: seeded experts have `systemPrompt = null`, so without
+    // this the child's ENTIRE system prompt was just the injected skill blocks —
+    // no role identity, no security preamble, no honesty/stopping rules. That is
+    // the direct cause of a research child that forgot it was doing research. Use
+    // the same base the worker-spawner path uses: expert prompt if present, else
+    // the role's template (which carries SECURITY_PREAMBLE + the good research
+    // prompt.md with its HONESTY section).
+    if (!systemPrompt) {
+      systemPrompt = getRoleConfig(childRole).systemPromptTemplate;
+    }
+
+    // Expert critical rules — injected on the worker path but previously dropped
+    // on the swarm path (the Researcher expert's "always cite / distinguish fact
+    // from speculation" rules never reached the child).
+    systemPrompt += formatCriticalRules(expertCriticalRules);
+
     if (skillFragments.length > 0) {
-      systemPrompt = `${systemPrompt ?? ''}\n\n${skillFragments.join('\n\n')}`.trim();
+      systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
     // Model selection — in order of preference:

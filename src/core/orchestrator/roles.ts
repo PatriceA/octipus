@@ -82,6 +82,18 @@ export function getLiteOrchestratorPrompt(): string {
 }
 
 /**
+ * Format an expert's `criticalRules` as the numbered "# Critical Rules" block
+ * appended to a system prompt. Shared by the worker-spawner and swarm-spawner
+ * paths — inlining it in both is exactly the drift that let the swarm path
+ * silently drop these rules (see run 743d4b66 post-mortem). Empty in → '' out.
+ */
+export function formatCriticalRules(rules: string[]): string {
+  if (rules.length === 0) return '';
+  return '\n\n# Critical Rules\nYou MUST follow these rules:\n' +
+    rules.map((r, i) => `${i + 1}. ${r}`).join('\n');
+}
+
+/**
  * Remove a leading `SECURITY_PREAMBLE` block from `prompt` if present, so
  * callers that concatenate multiple prompt sources (expert + role + custom)
  * don't end up with duplicates.

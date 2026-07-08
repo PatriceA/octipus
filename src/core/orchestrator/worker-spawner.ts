@@ -18,7 +18,7 @@ import { loadAgentsMd } from './agents-md';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
-import { getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
+import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
@@ -137,11 +137,7 @@ export async function handleExpertMessage(
     expertPrompt += stripSecurityPreamble(expert.systemPrompt || roleConfig.systemPromptTemplate);
 
     // Critical rules
-    const criticalRules = (expert.criticalRules as string[]) || [];
-    if (criticalRules.length > 0) {
-      expertPrompt += '\n\n# Critical Rules\nYou MUST follow these rules:\n' +
-        criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
-    }
+    expertPrompt += formatCriticalRules((expert.criticalRules as string[]) || []);
 
     // Deliverable template + success metrics: quality scaffolding for larger
     // models, prompt bloat that weak models follow poorly. Skip in the small tier.
@@ -374,11 +370,7 @@ export async function spawnWorker(
         expertPrompt = matchingExpert.systemPrompt || undefined;
         expertModel = matchingExpert.modelPreference || undefined;
 
-        const criticalRules = (matchingExpert.criticalRules as string[]) || [];
-        if (criticalRules.length > 0) {
-          expertPrompt = (expertPrompt || '') + '\n\n# Critical Rules\nYou MUST follow these rules:\n' +
-            criticalRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
-        }
+        expertPrompt = (expertPrompt || '') + formatCriticalRules((matchingExpert.criticalRules as string[]) || []);
 
         // Deliverable template + success metrics are quality scaffolding that
         // helps larger models structure output but bloats the prompt for small
