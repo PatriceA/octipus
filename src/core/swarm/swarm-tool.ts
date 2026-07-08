@@ -44,6 +44,48 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
 ];
 
 /**
+ * One-line capability blurb per spawnable role. Single source for the depth-1
+ * "roles you can spawn" menu (see `buildSpawnRoleCatalog`) — a depth-1 agent's
+ * system prompt is its own role prompt, which never lists the other roles, so
+ * without this the `role` enum is just 16 bare names and cross-specialist
+ * fan-out is undiscoverable. The `Record<AgentRole, string>` type forces a
+ * blurb whenever a role is added to `AgentRole`.
+ *
+ * The orchestrator (depth-0) keeps its own role list in prompt.md /
+ * prompt.lite.md — kept in sync manually with this map for now; a later change
+ * could generate those from here.
+ */
+const CHILD_ROLE_BLURBS: Record<Exclude<AgentRole, 'orchestrator'>, string> = {
+  research: 'web search, investigate, synthesize sources',
+  coding: 'write / refactor / fix code, shell, git',
+  review: 'read-only code review / audit',
+  qa: 'run tests, UI testing',
+  communication: 'email, calendar, contacts, messaging',
+  design: 'UI/UX, layout, accessibility',
+  devops: 'CI/CD, docker, infra',
+  security: 'security review, vuln scan',
+  data: 'databases, ETL, dashboards, charts',
+  ai: 'ML/AI/RAG/prompt engineering',
+  finance: 'markets, financial modelling',
+  automation: 'scheduling, recurring tasks, reminders',
+  pm: 'planning, status, milestones',
+  writing: 'docs, README, guides',
+  general: 'people/orgs, generic tasks, real-browser work',
+  architecture: 'system design, specs',
+};
+
+/**
+ * Render the spawnable-role menu for injection into a depth-1 agent's task
+ * brief. One `- role — blurb` line per role, in enum order.
+ */
+export function buildSpawnRoleCatalog(): string {
+  // CHILD_ROLES_ENUM never contains 'orchestrator', so the cast is safe.
+  return CHILD_ROLES_ENUM.map(
+    (r) => `- ${r} — ${CHILD_ROLE_BLURBS[r as Exclude<AgentRole, 'orchestrator'>]}`,
+  ).join('\n');
+}
+
+/**
  * Topic-name → role aliases. Orchestrator LLMs frequently pick natural
  * topic phrases ("database", "frontend", "machine-learning") that aren't
  * actual roles. Auto-mapping the obvious synonyms beats rejecting the

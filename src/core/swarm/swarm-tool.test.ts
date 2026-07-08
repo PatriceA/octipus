@@ -1,7 +1,24 @@
 import { describe, test, expect } from 'bun:test';
-import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool } from './swarm-tool';
+import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
 import { SwarmSpawner } from './spawner';
+
+// ── buildSpawnRoleCatalog (depth-1 subagent discoverability) ─────────
+
+describe('buildSpawnRoleCatalog', () => {
+  test('lists every spawnable role with a non-empty blurb', () => {
+    const catalog = buildSpawnRoleCatalog();
+    const lines = catalog.split('\n');
+    // One line per spawnable role, none left as an undefined blurb.
+    expect(lines.length).toBe(SPAWN_CHILD_ROLES.length);
+    for (const role of SPAWN_CHILD_ROLES) {
+      const line = lines.find((l) => l.startsWith(`- ${role} — `));
+      expect(line).toBeDefined();
+      expect(line).not.toContain('undefined');
+      expect((line as string).length).toBeGreaterThan(`- ${role} — `.length);
+    }
+  });
+});
 
 // ── applyRoleFit (Phase 2.6 deterministic role-fit) ──────────────────
 
