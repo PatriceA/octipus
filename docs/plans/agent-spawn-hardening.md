@@ -125,23 +125,44 @@ orphan/8.5× wall class are both closed. Remaining: #5 (self-timed tool ceiling,
 optional) and the heartbeat-based reap (to safely enforce the age-based wall
 class). RC5 is otherwise done.
 
-### RC7 — capability gate at model binding (from the post-mortem)
+### RC7 — capability gate at model binding — ✅ DONE (mostly)
 
-Nothing checks context-window / vision / tool-surface before handing a 9B text
-model a 373KB screenshot and ~120 tools. Tool-support fallback exists only on
-the worker path (`model-selector.ts`), not the swarm path. Also: stop deriving
-orchestrator mode from a param-count token in the model name
-(`mode-selector.ts`).
+Turned out to be three targeted changes, not a routing rewrite — the capability
+columns (`contextWindow`, `supportsVision`, `supportsTools`, `provider`) already
+exist; they were just under-populated and unused on the swarm path.
 
-**Effort:** large. Model-routing redesign, cross-cuts several selectors.
+1. **Populate `metadata.paramCount` at install** (`hwfit/install.ts`). The
+   catalog already has exact `params`; `buildModelEntry` now writes it. So the
+   mode selector uses a real number instead of parsing the model id tag. (The
+   selector already *preferred* `metadata.paramCount` — it was just never set.)
+2. **Cloud-model mode fallback** (`mode-selector.ts`). Unknown size + a
+   non-local-weight provider ⇒ `full` (was: always `lite`). Stops `gpt-4o` /
+   `claude-*` (no `Nb` tag) being throttled to lite. Threaded `provider` through
+   the two callers.
+3. **Capability gate on the swarm spawn path** (`spawner.ts`). Before returning
+   the child's model: log `staticCapabilityWarnings` for a weak model, and if it
+   can't do tool-calling, reroute to a tool-capable local model via the shared
+   `findToolCapableFallback` (extracted from the worker path's `ensureToolSupport`
+   so both reroute identically). Warn-and-reroute — never blocks a spawn.
 
-## Suggested sequencing (for discussion)
+**Deferred (needs signals that don't exist yet):**
+- Per-task vision / context-window gating at spawn — the spawner can't reliably
+  know a child will receive images or how much context it needs, so only the
+  deterministic small-model warning + tool reroute are wired. Add when task-need
+  signals exist.
+- Persisting discovery-fetched capabilities (OpenRouter/Ollama) for models
+  created outside the hwfit catalog — currently they only feed the picker UI, so
+  a manually-created model can keep default `contextWindow=128000` /
+  `supportsVision=false`. (Ollama `/api/show` enrichment, explicitly out of scope
+  this pass.)
 
-1. **Subagent discoverability + stale DETACH MODE** — small, prompt-only, low
-   risk, and it unblocks a capability the system is supposed to have (fan-out)
-   but currently doesn't exercise. Best value/effort right now.
-2. **RC5** — do the read-only runtime investigation first (why didn't the caps
-   fire?), then decide the code change. Safety-critical (runaway compute) but
-   needs diagnosis before edits.
-3. **RC7** — largest and least urgent now that RC3 gives children the right
-   prompt and RC2 surfaces tool failures.
+## Status
+
+Shipped: subagent discoverability (#180), RC5 #1–#4 (#181, #182), RC7 (this PR).
+
+Remaining backlog:
+- **Heartbeat-based reap** — to safely enforce the wall cap on the age-based
+  orphan class (unblocks the part RC5 #1 deliberately left DB-only).
+- **RC5 #5** (optional) — hard ceiling on self-timed tools.
+- **RC7 deferrals** — per-task vision/context gating; persisting
+  discovery-fetched capabilities for non-hwfit models.

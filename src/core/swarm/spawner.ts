@@ -333,6 +333,7 @@ export class SwarmSpawner {
       brief.taskBrief,
       params.expertId,
       internal.excludeExpertId,
+      childTools.length > 0,
     );
 
     // ── Compose child's initial user message from brief ─────────────
@@ -948,6 +949,8 @@ export class SwarmSpawner {
     childMessage: string,
     preferredExpertId?: string,
     excludeExpertId?: string,
+    /** Whether this child is equipped with tools — gates the tool-support reroute. */
+    childUsesTools = false,
   ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string }> {
     const registry = getModelRegistry();
 
@@ -1119,6 +1122,44 @@ export class SwarmSpawner {
     // overrode the user's "this topic uses this model" configuration and
     // sent every child to the orchestrator's model. If cost is a concern,
     // configure it via the Models page.
+
+    // Capability gate (RC7): the worker path checks a bound model can actually
+    // do the work; the swarm path never did. Warn on a weak model, and reroute
+    // ONLY when the child is equipped with tools but its model can't call them —
+    // a genuine mismatch, not a preference override. A tool-less child (pure
+    // synthesis) keeps its bound model even if that model reports no tool
+    // support. Never blocks the spawn.
+    try {
+      const bound = await registry.getModelByModelId(candidate);
+      if (bound) {
+        const { staticCapabilityWarnings } = await import('@/models/capability-gate');
+        const routerMax = getConfig().orchestrator.routerSmallModelMaxParams;
+        const warnings = staticCapabilityWarnings(bound, routerMax);
+        if (warnings.length > 0) {
+          coreLogger.warn({ childRole, model: candidate, warnings }, 'Swarm child bound to a weak model');
+        }
+        if (childUsesTools && !bound.supportsTools && bound.provider !== 'cli') {
+          const { findToolCapableFallback } = await import('@/core/orchestrator/model-selector');
+          const alt = await findToolCapableFallback(candidate);
+          if (alt) {
+            coreLogger.warn(
+              { childRole, from: candidate, to: alt.model, reason: alt.reason },
+              'Swarm child has tools but its model lacks tool support — rerouting to a tool-capable local model',
+            );
+            candidate = alt.model;
+          } else {
+            coreLogger.warn(
+              { childRole, model: candidate },
+              'Swarm child has tools but its model lacks tool support, and no tool-capable fallback exists — proceeding anyway',
+            );
+          }
+        }
+      }
+    } catch (err) {
+      // Best-effort gate — a lookup failure must not block a spawn.
+      coreLogger.debug({ err, childRole, model: candidate }, 'Swarm capability gate skipped');
+    }
+
     return { model: candidate, lane, expertId, systemPrompt };
   }
 

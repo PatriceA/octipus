@@ -21,7 +21,23 @@ export interface ModeThresholds {
 export interface ModeModelMeta {
   modelId: string;
   metadata?: ModelMetadata | null;
+  /** Used to pick a sane mode when the param count is unknown (see resolveOrchestratorMode). */
+  provider?: string;
 }
+
+/**
+ * Providers that only ever host frontier/hosted models. When a model's size is
+ * unparseable, one of these implies a capable model → `full` (so `gpt-4o` /
+ * `claude-*` aren't throttled to lite for lacking an `Nb` tag). An ALLOWLIST,
+ * not a denylist: an unknown/custom/self-hosted provider (`vllm`, `custom-*`,
+ * `litellm` proxy) could be fronting a small local model, so it stays `lite`
+ * (the safe middle band) rather than being optimistically promoted to full.
+ */
+const FRONTIER_CLOUD_PROVIDERS = new Set([
+  'openai', 'anthropic', 'google', 'gemini', 'deepseek', 'openrouter',
+  'xai', 'grok', 'mistral', 'groq', 'cohere', 'perplexity', 'together',
+  'fireworks', 'cli',
+]);
 
 /**
  * Map a parameter count to a mode using the configured thresholds. Shared by
@@ -103,8 +119,20 @@ export function resolveOrchestratorMode(
 
   const params = deriveParamCount(model.modelId, model.metadata);
   if (params === undefined) {
+    // No size signal. A known frontier-cloud provider is capable → full; every
+    // other case (local runner, custom/proxy provider, no provider) → lite (the
+    // safe middle band). This stops `gpt-4o` / `claude-*` (no `Nb` tag) being
+    // throttled to lite, without optimistically promoting an unknown provider.
+    const provider = (model.provider ?? '').toLowerCase();
+    if (FRONTIER_CLOUD_PROVIDERS.has(provider)) {
+      coreLogger.debug(
+        { modelId: model.modelId, provider },
+        'No size for cloud model — orchestrator mode = full',
+      );
+      return 'full';
+    }
     coreLogger.warn(
-      { modelId: model.modelId },
+      { modelId: model.modelId, provider },
       'Could not determine model size for orchestrator mode — defaulting to lite',
     );
     return 'lite';
