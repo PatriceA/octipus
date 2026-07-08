@@ -346,6 +346,27 @@ export class SwarmSpawner {
       availableToolNames,
       canSpawnChildren: childDepth === 1,
     });
+
+    // Context-window gate (RC7): warn if the child's first-turn input already
+    // approaches the model's context window — it will truncate or fail before
+    // doing any work. Estimate BOTH the system prompt (role prompt + injected
+    // skill/domain-knowledge fragments — the larger, more variable part) and the
+    // brief; a short brief on a small-context model with big skill blocks is the
+    // real risk. Warn-only (per the gate policy); the binding stays authoritative.
+    try {
+      const boundModel = await getModelRegistry().getModelByModelId(childModel);
+      const ctx = boundModel?.contextWindow ?? 0;
+      const estTokens = Math.ceil(((systemPrompt?.length ?? 0) + childMessage.length) / 4);
+      if (ctx > 0 && estTokens > ctx * 0.9) {
+        coreLogger.warn(
+          { childRole, model: childModel, estTokens, contextWindow: ctx },
+          'Swarm child first-turn input is at/over the model context window — expect truncation or failure',
+        );
+      }
+    } catch (err) {
+      coreLogger.debug({ err, childRole, model: childModel }, 'Context-window gate skipped');
+    }
+
     const guarded = guardInput(childMessage);
     if (guarded.action === 'block') {
       coreLogger.warn(
