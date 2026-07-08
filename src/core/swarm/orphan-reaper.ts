@@ -30,6 +30,14 @@ export interface ReapResult {
 }
 
 /**
+ * How long a candidate worker may go WITHOUT bumping its heartbeat (while not
+ * `blocked`) before it's judged wedged. Generous and independent of the
+ * createdAt cutoff — tools and LLM calls mark the worker blocked, so a real gap
+ * this long means it's stuck in the loop's own glue code. 30 min.
+ */
+const WEDGE_INACTIVITY_MS = 30 * 60_000;
+
+/**
  * Execute a single reaper pass. Returns the count of reaped rows so the
  * caller can log + surface in metrics.
  *
@@ -37,17 +45,42 @@ export interface ReapResult {
  * server. The server will still come up with orphans; they'll be garbage-
  * collected on the next successful pass.
  */
+/** Default liveness reader — an in-memory worker's activity, or null if it's
+ *  not in this process (a cross-process zombie). */
+async function defaultGetActivity(): Promise<
+  (id: string) => { lastActivityAt: number; blockedSince: number | null } | null
+> {
+  const { getAgentManager } = await import('@/core/agent-manager');
+  const mgr = getAgentManager();
+  return (id: string) => {
+    const w = mgr.get(id) as
+      | { getActivity?: () => { lastActivityAt: number; blockedSince: number | null } }
+      | undefined;
+    if (!w) return null; // truly absent from this process → cross-process zombie
+    // In memory but doesn't report activity (e.g. a CLI-backed worker) → it IS
+    // alive; report it as freshly active so it's never mistaken for wedged.
+    if (typeof w.getActivity !== 'function') return { lastActivityAt: Date.now(), blockedSince: null };
+    return w.getActivity();
+  };
+}
+
 export async function reapOrphanedSwarmNodes(
   opts: {
     /** Override age threshold (ms). Defaults to `config.swarm.orphanReaperIntervalMs`. */
     olderThanMs?: number;
     /** Override repository (tests). */
-    repo?: Pick<SwarmNodeRepository, 'reapOrphans' | 'reapUncollectedDetached'>;
+    repo?: Pick<SwarmNodeRepository, 'findRunningOlderThan' | 'cancelNodes' | 'reapUncollectedDetached'>;
     /**
      * Stop a reaped worker by id (node id == agent id). Injected for tests;
      * defaults to `AgentManager.stop(id, { cascade: true })`.
      */
     stopWorker?: (id: string) => void;
+    /**
+     * Liveness of an in-memory worker by id, or null if not in this process's
+     * memory (a cross-process zombie). Injected for tests; defaults to
+     * `AgentManager.getAgent(id).getActivity()`.
+     */
+    getActivity?: (id: string) => { lastActivityAt: number; blockedSince: number | null } | null;
   } = {},
 ): Promise<ReapResult> {
   const cfg = getConfig();
@@ -56,29 +89,57 @@ export async function reapOrphanedSwarmNodes(
 
   let reaped = 0;
   let uncollectedDetached = 0;
-  // Node id == agent id (1:1). Only UNAMBIGUOUS orphans go here — detached
-  // children whose parent already terminated (second pass). The age-based
-  // reapOrphans is DB-relabel only: it keys on createdAt, so a match can be a
-  // healthy long-running agent we must not kill mid-work.
+  // Node id == agent id (1:1). Ids collected here get their worker actively
+  // stopped (below): genuinely-stuck age-based orphans + detached-uncollected.
   const orphanIds = new Set<string>();
 
+  // Age-based pass — liveness-gated. A stale `createdAt` alone can't tell a
+  // wedged worker from one legitimately alive past the threshold, so we consult
+  // each candidate's heartbeat: an in-memory worker that is BLOCKED (awaiting
+  // approval/children) or still bumping activity is left alone; only a wedged
+  // worker (in memory, not blocked, no recent activity) or a cross-process
+  // zombie (not in memory) is cancelled + stopped.
   try {
-    reaped = await repo.reapOrphans(olderThanMs);
-    if (reaped > 0) {
+    const getActivity = opts.getActivity ?? (await defaultGetActivity());
+    const candidates = await repo.findRunningOlderThan(olderThanMs);
+    const now = Date.now();
+    // Inactivity window for the "wedged" verdict — deliberately INDEPENDENT of
+    // (and larger than) the createdAt cutoff. A worker executing a tool or an
+    // LLM call marks itself `blocked`, so a non-blocked worker that hasn't
+    // bumped its heartbeat for this long is stuck in the loop's own glue code
+    // (never legitimately minutes). Generous so short un-instrumented gaps
+    // (a slow model call, compaction) can never false-positive.
+    const inactivityMs = Math.max(olderThanMs, WEDGE_INACTIVITY_MS);
+    const stale: string[] = [];
+    for (const id of candidates) {
+      const activity = getActivity(id);
+      if (!activity) {
+        stale.push(id); // cross-process zombie (crash leftover)
+      } else if (activity.blockedSince !== null) {
+        continue; // legitimately blocked (tool / LLM / approval / collect) — alive
+      } else if (now - activity.lastActivityAt > inactivityMs) {
+        stale.push(id); // in memory, not blocked, not progressing → wedged
+      }
+      // else: recently active → healthy → leave the row 'running'
+    }
+    if (stale.length > 0) {
+      await repo.cancelNodes(stale, 'orphaned_stale');
+      reaped = stale.length;
+      for (const id of stale) orphanIds.add(id);
       coreLogger.warn(
-        { reaped, olderThanMs },
-        'Swarm orphan reaper — marked stale running nodes as cancelled',
+        { reaped, candidates: candidates.length, olderThanMs },
+        'Swarm orphan reaper — cancelled wedged/zombie nodes (healthy ones left running)',
       );
     } else {
       coreLogger.debug(
-        { olderThanMs },
-        'Swarm orphan reaper — no stale nodes found',
+        { candidates: candidates.length, olderThanMs },
+        'Swarm orphan reaper — no wedged nodes (all candidates alive or blocked)',
       );
     }
   } catch (err) {
     coreLogger.error(
       { err, olderThanMs },
-      'Swarm orphan reaper failed — continuing boot',
+      'Swarm orphan reaper age-based pass failed — continuing',
     );
   }
 
@@ -104,12 +165,13 @@ export async function reapOrphanedSwarmNodes(
     );
   }
 
-  // Actually stop the detached-orphan workers. Relabeling the row alone leaves
-  // a live orphaned worker running and burning budget until killed (RC5 D4 —
-  // the run-743d4b66 child ran 30 min past its parent). Safe because these are
-  // detached children whose parent is already terminal, so no legitimate work
-  // is in flight. `stop(cascade)` handles both an in-memory worker and a
-  // cross-process zombie (no-op if neither).
+  // Actually stop the workers. Relabeling the row alone leaves a live orphan
+  // running and burning budget until killed (RC5 D4 — the run-743d4b66 child ran
+  // 30 min past its parent). Safe: `orphanIds` only holds detached children
+  // whose parent is already terminal, plus age-based candidates that are wedged
+  // or cross-process zombies (healthy/blocked workers were filtered out above).
+  // `stop(cascade)` handles both an in-memory worker and a zombie (no-op if
+  // neither).
   if (orphanIds.size > 0) {
     try {
       let stop = opts.stopWorker;

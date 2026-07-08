@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import {
   type NewSwarmNodeRecord,
@@ -124,39 +124,37 @@ export class SwarmNodeRepository {
   }
 
   /**
-   * Orphan reaper — mark any `running` node older than `olderThanMs` as
-   * `cancelled` with `error='orphaned_at_restart'`. Returns number of rows
-   * updated.
-   *
-   * DB-relabel only — deliberately does NOT stop the workers. The filter keys
-   * on `createdAt` (spawn time), not last activity, so a match can be a healthy
-   * agent legitimately alive >olderThanMs (an orchestrator waiting on children);
-   * actively killing those mid-work would destroy in-flight work. The
-   * unambiguous orphans (detached child whose parent already terminated) are
-   * killed via `reapUncollectedDetached` instead. Active kill by wall-clock
-   * needs a last-activity heartbeat first (see agent-spawn-hardening plan).
-   *
-   * Runs on process boot; catches rows left stale when the server was
-   * killed mid-swarm. Mirrors `agent-manager.ts` stale-agent cleanup but
-   * targets the sibling `swarm_nodes` table.
+   * Orphan reaper — the ids of `running` nodes older than `olderThanMs`. Does
+   * NOT flip anything; the reaper decides per-candidate using worker liveness
+   * (a stale `createdAt` alone can't tell a wedged worker from one legitimately
+   * alive > the threshold — an orchestrator blocked on children), then flips
+   * only the genuinely-stuck ones via `cancelNodes`.
    */
-  async reapOrphans(olderThanMs: number): Promise<number> {
+  async findRunningOlderThan(olderThanMs: number): Promise<string[]> {
     const cutoff = new Date(Date.now() - olderThanMs);
     const rows = await this.db
-      .update(swarmNodes)
-      .set({
-        status: 'cancelled' as SwarmNodeStatus,
-        error: 'orphaned_at_restart',
-        completedAt: new Date(),
-      })
+      .select({ id: swarmNodes.id })
+      .from(swarmNodes)
       .where(
         and(
           eq(swarmNodes.status, 'running'),
           lt(swarmNodes.createdAt, cutoff),
         ),
-      )
-      .returning({ id: swarmNodes.id });
-    return rows.length;
+      );
+    return rows.map((r) => r.id);
+  }
+
+  /** Flip a specific set of nodes to `cancelled` with the given error reason. */
+  async cancelNodes(ids: string[], error: string): Promise<void> {
+    if (ids.length === 0) return;
+    await this.db
+      .update(swarmNodes)
+      .set({
+        status: 'cancelled' as SwarmNodeStatus,
+        error,
+        completedAt: new Date(),
+      })
+      .where(inArray(swarmNodes.id, ids));
   }
 
   /**
