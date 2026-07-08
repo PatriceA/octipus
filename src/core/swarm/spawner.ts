@@ -38,7 +38,7 @@ import {
   denialResult as denialResultFn,
 } from './spawn-validator';
 import { type Scorer, runScorers } from './scorers';
-import { applyRoleFit } from './swarm-tool';
+import { applyRoleFit, buildSpawnRoleCatalog } from './swarm-tool';
 import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
   type AgentNode,
@@ -1257,29 +1257,33 @@ export function composeChildMessage(
   // structural leaves (the `spawn_child` tool isn't even registered for them).
   if (opts.canSpawnChildren) {
     parts.push(
-      'DELEGATION POLICY: Before calling `spawn_child`, check whether the task ' +
-        'can be done with the tools above. Spawn subagents when you have 2+ ' +
-        'INDEPENDENT units of non-trivial work to run in parallel (per-page ' +
-        'research, per-file audit, per-endpoint probe), or when a sub-topic ' +
-        "needs a DIFFERENT specialist's toolset. It IS OK to spawn a subagent " +
-        'of the same role as you for parallel fan-out (e.g. you are a research ' +
-        'agent and you spawn three research subagents, one per source). What ' +
-        'is NOT OK is delegating a single task to one same-role subagent — you ' +
-        'ARE that specialist; synthesize directly.',
+      'DELEGATION POLICY: you can spawn your OWN subagents with `spawn_child` ' +
+        '(pick a `role`, give a focused `taskBrief`). Decide with these rules:\n' +
+        '1. First check: can you do it with your own tools above? If yes, just ' +
+        "do it — don't spawn.\n" +
+        '2. SPAWN when you have 2+ INDEPENDENT units of non-trivial work to run ' +
+        'in parallel (per-page research, per-file audit, per-endpoint probe), OR ' +
+        "a sub-topic needs a DIFFERENT specialist's toolset.\n" +
+        '3. Same-role fan-out is OK: e.g. you are a research agent → spawn three ' +
+        'research subagents, one per source.\n' +
+        "4. DON'T hand a single task to one same-role subagent — you ARE that " +
+        'specialist; do it yourself.\n\n' +
+        'Roles you can spawn (`role` — what it does):\n' +
+        buildSpawnRoleCatalog(),
     );
     parts.push(
-      'DETACH MODE (`spawn_child` mode="detach"): the default is "await" and is ' +
-        'always safe. Use "detach" ONLY when the child output is a DATAPOINT to ' +
-        'collect at the end, not a DEPENDENCY for your next step.\n' +
-        '- Datapoint (detach OK): scrape a page, probe an endpoint, fetch one ' +
-        'row — parallelize so you keep exploring.\n' +
-        '- Dependency (MUST await): decide which approach to use, compute an ' +
-        'input for your next call.\n' +
-        'Rules: (1) default to "await"; (2) at most 3 detached subagents pending ' +
-        'at any time; (3) call `collect_children` BEFORE your final answer, or the ' +
-        'framework will force-wait with a hard timeout and you may run out of ' +
-        'budget for synthesis; (4) don\'t detach trivial work (<30s); (5) if you ' +
-        'finalize without collecting, your pending children are cancelled.',
+      'HOW SPAWNING WORKS: `spawn_child` returns IMMEDIATELY with a pending ' +
+        'handle — the child always runs in the background (there is no `mode` ' +
+        'parameter). So you can fire several siblings in one turn, keep working, ' +
+        'and pick up results later. Use it for DATAPOINTS you collect at the end ' +
+        '(scrape a page, probe an endpoint) — not for a DEPENDENCY you need before ' +
+        'your next step (for that, spawn it and immediately `collect_children` ' +
+        'before continuing).\n' +
+        'Rules: (1) at most 3 subagents pending at any time; (2) call ' +
+        '`collect_children` BEFORE your final answer, or the framework force-waits ' +
+        'with a hard timeout and you may run out of budget for synthesis; ' +
+        "(3) don't spawn trivial work (<30s) — just do it; (4) if you finalize " +
+        'without collecting, your pending children are cancelled.',
     );
   } else {
     parts.push(
