@@ -137,6 +137,29 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     expect((thrown as BudgetExceededError).metadata?.cap).toBe(100);
   });
 
+  test('raceAbsolute: wedged self-timed wait trips the ceiling; fast/disabled do not (RC5 D5)', async () => {
+    const worker = new AgentWorker(mkCtx(), {
+      maxIterations: 1,
+      contextWindowSize: 1000,
+      timeout: 1000,
+      maxTokenBudget: 0,
+    });
+    const priv = worker as unknown as {
+      raceAbsolute: <T>(p: Promise<T>, label: string, ceilingMs: number) => Promise<T>;
+    };
+
+    // A never-resolving wait trips the ceiling.
+    const hang = new Promise<string>(() => {});
+    await expect(priv.raceAbsolute(hang, 'collect', 40)).rejects.toThrow(/absolute ceiling/i);
+
+    // A wait that finishes under the ceiling passes through with its value.
+    const fast = Promise.resolve('done');
+    expect(await priv.raceAbsolute(fast, 'collect', 10_000)).toBe('done');
+
+    // ceiling <= 0 disables the backstop (returns the promise unraced).
+    expect(await priv.raceAbsolute(Promise.resolve('x'), 'collect', 0)).toBe('x');
+  });
+
   test('estimateRequestTokens: text = chars/4; image part = fixed (not base64 length)', () => {
     const worker = new AgentWorker(mkCtx(), {
       maxIterations: 1,

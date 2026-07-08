@@ -38,6 +38,16 @@ export interface AgentWorkerConfig {
    * `DEFAULT_TOOL_OUTPUT_SOFT_CAP` when omitted.
    */
   toolOutputSoftCap?: number;
+  /**
+   * Absolute backstop (ms) for a `collect_children` wait, which is exempted
+   * from the normal wall race because it self-bounds to ~the child wall. This
+   * is NOT a wall cap — it's a last-resort ceiling so a wait whose promise never
+   * settles (a wedge) can't pin a worker forever. Set well above the child wall.
+   * Defaults to `DEFAULT_SELF_TIMED_TOOL_CEILING_MS` (2h); ≤0 disables it.
+   * (Pipeline/`final` tools are NOT bounded by this — they legitimately block on
+   * human approval for arbitrary durations.)
+   */
+  selfTimedToolCeilingMs?: number;
 }
 
 export interface ToolHandler {

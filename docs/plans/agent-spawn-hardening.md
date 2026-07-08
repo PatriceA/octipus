@@ -111,7 +111,12 @@ Defects:
    one giant call can't overshoot in a single step. Known minor conservatism:
    for prompt-caching models the full-input estimate can stop an agent slightly
    early once context alone nears the cap (safe direction).
-5. **(optional) Race self-timed tools against a hard ceiling** (tightens D5). TODO.
+5. **Race self-timed tools against a hard ceiling** (tightens D5). ✅ DONE, but
+   scoped to `collect_children` only. A generous absolute backstop (`raceAbsolute`,
+   default 2h, `selfTimedToolCeilingMs`) bounds a never-settling collect wait.
+   `final`/pipeline tools are deliberately left fully unraced — they legitimately
+   block on human approval (`approvalTimeoutMs`, hours), so any ceiling there
+   would kill a run mid-approval.
 
 **Follow-up — heartbeat-based reap (unblocks active age-based kill).** To make
 the wall cap actually bind for the age-based orphan class WITHOUT killing healthy
