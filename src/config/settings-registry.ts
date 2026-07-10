@@ -694,8 +694,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'voice.ttsProvider',
     category: 'voice',
     valueType: 'string',
-    defaultValue: 'piper',
-    description: 'Text-to-speech engine: piper, edge, coqui, or mistral (Voxtral)',
+    defaultValue: 'mistral',
+    description: 'Text-to-speech engine: mistral (Voxtral, cloud default), edge, coqui, or piper (local opt-in)',
     isSecret: false,
   },
   {

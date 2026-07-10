@@ -145,8 +145,12 @@ export const whatsappConfigSchema = z.object({
 export const voiceConfigSchema = z.object({
   sttEnabled: z.boolean().default(false),
   ttsEnabled: z.boolean().default(false),
-  /** Which TTS engine serves /api/voice/speak. Non-piper engines need no local model file. */
-  ttsProvider: z.enum(['piper', 'edge', 'coqui', 'mistral']).default('piper'),
+  /**
+   * Which TTS engine serves /api/voice/speak. Defaults to cloud (mistral/Voxtral)
+   * so voice-out works with no host setup; piper is the local opt-in (needs a
+   * binary + .onnx voice). Non-piper engines need no local model file.
+   */
+  ttsProvider: z.enum(['piper', 'edge', 'coqui', 'mistral']).default('mistral'),
   whisperModelPath: z.string().optional(),
   piperModelPath: z.string().optional(),
   wakeWord: z.string().optional(),
