@@ -1,4 +1,4 @@
-import { Bot, type Context } from 'grammy';
+import { Bot, type Context, InputFile } from 'grammy';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
 import type { Config } from '@/config/schema';
@@ -302,6 +302,9 @@ export class TelegramChannel extends BaseChannel {
       case 'audio':
         if (attachment.url) {
           await this.bot.api.sendAudio(chatId, attachment.url, options);
+        } else if (attachment.data) {
+          // Voice-out: synthesized TTS arrives as raw bytes, not a URL.
+          await this.bot.api.sendAudio(chatId, new InputFile(attachment.data as Uint8Array, attachment.filename), options);
         }
         break;
 

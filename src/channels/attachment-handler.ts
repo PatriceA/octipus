@@ -99,7 +99,7 @@ export async function processChannelAttachments(message: UnifiedMessage): Promis
   }
 }
 
-async function downloadAttachment(attachment: Attachment, message: UnifiedMessage): Promise<Buffer | null> {
+export async function downloadAttachment(attachment: Attachment, message: UnifiedMessage): Promise<Buffer | null> {
   // If the attachment already has data, use it
   if (attachment.data) {
     return Buffer.from(attachment.data);

@@ -161,6 +161,67 @@ async function analyzeImageAttachments(
   }
 }
 
+/** An audio attachment is a voice note by type or MIME (all channels build these identically). */
+function isAudioAttachment(a: Attachment): boolean {
+  // mimeType is typed as required but Teams passes through a possibly-undefined
+  // contentType, so guard the deref (the old VISION_MIME_TYPES.has path was safe).
+  return a.type === 'audio' || !!a.mimeType?.startsWith('audio/');
+}
+
+/**
+ * Download inbound voice-note bytes and transcribe them to text so the utterance
+ * reaches the orchestrator like any typed message. Reuses the channel-aware
+ * downloader (Slack/WhatsApp auth headers) and the default STT engine order
+ * (local whisper.cpp → Mistral → OpenAI). Returns '' if nothing transcribed.
+ */
+async function transcribeChannelAudio(audioAttachments: Attachment[], message: UnifiedMessage): Promise<string> {
+  const { downloadAttachment } = await import('./attachment-handler');
+  const { transcribeAudioBuffer } = await import('@/voice/stt');
+  const parts: string[] = [];
+  for (const att of audioAttachments) {
+    try {
+      const buf = await downloadAttachment(att, message);
+      if (!buf?.length) continue;
+      const ext = (att.mimeType.split('/')[1] || 'ogg').split(';')[0];
+      const text = (await transcribeAudioBuffer(buf, ext)).trim();
+      if (text) parts.push(text);
+    } catch (err) {
+      channelLogger.error({ err, channel: message.channelType }, 'Voice note transcription failed');
+    }
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * Synthesize an assistant reply to a spoken clip so a voice note gets a voice
+ * reply. Best-effort: gated on `voice.ttsEnabled`, and any synthesis failure is
+ * swallowed (undefined → the text reply still goes out on its own).
+ * ponytail: Telegram-only for now; other channels' outbound audio senders take a
+ * URL, not bytes. Cap the text so long/costly replies aren't fully synthesized.
+ */
+async function synthesizeVoiceReply(text: string): Promise<Attachment[] | undefined> {
+  const config = getConfig();
+  if (!config.voice.ttsEnabled) return undefined;
+  try {
+    const provider = config.voice.ttsProvider;
+    // Each engine's real output format (piper/coqui hardcode wav, edge mp3,
+    // mistral honours the request) — so the extension always matches the bytes.
+    const ext = ({ piper: 'wav', coqui: 'wav', edge: 'mp3', mistral: 'mp3' } as Record<string, string>)[provider] || 'mp3';
+    const { createTTSEngine } = await import('@/voice/tts');
+    const engine = createTTSEngine(provider, undefined, { outputFormat: ext as 'wav' | 'mp3' });
+    const audio = await engine.synthesize(text.slice(0, 2000));
+    return [{
+      type: 'audio',
+      mimeType: ext === 'mp3' ? 'audio/mpeg' : `audio/${ext}`,
+      data: Buffer.from(audio),
+      filename: `reply.${ext}`,
+    }];
+  } catch (err) {
+    channelLogger.error({ err }, 'Voice-out synthesis failed');
+    return undefined;
+  }
+}
+
 /**
  * Subscribe to document queue completions for a single channel message's attachments.
  * Sends each document's summary back to the channel as it completes.
@@ -601,44 +662,69 @@ export async function initializeChannels(): Promise<void> {
 
       // Handle file attachments
       let messageContent = message.content;
+      let voiceIn = false; // true when this turn came in as a voice note (drives voice-out)
       if (message.attachments?.length) {
-        const hasImages = message.attachments.some(a => VISION_MIME_TYPES.has(a.mimeType));
-        const hasNonImages = message.attachments.some(a => !VISION_MIME_TYPES.has(a.mimeType));
-        const hasCaption = messageContent && messageContent.trim().length > 0;
-
-        // All attachments are routed through the document pipeline (fire-and-forget above).
-        // For the orchestrator, decide: should we analyze inline or just acknowledge?
-
-        if (!hasCaption) {
-          // No caption — pure document upload. Acknowledge and skip orchestrator.
-          const attachmentNames = message.attachments.map(a => a.filename || 'file').join(', ');
-          await umi.send(message.channelType, message.channelId, {
-            content: `Received ${attachmentNames}. Processing through the document pipeline — I'll send you the summary when it's done.`,
-            replyTo: platformMessageId,
-          });
-          // Subscribe to document queue completions to send summary back
-          subscribeToDocumentResults(message, umi, platformMessageId);
-          if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
-          return;
+        // Voice notes: transcribe inline so the utterance reaches the orchestrator
+        // as text (all channels build audio attachments identically). Audio is not
+        // in the document pipeline's PROCESSABLE_MIMES, so it dead-ended here before.
+        const audioAttachments = message.attachments.filter(isAudioAttachment);
+        if (audioAttachments.length) {
+          voiceIn = true;
+          const transcript = await transcribeChannelAudio(audioAttachments, message);
+          if (!transcript) {
+            await umi.send(message.channelType, message.channelId, {
+              content: "Sorry, I couldn't transcribe that voice message. Please try again or type it out.",
+              replyTo: platformMessageId,
+            });
+            if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
+            return;
+          }
+          // A transcript becomes the caption — so a mixed voice+image message
+          // now has a caption and takes the vision-analysis path below.
+          messageContent = messageContent?.trim() ? `${messageContent}\n\n${transcript}` : transcript;
         }
 
-        if (hasImages && !hasNonImages) {
-          // Only images with a caption — analyze with vision model for inline response
-          const imageAnalysis = await analyzeImageAttachments(message.attachments, message.channelType);
-          if (imageAnalysis) {
-            const prefix = `[The user sent image attachment(s). Vision model analysis:\n${imageAnalysis}]\n\n`;
-            messageContent = prefix + messageContent;
+        // Non-audio attachments keep the existing image/document handling.
+        const fileAttachments = message.attachments.filter(a => !isAudioAttachment(a));
+        if (fileAttachments.length) {
+          const hasImages = fileAttachments.some(a => VISION_MIME_TYPES.has(a.mimeType));
+          const hasNonImages = fileAttachments.some(a => !VISION_MIME_TYPES.has(a.mimeType));
+          const hasCaption = messageContent && messageContent.trim().length > 0;
+
+          // All attachments are routed through the document pipeline (fire-and-forget above).
+          // For the orchestrator, decide: should we analyze inline or just acknowledge?
+
+          if (!hasCaption) {
+            // No caption — pure document upload. Acknowledge and skip orchestrator.
+            const attachmentNames = fileAttachments.map(a => a.filename || 'file').join(', ');
+            await umi.send(message.channelType, message.channelId, {
+              content: `Received ${attachmentNames}. Processing through the document pipeline — I'll send you the summary when it's done.`,
+              replyTo: platformMessageId,
+            });
+            // Subscribe to document queue completions to send summary back
+            subscribeToDocumentResults(message, umi, platformMessageId);
+            if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
+            return;
           }
-        } else {
-          // Files (possibly mixed with images) + caption — acknowledge, send summaries when done
-          const attachmentNames = message.attachments.map(a => a.filename || 'file').join(', ');
-          await umi.send(message.channelType, message.channelId, {
-            content: `Received ${attachmentNames}. Processing — I'll send you the results when done.`,
-            replyTo: platformMessageId,
-          });
-          subscribeToDocumentResults(message, umi, platformMessageId);
-          if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
-          return;
+
+          if (hasImages && !hasNonImages) {
+            // Only images with a caption — analyze with vision model for inline response
+            const imageAnalysis = await analyzeImageAttachments(fileAttachments, message.channelType);
+            if (imageAnalysis) {
+              const prefix = `[The user sent image attachment(s). Vision model analysis:\n${imageAnalysis}]\n\n`;
+              messageContent = prefix + messageContent;
+            }
+          } else {
+            // Files (possibly mixed with images) + caption — acknowledge, send summaries when done
+            const attachmentNames = fileAttachments.map(a => a.filename || 'file').join(', ');
+            await umi.send(message.channelType, message.channelId, {
+              content: `Received ${attachmentNames}. Processing — I'll send you the results when done.`,
+              replyTo: platformMessageId,
+            });
+            subscribeToDocumentResults(message, umi, platformMessageId);
+            if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
+            return;
+          }
         }
       }
 
@@ -669,9 +755,16 @@ export async function initializeChannels(): Promise<void> {
           ? summarizeForChannel(result.response)
           : result.response;
 
+        // Voice-in on Telegram → speak the reply back (Telegram sends the audio
+        // clip before the text). Best-effort; undefined leaves a text-only reply.
+        const attachments = voiceIn && message.channelType === 'telegram'
+          ? await synthesizeVoiceReply(content)
+          : undefined;
+
         await umi.send(message.channelType, message.channelId, {
           content,
           replyTo: platformMessageId,
+          attachments,
         });
       }
     } catch (error) {
