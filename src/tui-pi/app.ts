@@ -20,6 +20,7 @@ import { MessagesPane } from './components/messages-pane';
 import { type CumulativeStats, StatusBar } from './components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from './gateway-adapter';
 import { createOverlayController, type OverlayController } from './overlays/registry';
+import type { VoiceService } from '@/voice';
 
 export interface OctipusTuiAppOptions {
   gatewayUrl?: string;
@@ -62,6 +63,13 @@ export class OctipusTuiApp {
   private lastStreamedTool: string | null = null;
   private exiting = false;
   private readonly onShutdown?: () => Promise<void>;
+  /** Lazily-built local voice (push-to-talk). Null until first talk-key press. */
+  private voice: VoiceService | null = null;
+  private voiceInit: Promise<VoiceService | null> | null = null;
+  /** Speak the next assistant reply — armed by a voice turn so typed turns stay silent. */
+  private speakNextReply = false;
+  /** Guards the async windows of toggleTalk (init / transcription) against re-entrant key presses. */
+  private talkBusy = false;
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
@@ -99,6 +107,7 @@ export class OctipusTuiApp {
     tui.addInputListener((data) => {
       const kb = getKeybindings();
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
+      if (kb.matches(data, 'app.voice.talk')) { void this.toggleTalk(); return { consume: true }; }
       if (matchesKey(data, 'pageUp')) {
         if (this.messages.scrollUp()) this.tui.requestRender();
         return { consume: true };
@@ -161,6 +170,7 @@ export class OctipusTuiApp {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
+    if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
     // Hand off to the runtime so the alt-screen is properly torn down and
     // stdin is drained. Without this the shell's next prompt redraws on top
@@ -223,6 +233,11 @@ export class OctipusTuiApp {
         return;
       case 'message':
         this.pushMessage(event.role, event.content);
+        // Speak the reply to a voice turn (one-shot; no-op if TTS isn't configured).
+        if (event.role === 'assistant' && this.speakNextReply) {
+          this.speakNextReply = false;
+          void this.voice?.say(event.content).catch(() => { /* playback best-effort */ });
+        }
         return;
       case 'permission':
         this.openPermissionPrompt(event.requestId, event.toolName, event.detail);
@@ -294,6 +309,11 @@ export class OctipusTuiApp {
     const text = rawText.trim();
     if (!text) return;
 
+    // A new submission disarms any stale voice-reply flag, so a voice turn that
+    // errored (no assistant message) can't cause a later TYPED turn to be spoken.
+    // The voice path re-arms it right after calling this.
+    this.speakNextReply = false;
+
     this.pushMessage('user', text);
 
     if (text.startsWith('/')) {
@@ -301,6 +321,96 @@ export class OctipusTuiApp {
       return;
     }
     this.adapter.sendChat(this.sessionId, text, undefined, this.projectPath);
+  }
+
+  // ── Voice (push-to-talk) ───────────────────────────────────────
+
+  /**
+   * Talk-key handler. First press starts capture; second press stops, transcribes,
+   * and submits the transcript through the SAME path as typed text (`handleSubmit`
+   * → sendChat), so voice reuses the normal orchestrator turn. The reply to that
+   * turn is spoken back when TTS is configured.
+   * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
+   */
+  private async toggleTalk(): Promise<void> {
+    // Ignore presses during an async window (engine build or transcription) so a
+    // double-tap can't start-then-instantly-stop a capture. The idle wait BETWEEN
+    // the start press and the stop press is not busy, so the stop press still lands.
+    if (this.talkBusy) return;
+
+    // START: not yet recording (voice may be null before first build).
+    if (!this.voice?.recording) {
+      this.talkBusy = true;
+      try {
+        const voice = await this.ensureVoice();
+        if (!voice) return;
+        voice.startRecording();
+        this.pushMessage('system', '🎤 Listening… press the talk key again to send.');
+      } catch (err) {
+        this.pushMessage('system', `Voice capture failed: ${(err as Error).message} (needs arecord / Linux ALSA).`);
+      } finally {
+        this.talkBusy = false;
+      }
+      return;
+    }
+
+    // STOP: second press → transcribe + submit through the normal typed path.
+    this.talkBusy = true;
+    try {
+      this.pushMessage('system', 'Transcribing…');
+      const transcript = await this.voice.stopRecordingAndTranscribe();
+      if (!transcript) {
+        this.pushMessage('system', "Didn't catch anything — try again.");
+        return;
+      }
+      this.handleSubmit(transcript);
+      this.speakNextReply = true; // after handleSubmit (which clears it) — speak THIS turn's reply
+    } catch (err) {
+      this.pushMessage('system', `Transcription failed: ${(err as Error).message}`);
+    } finally {
+      this.talkBusy = false;
+    }
+  }
+
+  /**
+   * Build the local voice engine on first use (keeps voice deps off the TUI
+   * startup path). Local whisper STT + configured TTS. Returns null — with a
+   * one-line reason — when local whisper isn't installed.
+   */
+  private async ensureVoice(): Promise<VoiceService | null> {
+    if (this.voice) return this.voice;
+    if (this.voiceInit) return this.voiceInit;
+    this.voiceInit = (async () => {
+      try {
+        const { getConfig } = await import('@/config');
+        const { whisperModelPath, probeWhisper } = await import('@/voice/whisper');
+        const cfg = getConfig();
+        // Gate on the binary actually RUNNING, not just the model file existing —
+        // whisper.ts exists to catch "model present but binary dead (exit 127)",
+        // which would otherwise fail silently deep in transcribe.
+        const probe = await probeWhisper();
+        if (!probe.binaryOk || !probe.modelOk) {
+          this.pushMessage('system', `Voice unavailable: ${probe.binaryReason ?? 'local whisper model missing'}. Run \`octi setup\`.`);
+          return null;
+        }
+        const modelPath = cfg.voice.whisperModelPath || whisperModelPath();
+        const { VoiceService } = await import('@/voice');
+        this.voice = await VoiceService.create({
+          stt: { type: 'whisper-cpp', model: modelPath, language: cfg.voice.language || 'en' },
+          tts: cfg.voice.ttsEnabled ? { type: cfg.voice.ttsProvider } : undefined,
+        });
+        return this.voice;
+      } catch (err) {
+        this.pushMessage('system', `Voice init failed: ${(err as Error).message}`);
+        return null;
+      } finally {
+        // Clear the in-flight promise so a FAILED init can be retried on the next
+        // press (e.g. after the user runs `octi setup`). On success this.voice is
+        // set, so the cache-hit at the top short-circuits before this matters.
+        this.voiceInit = null;
+      }
+    })();
+    return this.voiceInit;
   }
 
   // ── Overlays ───────────────────────────────────────────────────
