@@ -1,7 +1,7 @@
 export type { STTEngine, STTOptions, TranscriptionResult } from './stt';
-export { createSTTEngine, FasterWhisperEngine, SpeechToText, WhisperEngine } from './stt';
+export { createSTTEngine, FasterWhisperEngine, MistralSTTEngine, SpeechToText, WhisperEngine } from './stt';
 export type { TTSEngine, TTSOptions } from './tts';
-export { CoquiTTSEngine, createTTSEngine, EdgeTTSEngine, PiperEngine, TextToSpeech } from './tts';
+export { CoquiTTSEngine, createTTSEngine, EdgeTTSEngine, MistralTTSEngine, PiperEngine, TextToSpeech } from './tts';
 export type { WakeWordDetection, WakeWordEngine, WakeWordOptions } from './wake-word';
 export {
   createWakeWordEngine,
@@ -18,12 +18,12 @@ import { WakeWordDetector, } from './wake-word';
 
 export interface VoiceServiceConfig {
   stt?: {
-    type: 'whisper-cpp' | 'faster-whisper';
+    type: 'whisper-cpp' | 'faster-whisper' | 'mistral';
     model: string;
     language?: string;
   };
   tts?: {
-    type: 'piper' | 'edge' | 'coqui';
+    type: 'piper' | 'edge' | 'coqui' | 'mistral';
     voice?: string;
     speed?: number;
   };

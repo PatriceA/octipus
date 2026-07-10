@@ -4,6 +4,32 @@ import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 
+/** Hosted TTS is metered per 1k characters — bound the request body. */
+const MAX_TTS_CHARS = 5000;
+
+const TTS_FORMATS = ['mp3', 'wav', 'pcm', 'flac', 'opus'] as const;
+type TtsFormat = (typeof TTS_FORMATS)[number];
+
+const TTS_CONTENT_TYPES: Record<TtsFormat, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  pcm: 'application/octet-stream',
+  flac: 'audio/flac',
+  opus: 'audio/opus',
+};
+
+/**
+ * What each engine actually emits, regardless of the requested format. Only
+ * Mistral forwards `response_format` upstream; piper/edge/coqui hardcode their
+ * output, so honouring the client's `format` there would mislabel the body.
+ */
+const TTS_ENGINE_FORMAT: Record<string, TtsFormat | null> = {
+  piper: 'wav',
+  edge: 'mp3',
+  coqui: 'wav',
+  mistral: null, // honours the requested format
+};
+
 // Lazy-initialized local whisper engine
 let localWhisper: import('@/voice/stt').WhisperEngine | null = null;
 
@@ -260,6 +286,14 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         const { audio, format, model } = body;
         const transcriptionModel = model || 'local';
 
+        // Mistral (Voxtral) hosted transcription
+        if (transcriptionModel.startsWith('voxtral')) {
+          const { MistralSTTEngine } = await import('@/voice/stt');
+          const engine = new MistralSTTEngine(transcriptionModel, { language: getConfig().voice.language });
+          const result = await engine.transcribe(Buffer.from(audio, 'base64'));
+          return { text: result.text, model: transcriptionModel, language: result.language, duration: result.duration };
+        }
+
         // Try local whisper engine first (if configured)
         if (transcriptionModel === 'local' || transcriptionModel === 'whisper-cpp') {
           const engine = await getLocalWhisper();
@@ -309,7 +343,58 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       body: t.Object({
         audio: t.String({ description: 'Base64-encoded audio data' }),
         format: t.Optional(t.String({ description: 'Audio format (webm, ogg, mp3, wav)' })),
-        model: t.Optional(t.String({ description: 'Transcription model: "local", "whisper-cpp", or "whisper-1" (OpenAI)' })),
+        model: t.Optional(t.String({ description: 'Transcription model: "local", "whisper-cpp", "whisper-1" (OpenAI), or "voxtral-*" (Mistral)' })),
+      }),
+      detail: { tags: ['voice'] },
+    }
+  )
+
+  .post(
+    '/speak',
+    async ({ user, body, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+
+      const config = getConfig();
+      if (!config.voice.ttsEnabled) {
+        set.status = 503;
+        return { error: 'Text-to-speech is not enabled (set voice.ttsProvider, or voice.piperModelPath for local piper)' };
+      }
+
+      try {
+        const provider = config.voice.ttsProvider;
+        const requested = body.format || 'mp3';
+        // Engines with a fixed output format win over the request, so the
+        // Content-Type always describes the bytes we actually return.
+        const fixed = TTS_ENGINE_FORMAT[provider];
+        const format = fixed ?? requested;
+        if (fixed && body.format && body.format !== fixed) {
+          set.status = 400;
+          return { error: `The "${provider}" TTS engine only produces ${fixed}; omit "format" or select a provider that supports ${body.format}` };
+        }
+
+        const { createTTSEngine } = await import('@/voice/tts');
+        const engine = createTTSEngine(provider, body.voice_id, { outputFormat: format });
+        const audio = await engine.synthesize(body.text);
+
+        return new Response(new Uint8Array(audio), {
+          headers: { 'Content-Type': TTS_CONTENT_TYPES[format] },
+        });
+      } catch (error) {
+        apiLogger.error({ error }, 'Voice synthesis failed');
+        set.status = 500;
+        return { error: (error as Error).message };
+      }
+    },
+    {
+      body: t.Object({
+        // Hosted TTS is billed per 1k characters — an unbounded body is a
+        // billing hole, so cap it at the trust boundary.
+        text: t.String({ minLength: 1, maxLength: MAX_TTS_CHARS }),
+        voice_id: t.Optional(t.String({ description: 'Preset or custom voice id (provider-specific)' })),
+        format: t.Optional(t.Union(TTS_FORMATS.map((f) => t.Literal(f)))),
       }),
       detail: { tags: ['voice'] },
     }
@@ -326,6 +411,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       return {
         sttEnabled: config.voice.sttEnabled,
         ttsEnabled: config.voice.ttsEnabled,
+        ttsProvider: config.voice.ttsProvider,
         localWhisper: !!engine,
         whisperModelPath: config.voice.whisperModelPath || null,
         language: config.voice.language || 'en',
