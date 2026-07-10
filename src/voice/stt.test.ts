@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test';
+import { stripWavHeader } from './stt';
 
 // STT integration tests require the bundled whisper-cpp binary plus a
 // downloaded model file and a WAV audio fixture, none of which ship
@@ -76,5 +77,45 @@ describe('Speech-to-Text (Unit)', () => {
       const sampleRate = 16000; // Standard for speech
       expect(sampleRate).toBe(16000);
     });
+  });
+});
+
+// ── stripWavHeader ───────────────────────────────────────────────────
+// Realtime transcription wants headerless 16kHz mono s16le PCM, but callers
+// conditioned by WhisperEngine hand over WAV. This is the trap; guard it.
+describe('stripWavHeader', () => {
+  /** Minimal 44-byte RIFF/WAVE header followed by `payload`. */
+  function wav(payload: Uint8Array, { channels = 1, sampleRate = 16000, bits = 16 } = {}): Uint8Array {
+    const buf = new Uint8Array(44 + payload.length);
+    const view = new DataView(buf.buffer);
+    buf.set(new TextEncoder().encode('RIFF'), 0);
+    buf.set(new TextEncoder().encode('WAVEfmt '), 8);
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint16(34, bits, true);
+    buf.set(payload, 44);
+    return buf;
+  }
+
+  const pcm = new Uint8Array([1, 2, 3, 4]);
+
+  test('strips a conforming 16kHz mono 16-bit header', () => {
+    expect(Array.from(stripWavHeader(wav(pcm)))).toEqual([1, 2, 3, 4]);
+  });
+
+  test('passes raw PCM through untouched', () => {
+    const raw = new Uint8Array(64).fill(7);
+    expect(stripWavHeader(raw)).toBe(raw);
+  });
+
+  test('leaves short buffers alone', () => {
+    const tiny = new Uint8Array([1, 2, 3]);
+    expect(stripWavHeader(tiny)).toBe(tiny);
+  });
+
+  test('fails loudly rather than silently mis-transcribing a wrong format', () => {
+    expect(() => stripWavHeader(wav(pcm, { sampleRate: 44100 }))).toThrow(/16kHz mono 16-bit/);
+    expect(() => stripWavHeader(wav(pcm, { channels: 2 }))).toThrow(/2ch/);
+    expect(() => stripWavHeader(wav(pcm, { bits: 8 }))).toThrow(/8-bit/);
   });
 });

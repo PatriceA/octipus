@@ -55,6 +55,7 @@ export const defaultConfig: Partial<Config> = {
   voice: {
     sttEnabled: false,
     ttsEnabled: false,
+    ttsProvider: 'piper' as const,
     language: 'en',
   },
   mcp: {
