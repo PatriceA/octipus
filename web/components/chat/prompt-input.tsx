@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  AudioLines,
   FileText,
   Image,
   Mic,
@@ -11,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import type { VoiceState } from '@/hooks/useVoiceConversation';
 import { cn } from '@/lib/utils';
 import { AudioWaveform } from './audio-waveform';
 
@@ -35,6 +37,10 @@ interface PromptInputProps {
   onSend: (message: string, attachments?: Attachment[]) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** Live voice conversation mode (hands-free talk ↔ spoken reply). */
+  voiceMode?: boolean;
+  voiceState?: VoiceState;
+  onToggleVoiceMode?: () => void;
 }
 
 function getAttachmentType(file: File): Attachment['type'] {
@@ -68,10 +74,22 @@ const ACCEPTED_TYPES =
 
 const MAX_HISTORY = 50;
 
+const VOICE_STATE_LABEL: Record<VoiceState, string> = {
+  idle: 'starting…',
+  listening: 'listening',
+  transcribing: 'transcribing',
+  thinking: 'thinking',
+  speaking: 'speaking',
+  error: 'mic error',
+};
+
 export default function PromptInput({
   onSend,
   disabled = false,
   placeholder = 'Type a message...',
+  voiceMode = false,
+  voiceState = 'idle',
+  onToggleVoiceMode,
 }: PromptInputProps) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -563,6 +581,31 @@ export default function PromptInput({
           <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5">
             <span className="dot dot-live text-primary bg-primary h-1.5 w-1.5" />
             <span className="text-xs text-accent animate-pulse">transcribing<span className="term-caret" /></span>
+          </div>
+        )}
+
+        {/* Live voice conversation toggle */}
+        {onToggleVoiceMode && (
+          <button
+            type="button"
+            onClick={onToggleVoiceMode}
+            className={cn(
+              'rounded-lg p-2 transition-colors',
+              voiceMode
+                ? 'bg-primary/15 text-primary hover:bg-primary/25'
+                : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+            )}
+            title={voiceMode ? 'Exit voice conversation' : 'Start voice conversation'}
+          >
+            <AudioLines className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Voice conversation state */}
+        {voiceMode && (
+          <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5">
+            <span className={cn('dot dot-live h-1.5 w-1.5', voiceState === 'error' ? 'text-error bg-error' : 'text-primary bg-primary')} />
+            <span className="text-xs text-accent">{VOICE_STATE_LABEL[voiceState]}<span className="term-caret" /></span>
           </div>
         )}
 

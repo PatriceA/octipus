@@ -18,6 +18,7 @@ import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
+import { useVoiceConversation } from '@/hooks/useVoiceConversation';
 import { useWorkspace } from '@/lib/workspace-context';
 
 interface ToolCallInfo {
@@ -116,6 +117,7 @@ export default function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
@@ -1503,6 +1505,21 @@ export default function ChatPage() {
     setStatusMessage(null);
   };
 
+  // Live voice conversation: transcribe → sendMessage (same pipeline as text,
+  // so agents spawn as usual) → speak the reply. The hook re-reads these each
+  // render via a ref, so plain closures (not memoized) are correct here.
+  const voice = useVoiceConversation({
+    enabled: voiceMode,
+    isTurnActive: isLoading,
+    getAssistantReply: () => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant') return messages[i].content;
+      }
+      return null;
+    },
+    sendTranscript: (t) => sendMessage(t),
+  });
+
   return (
     <div className="h-full flex">
       {/* New session dialog */}
@@ -1592,6 +1609,9 @@ export default function ChatPage() {
             onSend={sendMessage}
             disabled={isLoading}
             placeholder={activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
+            voiceMode={voiceMode}
+            voiceState={voice.state}
+            onToggleVoiceMode={() => setVoiceMode((v) => !v)}
           />
         </div>
       </div>

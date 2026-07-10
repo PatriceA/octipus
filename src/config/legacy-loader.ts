@@ -87,8 +87,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
     voice: {
       sttEnabled: process.env.WHISPER_MODEL_PATH ? true : false,
       // Env is a first-boot seed only; ttsProvider is chosen in settings (DB).
-      ttsEnabled: process.env.PIPER_MODEL_PATH ? true : false,
-      ttsProvider: 'piper' as const,
+      // Default is cloud (mistral) so voice-out works without a piper binary,
+      // which makes ttsEnabled true by default (a non-piper provider is set).
+      ttsEnabled: true,
+      ttsProvider: 'mistral' as const,
       whisperModelPath: process.env.WHISPER_MODEL_PATH,
       piperModelPath: process.env.PIPER_MODEL_PATH,
       wakeWord: process.env.WAKE_WORD,
