@@ -834,6 +834,7 @@ export class LiteLLMClient {
           gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', vaultName: 'gemini_api_key', envVar: 'GEMINI_API_KEY' },
           deepseek: { baseURL: 'https://api.deepseek.com/v1', vaultName: 'deepseek_api_key', envVar: 'DEEPSEEK_API_KEY' },
           openrouter: { baseURL: 'https://openrouter.ai/api/v1', vaultName: 'openrouter_api_key', envVar: 'OPENROUTER_API_KEY' },
+          mistral: { baseURL: 'https://api.mistral.ai/v1', vaultName: 'mistral_api_key', envVar: 'MISTRAL_API_KEY' },
         };
 
         const pe = providerEndpoints[provider.name];
