@@ -10,7 +10,7 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import type { ModelProvider, ProviderHealthStatus } from './interface';
+import type { ModelProvider, OcrDocument, OcrResult, ProviderHealthStatus } from './interface';
 
 const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 
@@ -34,6 +34,27 @@ const SUPPORTED_PREFIXES = [
   'open-mistral-',
   'open-mixtral-',
 ];
+
+/**
+ * Resolve the Mistral API key: environment first, then the vault. Exported so
+ * the OCR / STT / TTS paths share one resolution rule with the chat provider.
+ */
+export async function getMistralApiKey(): Promise<string | null> {
+  if (process.env.MISTRAL_API_KEY) {
+    return process.env.MISTRAL_API_KEY;
+  }
+
+  // Fall back to vault — recoverable: null return triggers a classified AUTH_FAILED on createClient()
+  try {
+    const { getVault } = await import('@/security/vault');
+    const vault = getVault();
+    const value = await vault.getByName('system', 'mistral_api_key');
+    return value || null;
+  } catch (err) {
+    modelLogger.warn({ err: (err as Error).message, provider: 'mistral' }, 'Mistral vault lookup failed; falling back to env var');
+    return null;
+  }
+}
 
 /** Detect Mistral reasoning variants (Magistral) by id. */
 function isMistralReasoningModel(modelName: string): boolean {
@@ -242,6 +263,57 @@ export class MistralProvider implements ModelProvider {
     }
   }
 
+  /**
+   * Native OCR via `POST /v1/ocr` (`mistral-ocr-latest`). Handles multi-page
+   * PDFs in a single call — no rasterization, no per-page vision prompting.
+   */
+  async ocr(document: OcrDocument, model: string): Promise<OcrResult> {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) {
+      throw classifyError(new Error('Mistral API key not available. Set MISTRAL_API_KEY or store it in the vault.'), 'mistral');
+    }
+
+    // Mistral accepts a `data:` URI in the *_url fields, so local files never
+    // need the Files API.
+    const url = document.kind === 'url' ? document.url : `data:${document.mimeType};base64,${document.data}`;
+    const isImage = document.kind === 'base64' && document.mimeType.startsWith('image/');
+    const docChunk = isImage
+      ? { type: 'image_url', image_url: url }
+      : { type: 'document_url', document_url: url };
+
+    modelLogger.debug({ model, kind: document.kind, provider: this.name }, 'Sending OCR request to Mistral');
+
+    try {
+      const response = await fetch(`${this.baseUrl}/ocr`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model, document: docChunk, table_format: 'markdown' }),
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Mistral OCR failed (${response.status}): ${detail.slice(0, 500)}`);
+      }
+
+      const raw = (await response.json()) as {
+        pages?: Array<{ index: number; markdown: string }>;
+        model?: string;
+      };
+
+      const pages = (raw.pages || []).map((p) => ({ index: p.index, markdown: p.markdown || '' }));
+      modelLogger.debug({ model, pageCount: pages.length, provider: this.name }, 'Mistral OCR successful');
+
+      return { pages, model: raw.model || model };
+    } catch (error) {
+      modelLogger.error({ error, model, provider: this.name }, 'Mistral OCR failed');
+      throw classifyError(error, 'mistral');
+    }
+  }
+
   async checkHealth(): Promise<ProviderHealthStatus> {
     const startTime = Date.now();
 
@@ -277,21 +349,7 @@ export class MistralProvider implements ModelProvider {
   // -- Private helpers --
 
   private async getApiKey(): Promise<string | null> {
-    // Environment variable first
-    if (process.env.MISTRAL_API_KEY) {
-      return process.env.MISTRAL_API_KEY;
-    }
-
-    // Fall back to vault — recoverable: null return triggers a classified AUTH_FAILED on createClient()
-    try {
-      const { getVault } = await import('@/security/vault');
-      const vault = getVault();
-      const value = await vault.getByName('system', 'mistral_api_key');
-      return value || null;
-    } catch (err) {
-      modelLogger.warn({ err: (err as Error).message, provider: this.name }, 'Mistral vault lookup failed; falling back to env var');
-      return null;
-    }
+    return getMistralApiKey();
   }
 
   private async createClient(modelName?: string): Promise<OpenAI> {

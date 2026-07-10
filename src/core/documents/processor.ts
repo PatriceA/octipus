@@ -160,17 +160,26 @@ export class DocumentProcessor {
       this.logger.info({ documentId, strategy, mimeType: doc.mimeType }, 'Extraction strategy selected');
 
       let extractedText: string;
+      // Native OCR (a provider with a dedicated /ocr endpoint) extracts text
+      // rather than describing an image, so it must not be labelled
+      // 'image_description' below — track which path actually ran.
+      let usedNativeOcr = false;
       switch (strategy) {
         case 'structured':
           extractedText = await this.extractStructured(doc.storagePath, doc.originalName, doc.mimeType);
           break;
-        case 'ocr':
-          if (doc.mimeType === 'application/pdf') {
+        case 'ocr': {
+          const native = await this.tryNativeOcr(doc.storagePath, doc.mimeType);
+          if (native !== null) {
+            extractedText = native;
+            usedNativeOcr = true;
+          } else if (doc.mimeType === 'application/pdf') {
             extractedText = await this.extractPdfText(doc.storagePath);
           } else {
             extractedText = await this.processImage(doc.storagePath);
           }
           break;
+        }
         case 'text':
         default:
           extractedText = await this.readTextFile(doc.storagePath);
@@ -181,7 +190,7 @@ export class DocumentProcessor {
         throw new Error(
           `No text could be extracted from ${doc.originalName}. ` +
             (strategy === 'ocr'
-              ? 'For images/PDFs, configure a model with topic "ocr" or "vision" on the Models page; for scanned PDFs, install poppler (pdftoppm) so pages can be rendered for OCR.'
+              ? 'For images/PDFs, configure a model with topic "ocr" or "vision" on the Models page. Providers with a native OCR endpoint (e.g. mistral-ocr-latest) handle PDFs directly; otherwise install poppler (pdftoppm) so scanned pages can be rendered for OCR.'
               : 'The file appears empty or unreadable.'),
         );
       }
@@ -197,7 +206,7 @@ export class DocumentProcessor {
       // Image-strategy extractions get purpose='image_description' (Phase E)
       // so retention and retrieval can distinguish vision-derived text
       // from regular document text.
-      const isImageDerived = strategy === 'ocr' && doc.mimeType !== 'application/pdf';
+      const isImageDerived = strategy === 'ocr' && doc.mimeType !== 'application/pdf' && !usedNativeOcr;
       await this.indexDocument(
         documentId,
         extractedText,
@@ -222,6 +231,37 @@ export class DocumentProcessor {
     } catch (err) {
       this.logger.error({ err, documentId }, 'Document processing failed');
       await documentRepository.updateStatus(documentId, 'failed', String(err));
+    }
+  }
+
+  /**
+   * If the model bound to the 'ocr' topic comes from a provider with a native
+   * OCR endpoint, use it: one call handles a whole multi-page PDF, with no
+   * rasterization and no per-page vision prompting.
+   *
+   * Returns null when there is no such provider — callers fall through to the
+   * vision-model path, which is unchanged.
+   */
+  private async tryNativeOcr(filePath: string, mimeType: string): Promise<string | null> {
+    const ocrModel = await getModelRegistry().getModelForTopic('ocr');
+    if (!ocrModel) return null;
+
+    const { getProviderRouter } = await import('@/models/providers');
+    const provider = getProviderRouter()
+      .getAllProviders()
+      .find((p) => p.name === ocrModel.provider);
+    if (!provider?.ocr) return null;
+
+    try {
+      this.logger.info({ model: ocrModel.modelId, provider: provider.name, filePath }, 'Native OCR extraction');
+      const data = (await readFile(filePath)).toString('base64');
+      const result = await provider.ocr({ kind: 'base64', data, mimeType }, ocrModel.modelId);
+      // Native OCR emits clean markdown — no grounding tokens to strip.
+      const text = result.pages.map((p) => p.markdown).join('\n\n').trim();
+      return text || null;
+    } catch (err) {
+      this.logger.warn({ err, model: ocrModel.modelId }, 'Native OCR failed; falling back to vision path');
+      return null;
     }
   }
 

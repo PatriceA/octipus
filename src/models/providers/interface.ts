@@ -20,6 +20,12 @@ export interface ModelProvider {
   /** Generate embeddings (optional — not all providers support it) */
   embed?(texts: string[], model: string, endpoint?: string): Promise<number[][]>;
 
+  /**
+   * Native document OCR (optional — only providers with a dedicated OCR
+   * endpoint). Providers without this are OCR'd page-by-page via a vision model.
+   */
+  ocr?(document: OcrDocument, model: string): Promise<OcrResult>;
+
   /** Check provider health */
   checkHealth(): Promise<ProviderHealthStatus>;
 
@@ -28,6 +34,21 @@ export interface ModelProvider {
 }
 
 export type ProviderType = 'litellm' | 'direct' | 'cli';
+
+/** A document handed to a native OCR endpoint. */
+export type OcrDocument =
+  | { kind: 'url'; url: string }
+  | { kind: 'base64'; data: string; mimeType: string };
+
+/**
+ * Result of a native OCR call. Deliberately minimal: callers only consume the
+ * page markdown. Providers may return images/bboxes/usage — we don't model
+ * fields nothing reads.
+ */
+export interface OcrResult {
+  pages: Array<{ index: number; markdown: string }>;
+  model: string;
+}
 
 export interface ProviderHealthStatus {
   healthy: boolean;
