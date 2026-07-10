@@ -68,6 +68,8 @@ export class OctipusTuiApp {
   private voiceInit: Promise<VoiceService | null> | null = null;
   /** Speak the next assistant reply — armed by a voice turn so typed turns stay silent. */
   private speakNextReply = false;
+  /** Guards the async windows of toggleTalk (init / transcription) against re-entrant key presses. */
+  private talkBusy = false;
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
@@ -307,6 +309,11 @@ export class OctipusTuiApp {
     const text = rawText.trim();
     if (!text) return;
 
+    // A new submission disarms any stale voice-reply flag, so a voice turn that
+    // errored (no assistant message) can't cause a later TYPED turn to be spoken.
+    // The voice path re-arms it right after calling this.
+    this.speakNextReply = false;
+
     this.pushMessage('user', text);
 
     if (text.startsWith('/')) {
@@ -326,33 +333,43 @@ export class OctipusTuiApp {
    * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
    */
   private async toggleTalk(): Promise<void> {
-    const voice = await this.ensureVoice();
-    if (!voice) return;
+    // Ignore presses during an async window (engine build or transcription) so a
+    // double-tap can't start-then-instantly-stop a capture. The idle wait BETWEEN
+    // the start press and the stop press is not busy, so the stop press still lands.
+    if (this.talkBusy) return;
 
-    if (!voice.recording) {
+    // START: not yet recording (voice may be null before first build).
+    if (!this.voice?.recording) {
+      this.talkBusy = true;
       try {
+        const voice = await this.ensureVoice();
+        if (!voice) return;
         voice.startRecording();
         this.pushMessage('system', '🎤 Listening… press the talk key again to send.');
       } catch (err) {
         this.pushMessage('system', `Voice capture failed: ${(err as Error).message} (needs arecord / Linux ALSA).`);
+      } finally {
+        this.talkBusy = false;
       }
       return;
     }
 
-    this.pushMessage('system', 'Transcribing…');
-    let transcript = '';
+    // STOP: second press → transcribe + submit through the normal typed path.
+    this.talkBusy = true;
     try {
-      transcript = await voice.stopRecordingAndTranscribe();
+      this.pushMessage('system', 'Transcribing…');
+      const transcript = await this.voice.stopRecordingAndTranscribe();
+      if (!transcript) {
+        this.pushMessage('system', "Didn't catch anything — try again.");
+        return;
+      }
+      this.handleSubmit(transcript);
+      this.speakNextReply = true; // after handleSubmit (which clears it) — speak THIS turn's reply
     } catch (err) {
       this.pushMessage('system', `Transcription failed: ${(err as Error).message}`);
-      return;
+    } finally {
+      this.talkBusy = false;
     }
-    if (!transcript) {
-      this.pushMessage('system', "Didn't catch anything — try again.");
-      return;
-    }
-    this.speakNextReply = true; // speak the reply to this voice turn
-    this.handleSubmit(transcript);
   }
 
   /**
@@ -366,13 +383,17 @@ export class OctipusTuiApp {
     this.voiceInit = (async () => {
       try {
         const { getConfig } = await import('@/config');
-        const { whisperModelPath } = await import('@/voice/whisper');
+        const { whisperModelPath, probeWhisper } = await import('@/voice/whisper');
         const cfg = getConfig();
-        const modelPath = cfg.voice.whisperModelPath || whisperModelPath();
-        if (!(await Bun.file(modelPath).exists())) {
-          this.pushMessage('system', 'Voice unavailable: local whisper not installed. Run `octi setup`.');
+        // Gate on the binary actually RUNNING, not just the model file existing —
+        // whisper.ts exists to catch "model present but binary dead (exit 127)",
+        // which would otherwise fail silently deep in transcribe.
+        const probe = await probeWhisper();
+        if (!probe.binaryOk || !probe.modelOk) {
+          this.pushMessage('system', `Voice unavailable: ${probe.binaryReason ?? 'local whisper model missing'}. Run \`octi setup\`.`);
           return null;
         }
+        const modelPath = cfg.voice.whisperModelPath || whisperModelPath();
         const { VoiceService } = await import('@/voice');
         this.voice = await VoiceService.create({
           stt: { type: 'whisper-cpp', model: modelPath, language: cfg.voice.language || 'en' },
@@ -382,6 +403,11 @@ export class OctipusTuiApp {
       } catch (err) {
         this.pushMessage('system', `Voice init failed: ${(err as Error).message}`);
         return null;
+      } finally {
+        // Clear the in-flight promise so a FAILED init can be retried on the next
+        // press (e.g. after the user runs `octi setup`). On success this.voice is
+        // set, so the cache-hit at the top short-circuits before this matters.
+        this.voiceInit = null;
       }
     })();
     return this.voiceInit;

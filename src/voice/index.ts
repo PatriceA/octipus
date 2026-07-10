@@ -186,41 +186,6 @@ export class VoiceService {
     return this.tts.getVoices();
   }
 
-  /**
-   * Full voice interaction: listen for speech, transcribe, return text
-   */
-  async listen(durationMs: number = 5000): Promise<string> {
-    if (!this.stt) {
-      throw new Error('Speech-to-text not configured');
-    }
-
-    // Record audio for specified duration
-    const audioPath = `/tmp/voice-listen-${Date.now()}.wav`;
-
-    // Use arecord for Linux, sox for cross-platform
-    const proc = Bun.spawn({
-      cmd: [
-        'arecord',
-        '-f', 'S16_LE',
-        '-r', '16000',
-        '-c', '1',
-        '-d', String(Math.ceil(durationMs / 1000)),
-        audioPath,
-      ],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-
-    await proc.exited;
-
-    try {
-      const result = await this.stt.transcribe(audioPath);
-      return result.text;
-    } finally {
-      await Bun.$`rm -f ${audioPath}`.quiet();
-    }
-  }
-
   /** True while a push-to-talk capture is in progress. */
   get recording(): boolean {
     return this.recordProc !== null;
@@ -228,9 +193,9 @@ export class VoiceService {
 
   /**
    * Push-to-talk: start capturing mic audio until `stopRecordingAndTranscribe()`.
-   * Unlike `listen()` there's no fixed duration — the caller ends it on the next
-   * keypress. Linux/ALSA only (arecord); throws if the binary is missing.
-   * ponytail: arecord-only capture, same caveat as listen(); no cross-platform mic.
+   * No fixed duration — the caller ends it on the next keypress.
+   * ponytail: arecord-only capture (Linux/ALSA); no cross-platform mic. Throws if
+   * the binary is missing.
    */
   startRecording(): void {
     if (!this.stt) throw new Error('Speech-to-text not configured');
@@ -280,31 +245,6 @@ export class VoiceService {
   }
 
   /**
-   * Conversational turn: listen, transcribe, get response, speak
-   */
-  async converse(
-    getResponse: (text: string) => Promise<string>,
-    listenDurationMs: number = 5000
-  ): Promise<{ input: string; output: string }> {
-    // Listen and transcribe
-    const input = await this.listen(listenDurationMs);
-    this.log.info({ input }, 'User said');
-
-    // Get response
-    const output = await getResponse(input);
-    this.log.info({ output }, 'Octipus response');
-
-    // Speak response
-    if (this.tts) {
-      const audio = await this.speak(output);
-      // Play audio
-      await this.playAudio(audio);
-    }
-
-    return { input, output };
-  }
-
-  /**
    * Play audio buffer
    */
   private async playAudio(audio: Buffer): Promise<void> {
@@ -330,6 +270,17 @@ export class VoiceService {
    */
   async dispose(): Promise<void> {
     await this.stopListening();
+
+    // Tear down an in-progress push-to-talk capture so quitting mid-record
+    // doesn't orphan the arecord process or leak its temp WAV.
+    if (this.recordProc) {
+      try { this.recordProc.kill(); } catch { /* already gone */ }
+      this.recordProc = null;
+    }
+    if (this.recordPath) {
+      await Bun.$`rm -f ${this.recordPath}`.quiet().catch(() => {});
+      this.recordPath = null;
+    }
 
     if (this.stt) {
       await this.stt.dispose();
