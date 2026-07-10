@@ -8,7 +8,7 @@ export interface TTSOptions {
   pitch?: number;  // 0.5 - 2.0
   volume?: number; // 0.0 - 1.0
   sampleRate?: number;
-  outputFormat?: 'wav' | 'mp3' | 'ogg';
+  outputFormat?: 'wav' | 'mp3' | 'ogg' | 'pcm' | 'flac' | 'opus';
 }
 
 export interface TTSEngine {
@@ -338,11 +338,86 @@ export class CoquiTTSEngine extends EventEmitter implements TTSEngine {
   }
 }
 
+const MISTRAL_TTS_MODEL = 'voxtral-mini-tts-2603';
+
+/**
+ * Mistral (Voxtral) text-to-speech via `POST /v1/audio/speech`.
+ *
+ * Note the endpoint returns JSON `{ audio_data: <base64> }` — NOT a raw audio
+ * body like OpenAI's identically-named endpoint.
+ */
+export class MistralTTSEngine extends EventEmitter implements TTSEngine {
+  private model: string;
+  private options: TTSOptions;
+
+  constructor(voiceId?: string, options: TTSOptions = {}) {
+    super();
+    this.model = MISTRAL_TTS_MODEL;
+    // mp3 ≈3s end-to-end, pcm ≈0.8s. mp3 is the sane default for HTTP callers;
+    // a latency-sensitive caller (telephony) should pass outputFormat: 'pcm'.
+    this.options = { voice: voiceId, outputFormat: 'mp3', ...options };
+  }
+
+  private async apiKey(): Promise<string> {
+    const { getMistralApiKey } = await import('../models/providers/mistral-provider');
+    const key = await getMistralApiKey();
+    if (!key) throw new Error('Mistral API key not available. Set MISTRAL_API_KEY or store it in the vault.');
+    return key;
+  }
+
+  async synthesize(text: string): Promise<Buffer> {
+    const response = await fetch('https://api.mistral.ai/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await this.apiKey()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        input: text,
+        response_format: this.options.outputFormat || 'mp3',
+        ...(this.options.voice ? { voice_id: this.options.voice } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Mistral TTS failed (${response.status}): ${detail.slice(0, 500)}`);
+    }
+
+    const { audio_data: audioData } = (await response.json()) as { audio_data?: string };
+    if (!audioData) throw new Error('Mistral TTS returned no audio_data');
+    return Buffer.from(audioData, 'base64');
+  }
+
+  async *streamSynthesize(text: string): AsyncGenerator<Buffer> {
+    // ponytail: sentence-split like Piper/Coqui. The endpoint does support
+    // `stream: true` over SSE — wire that up when a latency-bound caller exists.
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    for (const sentence of sentences) {
+      yield await this.synthesize(sentence.trim());
+    }
+  }
+
+  async getVoices(): Promise<string[]> {
+    const response = await fetch('https://api.mistral.ai/v1/audio/voices', {
+      headers: { Authorization: `Bearer ${await this.apiKey()}` },
+    });
+    if (!response.ok) return [];
+    const raw = (await response.json()) as { items?: Array<{ id: string }> };
+    return (raw.items || []).map((v) => v.id);
+  }
+
+  async dispose(): Promise<void> {
+    // Stateless.
+  }
+}
+
 /**
  * Factory function to create TTS engine
  */
 export function createTTSEngine(
-  type: 'piper' | 'edge' | 'coqui' = 'edge',
+  type: 'piper' | 'edge' | 'coqui' | 'mistral' = 'edge',
   modelOrVoice?: string,
   options: TTSOptions = {}
 ): TTSEngine {
@@ -355,6 +430,8 @@ export function createTTSEngine(
       return new EdgeTTSEngine({ voice: modelOrVoice || 'en-US-AriaNeural', ...options });
     case 'coqui':
       return new CoquiTTSEngine(modelOrVoice, options);
+    case 'mistral':
+      return new MistralTTSEngine(modelOrVoice, options);
     default:
       throw new Error(`Unknown TTS engine type: ${type}`);
   }
@@ -372,7 +449,7 @@ export class TextToSpeech {
   }
 
   static async create(
-    type: 'piper' | 'edge' | 'coqui' = 'edge',
+    type: 'piper' | 'edge' | 'coqui' | 'mistral' = 'edge',
     modelOrVoice?: string,
     options: TTSOptions = {}
   ): Promise<TextToSpeech> {

@@ -76,7 +76,10 @@ export async function loadRuntimeConfig(
   // Derive voice enabled flags from paths
   if (runtimePartial.voice) {
     runtimePartial.voice.sttEnabled = !!runtimePartial.voice.whisperModelPath;
-    runtimePartial.voice.ttsEnabled = !!runtimePartial.voice.piperModelPath;
+    // Only piper needs a local model file; every other engine is remote/CLI.
+    runtimePartial.voice.ttsEnabled =
+      !!runtimePartial.voice.piperModelPath ||
+      (!!runtimePartial.voice.ttsProvider && runtimePartial.voice.ttsProvider !== 'piper');
   }
 
   // Build final config: defaults → DB runtime values → bootstrap (DB/Redis/security/api.host/api.port)

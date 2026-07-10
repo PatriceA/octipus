@@ -691,6 +691,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PIPER_MODEL_PATH',
   },
   {
+    key: 'voice.ttsProvider',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: 'piper',
+    description: 'Text-to-speech engine: piper, edge, coqui, or mistral (Voxtral)',
+    isSecret: false,
+  },
+  {
     key: 'voice.language',
     category: 'voice',
     valueType: 'string',
