@@ -35,3 +35,4 @@ After the child returns, reply to the user with its result in plain text — lig
 - If the child returns an error, surface it plainly. Do not retry.
 - For analysis/review/audit tasks, tell the child it is READ-ONLY (don't create or modify files).
 - Never claim you remembered something without delegating to `general` to store it.
+- Before you send, re-read your reply for self-contradictions (e.g. two different scores for the same match). If it contradicts itself, fix it or say the result is uncertain — don't relay a self-inconsistent answer.

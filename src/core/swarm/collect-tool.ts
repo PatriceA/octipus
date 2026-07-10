@@ -102,9 +102,6 @@ export function formatCollectedResults(results: ChildResult[]): string {
   const lines = results.map((r) => {
     const outStr =
       typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
-    const meta =
-      `nodeId="${r.nodeId}" status="${r.status}" ` +
-      `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
     // A collect-path timeout (the wait elapsed, `notes` = "collect_children
     // timeout after Xms" from detached-child-manager) means the child is STILL
     // RUNNING, not failed — say so loudly, because a weak orchestrator otherwise
@@ -112,6 +109,12 @@ export function formatCollectedResults(results: ChildResult[]): string {
     // children. A child that exhausted its OWN wall budget is terminal and keeps
     // its own notes, so gate on the collect-timeout signature specifically.
     const stillRunning = r.status === 'timeout' && /collect_children timeout/i.test(r.notes ?? '');
+    // Render it as status="running" (not "timeout") so a weak model doesn't
+    // misparse the top-level attribute as failure before it reaches the notes.
+    const displayStatus = stillRunning ? 'running' : r.status;
+    const meta =
+      `nodeId="${r.nodeId}" status="${displayStatus}" ` +
+      `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
     const notes = stillRunning
       ? '\n  <notes>STILL RUNNING — did not finish within the wait window; it was NOT cancelled and is still working. Do NOT spawn a retry or duplicate child. Call collect_children again to keep waiting for it.</notes>'
       : r.notes ? `\n  <notes>${r.notes}</notes>` : '';

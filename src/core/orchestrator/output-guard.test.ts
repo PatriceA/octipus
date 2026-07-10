@@ -1,5 +1,35 @@
 import { describe, test, expect } from 'bun:test';
-import { ensureChildRelay, guardOutput } from './output-guard';
+import { ensureChildRelay, guardOutput, stripSwarmScaffolding } from './output-guard';
+
+describe('stripSwarmScaffolding', () => {
+  test('replaces a leaked container with its <output> deliverables, drops tags + notes', () => {
+    const leaked = 'Here is the summary.\n\n<CollectChildren count="2">\n<ChildResult nodeId="a" status="ok">\n  <output>France won 2-0.</output>\n</ChildResult>\n<ChildResult nodeId="b" status="running">\n  <output>Belgium play Spain today.</output>\n  <notes>STILL RUNNING — internal guidance</notes>\n</ChildResult>\n</CollectChildren>';
+    const out = stripSwarmScaffolding(leaked);
+    expect(out).toContain('France won 2-0.');
+    expect(out).toContain('Belgium play Spain today.');
+    expect(out).not.toMatch(/<\/?(?:CollectChildren|ChildResult|output|notes)/i);
+    // Internal LLM-only guidance must not surface to the user.
+    expect(out).not.toContain('STILL RUNNING');
+  });
+
+  test('scoped: a legitimate <output> in a code example is untouched when a container is also present', () => {
+    const mixed = 'Your program prints <output>42</output> to the console.\n\n<CollectChildren count="1"><ChildResult nodeId="a" status="ok"><output>done</output></ChildResult></CollectChildren>';
+    const out = stripSwarmScaffolding(mixed);
+    // The example's own <output>42</output> stays; only the container is rewritten.
+    expect(out).toContain('<output>42</output>');
+    expect(out).toContain('done');
+    expect(out).not.toContain('<ChildResult');
+  });
+
+  test('leaves normal prose untouched (no swarm container → no-op)', () => {
+    const prose = 'The function returns its <output> to stdout.';
+    expect(stripSwarmScaffolding(prose)).toBe(prose);
+  });
+
+  test('empty in, empty out', () => {
+    expect(stripSwarmScaffolding('')).toBe('');
+  });
+});
 
 describe('guardOutput', () => {
   // ── Normal responses pass through ────────────────────────
