@@ -20,6 +20,7 @@ import { MessagesPane } from './components/messages-pane';
 import { type CumulativeStats, StatusBar } from './components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from './gateway-adapter';
 import { createOverlayController, type OverlayController } from './overlays/registry';
+import type { VoiceService } from '@/voice';
 
 export interface OctipusTuiAppOptions {
   gatewayUrl?: string;
@@ -62,6 +63,11 @@ export class OctipusTuiApp {
   private lastStreamedTool: string | null = null;
   private exiting = false;
   private readonly onShutdown?: () => Promise<void>;
+  /** Lazily-built local voice (push-to-talk). Null until first talk-key press. */
+  private voice: VoiceService | null = null;
+  private voiceInit: Promise<VoiceService | null> | null = null;
+  /** Speak the next assistant reply — armed by a voice turn so typed turns stay silent. */
+  private speakNextReply = false;
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
@@ -99,6 +105,7 @@ export class OctipusTuiApp {
     tui.addInputListener((data) => {
       const kb = getKeybindings();
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
+      if (kb.matches(data, 'app.voice.talk')) { void this.toggleTalk(); return { consume: true }; }
       if (matchesKey(data, 'pageUp')) {
         if (this.messages.scrollUp()) this.tui.requestRender();
         return { consume: true };
@@ -161,6 +168,7 @@ export class OctipusTuiApp {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
+    if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
     // Hand off to the runtime so the alt-screen is properly torn down and
     // stdin is drained. Without this the shell's next prompt redraws on top
@@ -223,6 +231,11 @@ export class OctipusTuiApp {
         return;
       case 'message':
         this.pushMessage(event.role, event.content);
+        // Speak the reply to a voice turn (one-shot; no-op if TTS isn't configured).
+        if (event.role === 'assistant' && this.speakNextReply) {
+          this.speakNextReply = false;
+          void this.voice?.say(event.content).catch(() => { /* playback best-effort */ });
+        }
         return;
       case 'permission':
         this.openPermissionPrompt(event.requestId, event.toolName, event.detail);
@@ -301,6 +314,77 @@ export class OctipusTuiApp {
       return;
     }
     this.adapter.sendChat(this.sessionId, text, undefined, this.projectPath);
+  }
+
+  // ── Voice (push-to-talk) ───────────────────────────────────────
+
+  /**
+   * Talk-key handler. First press starts capture; second press stops, transcribes,
+   * and submits the transcript through the SAME path as typed text (`handleSubmit`
+   * → sendChat), so voice reuses the normal orchestrator turn. The reply to that
+   * turn is spoken back when TTS is configured.
+   * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
+   */
+  private async toggleTalk(): Promise<void> {
+    const voice = await this.ensureVoice();
+    if (!voice) return;
+
+    if (!voice.recording) {
+      try {
+        voice.startRecording();
+        this.pushMessage('system', '🎤 Listening… press the talk key again to send.');
+      } catch (err) {
+        this.pushMessage('system', `Voice capture failed: ${(err as Error).message} (needs arecord / Linux ALSA).`);
+      }
+      return;
+    }
+
+    this.pushMessage('system', 'Transcribing…');
+    let transcript = '';
+    try {
+      transcript = await voice.stopRecordingAndTranscribe();
+    } catch (err) {
+      this.pushMessage('system', `Transcription failed: ${(err as Error).message}`);
+      return;
+    }
+    if (!transcript) {
+      this.pushMessage('system', "Didn't catch anything — try again.");
+      return;
+    }
+    this.speakNextReply = true; // speak the reply to this voice turn
+    this.handleSubmit(transcript);
+  }
+
+  /**
+   * Build the local voice engine on first use (keeps voice deps off the TUI
+   * startup path). Local whisper STT + configured TTS. Returns null — with a
+   * one-line reason — when local whisper isn't installed.
+   */
+  private async ensureVoice(): Promise<VoiceService | null> {
+    if (this.voice) return this.voice;
+    if (this.voiceInit) return this.voiceInit;
+    this.voiceInit = (async () => {
+      try {
+        const { getConfig } = await import('@/config');
+        const { whisperModelPath } = await import('@/voice/whisper');
+        const cfg = getConfig();
+        const modelPath = cfg.voice.whisperModelPath || whisperModelPath();
+        if (!(await Bun.file(modelPath).exists())) {
+          this.pushMessage('system', 'Voice unavailable: local whisper not installed. Run `octi setup`.');
+          return null;
+        }
+        const { VoiceService } = await import('@/voice');
+        this.voice = await VoiceService.create({
+          stt: { type: 'whisper-cpp', model: modelPath, language: cfg.voice.language || 'en' },
+          tts: cfg.voice.ttsEnabled ? { type: cfg.voice.ttsProvider } : undefined,
+        });
+        return this.voice;
+      } catch (err) {
+        this.pushMessage('system', `Voice init failed: ${(err as Error).message}`);
+        return null;
+      }
+    })();
+    return this.voiceInit;
   }
 
   // ── Overlays ───────────────────────────────────────────────────

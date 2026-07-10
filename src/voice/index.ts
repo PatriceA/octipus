@@ -11,6 +11,7 @@ export {
   WakeWordDetector,
 } from './wake-word';
 
+import type { Subprocess } from 'bun';
 import { logger } from '../utils/logger';
 import { SpeechToText, } from './stt';
 import { TextToSpeech, } from './tts';
@@ -45,6 +46,9 @@ export class VoiceService {
   private wakeWord: WakeWordDetector | null = null;
   private log = logger.child({ component: 'voice-service' });
   private listening = false;
+  /** Push-to-talk capture, toggled by startRecording()/stopRecordingAndTranscribe(). */
+  private recordProc: Subprocess | null = null;
+  private recordPath: string | null = null;
 
   constructor(
     stt?: SpeechToText,
@@ -215,6 +219,64 @@ export class VoiceService {
     } finally {
       await Bun.$`rm -f ${audioPath}`.quiet();
     }
+  }
+
+  /** True while a push-to-talk capture is in progress. */
+  get recording(): boolean {
+    return this.recordProc !== null;
+  }
+
+  /**
+   * Push-to-talk: start capturing mic audio until `stopRecordingAndTranscribe()`.
+   * Unlike `listen()` there's no fixed duration — the caller ends it on the next
+   * keypress. Linux/ALSA only (arecord); throws if the binary is missing.
+   * ponytail: arecord-only capture, same caveat as listen(); no cross-platform mic.
+   */
+  startRecording(): void {
+    if (!this.stt) throw new Error('Speech-to-text not configured');
+    if (this.recordProc) return; // already recording — ignore double-press
+    this.recordPath = `/tmp/voice-ptt-${Date.now()}.wav`;
+    this.recordProc = Bun.spawn({
+      cmd: ['arecord', '-f', 'S16_LE', '-r', '16000', '-c', '1', this.recordPath],
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+  }
+
+  /**
+   * Stop the push-to-talk capture and transcribe it. Returns '' if nothing was
+   * captured. arecord finalizes the WAV header on SIGTERM, so the file is valid.
+   */
+  async stopRecordingAndTranscribe(): Promise<string> {
+    const proc = this.recordProc;
+    const path = this.recordPath;
+    this.recordProc = null;
+    this.recordPath = null;
+    if (!proc || !path || !this.stt) return '';
+    proc.kill(); // SIGTERM — arecord traps it and closes the WAV cleanly
+    await proc.exited;
+    try {
+      const file = Bun.file(path);
+      // arecord writes a 44-byte WAV header up front; a file at/under that size
+      // means no samples were captured (no mic, or an ALSA device error). Surface
+      // that clearly instead of letting ffmpeg fail on an empty/absent file.
+      if (!(await file.exists()) || file.size <= 44) {
+        const stderr = proc.stderr ? await new Response(proc.stderr as ReadableStream).text().catch(() => '') : '';
+        const detail = stderr.trim().split('\n').pop();
+        throw new Error(`no audio captured — check your microphone / ALSA device${detail ? `: ${detail}` : ''}`);
+      }
+      const result = await this.stt.transcribe(path);
+      return result.text.trim();
+    } finally {
+      await Bun.$`rm -f ${path}`.quiet();
+    }
+  }
+
+  /** Speak text aloud (TTS → aplay/afplay). No-op if TTS isn't configured. */
+  async say(text: string): Promise<void> {
+    if (!this.tts || !text.trim()) return;
+    const audio = await this.speak(text);
+    await this.playAudio(audio);
   }
 
   /**

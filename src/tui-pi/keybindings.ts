@@ -48,6 +48,7 @@ declare module '@mariozechner/pi-tui' {
     'app.palette.open': true;
     'app.help.open': true;
     'app.quit': true;
+    'app.voice.talk': true;
   }
 }
 
@@ -71,6 +72,7 @@ export const OCTIPUS_APP_KEYBINDINGS = {
   'app.palette.open':    { defaultKeys: ['ctrl+p', 'f4'],   description: 'Command palette' },
   'app.help.open':       { defaultKeys: 'f5',               description: 'Show hotkeys' },
   'app.quit':            { defaultKeys: 'ctrl+q',           description: 'Quit' },
+  'app.voice.talk':      { defaultKeys: ['alt+t', 'f8'],    description: 'Push-to-talk: start/stop voice input' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFAULT_USER_PATH = join(homedir(), '.octipus', 'keybindings.json');
