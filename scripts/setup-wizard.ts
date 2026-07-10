@@ -55,6 +55,7 @@ import {
 } from '@mariozechner/pi-tui';
 import { httpReachable, probeAllServices } from '@/setup/probes';
 import { PROVIDERS, getProvider, type ProviderId } from '@/setup/providers';
+import { installWhisper, ToolchainMissingError } from '@/voice/whisper';
 
 // ── Args ───────────────────────────────────────────────────────────
 
@@ -588,6 +589,54 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
   return picked;
 }
 
+/**
+ * Voice dependencies: detect whether STT actually works (local whisper runs, or
+ * a cloud key is set) and, if not, offer to build local whisper from source.
+ * Detection goes through the API (it knows the vault keys); the build runs
+ * in-process here — it takes minutes, so an HTTP call would just time out.
+ */
+async function pickVoice(api: ApiClient): Promise<void> {
+  let status: { sttAvailable?: boolean; sttLocal?: boolean; sttReason?: string | null } | null = null;
+  try {
+    status = await api.get('/api/voice/status');
+  } catch {
+    return; // status unreachable (e.g. auth) — don't block setup on voice
+  }
+  if (status?.sttAvailable) {
+    process.stdout.write(`\x1b[32m✓ Voice ready\x1b[0m (${status.sttLocal ? 'local whisper' : 'cloud STT provider'}).\n`);
+    return;
+  }
+
+  process.stdout.write(`\x1b[2mVoice: ${status?.sttReason || 'no local whisper and no cloud STT key configured'}\x1b[0m\n`);
+
+  let install: boolean;
+  if (NON_INTERACTIVE) {
+    install = process.env.OCTIPUS_SETUP_INSTALL_VOICE === '1' || process.env.OCTIPUS_SETUP_INSTALL_VOICE === 'true';
+  } else {
+    install =
+      (await selectStep<'y' | 'n'>(
+        null,
+        'Install local voice (builds whisper.cpp from source — needs cmake + a C++ compiler)?',
+        [
+          { value: 'y', label: 'Yes — build & install now', description: 'A few minutes; fully local, offline speech-to-text.' },
+          { value: 'n', label: 'No — skip', description: 'Configure a cloud STT key later, or rerun setup.' },
+        ],
+        'n',
+      )) === 'y';
+  }
+  if (!install) return;
+
+  process.stdout.write('Building whisper.cpp (this can take a few minutes)…\n');
+  try {
+    await installWhisper((line) => process.stdout.write(`\x1b[2m  ${line}\x1b[0m\n`));
+    process.stdout.write('\x1b[32m✓ Local voice installed and verified\x1b[0m\n');
+  } catch (err) {
+    // Missing toolchain is a user-fixable setup gap, not a wizard failure.
+    const prefix = err instanceof ToolchainMissingError ? 'Local voice not installed' : 'Local voice install failed';
+    process.stdout.write(`\x1b[33m! ${prefix}: ${(err as Error).message}\x1b[0m\n`);
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────
 
 async function main() {
@@ -957,6 +1006,9 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
       process.stdout.write(`  \x1b[33m! install failed: ${(err as Error).message}\x1b[0m\n`);
     }
   }
+
+  // Voice dependencies (local whisper build offer).
+  await pickVoice(api);
 
   // Mark setup complete.
   await api.post('/api/settings/setup-complete', {}).catch((err) => {

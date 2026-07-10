@@ -30,6 +30,18 @@ const TTS_ENGINE_FORMAT: Record<string, TtsFormat | null> = {
   mistral: null, // honours the requested format
 };
 
+/** Resolve real voice availability: does whisper actually run, or is a cloud key set. */
+async function resolveVoiceAvailability(config: ReturnType<typeof getConfig>) {
+  const { getVoiceAvailability } = await import('@/voice/whisper');
+  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
+  return getVoiceAvailability({
+    ttsProvider: config.voice.ttsProvider,
+    hasMistralKey: !!(await getMistralApiKey()),
+    hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    piperModelPath: config.voice.piperModelPath,
+  });
+}
+
 // Lazy-initialized local whisper engine
 let localWhisper: import('@/voice/stt').WhisperEngine | null = null;
 
@@ -406,16 +418,50 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       if (!user) return { error: 'Not authenticated' };
 
       const config = getConfig();
-      const engine = await getLocalWhisper();
+      const availability = await resolveVoiceAvailability(config);
 
       return {
-        sttEnabled: config.voice.sttEnabled,
-        ttsEnabled: config.voice.ttsEnabled,
+        // Real availability — the binary actually runs / a cloud key exists —
+        // not just a config flag. The web voice UI gates on sttAvailable.
+        sttAvailable: availability.stt.available,
+        sttReason: availability.stt.reason,
+        sttLocal: availability.stt.local,
+        sttExternal: availability.stt.external,
+        ttsAvailable: availability.tts.available,
+        ttsReason: availability.tts.reason,
+        // Retained for compatibility with existing callers.
+        sttEnabled: availability.stt.available,
+        ttsEnabled: availability.tts.available,
         ttsProvider: config.voice.ttsProvider,
-        localWhisper: !!engine,
+        localWhisper: availability.stt.local,
         whisperModelPath: config.voice.whisperModelPath || null,
         language: config.voice.language || 'en',
       };
+    },
+    { detail: { tags: ['voice'] } }
+  )
+
+  .post(
+    '/install',
+    async ({ user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      try {
+        const { installWhisper } = await import('@/voice/whisper');
+        const log: string[] = [];
+        await installWhisper((line) => {
+          log.push(line);
+          if (log.length > 200) log.shift(); // keep the tail, cap memory
+        });
+        return { ok: true, log };
+      } catch (error) {
+        const { ToolchainMissingError } = await import('@/voice/whisper');
+        set.status = error instanceof ToolchainMissingError ? 422 : 500;
+        apiLogger.error({ error }, 'Local whisper install failed');
+        return { ok: false, error: (error as Error).message };
+      }
     },
     { detail: { tags: ['voice'] } }
   )
