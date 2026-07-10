@@ -637,6 +637,58 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
 }
 
 /**
+ * Transcribe an audio buffer with the best available engine, mirroring the
+ * `/voice/transcribe` route's default order: local whisper.cpp (no API cost) →
+ * Mistral Voxtral → OpenAI whisper-1. Throws if none is configured. Used by
+ * channels voice-in so an inbound voice note reaches the orchestrator as text.
+ *
+ * `format` is only the file-extension hint for the OpenAI multipart upload;
+ * local whisper and Mistral sniff the container themselves.
+ */
+export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg'): Promise<string> {
+  const { getConfig } = await import('../config');
+  const config = getConfig();
+  const language = config.voice.language || 'en';
+
+  // 1. Local whisper.cpp — the default. Same model-path resolution the route uses.
+  const { whisperModelPath } = await import('./whisper');
+  const modelPath = config.voice.whisperModelPath || whisperModelPath();
+  if (await Bun.file(modelPath).exists()) {
+    try {
+      const engine = new WhisperEngine(modelPath, { language });
+      return (await engine.transcribe(audio)).text;
+    } catch (err) {
+      // Model file is present but the runtime failed (e.g. missing ffmpeg or the
+      // binary was removed). Fall through to a cloud engine if one is configured
+      // rather than dead-ending on a broken-but-present local install.
+      logger.warn({ err }, 'Local whisper failed; falling back to cloud STT if configured');
+    }
+  }
+
+  // 2. Mistral Voxtral, if a key is set.
+  const { getMistralApiKey } = await import('../models/providers/mistral-provider');
+  if (await getMistralApiKey()) {
+    return (await new MistralSTTEngine(undefined, { language }).transcribe(audio)).text;
+  }
+
+  // 3. OpenAI whisper-1, if a key is set.
+  if (process.env.OPENAI_API_KEY) {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(audio)]), `audio.${format}`);
+    form.append('model', 'whisper-1');
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form,
+    });
+    if (!res.ok) throw new Error(`OpenAI transcription failed (${res.status})`);
+    return ((await res.json()) as { text?: string }).text || '';
+  }
+
+  throw new Error('No STT engine available: install local whisper (`octi setup`) or set a Mistral/OpenAI API key.');
+}
+
+/**
  * Factory function to create STT engine
  */
 export function createSTTEngine(
