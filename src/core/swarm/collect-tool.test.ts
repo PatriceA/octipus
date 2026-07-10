@@ -190,5 +190,9 @@ describe('collect_children', () => {
     expect(out).toContain('Do NOT spawn a retry');
     // The raw "collect_children timeout" note is replaced by the guidance.
     expect(out).not.toContain('collect_children timeout after 5000ms');
+    // Rendered as status="running" (not "timeout") so a weak model doesn't
+    // misread the top-level attribute as failure.
+    expect(out).toContain('status="running"');
+    expect(out).not.toContain('status="timeout"');
   });
 });

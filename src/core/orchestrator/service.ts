@@ -17,7 +17,7 @@ import { directResponse } from './direct-response';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
 import { runOrchestrator } from './orchestrator-runner';
-import { guardOutput } from './output-guard';
+import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
@@ -500,6 +500,9 @@ export class OrchestratorService {
       if (outputCheck.action === 'replace') {
         coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced orchestrator response');
       }
+      // Strip internal swarm relay markup (<CollectChildren>/<ChildResult>/…) a
+      // weak orchestrator sometimes echoes verbatim — the user must never see it.
+      finalResponse = stripSwarmScaffolding(finalResponse);
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;

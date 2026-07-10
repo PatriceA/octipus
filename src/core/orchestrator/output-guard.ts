@@ -112,6 +112,39 @@ export function guardOutput(response: string, inputFlags: string[]): OutputGuard
   return { action: 'pass', response, flags };
 }
 
+// ── Swarm scaffolding stripper ──────────────────────────────────────────
+
+/**
+ * Remove swarm relay scaffolding that is meant to be INTERNAL — the
+ * `<CollectChildren>`/`<ChildResult>` tool-result that `collect_children` feeds
+ * back to the orchestrator LLM. A weak orchestrator sometimes echoes it
+ * verbatim, and the deterministic relay fallback appends it raw — either way the
+ * user must never see it.
+ *
+ * Each container is replaced by only the `<output>` contents (the actual
+ * deliverable), joined; the `<notes>` (LLM-only guidance like "STILL RUNNING…")
+ * and `<scorers>` are dropped. The operation is SCOPED to the matched container,
+ * so a legitimate `<output>` elsewhere in the reply (e.g. a code example) is
+ * untouched — and it no-ops entirely when no container is present.
+ */
+export function stripSwarmScaffolding(text: string): string {
+  if (!text) return text;
+  if (!/<(?:CollectChildren|ChildResult)\b/i.test(text)) return text;
+  const deliverables = (block: string): string =>
+    [...block.matchAll(/<output>([\s\S]*?)<\/output>/gi)]
+      .map((m) => m[1].trim())
+      .filter((t) => t && t !== 'null') // a still-running child's output is the literal "null"
+      .join('\n\n');
+  const out = text
+    // Whole <CollectChildren>…</CollectChildren> container(s).
+    .replace(/<CollectChildren\b[^>]*>([\s\S]*?)<\/CollectChildren>/gi, (_m, inner) => deliverables(inner))
+    // Self-closing empty container.
+    .replace(/<CollectChildren\b[^>]*\/>/gi, '')
+    // Any stray <ChildResult>…</ChildResult> not wrapped in a container.
+    .replace(/<ChildResult\b[^>]*>([\s\S]*?)<\/ChildResult>/gi, (_m, inner) => deliverables(inner));
+  return out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // ── Deterministic relay guard (P1.3) ───────────────────────────────────
 
 /** A genuine relay carries at least this fraction of the collected material. */

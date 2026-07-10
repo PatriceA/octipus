@@ -414,10 +414,12 @@ export class AgentWorker extends BaseAgentWorker {
           this.addSystemMessage(
             `SYSTEM: ${collected.length} detached subagent${collected.length > 1 ? 's' : ''} finished, ` +
               `but you did not call collect_children. Their full results are below:\n\n${summary}\n\n` +
-              `Relay this content to the user as your final answer. Reproduce the substantive findings, ` +
-              `code, and data from each child verbatim or lightly edited — the user cannot see the child ` +
-              `output, only your reply. Do NOT answer with a meta-summary that merely states you have the ` +
-              `results; pass the actual deliverable through.`,
+              `Write ONE unified final answer that merges these results into a single coherent reply for ` +
+              `the user. Do NOT reproduce each child separately, label them ("Child 1…"), or repeat the ` +
+              `same point once per child — deduplicate and combine. Include all substantive findings, code, ` +
+              `and data (the user sees only your reply, not the child output). If the children DISAGREE on ` +
+              `any fact, do NOT silently pick one — say the sources conflict and give the differing values. ` +
+              `Do NOT answer with a meta-summary that merely states you have the results; deliver the actual content.`,
           );
           try {
             const withMerge = await this.loop();

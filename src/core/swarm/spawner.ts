@@ -232,18 +232,37 @@ export class SwarmSpawner {
       throw err;
     }
 
+    // `checkSpawn` RESERVED briefHash. Every exit before `register()` (deep in
+    // singleSpawnAndRun) must release it, or that brief is wrongly deduped for
+    // the rest of the root session. `releaseFingerprint` is a no-op once a node
+    // owns the fingerprint, so releasing on the final success path too is safe.
+    // Two helpers cover the two exit shapes: `denyAndRelease` for early-return
+    // denials, `releaseOnThrow` for an awaited call that rejects.
+    const denyAndRelease = <T>(denial: T): T => {
+      graph.releaseFingerprint(briefHash);
+      return denial;
+    };
+    const releaseOnThrow = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+      try {
+        return await fn();
+      } catch (err) {
+        graph.releaseFingerprint(briefHash);
+        throw err;
+      }
+    };
+
     // ── Fan-out cap (Phase 2, per-turn = per-node lifetime) ─────────
     const fanOutDenial = checkFanOut(parent, childKind);
-    if (fanOutDenial) return fanOutDenial;
+    if (fanOutDenial) return denyAndRelease(fanOutDenial);
 
     // ── Cache lookup (Q4) ───────────────────────────────────────────
     // Note: a cache hit creates no new node and appends no ledger event — the
     // cached node already carries its own spawn+terminal ledger history from
     // its original run, so there is nothing in-flight to reconcile here.
-    const cacheHit = await lookupCacheHit(parent, briefHash, topicPath, childKind, childDepth, childRole);
+    const cacheHit = await releaseOnThrow(() => lookupCacheHit(parent, briefHash, topicPath, childKind, childDepth, childRole));
     if (cacheHit) {
       this.emitNodeCompleted(parent, cacheHit.completedPayload);
-      return cacheHit.result;
+      return denyAndRelease(cacheHit.result);
     }
 
     // ── Concurrency pre-check (Q3) ──────────────────────────────────
@@ -255,7 +274,7 @@ export class SwarmSpawner {
       agentManager.getRunningCount(),
       maxConcurrent,
     );
-    if (concurrencyDenial) return concurrencyDenial;
+    if (concurrencyDenial) return denyAndRelease(concurrencyDenial);
 
     // ── Budget cascade ──────────────────────────────────────────────
     // Done BEFORE reserving fan-out so a refused spawn doesn't consume a slot.
@@ -263,9 +282,10 @@ export class SwarmSpawner {
     // `tokens.used` is otherwise never updated (it stays 0), so the reserve
     // math and `InsufficientBudgetError` guard in `deriveChildBudget` never
     // reflect real consumption. No-op for legacy call sites without a workerRef.
-    syncParentTokenUsage(parent);
     let budget: NodeBudget;
     try {
+      // Inside the try so a throw here also hits the release-and-rethrow below.
+      syncParentTokenUsage(parent);
       budget = deriveChildBudget(parent.budget, childDepth);
     } catch (err) {
       if (err instanceof InsufficientBudgetError) {
@@ -273,7 +293,7 @@ export class SwarmSpawner {
           { parentNodeId: parent.id, available: err.available, minimum: err.minimum },
           'Swarm spawn refused — parent near token exhaustion',
         );
-        return {
+        return denyAndRelease({
           nodeId: '',
           kind: childKind,
           status: 'budget',
@@ -282,8 +302,9 @@ export class SwarmSpawner {
           durationMs: 0,
           spawnedChildren: [],
           notes: err.message,
-        };
+        });
       }
+      graph.releaseFingerprint(briefHash);
       throw err;
     }
 
@@ -327,14 +348,15 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model + expert resolution (topic binding is authoritative) ──
-    const { model: childModel, lane: childLane, expertId, systemPrompt } = await this.resolveChildModelAndExpert(
-      parent.model,
-      childRole,
-      brief.taskBrief,
-      params.expertId,
-      internal.excludeExpertId,
-      childTools.length > 0,
-    );
+    const { model: childModel, lane: childLane, expertId, systemPrompt } = await releaseOnThrow(() =>
+      this.resolveChildModelAndExpert(
+        parent.model,
+        childRole,
+        brief.taskBrief,
+        params.expertId,
+        internal.excludeExpertId,
+        childTools.length > 0,
+      ));
 
     // ── Compose child's initial user message from brief ─────────────
     // Include the list of tools available to this child so the agent can
@@ -373,7 +395,7 @@ export class SwarmSpawner {
         { parentId: parent.id, flags: guarded.flags, reason: guarded.blockReason, topicPath },
         'Swarm child brief blocked by input guard',
       );
-      return {
+      return denyAndRelease({
         nodeId: 'blocked',
         kind: childKind,
         status: 'denied',
@@ -382,20 +404,20 @@ export class SwarmSpawner {
         durationMs: 0,
         spawnedChildren: [],
         notes: `flags: ${guarded.flags.join(',')}`,
-      };
+      });
     }
     const securityReminder =
       guarded.action === 'warn' ? buildSecurityReminder(guarded.flags) : '';
     // Phase 2.5 — inject sibling scope: files already changed this session (+
     // overlapping siblings' final reports) so this child doesn't clobber prior
     // work unaware.
-    const siblingScope = buildSiblingScopeBrief(parent.rootSessionId, { topicPath });
+    const siblingScope = await releaseOnThrow(() => buildSiblingScopeBrief(parent.rootSessionId, { topicPath }));
     const finalChildMessage = [childMessage, guarded.action === 'warn' ? securityReminder : '', siblingScope]
       .filter(Boolean)
       .join('\n\n');
 
     // ── Attempt child spawn + run, with bounded retry per §Failure Modes ──
-    const result = await this.runChildWithRetry({
+    const result = await releaseOnThrow(() => this.runChildWithRetry({
       parent,
       parentContext,
       childDepth,
@@ -415,7 +437,7 @@ export class SwarmSpawner {
       reason: internal.reason ?? 'normal',
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
-    });
+    }));
 
     // Feed the child's actual spend back into the parent's pool accounting so
     // later spawns (and the budget-cascade guard via `syncParentTokenUsage`)
@@ -451,6 +473,11 @@ export class SwarmSpawner {
       }
     }
 
+    // A spawn that failed inside singleSpawnAndRun (e.g. manager concurrency cap)
+    // returns here without ever registering a node — release its reservation.
+    // No-op when register() ran (a node owns the fingerprint), so this is safe
+    // on the success path too.
+    graph.releaseFingerprint(briefHash);
     return result;
   }
 

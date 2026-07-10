@@ -95,6 +95,38 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
     g.unregisterFingerprint('agent-x');
     expect(() => g.checkSpawn('orch', brief)).not.toThrow();
   });
+
+  test('reserves atomically: a second checkSpawn WITHOUT register still dedups (race close)', () => {
+    const g = new SwarmCallGraph('root-race');
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+
+    const brief = mkBrief();
+    g.checkSpawn('orch', brief); // reserves — no register() yet (child not built)
+    // Two identical detached spawns in the same tick: the second must be refused
+    // even though the first hasn't reached register().
+    expect(() => g.checkSpawn('orch', brief)).toThrow(DuplicateSpawnError);
+  });
+
+  test('releaseFingerprint frees a reservation that never registered', () => {
+    const g = new SwarmCallGraph('root-release');
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+
+    const brief = mkBrief();
+    const { fingerprint } = g.checkSpawn('orch', brief); // reserved, then spawn denied
+    g.releaseFingerprint(fingerprint);
+    expect(() => g.checkSpawn('orch', brief)).not.toThrow();
+  });
+
+  test('releaseFingerprint is a no-op while a registered node owns it', () => {
+    const g = new SwarmCallGraph('root-owned');
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+
+    const brief = mkBrief();
+    const { fingerprint } = g.checkSpawn('orch', brief);
+    g.register({ id: 'agent-1', parentNodeId: 'orch', topicPath: brief.topicPath, role: 'security', briefHash: fingerprint, escalationUsed: false });
+    g.releaseFingerprint(fingerprint); // must NOT un-dedup the live child
+    expect(() => g.checkSpawn('orch', brief)).toThrow(DuplicateSpawnError);
+  });
 });
 
 describe('SwarmCallGraph — ancestor-chain rejection', () => {

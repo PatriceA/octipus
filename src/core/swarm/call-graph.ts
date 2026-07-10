@@ -90,6 +90,13 @@ export class SwarmCallGraph {
    *   (a) an identical fingerprint is already live in the graph, OR
    *   (b) the child's `topicPath` appears in any ancestor's `topicPath`.
    *
+   * On success it **reserves** the fingerprint immediately (before returning),
+   * not later in `register()`. The child node is only built after several
+   * `await`s, so two identical detached spawns fired in the same tick would
+   * both pass a check-only gate and both spawn — the exact duplicate the
+   * orchestrator produced. Reserving here closes that race; the caller must
+   * `releaseFingerprint()` if the spawn is then denied before `register()`.
+   *
    * Throws `DuplicateSpawnError`. Caller (spawner) catches and returns a
    * `ChildResult{status:'cancelled'}` to the parent LLM, preserving the
    * structured notice so the parent can synthesize against the in-flight
@@ -136,6 +143,9 @@ export class SwarmCallGraph {
       }
     }
 
+    // Reserve atomically so a same-tick identical spawn is deduped before this
+    // one has built its node (see method doc).
+    this.fingerprints.add(fingerprint);
     return { fingerprint };
   }
 
@@ -143,6 +153,17 @@ export class SwarmCallGraph {
   register(node: CallGraphNode): void {
     this.nodes.set(node.id, node);
     if (node.briefHash) this.fingerprints.add(node.briefHash);
+  }
+
+  /**
+   * Release a fingerprint reserved by `checkSpawn` when the spawn is denied
+   * before `register()` (fan-out/concurrency/budget/cache). No-op if a
+   * registered node still owns it, so a spurious call can't un-dedup a live
+   * child.
+   */
+  releaseFingerprint(fingerprint: string): void {
+    if (this.findByFingerprint(fingerprint)) return;
+    this.fingerprints.delete(fingerprint);
   }
 
   /** Remove a node's fingerprint from the live set (e.g. on cancel). */
