@@ -118,6 +118,10 @@ export default function ChatPage() {
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
+  // Real STT availability (whisper runs, or a cloud key is set) — the voice
+  // feature disables itself when neither is present.
+  const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
+  const [voiceUnavailableReason, setVoiceUnavailableReason] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
@@ -1505,6 +1509,18 @@ export default function ChatPage() {
     setStatusMessage(null);
   };
 
+  // Probe real voice availability once so the toggle can disable itself when
+  // neither local whisper nor a cloud STT key is present.
+  useEffect(() => {
+    api
+      .get<{ sttAvailable?: boolean; sttReason?: string | null }>('/voice/status')
+      .then((s) => {
+        setVoiceAvailable(!!s?.sttAvailable);
+        setVoiceUnavailableReason(s?.sttReason || null);
+      })
+      .catch(() => setVoiceAvailable(false));
+  }, []);
+
   // Live voice conversation: transcribe → sendMessage (same pipeline as text,
   // so agents spawn as usual) → speak the reply. The hook re-reads these each
   // render via a ref, so plain closures (not memoized) are correct here.
@@ -1611,6 +1627,8 @@ export default function ChatPage() {
             placeholder={activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
             voiceMode={voiceMode}
             voiceState={voice.state}
+            voiceError={voice.error || voiceUnavailableReason}
+            voiceAvailable={voiceAvailable !== false}
             onToggleVoiceMode={() => setVoiceMode((v) => !v)}
           />
         </div>

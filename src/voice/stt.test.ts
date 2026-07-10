@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { stripWavHeader } from './stt';
+import { isConformantWav, stripWavHeader } from './stt';
 
 // STT integration tests require the bundled whisper-cpp binary plus a
 // downloaded model file and a WAV audio fixture, none of which ship
@@ -117,5 +117,47 @@ describe('stripWavHeader', () => {
     expect(() => stripWavHeader(wav(pcm, { sampleRate: 44100 }))).toThrow(/16kHz mono 16-bit/);
     expect(() => stripWavHeader(wav(pcm, { channels: 2 }))).toThrow(/2ch/);
     expect(() => stripWavHeader(wav(pcm, { bits: 8 }))).toThrow(/8-bit/);
+  });
+});
+
+// ── isConformantWav ──────────────────────────────────────────────────
+// Gates the ffmpeg skip: only a 16kHz mono 16-bit PCM WAV (what the browser
+// encoder emits) may bypass conversion. Anything else must be re-encoded.
+describe('isConformantWav', () => {
+  /** Build a WAV file on disk with the given fmt fields; return its path. */
+  async function writeWav(
+    { format = 1, channels = 1, sampleRate = 16000, bits = 16 } = {},
+  ): Promise<string> {
+    const samples = 8;
+    const buf = new Uint8Array(44 + samples * 2);
+    const view = new DataView(buf.buffer);
+    const put = (o: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    put(0, 'RIFF'); put(8, 'WAVE'); put(12, 'fmt ');
+    view.setUint16(20, format, true);
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint16(34, bits, true);
+    put(36, 'data');
+    const path = `/tmp/conformant-${format}-${channels}-${sampleRate}-${bits}-${samples}.wav`;
+    await Bun.write(path, buf);
+    return path;
+  }
+
+  test('accepts 16kHz mono 16-bit PCM (the browser encoder output)', async () => {
+    expect(await isConformantWav(await writeWav())).toBe(true);
+  });
+
+  test('rejects wrong rate / channels / bits / codec', async () => {
+    expect(await isConformantWav(await writeWav({ sampleRate: 44100 }))).toBe(false);
+    expect(await isConformantWav(await writeWav({ channels: 2 }))).toBe(false);
+    expect(await isConformantWav(await writeWav({ bits: 8 }))).toBe(false);
+    expect(await isConformantWav(await writeWav({ format: 3 }))).toBe(false); // float, not PCM
+  });
+
+  test('rejects a non-WAV / missing file', async () => {
+    const p = '/tmp/not-a-wav.bin';
+    await Bun.write(p, new Uint8Array([1, 2, 3, 4, 5]));
+    expect(await isConformantWav(p)).toBe(false);
+    expect(await isConformantWav('/tmp/does-not-exist-xyz.wav')).toBe(false);
   });
 });

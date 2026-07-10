@@ -151,8 +151,17 @@ export function useVoiceConversation({
       setPhase('transcribing');
       try {
         const blob = new Blob(captured, { type: mimeType || 'audio/webm' });
-        const base64 = await blobToBase64(blob);
-        const format = (mimeType.split('/')[1] || 'webm').split(';')[0];
+        // Encode 16 kHz mono WAV in the browser (native decode+resample) so the
+        // host needs no ffmpeg for whisper. Fall back to the raw container if
+        // decoding fails — the server can still ffmpeg-convert it.
+        let audioBlob = blob;
+        let format = 'wav';
+        try {
+          audioBlob = await encodeWav16kMono(blob);
+        } catch {
+          format = (mimeType.split('/')[1] || 'webm').split(';')[0];
+        }
+        const base64 = await blobToBase64(audioBlob);
         // No `model` field → backend defaults to local whisper.cpp (local-first).
         const res = await fetch('/api/voice/transcribe', {
           method: 'POST',
@@ -164,11 +173,15 @@ export function useVoiceConversation({
         if (cancelled) return;
         const text = (data?.text || '').trim();
         if (text) {
+          setError(null);
           pendingSpeakRef.current = true;
           setPhase('thinking');
           sendRef.current(text);
         } else {
-          setPhase('listening'); // nothing heard — keep the conversation open
+          // Surface a real failure (e.g. STT misconfigured) rather than looping
+          // silently; an empty result with no error just means nothing was said.
+          if (data?.error) setError(`Transcription failed: ${data.error}`);
+          setPhase('listening');
         }
       } catch (err) {
         console.error('Voice transcription failed:', err);
@@ -271,6 +284,62 @@ export function useVoiceConversation({
   }, [enabled, setPhase]);
 
   return { state, error, stream };
+}
+
+/**
+ * Decode recorded audio and re-encode it as 16 kHz mono 16-bit PCM WAV — exactly
+ * what whisper.cpp wants — using native Web Audio (no library, no host ffmpeg).
+ */
+async function encodeWav16kMono(blob: Blob): Promise<Blob> {
+  const arrayBuf = await blob.arrayBuffer();
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const decodeCtx = new AudioCtx();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await decodeCtx.decodeAudioData(arrayBuf);
+  } finally {
+    void decodeCtx.close();
+  }
+  const rate = 16000;
+  const frames = Math.max(1, Math.ceil(decoded.duration * rate));
+  const offline = new OfflineAudioContext(1, frames, rate); // 1 ch → downmix to mono
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  return pcmToWav(rendered.getChannelData(0), rate);
+}
+
+/** Float32 PCM → 16-bit mono WAV blob (44-byte RIFF header + samples). */
+function pcmToWav(samples: Float32Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // channels = mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate (mono 16-bit)
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
