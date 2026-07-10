@@ -60,6 +60,7 @@ export function useVoiceConversation({
   const pendingSpeakRef = useRef(false); // a voice turn is awaiting its reply
   const prevTurnRef = useRef(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null); // current TTS blob URL, for cleanup
 
   // Keep the latest page callbacks reachable from the capture closures without
   // re-running the mic effect (ref writes in an effect, never during render).
@@ -93,17 +94,25 @@ export function useVoiceConversation({
         }
         const arrayBuf = await res.arrayBuffer();
         const type = res.headers.get('Content-Type') || 'audio/mpeg';
+        // Revoke any prior clip before replacing it; the teardown effect revokes
+        // whatever is current, so an interrupted reply can't leak its URL.
+        const revoke = () => {
+          if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+          audioUrlRef.current = null;
+        };
+        revoke();
         const url = URL.createObjectURL(new Blob([arrayBuf], { type }));
+        audioUrlRef.current = url;
         const audio = audioElRef.current ?? new Audio();
         audioElRef.current = audio;
         audio.src = url;
         audio.onended = () => {
-          URL.revokeObjectURL(url);
+          revoke();
           if (stateRef.current === 'speaking') setPhase('listening');
         };
         await audio.play().catch(() => {
           // Autoplay blocked or decode error — don't wedge the loop.
-          URL.revokeObjectURL(url);
+          revoke();
           setPhase('listening');
         });
       } catch (err) {
@@ -139,6 +148,7 @@ export function useVoiceConversation({
     let raf: number | null = null;
     let uttStart = 0;
     let lastVoice = 0;
+    let vadBuf: Uint8Array<ArrayBuffer> | null = null; // reused per frame — no per-tick alloc
 
     const finishUtterance = async (mimeType: string) => {
       const captured = chunks;
@@ -208,15 +218,14 @@ export function useVoiceConversation({
     };
 
     const tick = () => {
-      if (cancelled || !analyser) return;
-      const buf = new Uint8Array(analyser.fftSize);
-      analyser.getByteTimeDomainData(buf);
+      if (cancelled || !analyser || !vadBuf) return;
+      analyser.getByteTimeDomainData(vadBuf);
       let sumSq = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const v = (buf[i] - 128) / 128;
+      for (let i = 0; i < vadBuf.length; i++) {
+        const v = (vadBuf[i] - 128) / 128;
         sumSq += v * v;
       }
-      const rms = Math.sqrt(sumSq / buf.length);
+      const rms = Math.sqrt(sumSq / vadBuf.length);
       const now = performance.now();
 
       // Only segment while listening (half-duplex: never during thinking/
@@ -227,7 +236,10 @@ export function useVoiceConversation({
           lastVoice = now;
           if (!recording) beginUtterance();
         } else if (recording && (now - lastVoice >= SILENCE_MS || now - uttStart >= MAX_UTTERANCE_MS)) {
-          recorder?.stop(); // → finishUtterance
+          // Flip out of 'listening' synchronously so the next frame can't start a
+          // fresh recorder in the gap before the async onstop → finishUtterance.
+          setPhase('transcribing');
+          recorder?.stop();
         }
       }
       raf = requestAnimationFrame(tick);
@@ -250,6 +262,7 @@ export function useVoiceConversation({
         const src = ctx.createMediaStreamSource(s);
         analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
+        vadBuf = new Uint8Array(analyser.fftSize);
         src.connect(analyser);
         setPhase('listening');
         raf = requestAnimationFrame(tick);
@@ -274,6 +287,11 @@ export function useVoiceConversation({
       if (audioElRef.current) {
         audioElRef.current.pause();
         audioElRef.current.src = '';
+      }
+      // Revoke a clip interrupted mid-playback — onended won't fire after this.
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = null;
       }
       ctx?.close().catch(() => {});
       mediaStream?.getTracks().forEach((t) => t.stop());

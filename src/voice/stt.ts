@@ -1,7 +1,34 @@
 import { type Subprocess, spawn } from 'bun';
 import { EventEmitter } from 'events';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { logger } from '../utils/logger';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
+
+/** A unique temp path in the OS temp dir (cross-platform; collision-free). */
+function tmpPath(suffix: string): string {
+  return join(tmpdir(), `whisper-${crypto.randomUUID()}${suffix}`);
+}
+
+/** Wrap raw 16 kHz mono s16 PCM in a 44-byte WAV header so whisper.cpp accepts it. */
+function pcm16kMonoToWav(pcm: Uint8Array): Buffer {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // format = PCM
+  header.writeUInt16LE(1, 22); // channels = mono
+  header.writeUInt32LE(16000, 24); // sample rate
+  header.writeUInt32LE(16000 * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, Buffer.from(pcm)]);
+}
 
 /**
  * True if the file is already exactly what whisper.cpp decodes — 16 kHz mono
@@ -34,7 +61,7 @@ export async function isConformantWav(path: string): Promise<boolean> {
  */
 async function toWhisperWav(sourcePath: string): Promise<string> {
   if (await isConformantWav(sourcePath)) return sourcePath;
-  const out = `/tmp/whisper-16k-${Date.now()}-${Math.round(performance.now())}.wav`;
+  const out = tmpPath('-16k.wav');
   let proc: Subprocess<'ignore', 'pipe', 'pipe'>;
   try {
     proc = spawn({
@@ -112,18 +139,21 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
     let tempSource = false;
 
     if (Buffer.isBuffer(audio)) {
-      sourcePath = `/tmp/whisper-src-${Date.now()}`;
+      sourcePath = tmpPath('-src');
       await Bun.write(sourcePath, audio);
       tempSource = true;
     } else {
       sourcePath = audio;
     }
 
-    // Normalize to 16 kHz mono WAV — whisper.cpp decodes nothing else.
-    const audioPath = await toWhisperWav(sourcePath);
-    const jsonPath = `${audioPath}.json`;
-
+    // audioPath/jsonPath are set inside the try so a conversion failure still
+    // hits the finally that cleans up the source temp file.
+    let audioPath = sourcePath;
+    let jsonPath = '';
     try {
+      // Normalize to 16 kHz mono WAV — whisper.cpp decodes nothing else.
+      audioPath = await toWhisperWav(sourcePath);
+      jsonPath = `${audioPath}.json`;
       const binary = await resolveWhisperBinary();
       if (!binary) {
         throw new Error('Local whisper is not installed. Run `octi setup` to install it, or use a hosted STT model (voxtral-*, whisper-1).');
@@ -182,18 +212,11 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
         duration: (Date.now() - startTime) / 1000,
       };
     } finally {
-      // Clean up temp files: the source only when we wrote it from a buffer; the
-      // converted wav only when ffmpeg actually ran (audioPath !== sourcePath).
-      if (tempSource) {
-        const srcFile = Bun.file(sourcePath);
-        if (await srcFile.exists()) await Bun.$`rm ${sourcePath}`.quiet();
-      }
-      if (audioPath !== sourcePath) {
-        const audioFile = Bun.file(audioPath);
-        if (await audioFile.exists()) await Bun.$`rm ${audioPath}`.quiet();
-      }
-      const jsonFile = Bun.file(jsonPath);
-      if (await jsonFile.exists()) await Bun.$`rm ${jsonPath}`.quiet();
+      // Clean up temp files (rm force no-ops on missing paths): the source only
+      // when we wrote it from a buffer; the converted wav only when ffmpeg ran.
+      if (tempSource) await rm(sourcePath, { force: true });
+      if (audioPath !== sourcePath) await rm(audioPath, { force: true });
+      if (jsonPath) await rm(jsonPath, { force: true });
     }
   }
 
@@ -201,51 +224,47 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
    * Stream transcription for real-time use
    */
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-    const tempPath = `/tmp/whisper-stream-${Date.now()}.wav`;
+    const tempPath = tmpPath('-stream.wav');
     const chunks: Uint8Array[] = [];
 
     const reader = stream.getReader();
     let totalBytes = 0;
     const chunkThreshold = 16000 * 2 * 3; // 3 seconds of 16kHz 16-bit audio
 
+    // Chunks are raw 16kHz mono s16 PCM (the byte-threshold math assumes it), so
+    // wrap each batch in a WAV header — that makes it conformant and lets
+    // transcribe() skip ffmpeg entirely (headerless PCM would otherwise fail
+    // ffmpeg's autodetect).
+    const flush = async (data: Buffer): Promise<string> => {
+      await Bun.write(tempPath, pcm16kMonoToWav(data));
+      const result = await this.transcribe(tempPath);
+      return result.text;
+    };
+
     try {
       while (true) {
         const { done, value } = await reader.read();
-
         if (done) break;
 
         chunks.push(value);
         totalBytes += value.length;
 
-        // Process in chunks
         if (totalBytes >= chunkThreshold) {
           const audioData = Buffer.concat(chunks);
           chunks.length = 0;
           totalBytes = 0;
-
-          // Write chunk and transcribe
-          await Bun.write(tempPath, audioData);
-          const result = await this.transcribe(tempPath);
-
-          if (result.text) {
-            yield result.text;
-          }
+          const text = await flush(audioData);
+          if (text) yield text;
         }
       }
 
       // Process remaining audio
       if (chunks.length > 0) {
-        const audioData = Buffer.concat(chunks);
-        await Bun.write(tempPath, audioData);
-        const result = await this.transcribe(tempPath);
-
-        if (result.text) {
-          yield result.text;
-        }
+        const text = await flush(Buffer.concat(chunks));
+        if (text) yield text;
       }
     } finally {
-      await Bun.file(tempPath).exists() &&
-        await Bun.$`rm ${tempPath}`.quiet();
+      await rm(tempPath, { force: true });
     }
   }
 

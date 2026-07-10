@@ -49,10 +49,15 @@ async function getLocalWhisper() {
   if (localWhisper) return localWhisper;
 
   const config = getConfig();
-  if (!config.voice.whisperModelPath) return null;
+  // Use the configured model path, else the installed default — and only if the
+  // file actually exists, so this agrees with what /status's probe reports
+  // (avoids "status says ready but transcribe 400s").
+  const { whisperModelPath } = await import('@/voice/whisper');
+  const modelPath = config.voice.whisperModelPath || whisperModelPath();
+  if (!(await Bun.file(modelPath).exists())) return null;
 
   const { WhisperEngine } = await import('@/voice/stt');
-  localWhisper = new WhisperEngine(config.voice.whisperModelPath, {
+  localWhisper = new WhisperEngine(modelPath, {
     language: config.voice.language || 'en',
   });
   return localWhisper;
@@ -370,9 +375,12 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       }
 
       const config = getConfig();
-      if (!config.voice.ttsEnabled) {
+      // Gate on REAL availability (same source as /status), not the config flag —
+      // otherwise a mistral default with no key passes here and 500s downstream.
+      const availability = await resolveVoiceAvailability(config);
+      if (!availability.tts.available) {
         set.status = 503;
-        return { error: 'Text-to-speech is not enabled (set voice.ttsProvider, or voice.piperModelPath for local piper)' };
+        return { error: availability.tts.reason || 'Text-to-speech is not enabled (configure a TTS provider/key, or voice.piperModelPath for local piper)' };
       }
 
       try {

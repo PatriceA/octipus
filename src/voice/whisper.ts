@@ -1,6 +1,6 @@
 import { spawn, which } from 'bun';
-import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { cp, mkdir, readdir, rm } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { logger } from '../utils/logger';
 
 /**
@@ -43,16 +43,15 @@ export function whisperModelPath(): string {
 }
 
 /**
- * Resolve an existing binary to actually spawn: prefer the per-platform install,
- * fall back to the legacy committed `models/whisper/whisper-cpp` layout so old
- * setups keep working. Returns null if neither is on disk.
+ * Resolve the per-platform binary to spawn, or null if not installed. We do NOT
+ * fall back to the legacy committed `models/whisper/whisper-cpp`: that binary is
+ * dynamically linked without its libs (exit 127), and handing it back would
+ * resurrect the exact silent-failure this module removes. `octi setup` installs
+ * a real per-platform binary.
  */
 export async function resolveWhisperBinary(): Promise<string | null> {
   const perPlatform = whisperBinaryPath();
-  if (await exists(perPlatform)) return perPlatform;
-  const legacy = join(whisperRoot(), `whisper-cpp${EXE}`);
-  if (await exists(legacy)) return legacy;
-  return null;
+  return (await Bun.file(perPlatform).exists()) ? perPlatform : null;
 }
 
 /**
@@ -78,18 +77,27 @@ export interface WhisperProbe {
   modelPath: string;
 }
 
+// Availability changes only at install time, but probeWhisper forks a
+// subprocess and /voice/status is polled per page load — so cache the result and
+// invalidate it after an install.
+let cachedProbe: WhisperProbe | null = null;
+export function invalidateWhisperProbe(): void {
+  cachedProbe = null;
+}
+
 /**
  * Detect whether local whisper *actually works* — not just whether a config
  * value is set. Runs the binary (`--help`) so a missing-libs (exit 127) or
- * missing-binary (ENOENT) failure is caught, and stats the model file.
+ * missing-binary (ENOENT) failure is caught, and checks the model file. Cached.
  */
 export async function probeWhisper(): Promise<WhisperProbe> {
+  if (cachedProbe) return cachedProbe;
   const modelPath = whisperModelPath();
-  const modelOk = await exists(modelPath);
+  const modelOk = await Bun.file(modelPath).exists();
   const binaryPath = await resolveWhisperBinary();
 
   if (!binaryPath) {
-    return { binaryOk: false, binaryReason: 'whisper binary not installed', modelOk, binaryPath: null, modelPath };
+    return (cachedProbe = { binaryOk: false, binaryReason: 'whisper binary not installed', modelOk, binaryPath: null, modelPath });
   }
   try {
     const proc = spawn({
@@ -99,17 +107,18 @@ export async function probeWhisper(): Promise<WhisperProbe> {
       env: whisperSpawnEnv(binaryPath),
     });
     await proc.exited;
-    // whisper-cli --help exits 0; a shared-lib load failure exits 127.
-    if (proc.exitCode === 0 || proc.exitCode === 1) {
-      return { binaryOk: true, binaryReason: null, modelOk, binaryPath, modelPath };
+    // A healthy `whisper-cli --help` exits 0; a shared-lib load failure exits
+    // 127. Require 0 so an ABI-broken binary that errors out isn't reported OK.
+    if (proc.exitCode === 0) {
+      return (cachedProbe = { binaryOk: true, binaryReason: null, modelOk, binaryPath, modelPath });
     }
     const stderr = await new Response(proc.stderr).text();
     const reason = /cannot open shared object|not found|libwhisper|libggml/i.test(stderr)
       ? 'whisper binary present but its shared libraries are missing — reinstall local voice'
       : `whisper binary failed to run (exit ${proc.exitCode})`;
-    return { binaryOk: false, binaryReason: reason, modelOk, binaryPath, modelPath };
+    return (cachedProbe = { binaryOk: false, binaryReason: reason, modelOk, binaryPath, modelPath });
   } catch (err) {
-    return { binaryOk: false, binaryReason: `whisper binary could not be spawned: ${(err as Error).message}`, modelOk, binaryPath, modelPath };
+    return (cachedProbe = { binaryOk: false, binaryReason: `whisper binary could not be spawned: ${(err as Error).message}`, modelOk, binaryPath, modelPath });
   }
 }
 
@@ -213,7 +222,9 @@ async function doInstall(onProgress: InstallProgress): Promise<void> {
 
   await ensureModel(onProgress);
 
-  // Prove it: the whole point was catching the silent 127.
+  // Prove it: the whole point was catching the silent 127. Drop the stale cached
+  // "not installed" probe first so this re-runs against the freshly staged files.
+  invalidateWhisperProbe();
   const probe = await probeWhisper();
   if (!probe.binaryOk) {
     throw new Error(`Whisper built but still won't run: ${probe.binaryReason}`);
@@ -228,7 +239,7 @@ async function doInstall(onProgress: InstallProgress): Promise<void> {
 /** Ensure the ggml model is present; download if missing. */
 async function ensureModel(onProgress: InstallProgress): Promise<void> {
   const model = whisperModelPath();
-  if (await exists(model)) return;
+  if (await Bun.file(model).exists()) return;
   onProgress(`Downloading ${MODEL_FILE}…`);
   const res = await fetch(MODEL_URL);
   if (!res.ok || !res.body) throw new Error(`Model download failed (${res.status})`);
@@ -257,7 +268,10 @@ interface Artifacts { binary: string | null; libs: string[]; }
 
 /** Walk the build tree for the whisper-cli binary and all shared libs. */
 async function collectArtifacts(buildDir: string): Promise<Artifacts> {
-  const libExt = process.platform === 'darwin' ? '.dylib' : process.platform === 'win32' ? '.dll' : '.so';
+  // Anchor to the extension so a substring like ".so" doesn't sweep up cruft
+  // (foo.so.bak, x.so.tmp): match `.so`/`.so.1`/`.so.1.7.4`, `.dylib`, `.dll`.
+  const libRe =
+    process.platform === 'darwin' ? /\.dylib$/ : process.platform === 'win32' ? /\.dll$/ : /\.so(\.\d+)*$/;
   const binaryName = `whisper-cli${EXE}`;
   const out: Artifacts = { binary: null, libs: [] };
 
@@ -274,7 +288,7 @@ async function collectArtifacts(buildDir: string): Promise<Artifacts> {
         await walk(full);
       } else if (e.name === binaryName && !out.binary) {
         out.binary = full;
-      } else if (e.name.includes(libExt)) {
+      } else if (libRe.test(e.name)) {
         // matches libwhisper.so.1, libggml.so, libggml-cpu.dylib, whisper.dll, …
         out.libs.push(full);
       }
@@ -307,17 +321,4 @@ async function run(cmd: string[], onProgress: InstallProgress): Promise<void> {
   if (proc.exitCode !== 0) {
     throw new Error(`Command failed (exit ${proc.exitCode}): ${cmd.join(' ')}`);
   }
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function basename(p: string): string {
-  return p.split(/[\\/]/).pop()!;
 }
