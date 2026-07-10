@@ -1611,6 +1611,7 @@ export default function ChatPage() {
             placeholder={activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
             voiceMode={voiceMode}
             voiceState={voice.state}
+            voiceError={voice.error}
             onToggleVoiceMode={() => setVoiceMode((v) => !v)}
           />
         </div>

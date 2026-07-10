@@ -10,6 +10,34 @@ function getBundledWhisperBinary(): string {
   return resolve(projectRoot, 'models/whisper/whisper-cpp');
 }
 
+/**
+ * Transcode arbitrary audio to the only thing whisper.cpp decodes: 16 kHz mono
+ * signed-16 WAV. Browser mics send webm/opus (and a Bluetooth headset may flip
+ * between mono/stereo profiles); ffmpeg sniffs the container and `-ac 1`
+ * downmixes deterministically, so the binary always gets a clean file. Returns
+ * a new temp path the caller must delete.
+ */
+async function toWhisperWav(sourcePath: string): Promise<string> {
+  const out = `/tmp/whisper-16k-${Date.now()}-${Math.round(performance.now())}.wav`;
+  let proc: Subprocess<'ignore', 'pipe', 'pipe'>;
+  try {
+    proc = spawn({
+      cmd: ['ffmpeg', '-nostdin', '-y', '-i', sourcePath, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out],
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+  } catch {
+    // spawn throws if the binary is missing on PATH.
+    throw new Error('ffmpeg is required for local whisper transcription but was not found. Install ffmpeg, or use a hosted STT model (voxtral-*, whisper-1).');
+  }
+  await proc.exited;
+  if (proc.exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Audio conversion failed (ffmpeg exit ${proc.exitCode}): ${stderr.slice(-300)}`);
+  }
+  return out;
+}
+
 export interface STTOptions {
   model?: 'tiny' | 'base' | 'small' | 'medium' | 'large';
   language?: string;
@@ -64,17 +92,19 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
     const startTime = Date.now();
 
     // If buffer, write to temp file
-    let audioPath: string;
-    let tempFile = false;
+    let sourcePath: string;
+    let tempSource = false;
 
     if (Buffer.isBuffer(audio)) {
-      audioPath = `/tmp/whisper-${Date.now()}.wav`;
-      await Bun.write(audioPath, audio);
-      tempFile = true;
+      sourcePath = `/tmp/whisper-src-${Date.now()}`;
+      await Bun.write(sourcePath, audio);
+      tempSource = true;
     } else {
-      audioPath = audio;
+      sourcePath = audio;
     }
 
+    // Normalize to 16 kHz mono WAV — whisper.cpp decodes nothing else.
+    const audioPath = await toWhisperWav(sourcePath);
     const jsonPath = `${audioPath}.json`;
 
     try {
@@ -131,11 +161,14 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
         duration: (Date.now() - startTime) / 1000,
       };
     } finally {
-      // Clean up temp files
-      if (tempFile) {
-        const audioFile = Bun.file(audioPath);
-        if (await audioFile.exists()) await Bun.$`rm ${audioPath}`.quiet();
+      // Clean up temp files: the converted wav is always ours; the source only
+      // when we wrote it from a buffer.
+      if (tempSource) {
+        const srcFile = Bun.file(sourcePath);
+        if (await srcFile.exists()) await Bun.$`rm ${sourcePath}`.quiet();
       }
+      const audioFile = Bun.file(audioPath);
+      if (await audioFile.exists()) await Bun.$`rm ${audioPath}`.quiet();
       const jsonFile = Bun.file(jsonPath);
       if (await jsonFile.exists()) await Bun.$`rm ${jsonPath}`.quiet();
     }

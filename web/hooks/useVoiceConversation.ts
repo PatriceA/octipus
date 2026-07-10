@@ -164,11 +164,15 @@ export function useVoiceConversation({
         if (cancelled) return;
         const text = (data?.text || '').trim();
         if (text) {
+          setError(null);
           pendingSpeakRef.current = true;
           setPhase('thinking');
           sendRef.current(text);
         } else {
-          setPhase('listening'); // nothing heard — keep the conversation open
+          // Surface a real failure (e.g. STT misconfigured) rather than looping
+          // silently; an empty result with no error just means nothing was said.
+          if (data?.error) setError(`Transcription failed: ${data.error}`);
+          setPhase('listening');
         }
       } catch (err) {
         console.error('Voice transcription failed:', err);

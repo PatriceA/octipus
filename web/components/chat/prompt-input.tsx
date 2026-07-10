@@ -40,6 +40,7 @@ interface PromptInputProps {
   /** Live voice conversation mode (hands-free talk ↔ spoken reply). */
   voiceMode?: boolean;
   voiceState?: VoiceState;
+  voiceError?: string | null;
   onToggleVoiceMode?: () => void;
 }
 
@@ -89,6 +90,7 @@ export default function PromptInput({
   placeholder = 'Type a message...',
   voiceMode = false,
   voiceState = 'idle',
+  voiceError = null,
   onToggleVoiceMode,
 }: PromptInputProps) {
   const [text, setText] = useState('');
@@ -443,6 +445,11 @@ export default function PromptInput({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      {/* Voice conversation error (STT/TTS/mic) */}
+      {voiceMode && voiceError && (
+        <div className="mb-2 rounded-lg bg-error/10 px-3 py-1.5 text-xs text-error">{voiceError}</div>
+      )}
+
       {/* Drop zone overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10">
