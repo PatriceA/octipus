@@ -45,6 +45,9 @@ set "WEB_LOG_FILE=%STATE_DIR%\web.log"
 
 if not defined API_PORT set "API_PORT=3005"
 if not defined WEB_PORT set "WEB_PORT=3007"
+:: Desktop dev web server (tauri:dev → next dev -p 3008). Distinct from
+:: WEB_PORT so the desktop and the browser web UI never collide.
+if not defined DESKTOP_DEV_PORT set "DESKTOP_DEV_PORT=3008"
 
 if not exist "%STATE_DIR%" mkdir "%STATE_DIR%"
 
@@ -59,14 +62,18 @@ if exist "%PROJECT_DIR%\.env" (
 set "COMMAND=%~1"
 if "%COMMAND%"=="" set "COMMAND=help"
 
+if "%COMMAND%"=="setup" goto :cmd_setup
 if "%COMMAND%"=="start" goto :cmd_start
 if "%COMMAND%"=="stop" goto :cmd_stop
 if "%COMMAND%"=="restart" goto :cmd_restart
 if "%COMMAND%"=="status" goto :cmd_status
+if "%COMMAND%"=="doctor" goto :cmd_doctor
 if "%COMMAND%"=="logs" goto :cmd_logs
 if "%COMMAND%"=="open" goto :cmd_open
 if "%COMMAND%"=="tui" goto :cmd_tui
 if "%COMMAND%"=="edit" goto :cmd_edit
+if "%COMMAND%"=="desktop" goto :cmd_desktop
+if "%COMMAND%"=="uninstall" goto :cmd_uninstall
 if "%COMMAND%"=="help" goto :cmd_help
 if "%COMMAND%"=="--help" goto :cmd_help
 if "%COMMAND%"=="-h" goto :cmd_help
@@ -207,7 +214,7 @@ if "!DEV_MODE!"=="true" (
     cd /d "%PROJECT_DIR%\web"
     call bun run build >"%WEB_LOG_FILE%" 2>&1
     if errorlevel 1 (
-        echo   %YELLOW%!%NC% Production build failed, using dev mode instead
+        echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
         call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
     ) else (
         echo   %BLUE%-%NC% Starting web UI...
@@ -339,7 +346,7 @@ if "!DEV_MODE!"=="true" (
     cd /d "%PROJECT_DIR%\web"
     call bun run build >"%WEB_LOG_FILE%" 2>&1
     if errorlevel 1 (
-        echo   %YELLOW%!%NC% Production build failed, using dev mode instead
+        echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
         call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
     ) else (
         echo   %BLUE%-%NC% Starting web UI...
@@ -417,14 +424,14 @@ if "!STORAGE_MODE!"=="external" (
 
 call :check_port 11434
 if errorlevel 1 (
-    echo   %YELLOW%!%NC% Ollama:     not reachable %DIM%(optional^)%NC%
+    echo   %YELLOW%^^!%NC% Ollama:     not reachable %DIM%(optional^)%NC%
 ) else (
     echo   %GREEN%v%NC% Ollama:     reachable %DIM%(port 11434^)%NC%
 )
 
 call :check_port 4000
 if errorlevel 1 (
-    echo   %YELLOW%!%NC% LiteLLM:    not reachable %DIM%(optional^)%NC%
+    echo   %YELLOW%^^!%NC% LiteLLM:    not reachable %DIM%(optional^)%NC%
 ) else (
     echo   %GREEN%v%NC% LiteLLM:    reachable %DIM%(port 4000^)%NC%
 )
@@ -502,20 +509,253 @@ cd /d "%PROJECT_DIR%"
 bun run src/tui-editor/index.ts --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
 exit /b %errorlevel%
 
+:: ─── Setup (first-run / re-config wizard) ───────────────────────────────────
+:cmd_setup
+:: Interactive first-run wizard: storage, secrets, admin account, provider,
+:: default model, capabilities. Same code path as `bun run setup`.
+cd /d "%PROJECT_DIR%"
+bun run scripts/setup-wizard.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8
+exit /b %errorlevel%
+
+:: ─── Doctor (environment health checks) ─────────────────────────────────────
+:cmd_doctor
+cd /d "%PROJECT_DIR%"
+bun run scripts/doctor.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8
+exit /b %errorlevel%
+
+:: ─── Desktop (Tauri thin client) ────────────────────────────────────────────
+:: Launch the Tauri desktop app. It is a thin CLIENT: it does NOT run its own
+:: backend — it connects to whatever Octipus backend you point it at (local
+:: `octi start`, a LAN host, or a remote deployment).
+:cmd_desktop
+set "DT_BUILD=false"
+set "DT_STOP=false"
+:desktop_parse
+if "%~2"=="" goto :desktop_parsed
+if /i "%~2"=="--build"      set "DT_BUILD=true"
+if /i "%~2"=="-b"           set "DT_BUILD=true"
+if /i "%~2"=="--stop"       set "DT_STOP=true"
+if /i "%~2"=="--foreground" rem foreground is the only mode on Windows
+if /i "%~2"=="-f"           rem foreground is the only mode on Windows
+shift
+goto :desktop_parse
+:desktop_parsed
+
+:: --stop: reap any running desktop app (built bundle or tauri dev).
+if "!DT_STOP!"=="true" (
+    echo   %BLUE%-%NC% Stopping desktop app...
+    taskkill /F /IM "Octipus.exe" /T >nul 2>&1
+    call :kill_port %DESKTOP_DEV_PORT%
+    echo   %GREEN%v%NC% Reaped any running desktop processes.
+    exit /b 0
+)
+
+:: Building the desktop client needs the Rust toolchain (cargo).
+where cargo >nul 2>&1
+if errorlevel 1 (
+    echo   %RED%x%NC% Rust toolchain not found (cargo^) — required to build the desktop app.
+    echo     %DIM%Install Rust from https://rustup.rs and the Tauri prerequisites.%NC%
+    exit /b 1
+)
+
+:: Nudge the user to bring up a backend if nothing is reachable.
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
+if errorlevel 1 (
+    echo     %DIM%No backend detected on :%API_PORT%. Start one with 'octi start',%NC%
+    echo     %DIM%or point the app at a remote backend from its connection screen.%NC%
+)
+
+cd /d "%PROJECT_DIR%\web"
+if "!DT_BUILD!"=="true" (
+    echo   %BLUE%-%NC% Building the desktop app bundle %DIM%(can take a few minutes^)%NC%...
+    echo     %DIM%Output: web\src-tauri\target\release\bundle\%NC%
+    bun run tauri:build
+    exit /b %errorlevel%
+)
+
+echo   %BLUE%-%NC% Launching the Octipus desktop app...
+echo     %DIM%It connects to a backend (default http://localhost:%API_PORT%) — change it in-app.%NC%
+bun run tauri:dev
+exit /b %errorlevel%
+
+:: ─── Uninstall ──────────────────────────────────────────────────────────────
+:: Detect an Octipus Docker deployment (containers or volumes named octipus-*).
+:: Sets HAS_DOCKER=true when found. Uses for/f so it only trips on real output.
+:detect_docker
+set "HAS_DOCKER=false"
+where docker >nul 2>&1 || exit /b 0
+if not exist "%PROJECT_DIR%\docker-compose.yml" exit /b 0
+for /f "delims=" %%n in ('docker ps -a --format "{{.Names}}" 2^>nul ^| findstr /b "octipus-"') do set "HAS_DOCKER=true"
+for /f "delims=" %%n in ('docker volume ls --format "{{.Name}}" 2^>nul ^| findstr "octipus-"') do set "HAS_DOCKER=true"
+exit /b 0
+
+:cmd_uninstall
+set "PURGE=false"
+set "ASSUME_YES=false"
+set "DRY_RUN=false"
+:uninstall_parse
+if "%~2"=="" goto :uninstall_parsed
+if /i "%~2"=="--purge"   set "PURGE=true"
+if /i "%~2"=="--yes"     set "ASSUME_YES=true"
+if /i "%~2"=="-y"        set "ASSUME_YES=true"
+if /i "%~2"=="--dry-run" set "DRY_RUN=true"
+if /i "%~2"=="-n"        set "DRY_RUN=true"
+if /i "%~2"=="-h"        goto :cmd_uninstall_help
+if /i "%~2"=="--help"    goto :cmd_uninstall_help
+shift
+goto :uninstall_parse
+:uninstall_parsed
+
+call :print_banner
+
+:: Resolve the data dir: .env DATA_DIR overrides the default.
+set "DATA_DIR_RESOLVED=%STATE_DIR%\data"
+if exist "%PROJECT_DIR%\.env" (
+    for /f "tokens=1,* delims==" %%a in ('findstr /b "DATA_DIR=" "%PROJECT_DIR%\.env" 2^>nul') do set "DATA_DIR_RESOLVED=%%b"
+)
+set "DATA_DIR_RESOLVED=!DATA_DIR_RESOLVED:"=!"
+:: Expand a leading ~ to the user's home, matching the bash CLI.
+if "!DATA_DIR_RESOLVED:~0,1!"=="~" set "DATA_DIR_RESOLVED=%USERPROFILE%!DATA_DIR_RESOLVED:~1!"
+
+call :detect_docker
+
+:: ── Show the plan ───────────────────────────────────────────────────────────
+echo   %BOLD%This will remove Octipus from your system.%NC%
+echo.
+echo   %BLUE%-%NC% Stop running backend / web / TUI processes
+if "!HAS_DOCKER!"=="true" (
+    if "!PURGE!"=="true" (
+        echo   %BLUE%-%NC% Docker: compose down %BOLD%-v%NC% ^(containers + volumes deleted^)
+    ) else (
+        echo   %BLUE%-%NC% Docker: compose down ^(containers only — named volumes kept^)
+    )
+)
+if "!PURGE!"=="true" (
+    echo   %BLUE%-%NC% Remove EVERYTHING under %STATE_DIR% ^(app state, vault, secrets^)
+    echo   %YELLOW%^^!%NC% PURGE: your database, vault secrets and chat history will be %BOLD%permanently deleted%NC%.
+) else (
+    echo   %BLUE%-%NC% Keep your data: !DATA_DIR_RESOLVED!
+    echo   %BLUE%-%NC% Back up secrets to %STATE_DIR%\.env.uninstall-backup
+    echo     %DIM%Re-install later to reuse the same data. Pass --purge to wipe it all.%NC%
+)
+echo.
+
+if "!DRY_RUN!"=="true" (
+    echo   %GREEN%v%NC% Dry run — nothing was changed.
+    exit /b 0
+)
+
+:: ── Confirm ─────────────────────────────────────────────────────────────────
+if "!ASSUME_YES!"=="true" goto :uninstall_execute
+set "WORD=uninstall"
+if "!PURGE!"=="true" set "WORD=purge"
+set "REPLY="
+set /p "REPLY=  Type '!WORD!' to confirm: "
+if not "!REPLY!"=="!WORD!" (
+    echo.
+    echo   %YELLOW%^^!%NC% Aborted — nothing was changed.
+    exit /b 1
+)
+echo.
+
+:uninstall_execute
+:: Stop everything (frees ports, kills tracked + stray bun processes).
+echo   %BLUE%-%NC% Stopping processes...
+call :kill_all_octipus
+echo   %GREEN%v%NC% Processes stopped
+
+:: Tear down Docker if we detected an Octipus deployment.
+if "!HAS_DOCKER!"=="true" (
+    echo   %BLUE%-%NC% Tearing down Docker...
+    pushd "%PROJECT_DIR%"
+    if "!PURGE!"=="true" (
+        docker compose down -v --remove-orphans >nul 2>&1 || echo   %YELLOW%^^!%NC% docker compose down failed — remove 'octipus-*' containers/volumes manually.
+    ) else (
+        docker compose down --remove-orphans >nul 2>&1 || echo   %YELLOW%^^!%NC% docker compose down failed — remove 'octipus-*' containers manually.
+    )
+    popd
+    echo   %GREEN%v%NC% Docker torn down
+)
+
+:: Preserve secrets so kept data stays decryptable (MASTER_KEY lives in .env).
+if not "!PURGE!"=="true" (
+    if exist "%PROJECT_DIR%\.env" (
+        copy /y "%PROJECT_DIR%\.env" "%STATE_DIR%\.env.uninstall-backup" >nul 2>&1 && (
+            echo   %GREEN%v%NC% Secrets backed up to %STATE_DIR%\.env.uninstall-backup
+        ) || (
+            echo   %YELLOW%^^!%NC% Could not back up .env — kept data may be unreadable without its MASTER_KEY.
+        )
+    )
+)
+
+if "!PURGE!"=="true" (
+    if exist "%STATE_DIR%" rmdir /s /q "%STATE_DIR%"
+    echo   %GREEN%v%NC% Removed %STATE_DIR% ^(all data + secrets^)
+) else (
+    :: Only delete the app checkout when it's the installer-managed path;
+    :: a dev clone or a linked global install is left in place.
+    if /i "%PROJECT_DIR%"=="%STATE_DIR%\app" (
+        rmdir /s /q "%PROJECT_DIR%"
+        echo   %GREEN%v%NC% Removed app checkout %PROJECT_DIR%
+    ) else (
+        echo   %YELLOW%^^!%NC% App checkout at %PROJECT_DIR% looks like a dev clone — left in place.
+        echo     %DIM%Delete it yourself if you want it gone.%NC%
+    )
+    if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%" >nul 2>&1
+    if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%" >nul 2>&1
+    if exist "%LOG_FILE%" del "%LOG_FILE%" >nul 2>&1
+    if exist "%WEB_LOG_FILE%" del "%WEB_LOG_FILE%" >nul 2>&1
+)
+
+echo.
+call :print_banner
+if "!PURGE!"=="true" (
+    echo   %GREEN%v%NC% Octipus fully removed. Goodbye. 🐙
+) else (
+    echo   %GREEN%v%NC% Octipus uninstalled — your data is preserved:
+    echo     %DIM%data:    !DATA_DIR_RESOLVED!%NC%
+    echo     %DIM%secrets: %STATE_DIR%\.env.uninstall-backup%NC%
+)
+echo.
+echo   %BLUE%-%NC% Remove the %BOLD%octi%NC% command from your PATH with:
+echo     %DIM%bun rm -g octipus%NC%
+echo.
+exit /b 0
+
+:cmd_uninstall_help
+call :print_banner
+echo   %BOLD%octi uninstall%NC% — remove Octipus from this machine.
+echo.
+echo   By default your data is %BOLD%kept%NC% ^(database, vault, history^) so a
+echo   later re-install picks up where you left off. Use --purge to wipe it.
+echo.
+echo   %BOLD%Usage:%NC% octi uninstall [--purge] [--yes] [--dry-run]
+echo.
+echo   %BOLD%Options:%NC%
+echo     --purge          Also delete all data + secrets ^(%STATE_DIR%^) and Docker volumes
+echo     --yes, -y        Skip the confirmation prompt
+echo     --dry-run, -n    Show what would happen without changing anything
+echo.
+exit /b 0
+
 :: ─── Help ───────────────────────────────────────────────────────────────────
 :cmd_help
 call :print_banner
 echo   %BOLD%Usage:%NC% octi ^<command^> [options]
 echo.
 echo   %BOLD%Commands:%NC%
+echo     setup            Run the first-run / re-config wizard
 echo     start [--dev]    Start backend and web UI
 echo     stop             Stop all Octipus processes
 echo     restart [--dev]  Restart everything
 echo     tui              Launch terminal chat — pins to current directory as project
 echo     edit             Launch TUI editor — pins to current directory as project
 echo     status           Show running state and service health
+echo     doctor [--json]  Run environment health checks (what's wired, what's missing)
 echo     logs [--web]     Tail backend logs (--web for web UI)
 echo     open             Open web UI in browser
+echo     desktop [opts]   Launch the desktop app ^(thin client; --build bundle, --stop quit^)
+echo     uninstall        Remove Octipus ^(keeps data; --purge wipes everything^)
 echo     help             Show this help message
 echo.
 echo   %BOLD%Options:%NC%
