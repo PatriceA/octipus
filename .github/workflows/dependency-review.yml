@@ -21,8 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Non-blocking until the repo's Dependency Graph feature is enabled — the
+      # action hard-fails ("Dependency review is not supported on this
+      # repository") without it. Enable it at
+      # Settings → Security → Dependency graph, then remove `continue-on-error`
+      # to make this a blocking gate.
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
+        continue-on-error: true
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
