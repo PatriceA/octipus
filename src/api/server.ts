@@ -26,6 +26,7 @@ import { artifactRoutes } from './routes/artifacts';
 import { authRoutes } from './routes/auth';
 import { channelBindingRoutes } from './routes/channel-bindings';
 import { chatRoutes } from './routes/chat';
+import { openaiCompatRoutes } from './routes/openai-compat';
 import { deviceRoutes } from './routes/devices';
 import { documentRoutes } from './routes/documents';
 import { emailRoutes } from './routes/email';
@@ -385,6 +386,11 @@ export function createServer() {
         .use(skillProposalRoutes)
         .use(swarmRoutes)
     );
+
+  // OpenAI-compatible surface (WS6) — mounted at /v1, sharing the same
+  // app-level auth (.derive) + auth-guard as /api. Bearer octi_ tokens are the
+  // expected credential; the api:chat scope is enforced inside the route.
+  app.group('/v1', (app) => app.use(openaiCompatRoutes));
 
   // Webhooks — unauthenticated, outside /api group
   app.group('/api', (app) => app.use(webhookRoutes));
