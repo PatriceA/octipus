@@ -28,6 +28,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [CUSTOM-PROVIDERS.md](CUSTOM-PROVIDERS.md) | Custom OpenAI-, Gemini-, and Anthropic-compatible endpoints that aren't backed by a first-party provider. |
 | [EVALUATIONS.md](EVALUATIONS.md) | Model evaluation and provider conformance testing. |
 | [CAPABILITY-COMPARISON.md](CAPABILITY-COMPARISON.md) | Feature-by-feature comparison against other platforms. |
+| [OPENCLAW-COMPARISON.md](OPENCLAW-COMPARISON.md) | Feature, quality, and architecture comparison vs OpenClaw, with gap analysis. |
 
 ## Features
 
