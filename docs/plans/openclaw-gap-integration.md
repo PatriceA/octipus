@@ -273,16 +273,28 @@ line of the run shares the `runId`.
 
 ## WS5 — `tool_search` meta-tool
 
-**Current state:** a role's full allowlist goes into every model call
-— `getToolsForRole` (`src/core/orchestrator/roles.ts:166`) →
-`getToolHandlersForTools` (`src/tools/registry.ts:143`), plus per-user
-connector tools (`worker-spawner.ts:277-294`). The **MCP lazy bridge
-is the in-repo precedent**: roles with `'mcp'` get only
-`mcp_list_tools`/`mcp_call_tool` instead of the expanded catalog.
-Skills already do embedding-based discovery
-(`skills.descriptionEmbedding`, `scripts/backfill-skill-embeddings.ts`)
-via `getEmbeddingService()` (`src/core/rag/embeddings.ts`).
-`scripts/measure-tool-payload.ts` exists to quantify the win.
+**Current state (updated 2026-07-11):** a first cut of lazy discovery
+**already shipped** — `docs/plans/lazy-tool-discovery.md`. Roles can set
+`coreToolIds` (`roles/types.ts`); `splitRoleTools`
+(`src/core/orchestrator/tool-split.ts`) partitions the allowlist into a
+core set (full schema every turn) and a long tail reached via the
+built-in `list_tools`/`describe_tool` meta-tools
+(`src/tools/tool-discovery.ts`). Six roles already opt in (`ai`, `data`,
+`general`, `qa`, `research`, `security`). **Two important limits:** (a)
+discovery is **keyword-only**, not embedding-based; (b) it's gated to
+**non-small Ollama models only** — remote providers prefix-cache the
+tool block cheaply and stay on full schema, so they get no benefit today.
+`scripts/measure-tool-payload.ts` quantifies the win (targets `research`).
+
+So WS5 is now an **upgrade**, not a greenfield build: (1) swap the
+keyword meta-tools for embedding-based `tool_search` (skills already do
+this via `skills.descriptionEmbedding` /
+`scripts/backfill-skill-embeddings.ts` and `getEmbeddingService()`,
+`src/core/rag/embeddings.ts`), and (2) add a `toolCatalogMode:
+'full'|'search'` role field so `'search'` mode also applies to **remote**
+providers (where the tool block is large enough to matter), not just
+Ollama. The **MCP lazy bridge** (`mcp_list_tools`/`mcp_call_tool`)
+remains the in-repo precedent for the meta-tool shape.
 
 **Design:** generalize the MCP lazy pattern to builtin tools, scoped
 by the role allowlist (search never widens permissions — it only
@@ -452,20 +464,17 @@ Two sub-items, different risk profiles:
    plus model autodiscovery via the endpoint's `/v1/models` to
    populate the registry. No new provider classes. Extend the provider
    conformance suite to run against a mocked local endpoint.
-2. **Subscription OAuth (ChatGPT/Codex-plan style) — decision
-   required before build.** Technically: extend `OAuthManager`
-   (`src/security/oauth.ts` — PKCE engine already generic,
-   string-keyed providers) with a device-code flow, store
-   tokens in the vault, add a provider class that authenticates
-   completions with the OAuth token instead of an API key. But using
-   consumer-subscription auth for a *multi-user server* is exactly
-   the pattern that violates provider ToS (it's defensible in
-   OpenClaw's single-user context; much less so here, since one
-   subscription would back many users). **Recommendation: build the
-   device-code OAuth plumbing (it's also needed for future
-   connectors) but ship subscription-auth providers only in
-   single-user/embedded mode, gated and documented.** If that
-   restriction isn't acceptable, drop the item.
+2. **Subscription OAuth (ChatGPT/Codex-plan style) — ~~decision
+   required before build~~ DROPPED (resolved 2026-07-11, see Resolved
+   decisions #1).** Octipus runs multi-user only, and consumer-
+   subscription auth backing many users off one subscription violates
+   provider ToS — the exact pattern that's defensible in OpenClaw's
+   single-user context but not here. There is no single-user/embedded
+   mode to gate it behind, so the subscription-auth provider is out of
+   scope. The generic device-code OAuth flow on `OAuthManager`
+   (`src/security/oauth.ts`) is **not built as part of this item**;
+   defer it to whenever a future connector actually requires it, and
+   build it there against that connector's need.
 
 **Files:** `src/models/providers/custom/*`, new
 `src/models/providers/presets.ts`, `src/security/oauth.ts`,
@@ -495,21 +504,45 @@ infrastructure-before-features and small-wins-first.
 | 4 | WS8 local-runtime presets | 1w | — |
 | 5 | WS7 Signal, Matrix | 1.5w each | channel harness (WS7.1) |
 | 5 | WS3 remote install (phase 3) | 1.5w | WS3 phases 1-2 |
-| 5 | WS8 subscription OAuth | 1w | **product decision** |
+| ~~5~~ | ~~WS8 subscription OAuth~~ | — | **dropped (decision #1)** |
 
-Total ≈ 20 engineer-weeks for everything; phases 1-2 (≈ 6 weeks)
+Note: WS5 now builds on already-shipped lazy discovery (`tool-split.ts` /
+`tool-discovery.ts`), so its 2w is upgrade work (embedding rank +
+`toolCatalogMode` for remote providers), not a from-scratch build.
+
+Total ≈ 19 engineer-weeks (was 20; WS8 subscription OAuth dropped);
+phases 1-2 (≈ 6 weeks)
 deliver the highest-leverage subset: hardened CI, metrics + run
 correlation, a usable OpenAI-compatible API, and the heartbeat loop.
 
-## Open decisions
+## Resolved decisions (2026-07-11, owner: patrice)
 
-1. **WS8 subscription OAuth** — accept the single-user-mode-only
-   restriction, or drop? (Owner call; ToS exposure.)
-2. **WS2** — is a pinned note the right home for standing
-   instructions, or does product want a first-class "goals" object
-   (OpenClaw has `create_goal`/`update_goal`)? Note is the cheap v1;
-   schema can follow usage.
-3. **WS7** — email adapter default posture: reply-drafts-only (ASK on
-   every send) vs. allowlisted auto-send. Plan assumes ASK-gated.
-4. **WS5** — which two roles convert to `'search'` mode first (pick
-   from `measure-tool-payload.ts` output).
+1. **WS8 subscription OAuth — DROPPED.** Octipus is multi-user only;
+   consumer-subscription auth backing many users off one subscription
+   violates provider ToS and there is no single-user mode to gate it
+   behind. Subscription-auth providers are out of scope. The generic
+   device-code OAuth flow is deferred until a connector needs it (not
+   built as part of WS8). WS8 item 1 (local-runtime presets) is
+   unaffected and proceeds. See WS8 above.
+
+2. **WS2 standing instructions — PINNED NOTE.** A pinned `HEARTBEAT`
+   note (reusing the `notes` tool/table) is the home for standing
+   instructions; no first-class `goals` object / schema in v1. Revisit
+   only if usage demands it. Plan already assumes this — no change.
+
+3. **WS7 email posture — ASK-GATED (reply-drafts-only).** Every
+   outbound email goes through the existing ASK permission gate; no
+   allowlisted auto-send in v1. Plan already assumes this — no change.
+
+4. **WS5 first roles to `'search'` mode — `general` then `qa`**
+   (recommendation). Rationale from the codebase: `general` is the
+   catch-all with the largest payload (~53k; 14 toolIds) and `qa` is
+   next (browser/browser-ext ~16k + artifacts ~12k; 10 toolIds). Both
+   **already carry a proven `coreToolIds` split**, so the semantic
+   `tool_search` layer drops onto an existing partition rather than
+   needing a fresh core/long-tail decision. Keep `research` as the
+   **control/baseline** — it already has `coreToolIds` and is the role
+   `scripts/measure-tool-payload.ts` instruments — so before/after
+   eval + payload comparisons have a stable reference. Sequence:
+   convert `general`, watch evals + payload (WS5 item 4 gate), then
+   `qa`, then expand.
