@@ -1,6 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
-import { getApiTokenManager } from '@/security/api-tokens';
+import { getApiTokenManager, ScopeValidationError } from '@/security/api-tokens';
 import { isAuthenticated } from '@/security/principal';
 
 /**
@@ -53,11 +53,20 @@ export const apiTokenRoutes = new Elysia({ prefix: '/auth/api-tokens' })
         return { error: 'Invalid expiresAt — must be ISO-8601' };
       }
 
-      const result = await getApiTokenManager().issue(principal.userId, {
-        name: body.name,
-        scopes: body.scopes,
-        expiresAt,
-      });
+      let result: Awaited<ReturnType<ReturnType<typeof getApiTokenManager>['issue']>>;
+      try {
+        result = await getApiTokenManager().issue(principal.userId, {
+          name: body.name,
+          scopes: body.scopes,
+          expiresAt,
+        });
+      } catch (err) {
+        if (err instanceof ScopeValidationError) {
+          set.status = 400;
+          return { error: err.message };
+        }
+        throw err;
+      }
 
       set.status = 201;
       // The plaintext is keyed `token` so callers can copy it into

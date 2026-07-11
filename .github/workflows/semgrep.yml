@@ -1,0 +1,28 @@
+name: Semgrep
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: semgrep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep (typescript · security-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Pinned image, not `latest`, so a Semgrep release cannot break CI for
+    # unrelated PRs (same reasoning as pinning setup-bun).
+    container:
+      image: semgrep/semgrep:1.86.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # NOTE: starts non-blocking for a one-week triage window. Flip to blocking
+      # (remove `continue-on-error`) once the initial findings are triaged.
+      - name: Run Semgrep
+        run: semgrep ci --config p/typescript --config p/security-audit
+        continue-on-error: true

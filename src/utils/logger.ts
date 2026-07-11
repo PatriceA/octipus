@@ -1,5 +1,6 @@
 import pino from 'pino';
 import pinoPretty from 'pino-pretty';
+import { getRunId } from '@/core/run-context';
 import { redactLogObject } from './log-redact';
 import { ringBufferStream } from './log-stream';
 
@@ -28,6 +29,14 @@ export const logger = pino(
     level: logLevel,
     base: { service: 'octipus' },
     timestamp: pino.stdTimeFunctions.isoTime,
+    // Stamp the ambient runId (WS4) onto every log line emitted inside an
+    // orchestrated turn, without threading it through call sites. Cheap: an
+    // AsyncLocalStorage read per log call, no-op outside a run. See
+    // src/core/run-context.ts.
+    mixin() {
+      const runId = getRunId();
+      return runId ? { runId } : {};
+    },
     // Deep-redact credential-shaped fields before serialization. Runs once and
     // applies to every stream, including the ring buffer behind the admin log
     // dashboard. See log-redact.ts.

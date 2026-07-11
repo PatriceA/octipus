@@ -3,7 +3,8 @@ import { apiContext } from '@/api/context';
 import { getOrchestratorService } from '@/core/orchestrator';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { devModeAllowed } from '@/security/devmode';
-import { isAuthenticated } from '@/security/principal';
+import { isAuthenticated, requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 
@@ -26,9 +27,17 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
   // Send a chat message through the orchestrator
   .post(
     '/',
-    async ({ user, principal, body }) => {
+    async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
+      }
+
+      // WS6 — enforce the `api:chat` scope. No-op for browser sessions and
+      // unscoped tokens (both full-access); only a token minted with an
+      // explicit scope set lacking `api:chat` is rejected here.
+      if (!requireScope(principal, API_SCOPES.CHAT)) {
+        set.status = 403;
+        return { error: `API token missing required scope "${API_SCOPES.CHAT}"` };
       }
 
       let { sessionId } = body;
@@ -118,9 +127,13 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
   // Resolve an approval request
   .post(
     '/approve',
-    async ({ user, principal, body }) => {
+    async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
+      }
+      if (!requireScope(principal, API_SCOPES.CHAT)) {
+        set.status = 403;
+        return { error: `API token missing required scope "${API_SCOPES.CHAT}"` };
       }
 
       const orchestrator = getOrchestratorService();
@@ -157,9 +170,13 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
   // Get pending approvals (polling fallback when WebSocket disconnects)
   .get(
     '/approvals/pending',
-    async ({ user, principal }) => {
+    async ({ user, principal, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
+      }
+      if (!requireScope(principal, API_SCOPES.CHAT)) {
+        set.status = 403;
+        return { error: `API token missing required scope "${API_SCOPES.CHAT}"` };
       }
 
       const orchestrator = getOrchestratorService();

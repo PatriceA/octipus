@@ -230,7 +230,14 @@ export function createServer() {
             return {
               user: userObj,
               session: null,
-              principal: principalFromUser(userObj, token),
+              // WS6 — carry the token's scopes onto the principal so guarded
+              // surfaces can enforce them. Empty ⇒ unscoped ⇒ full access, so we
+              // only attach a non-empty set (keeps the principal shape identical
+              // to browser-session auth for every existing token).
+              principal: {
+                ...principalFromUser(userObj, token),
+                ...(validated.scopes.length > 0 ? { scopes: validated.scopes } : {}),
+              },
             };
           }
         }
