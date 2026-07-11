@@ -263,6 +263,9 @@ keep one authoritative daemon.
 
 ## Gap analysis — Octipus gaps vs OpenClaw
 
+> Implementation plan for the items below:
+> [docs/plans/openclaw-gap-integration.md](plans/openclaw-gap-integration.md).
+
 Ordered by recommended priority, filtered through Octipus's
 positioning (multi-user orchestration platform — not a personal
 assistant, so device nodes, personal-account WhatsApp, and 25
