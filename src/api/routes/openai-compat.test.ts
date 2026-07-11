@@ -2,20 +2,46 @@
  * OpenAI-compatible API (WS6) — route-level contract tests.
  *
  * Mounts the route under an injecting `.derive()` (standing in for the server's
- * app-level auth derive) and stubs the provider router / model registry /
- * orchestrator singletons with spies. No DB, no live providers.
+ * app-level auth derive). No DB, no live providers.
  *
- * Asserts the OpenAI wire shapes an off-the-shelf SDK depends on: model list,
- * chat.completion object, usage mapping, SSE stream framing, auth + scope
- * envelopes, and error shapes.
+ * Dependency isolation: bun's `mock.module` is process-global, and sibling
+ * suites (evaluators, litellm-client) replace `getProviderRouter` /
+ * `getModelRegistry` with PARTIAL stubs that leak forward — so grabbing the real
+ * singletons here and spying on them is order-dependent and crashes when their
+ * mock lands first (`getProviderRouter().complete is not a function`). Following
+ * the pattern in `litellm-provider.test.ts`, we pin our OWN stubs (spreading the
+ * real module so other exports survive) driven by mutable impls, and restore the
+ * real modules in `afterAll` so this file doesn't pollute later suites. The
+ * orchestrator barrel is NOT contaminated, so `getOrchestratorService` is spied
+ * normally.
  */
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { Elysia } from 'elysia';
-import { getOrchestratorService } from '@/core/orchestrator';
-import { getModelRegistry } from '@/models/model-registry';
-import { getProviderRouter } from '@/models/providers';
+import * as realRegistry from '@/models/model-registry';
+import * as realProviders from '@/models/providers';
 import { ANONYMOUS_PRINCIPAL, type Principal, principalFromUser } from '@/security/principal';
-import { openaiCompatRoutes } from './openai-compat';
+
+// ── Mutable per-test behavior the pinned stubs delegate to ──────────────────
+let completeImpl: (opts: unknown) => Promise<unknown>;
+let getAllModelsImpl: () => Promise<unknown[]>;
+let completeCalls: unknown[];
+
+mock.module('@/models/providers', () => ({
+  ...realProviders,
+  getProviderRouter: () => ({
+    complete: (opts: unknown) => {
+      completeCalls.push(opts);
+      return completeImpl(opts);
+    },
+  }),
+}));
+mock.module('@/models/model-registry', () => ({
+  ...realRegistry,
+  getModelRegistry: () => ({ getAllModels: () => getAllModelsImpl() }),
+}));
+
+const { getOrchestratorService } = await import('@/core/orchestrator');
+const { openaiCompatRoutes } = await import('./openai-compat');
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
@@ -45,10 +71,22 @@ function post(app: ElysiaLike, body: unknown): Promise<Response> {
   );
 }
 
+beforeEach(() => {
+  completeCalls = [];
+  completeImpl = async () => {
+    throw new Error('completeImpl not set for this test');
+  };
+  getAllModelsImpl = async () => [];
+});
+
 afterEach(() => {
-  // spyOn auto-restores at process exit, but restore between tests to avoid
-  // one test's mock bleeding into the next.
-  (getProviderRouter().complete as ReturnType<typeof spyOn>).mockRestore?.();
+  mock.restore(); // revert getOrchestratorService spies
+});
+
+afterAll(() => {
+  // Restore the real modules so this file's stubs don't leak into later suites.
+  mock.module('@/models/providers', () => realProviders);
+  mock.module('@/models/model-registry', () => realRegistry);
 });
 
 describe('GET /v1/models', () => {
@@ -60,10 +98,10 @@ describe('GET /v1/models', () => {
   });
 
   test('lists the orchestrator model + registry models', async () => {
-    spyOn(getModelRegistry(), 'getAllModels').mockResolvedValue([
+    getAllModelsImpl = async () => [
       { name: 'gpt-4o', provider: 'openai' },
       { name: 'llama3.2', provider: 'ollama' },
-    ] as never);
+    ];
     const res = await appFor(fullUser).handle(new Request('http://localhost/v1/models'));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -90,10 +128,10 @@ describe('POST /v1/chat/completions — auth + scope', () => {
   });
 
   test('a token WITH api:chat is allowed through to passthrough', async () => {
-    spyOn(getProviderRouter(), 'complete').mockResolvedValue({
+    completeImpl = async () => ({
       content: 'ok', model: 'gpt-4o', finishReason: 'stop', latencyMs: 1,
       usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
-    } as never);
+    });
     const res = await post(appFor(scopedWithChat), {
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'hi' }],
@@ -104,10 +142,10 @@ describe('POST /v1/chat/completions — auth + scope', () => {
 
 describe('POST /v1/chat/completions — passthrough mode', () => {
   test('maps a provider completion to a chat.completion object with real usage', async () => {
-    const spy = spyOn(getProviderRouter(), 'complete').mockResolvedValue({
+    completeImpl = async () => ({
       content: 'The answer is 42.', model: 'gpt-4o', finishReason: 'stop', latencyMs: 5,
       usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 },
-    } as never);
+    });
 
     const res = await post(appFor(fullUser), {
       model: 'gpt-4o',
@@ -129,7 +167,7 @@ describe('POST /v1/chat/completions — passthrough mode', () => {
     expect(body.usage).toEqual({ prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 });
 
     // Passthrough forwards the OpenAI params to the router (stop normalized to array).
-    const opts = spy.mock.calls[0][0] as unknown as Record<string, unknown>;
+    const opts = completeCalls[0] as Record<string, unknown>;
     expect(opts.model).toBe('gpt-4o');
     expect(opts.temperature).toBe(0.2);
     expect(opts.maxTokens).toBe(100);
@@ -138,10 +176,10 @@ describe('POST /v1/chat/completions — passthrough mode', () => {
   });
 
   test('stream:true returns SSE frames terminated by [DONE]', async () => {
-    spyOn(getProviderRouter(), 'complete').mockResolvedValue({
+    completeImpl = async () => ({
       content: 'hello world', model: 'gpt-4o', finishReason: 'stop', latencyMs: 1,
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
-    } as never);
+    });
 
     const res = await post(appFor(fullUser), {
       model: 'gpt-4o',
@@ -159,7 +197,9 @@ describe('POST /v1/chat/completions — passthrough mode', () => {
   });
 
   test('unknown provider model → 400 model_not_found', async () => {
-    spyOn(getProviderRouter(), 'complete').mockRejectedValue(new Error('No provider for model bogus'));
+    completeImpl = async () => {
+      throw new Error('No provider for model bogus');
+    };
     const res = await post(appFor(fullUser), {
       model: 'bogus',
       messages: [{ role: 'user', content: 'hi' }],
