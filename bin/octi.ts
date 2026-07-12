@@ -309,6 +309,11 @@ async function main(): Promise<void> {
       await delegateBun('scripts/models-recommend.ts', rest);
       break;
 
+    case 'plugin':
+    case 'plugins':
+      await delegateBun('scripts/plugin.ts', rest);
+      break;
+
     case 'start':
     case 'stop':
     case 'restart':

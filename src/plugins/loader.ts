@@ -1,5 +1,6 @@
 import { readdir } from 'fs/promises';
 import { join, resolve } from 'path';
+import { checkApiVersion, manifestTools, validateManifest as validateManifestContract } from '@octipus/plugin-sdk';
 import { createChildLogger } from '@/utils/logger';
 import type { LoadedPlugin, PluginContext, PluginManifest, PluginModule } from './types';
 
@@ -16,59 +17,28 @@ function getExtensionsDir(): string {
 }
 
 /**
- * Validate a parsed plugin.json object.
- * Throws if the manifest is invalid.
+ * Validate a parsed plugin.json against the published contract
+ * (`@octipus/plugin-sdk`) and enforce apiVersion compatibility. Throws with a
+ * clear, aggregated message when the manifest is invalid or the plugin targets
+ * an incompatible contract version. A plugin with no `apiVersion` is loaded
+ * with a deprecation warning (legacy), not refused.
  */
 function validateManifest(raw: unknown, dir: string): PluginManifest {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`Invalid plugin.json in ${dir}: not an object`);
+  const result = validateManifestContract(raw);
+  if (!result.ok) {
+    throw new Error(`Invalid plugin.json in ${dir}: ${result.errors.join('; ')}`);
+  }
+  const manifest = result.manifest;
+
+  const version = checkApiVersion(manifest.apiVersion);
+  if (!version.ok) {
+    throw new Error(`Plugin "${manifest.name}" in ${dir} refused: ${version.reason}`);
+  }
+  if (version.legacy) {
+    pluginLogger.warn({ dir, plugin: manifest.name }, `Plugin has ${version.reason}`);
   }
 
-  const obj = raw as Record<string, unknown>;
-
-  if (typeof obj.name !== 'string' || !obj.name) {
-    throw new Error(`Invalid plugin.json in ${dir}: missing or empty "name"`);
-  }
-  if (typeof obj.version !== 'string' || !obj.version) {
-    throw new Error(`Invalid plugin.json in ${dir}: missing or empty "version"`);
-  }
-  if (typeof obj.description !== 'string') {
-    throw new Error(`Invalid plugin.json in ${dir}: missing "description"`);
-  }
-  if (typeof obj.main !== 'string' || !obj.main) {
-    throw new Error(`Invalid plugin.json in ${dir}: missing or empty "main"`);
-  }
-  if (!Array.isArray(obj.tools)) {
-    throw new Error(`Invalid plugin.json in ${dir}: "tools" must be an array`);
-  }
-
-  for (const tool of obj.tools) {
-    if (typeof tool !== 'object' || !tool) {
-      throw new Error(`Invalid plugin.json in ${dir}: each tool must be an object`);
-    }
-    if (typeof tool.name !== 'string' || !tool.name) {
-      throw new Error(`Invalid plugin.json in ${dir}: tool missing "name"`);
-    }
-    if (typeof tool.description !== 'string') {
-      throw new Error(`Invalid plugin.json in ${dir}: tool "${tool.name}" missing "description"`);
-    }
-    if (typeof tool.parameters !== 'object' || !tool.parameters) {
-      throw new Error(`Invalid plugin.json in ${dir}: tool "${tool.name}" missing "parameters"`);
-    }
-  }
-
-  if (obj.secrets !== undefined) {
-    if (typeof obj.secrets !== 'object' || obj.secrets === null || Array.isArray(obj.secrets)) {
-      throw new Error(`Invalid plugin.json in ${dir}: "secrets" must be an object`);
-    }
-    for (const [key, secretName] of Object.entries(obj.secrets)) {
-      if (typeof secretName !== 'string' || !secretName) {
-        throw new Error(`Invalid plugin.json in ${dir}: secret "${key}" must map to a non-empty secret name`);
-      }
-    }
-  }
-
-  return obj as unknown as PluginManifest;
+  return manifest;
 }
 
 /**
@@ -171,7 +141,7 @@ export async function loadPlugins(): Promise<LoadedPlugin[]> {
       plugins.push(plugin);
 
       pluginLogger.info(
-        { name: plugin.manifest.name, version: plugin.manifest.version, tools: plugin.manifest.tools.length },
+        { name: plugin.manifest.name, version: plugin.manifest.version, tools: manifestTools(plugin.manifest).length },
         'Plugin loaded',
       );
     } catch (err) {

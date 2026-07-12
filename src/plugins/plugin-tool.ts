@@ -1,3 +1,4 @@
+import { manifestTools } from '@octipus/plugin-sdk';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getVault } from '@/security/vault';
 import { BaseTool, createParameterSchema } from '@/tools/base-tool';
@@ -33,7 +34,7 @@ export class PluginTool extends BaseTool {
           defaultLevel: 'ASK',
         },
       ],
-      tools: this.plugin.manifest.tools.map((t) => ({
+      tools: manifestTools(this.plugin.manifest).map((t) => ({
         name: t.name,
         description: t.description,
         parameters: t.parameters,
@@ -43,7 +44,7 @@ export class PluginTool extends BaseTool {
   }
 
   protected async registerTools(): Promise<void> {
-    for (const toolDef of this.plugin.manifest.tools) {
+    for (const toolDef of manifestTools(this.plugin.manifest)) {
       const handler = this.plugin.module.tools[toolDef.name];
       if (!handler) continue;
 

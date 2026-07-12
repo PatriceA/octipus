@@ -22,7 +22,9 @@
       "@skills/*": ["./src/skills/*"],
       "@channels/*": ["./src/channels/*"],
       "@api/*": ["./src/api/*"],
-      "@utils/*": ["./src/utils/*"]
+      "@utils/*": ["./src/utils/*"],
+      "@octipus/plugin-sdk": ["./plugin-sdk/index.ts"],
+      "@octipus/plugin-sdk/testing": ["./plugin-sdk/testing.ts"]
     }
   },
   "include": ["src/**/*", "scripts/**/*"],

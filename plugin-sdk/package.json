@@ -1,0 +1,26 @@
+{
+  "name": "@octipus/plugin-sdk",
+  "version": "0.1.0",
+  "description": "Versioned plugin contract + validation kit for Octipus plugins",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PatriceA/octipus.git",
+    "directory": "plugin-sdk"
+  },
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./testing": "./testing.ts"
+  },
+  "files": [
+    "index.ts",
+    "testing.ts",
+    "README.md"
+  ],
+  "keywords": ["octipus", "plugin", "sdk"],
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}
