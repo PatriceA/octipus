@@ -131,3 +131,32 @@ If you need a third request shape, add a new branch to
 `src/models/providers/custom/gemini-envelope.ts` and extend the
 `requestEnvelope` enum in `src/db/schema/models.ts`. Each new envelope
 should ship with unit tests in `gemini-envelope.test.ts`.
+
+## Local-runtime presets (one-click self-hosted models)
+
+Local OpenAI-compatible model servers (LM Studio, llama.cpp, vLLM, SGLang, TGI,
+Ollama's `/v1`) all speak the same wire format as the `custom-openai` provider,
+so they need no new provider class — only their boilerplate (endpoint, path,
+auth). `src/models/providers/presets.ts` supplies that, plus model
+autodiscovery.
+
+### API
+
+| Method | Endpoint | Auth | Purpose |
+|--------|----------|------|---------|
+| GET | `/api/models/presets` | any user | List the known local-runtime presets. |
+| POST | `/api/models/discover` | admin | `{ endpoint, apiKey? }` → `{ models: string[], healthy: boolean }` — lists the endpoint's `/models` and probes health. |
+
+### Flow (setup wizard / models UI)
+
+1. `GET /api/models/presets` → user picks a runtime (e.g. **LM Studio →
+   `http://localhost:1234/v1`**).
+2. `POST /api/models/discover` with the (default or edited) endpoint →
+   autodiscovered model ids + a health flag.
+3. For a chosen model, `buildModelConfigFromPreset(preset, modelId, endpoint)`
+   produces the `custom-openai` `model_config` fields, then register it via the
+   existing `POST /api/models`.
+
+Presets included: `lmstudio`, `llamacpp`, `vllm`, `sglang`, `tgi`,
+`ollama-openai`. Discovery/health degrade gracefully (return `[]` / `false`)
+when the endpoint is unreachable, so the UI can fall back to manual entry.

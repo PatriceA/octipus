@@ -1,5 +1,6 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
+import { discoverModels, listPresets, probeHealth } from '@/models/providers/presets';
 import type { CustomProviderConfig } from '@/db/schema/models';
 import {
   checkCapabilities,
@@ -43,6 +44,35 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       return listModels(user.id, user.isAdmin);
     },
     { detail: { tags: ['models'] } }
+  )
+
+  // WS8 — local-runtime presets (llama.cpp / LM Studio / vLLM / SGLang …) for
+  // one-click self-hosted model setup. Registered before /:name so the static
+  // path wins.
+  .get(
+    '/presets',
+    async ({ user }) => {
+      if (!user) return { error: 'Not authenticated' };
+      return { presets: listPresets() };
+    },
+    { detail: { tags: ['models'] } }
+  )
+
+  // Autodiscover models from a local OpenAI-compatible endpoint + health probe.
+  .post(
+    '/discover',
+    async ({ user, body }) => {
+      if (!user?.isAdmin) return { error: 'Admin access required' };
+      const [models, healthy] = await Promise.all([
+        discoverModels(body.endpoint, { apiKey: body.apiKey }),
+        probeHealth(body.endpoint),
+      ]);
+      return { models, healthy };
+    },
+    {
+      body: t.Object({ endpoint: t.String(), apiKey: t.Optional(t.String()) }),
+      detail: { tags: ['models'] },
+    }
   )
 
   // Get model by name
