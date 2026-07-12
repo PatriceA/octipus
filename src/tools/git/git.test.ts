@@ -75,11 +75,29 @@ describe('GitTool', () => {
     expect(pushPermission?.dangerous).toBe(true);
   });
 
-  test('should register all expected tools', () => {
-    // This test would normally check the registered tools
-    // For now, we'll just verify the class structure
-    expect(gitTool).toBeDefined();
-    expect(typeof gitTool.getManifest).toBe('function');
+  test('should register all expected tools', async () => {
+    await gitTool.initialize();
+
+    const expected = [
+      'status', 'log', 'diff', 'add', 'commit', 'branch',
+      'checkout', 'pull', 'push', 'stash', 'reset', 'clone',
+    ];
+
+    // Every advertised subcommand resolves to a handler, namespaced under
+    // the container id (`git__<name>`) and tagged with `toolId: 'git'` so
+    // the swarm's permission intersection can match it.
+    for (const name of expected) {
+      const handler = gitTool.getTool(name);
+      expect(handler).toBeDefined();
+      expect(handler?.name).toBe(`git__${name}`);
+      expect(handler?.toolId).toBe('git');
+      expect(typeof handler?.execute).toBe('function');
+      expect(handler?.description).toBeTruthy();
+    }
+
+    // No stray tools beyond the expected set.
+    const registered = gitTool.getToolHandlers().map((h) => h.name).sort();
+    expect(registered).toEqual(expected.map((n) => `git__${n}`).sort());
   });
 
   test('parseStatus should handle empty output', () => {
