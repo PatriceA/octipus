@@ -22,6 +22,44 @@ media generation, device nodes, personal-account WhatsApp, i18n.
 
 ---
 
+## Delivery status (2026-07-12)
+
+Eight phases have shipped to `main` as independently-reviewed PRs. Each
+was self-code-reviewed, CI-green, and merged before the next began.
+
+| # | PR | Track | What shipped |
+|---|----|-------|--------------|
+| 1 | #199, #201, #202 | **WS1** | Blocking `bun audit` + allowlist, CodeQL, semgrep, zizmor, dependency-review, install smoke (ubuntu + macOS), tag-driven `release.yml` + changelog extract / version sync. Also fixed the repo's chronic CI flakiness (bun coverage stdout `WriteFailed`) via `coverageReporter=["lcov"]`. |
+| 2 | (Phase 1) | **WS4** | prom-client registry + metric families + `record*` helpers; `runId` propagation via `AsyncLocalStorage` (`src/core/run-context.ts`), stamped into pino logs and `/metrics`. |
+| 3 | (Phase 1) | **WS6.1** | API-token **scope enforcement** (`src/security/scopes.ts`; empty scopes = full-access back-compat). |
+| 4 | #200 | **WS6** | `GET /v1/models`, `POST /v1/chat/completions` (orchestrator + role + passthrough), protocol-correct SSE (step 1), OpenAI error envelope. |
+| 5 | #203 | **WS2** | Cron-runner heartbeat with a cheap-first gate (quiet hours / quota / pending-work probe before any LLM call) driven by a pinned `HEARTBEAT` note (decision #2). Migration 0077 adds the `heartbeat` trigger type. |
+| 6 | #204 | **WS5** | `tool_search` — embedding-based semantic ranking layered onto the already-shipped lazy discovery, wired into `list_tools`. |
+| 7 | #205 | **WS8** | Local-runtime presets + model autodiscovery (reusing `CustomOpenAICompatProvider`). |
+| 8 | #207 | **WS3** | Versioned plugin SDK (`@octipus/plugin-sdk`): contract types, `validateManifest`/`checkApiVersion`, `validatePlugin` kit, `octi plugin validate` CLI, and a `plugin-validate` CI job. Consumed via tsconfig alias (zero install impact). |
+
+### Remaining / deferred
+
+- **WS6 step 2 — token-true streaming.** Deferred. The orchestrator
+  emits only *structured* events (`status_update`, `worker_spawned`,
+  …) and `ProviderRouter.complete` returns full text — there is no
+  token-delta path anywhere in the provider → orchestrator → SSE
+  stack. Real token streaming is new infrastructure, not a bridge over
+  existing events; step 1 SSE (shipped) is protocol-correct in the
+  meantime.
+- **WS7 — email channel.** Deferred, **ASK-gated** by decision #3
+  (reply-drafts-only). Needs a channel-adapter harness first.
+- **WS4 step 3 — OpenTelemetry traces.** Deferred. Metrics + `runId`
+  correlation shipped; the OTel SDK (~20 transitive packages) cannot
+  install through this environment's package proxy. Revisit when the
+  dep constraint lifts.
+- **WS3 phase 3 — remote install / signing.** Deferred as planned
+  (roadmap item; see WS3 below).
+- **WS8 subscription OAuth.** Dropped by decision #1 (multi-user only).
+- **WS7 Signal / Matrix.** Not started (follow WS7 email + harness).
+
+---
+
 ## WS1 — CI & security engineering
 
 **Current state:** `.github/workflows/ci.yml` is the only workflow — 4
