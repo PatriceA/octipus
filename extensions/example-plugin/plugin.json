@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "description": "Example plugin demonstrating the plugin API with basic calculator and greeting tools",
   "author": "Octipus",
+  "apiVersion": "1.0.0",
   "main": "index.ts",
-  "tools": [
+  "capabilities": {
+    "tools": [
     {
       "name": "greet",
       "description": "Returns a greeting message for the given name",
@@ -37,5 +39,6 @@
         }
       }
     }
-  ]
+    ]
+  }
 }

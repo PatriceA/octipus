@@ -112,3 +112,59 @@ See `extensions/example-plugin/` for a working example with a greeting tool and 
 | `src/plugins/index.ts` | Barrel exports |
 | `src/api/routes/plugins.ts` | REST API routes |
 | `extensions/` | Plugin directory (create plugins here) |
+
+## Versioned contract (`@octipus/plugin-sdk`)
+
+The `plugin.json` shape, the host API-version compatibility rule, and the
+validation kit are owned by the published `@octipus/plugin-sdk` package, so
+plugin authors and the host validate against the **same** definition.
+
+### `apiVersion`
+
+Declare the contract version your plugin targets:
+
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "…",
+  "apiVersion": "1.0.0",
+  "main": "index.ts",
+  "capabilities": {
+    "tools": [
+      { "name": "my_tool", "description": "…", "parameters": { "input": { "type": "string", "description": "…", "required": true } } }
+    ]
+  }
+}
+```
+
+- The host **refuses** a plugin whose MAJOR differs from the host's
+  `PLUGIN_API_VERSION`, or whose MINOR is newer than the host.
+- A manifest **without** `apiVersion` still loads, with a **deprecation
+  warning** (legacy). Add `apiVersion` to silence it.
+- `capabilities.tools` is the canonical tool list; the legacy top-level `tools`
+  array is still accepted when `capabilities` is absent.
+
+### Validate before you ship
+
+```bash
+octi plugin validate ./extensions/my-plugin
+```
+
+This runs the full pre-flight the host runs at load time — manifest schema,
+apiVersion compatibility, module shape, an `initialize` dry-run, and a fixture
+dry-run of every declared tool. It exits non-zero on any fatal error. A CI
+workflow (`.github/workflows/plugin-validate.yml`) runs it over every plugin in
+`extensions/`.
+
+Authors can run the same check in their own CI:
+
+```ts
+import { validatePlugin } from '@octipus/plugin-sdk/testing';
+const report = await validatePlugin('./my-plugin');
+if (!report.ok) { console.error(report.errors.join('\n')); process.exit(1); }
+```
+
+> **Remote install** (`octi plugin install npm:… / github:…`) is a planned
+> follow-up; it stays deferred until plugin signing exists, since installing a
+> plugin executes third-party code in-process.
