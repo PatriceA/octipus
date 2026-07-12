@@ -30,7 +30,16 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type ApiToken, type ApiTokenSummary, apiTokens } from '@/db/schema/api-tokens';
+import { validateRequestedScopes } from '@/security/scopes';
 import { securityLogger } from '@/utils/logger';
+
+/** Thrown by `issue()` when a requested scope isn't recognized. Routes map it to a 400. */
+export class ScopeValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScopeValidationError';
+  }
+}
 
 const TOKEN_PREFIX = 'octi_';
 /** Length of the random component in bytes (43 base64url chars). */
@@ -115,6 +124,13 @@ export class ApiTokenManager {
    * the summary (no plaintext, no hash).
    */
   async issue(userId: string, options: IssueOptions): Promise<IssuedApiToken> {
+    // Reject unknown scopes at issuance so a typo can't silently mint a token
+    // that satisfies nothing (WS6). Empty ⇒ unscoped ⇒ full access.
+    const scopeCheck = validateRequestedScopes(options.scopes);
+    if (!scopeCheck.ok) {
+      throw new ScopeValidationError(scopeCheck.error);
+    }
+
     const plaintext = generateTokenPlaintext();
     const tokenHash = hashToken(plaintext);
     const prefix = plaintext.slice(0, DISPLAY_PREFIX_LEN);
@@ -124,7 +140,7 @@ export class ApiTokenManager {
       name: options.name,
       tokenHash,
       prefix,
-      scopes: options.scopes ? Array.from(options.scopes) : [],
+      scopes: scopeCheck.scopes,
       expiresAt: options.expiresAt ?? null,
       metadata: options.metadata ?? {},
     }).returning();
@@ -151,7 +167,9 @@ export class ApiTokenManager {
    * is best-effort — failures are logged but never propagate so a
    * transient DB hiccup can't block authentication.
    */
-  async validate(plaintext: string): Promise<{ userId: string; tokenId: string } | null> {
+  async validate(
+    plaintext: string,
+  ): Promise<{ userId: string; tokenId: string; scopes: string[] } | null> {
     if (!looksLikeApiToken(plaintext)) return null;
     const tokenHash = hashToken(plaintext);
 
@@ -177,7 +195,9 @@ export class ApiTokenManager {
         securityLogger.warn({ err, tokenId: row.id }, 'Failed to update last_used_at');
       });
 
-    return { userId: row.userId, tokenId: row.id };
+    // Scopes flow to the principal so guarded surfaces (WS6) can enforce them.
+    // Empty ⇒ unscoped ⇒ full access (see src/security/scopes.ts).
+    return { userId: row.userId, tokenId: row.id, scopes: row.scopes ?? [] };
   }
 
   /**

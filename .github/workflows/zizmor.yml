@@ -1,0 +1,41 @@
+name: Zizmor
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: Zizmor (workflow audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Pinned version, not `latest`, so a zizmor release cannot change CI
+      # behaviour for unrelated PRs.
+      - name: Install zizmor
+        run: pip install zizmor==1.5.2
+
+      # NOTE: starts non-blocking — we cannot triage findings in this change.
+      # Flip to blocking (remove `continue-on-error`) once findings are triaged.
+      - name: Audit workflows
+        run: zizmor .github/workflows/
+        continue-on-error: true

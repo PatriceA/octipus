@@ -20,7 +20,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -40,9 +40,11 @@ jobs:
           JWT_SECRET: ci-dummy-jwt-secret-for-unit-tests-only-1234567890
           SESSION_SECRET: ci-dummy-session-secret-for-unit-tests-only-1234567890
 
+      # Blocking dependency audit. Accepted advisories are recorded in a
+      # reviewable allowlist (scripts/audit-allowlist.json); see the wrapper
+      # scripts/audit-check.ts and scripts/audit-allowlist.README.md.
       - name: Audit dependencies
-        run: bun audit --prod
-        continue-on-error: true
+        run: bun run scripts/audit-check.ts
 
   web:
     name: Web (typecheck · lint)
@@ -54,7 +56,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -86,7 +88,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -133,7 +135,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.11
 
       - name: Install deps
         run: bun install --frozen-lockfile

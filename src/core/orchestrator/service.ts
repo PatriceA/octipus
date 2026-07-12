@@ -2,7 +2,9 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
+import { recordClassification, recordOrchestratorRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext } from '@/core/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -79,7 +81,30 @@ export class OrchestratorService {
 
   // ── Main entry point ─────────────────────────────────────────────
 
+  /**
+   * Public entry point. Mints the per-turn `runId` (WS4) and binds it as the
+   * ambient run context for the whole turn — every child logger, tool call, and
+   * LLM request underneath inherits it without threading. The real work is in
+   * `handleMessageInner`; this wrapper only owns run correlation + the
+   * top-level orchestrator run counter.
+   */
   async handleMessage(
+    sessionId: string,
+    userId: string,
+    message: string,
+    channel?: string,
+    expertId?: string,
+    attachedFiles: AttachedFileRef[] = [],
+    forcedOutputMode?: 'inline' | 'file',
+  ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
+    const runId = generateRunId();
+    return runWithContext(
+      { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
+      () => this.handleMessageInner(sessionId, userId, message, channel, expertId, attachedFiles, forcedOutputMode),
+    );
+  }
+
+  private async handleMessageInner(
     sessionId: string,
     userId: string,
     message: string,
@@ -348,6 +373,7 @@ export class OrchestratorService {
       }
 
       const classification = classifyMessage(message);
+      recordClassification(classification.topic ?? classification.type, 'deterministic');
       // Chat/work split (Thread 3): resolve the effective deliverable mode (the
       // per-message toggle wins over the heuristic) and reflect it on the
       // classification so downstream + the returned value agree.
@@ -525,6 +551,7 @@ export class OrchestratorService {
       }
 
       fireMemoryUpdate();
+      recordOrchestratorRun(channel, classification?.type, 'success');
       return {
         response: finalResponse,
         sessionId: resolvedSessionId,
@@ -533,6 +560,7 @@ export class OrchestratorService {
         metadata: { latencyMs: Date.now() - startTime },
       };
     } catch (error) {
+      recordOrchestratorRun(channel, undefined, 'error');
       coreLogger.error({ error, sessionId, channel }, 'handleMessage failed');
       if (trajectory) {
         trajectory.finalize({

@@ -13,6 +13,8 @@
  *   - `anonymous`    — no credentials present; only public routes accept it
  */
 
+import { scopesSatisfy } from './scopes';
+
 export type PrincipalKind = 'user' | 'service' | 'system' | 'anonymous';
 
 export interface Principal {
@@ -55,6 +57,13 @@ export interface Principal {
    * switching between multiple workspaces, not workspace existence.
    */
   readonly workspaceId?: string | null;
+  /**
+   * WS6 — API-token scopes. Present (and non-empty) ONLY when the request was
+   * authenticated by a scoped personal access token. Undefined for browser
+   * sessions and unscoped tokens, both of which are full-access. Enforced via
+   * `requireScope` / `scopesSatisfy` at guarded surfaces.
+   */
+  readonly scopes?: readonly string[];
 }
 
 /** Sentinel principal for anonymous/unauthenticated callers. */
@@ -117,4 +126,14 @@ export function canActOnUser(actor: Principal, targetUserId: string): boolean {
   if (!isAuthenticated(actor)) return false;
   if (actor.userId === targetUserId) return true;
   return isAdmin(actor);
+}
+
+/**
+ * WS6 — whether `principal` carries the given API scope. Delegates to
+ * `scopesSatisfy`, so unscoped principals (browser sessions, unscoped tokens)
+ * pass everything and only explicitly-scoped tokens are restricted.
+ */
+export function requireScope(principal: Principal | null | undefined, scope: string): boolean {
+  if (!isAuthenticated(principal)) return false;
+  return scopesSatisfy(principal.scopes, scope);
 }

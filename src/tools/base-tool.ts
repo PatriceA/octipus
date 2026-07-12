@@ -1,5 +1,6 @@
 import type { ToolHandler } from '@/core/agent-worker';
 import { isCancellationError } from '@/core/swarm/errors';
+import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
@@ -176,6 +177,10 @@ export abstract class BaseTool {
     // Execute the tool
     toolLogger.debug({ toolId: this.id, tool: toolName }, 'Executing tool');
 
+    // WS4 observability — count + time every dispatch. `finally` fires on both
+    // the success returns (incl. the secret-redaction branch) and the throw.
+    const execStart = Date.now();
+    let execStatus: 'success' | 'error' | 'cancelled' = 'success';
     try {
       const result = await execute(processedArgs, toolContext);
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
@@ -203,14 +208,18 @@ export abstract class BaseTool {
     } catch (error) {
       if (isCancellationError(error)) {
         // Aborted by the agent's cancellation — not a real failure.
+        execStatus = 'cancelled';
         toolLogger.info(
           { toolId: this.id, tool: toolName, reason: (error as Error).message },
           'Tool execution cancelled'
         );
       } else {
+        execStatus = 'error';
         toolLogger.error({ err: error, toolId: this.id, tool: toolName }, 'Tool execution failed');
       }
       throw error;
+    } finally {
+      recordToolExecution(toolName, execStatus, (Date.now() - execStart) / 1000);
     }
   }
 

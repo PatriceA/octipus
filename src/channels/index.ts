@@ -9,6 +9,7 @@ export { WebChatChannel, type WebChatConnection, type WebChatMessage, webChatCha
 export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 
 import { getConfig } from '@/config';
+import { recordChannelMessage } from '@/core/telemetry';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
@@ -466,6 +467,7 @@ export async function initializeChannels(): Promise<void> {
   // Bridge incoming channel messages → orchestrator → reply
   umi.on('message', async (message: UnifiedMessage) => {
     try {
+      recordChannelMessage(message.channelType, 'inbound');
       // Check if this is a yes/no reply to a pending permission request
       const consumed = await tryResolvePermissionFromChannel(message);
       if (consumed) return;
@@ -766,6 +768,7 @@ export async function initializeChannels(): Promise<void> {
           replyTo: platformMessageId,
           attachments,
         });
+        recordChannelMessage(message.channelType, 'outbound');
       }
     } catch (error) {
       channelLogger.error({ error, channelType: message.channelType }, 'Failed to process channel message');

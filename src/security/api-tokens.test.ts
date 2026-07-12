@@ -209,6 +209,38 @@ describe('revoke cross-tenant', () => {
   });
 });
 
+describe('scopes (WS6)', () => {
+  test('validate returns the token scopes; unscoped tokens report []', async () => {
+    const { getApiTokenManager } = await import('@/security/api-tokens');
+    const mgr = getApiTokenManager();
+
+    const unscoped = await mgr.issue(aliceId, { name: 'unscoped' });
+    expect((await mgr.validate(unscoped.plaintext))?.scopes).toEqual([]);
+
+    const scoped = await mgr.issue(aliceId, { name: 'scoped', scopes: ['api:chat'] });
+    expect((await mgr.validate(scoped.plaintext))?.scopes).toEqual(['api:chat']);
+  });
+
+  test('issue rejects an unknown scope with ScopeValidationError', async () => {
+    const { getApiTokenManager, ScopeValidationError } = await import('@/security/api-tokens');
+    const mgr = getApiTokenManager();
+    await expect(mgr.issue(aliceId, { name: 'bad', scopes: ['api:nope'] })).rejects.toBeInstanceOf(
+      ScopeValidationError,
+    );
+  });
+
+  test('issue dedupes valid scopes', async () => {
+    const { getApiTokenManager } = await import('@/security/api-tokens');
+    const mgr = getApiTokenManager();
+    const { plaintext } = await mgr.issue(aliceId, {
+      name: 'dupes',
+      scopes: ['api:chat', 'api:chat', 'api:read'],
+    });
+    const scopes = (await mgr.validate(plaintext))?.scopes ?? [];
+    expect([...scopes].sort()).toEqual(['api:chat', 'api:read']);
+  });
+});
+
 describe('countActive', () => {
   test('only counts non-revoked rows', async () => {
     const { getApiTokenManager } = await import('@/security/api-tokens');

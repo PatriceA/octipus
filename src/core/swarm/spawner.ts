@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
 import type { ToolHandler } from '@/core/agent-worker';
@@ -128,6 +129,11 @@ export class SwarmSpawner {
     const childKind: 'agent' | 'subagent' = childDepth === 1 ? 'agent' : 'subagent';
     const childRole = this.resolveChildRole(params);
     const topicPath = this.buildTopicPath(parent.topicPath, params.topic, params.subtopic);
+
+    // WS4 observability — count spawns that clear the depth gate, by child role
+    // and depth. (Later input-guard/same-role denials are rare; this tracks the
+    // fan-out shape well enough for capacity/cost dashboards.)
+    recordSwarmSpawn(childRole, childDepth);
 
     // ── Same-role guard ─────────────────────────────────────────────
     // At depth 0→1 (Orchestrator → Agent): Orchestrator role is unique, so

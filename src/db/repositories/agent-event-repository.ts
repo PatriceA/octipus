@@ -1,17 +1,25 @@
 import { and, eq, gt, lt } from 'drizzle-orm';
+import { getRunId } from '@/core/run-context';
 import { getDb } from '../postgres';
 import { type AgentEventRecord, agentEvents, type NewAgentEventRecord } from '../schema/agent-events';
 
 export class AgentEventRepository {
   private get db() { return getDb(); }
 
+  /** Stamp the ambient runId (WS4) unless the caller set one explicitly. */
+  private withRun(record: NewAgentEventRecord): NewAgentEventRecord {
+    if (record.runId != null) return record;
+    const runId = getRunId();
+    return runId ? { ...record, runId } : record;
+  }
+
   async create(record: NewAgentEventRecord): Promise<void> {
-    await this.db.insert(agentEvents).values(record);
+    await this.db.insert(agentEvents).values(this.withRun(record));
   }
 
   async createMany(records: NewAgentEventRecord[]): Promise<void> {
     if (records.length === 0) return;
-    await this.db.insert(agentEvents).values(records);
+    await this.db.insert(agentEvents).values(records.map((r) => this.withRun(r)));
   }
 
   async findByAgent(agentId: string, afterId?: number): Promise<AgentEventRecord[]> {

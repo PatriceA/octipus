@@ -1,0 +1,13 @@
+# Tests and fixtures — not product code.
+**/*.test.ts
+tests/
+scripts/e2e/
+
+# Generated / build output.
+web/.next/
+dist/
+**/node_modules/
+*.min.js
+
+# Drizzle-generated SQL migrations.
+src/db/migrations/
