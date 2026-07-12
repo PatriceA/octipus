@@ -41,6 +41,15 @@ describe('buildToolDiscoveryHandlers', () => {
     expect(result[0]).not.toHaveProperty('parameters');
   });
 
+  test('list_tools with a query falls back to the full list when embeddings are unavailable', async () => {
+    // No embedding provider in unit tests → rankToolsByQuery returns null and
+    // list_tools must still return every long-tail tool (never fewer/none).
+    const [listTools] = buildToolDiscoveryHandlers(longTail);
+    const result = (await listTools.execute({ query: 'read a file' }, ctx)) as Array<Record<string, unknown>>;
+    expect(result).toHaveLength(2);
+    expect(result.map((r) => r.name).sort()).toEqual(['read_file', 'save_artifact'].sort());
+  });
+
   test('describe_tool returns the exact schema object', async () => {
     const describe = buildToolDiscoveryHandlers(longTail)[1];
     expect(describe.name).toBe('describe_tool');
