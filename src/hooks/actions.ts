@@ -221,7 +221,10 @@ async function executeSpawnAgent(
     const { getOrchestratorService } = await import('@/core/orchestrator');
     const orchestrator = getOrchestratorService();
 
-    const result = await orchestrator.handleMessage(sessionId, userId, message, 'hook');
+    // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
+    // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
+    const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
+    const result = await orchestrator.handleMessage(sessionId, userId, message, channel);
 
     // For orchestrated hooks, notify the owner with the result if either:
     // - orchestratorNotify is true (scheduled tasks that should deliver results)

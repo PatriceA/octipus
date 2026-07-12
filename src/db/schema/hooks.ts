@@ -11,6 +11,10 @@ export const triggerTypeEnum = pgEnum('trigger_type', [
   'permission_requested',
   'schedule',
   'webhook',
+  // WS2 — periodic per-user "heartbeat": a schedule variant that runs a cheap
+  // deterministic gate (quiet hours, quota, "anything pending?" probe) before
+  // spending any LLM tokens. See src/core/heartbeat.ts.
+  'heartbeat',
 ]);
 
 export const actionTypeEnum = pgEnum('action_type', [
@@ -86,6 +90,10 @@ export interface TriggerConfig {
     topics?: string[];
     userIds?: string[];
   };
+  // For heartbeat — per-hook daily-run counter (WS2). `heartbeatDayKey` is the
+  // calendar day (in the config tz) the count applies to; it resets on rollover.
+  heartbeatDayKey?: string;
+  heartbeatRunsToday?: number;
 }
 
 export interface ActionConfig {

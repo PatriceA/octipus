@@ -1,5 +1,6 @@
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { getDb } from '@/db/postgres';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -199,6 +200,10 @@ async function processCronTick(): Promise<void> {
     await maybeReindexDocs();
     const db = getDb();
     const now = new Date();
+
+    // WS2 heartbeat — process due per-user heartbeat hooks (gated, cheap-first).
+    // Runs before the schedule query's early return below. No-op when disabled.
+    await maybeRunHeartbeats(now);
 
     // Find schedule-triggered hooks that are due
     const dueHooks = await db

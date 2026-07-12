@@ -178,7 +178,8 @@ export type TriggerType =
   | 'tool_post'
   | 'permission_requested'
   | 'schedule'
-  | 'webhook';
+  | 'webhook'
+  | 'heartbeat';
 
 export type ActionType =
   | 'notify'

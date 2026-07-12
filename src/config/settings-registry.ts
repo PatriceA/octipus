@@ -1036,6 +1036,62 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'ARTIFACT_BUNDLES_DIR',
   },
+
+  // ── Heartbeat (WS2) ──
+  {
+    key: 'heartbeat.enabled',
+    category: 'heartbeat',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Master switch for the periodic per-user heartbeat loop. Off by default.',
+    isSecret: false,
+    envVar: 'HEARTBEAT_ENABLED',
+  },
+  {
+    key: 'heartbeat.intervalMinutes',
+    category: 'heartbeat',
+    valueType: 'number',
+    defaultValue: 60,
+    description: 'Minutes between heartbeat runs per user (5–1440).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_INTERVAL_MINUTES',
+  },
+  {
+    key: 'heartbeat.quietHoursStart',
+    category: 'heartbeat',
+    valueType: 'number',
+    defaultValue: 22,
+    description: 'Quiet-hours start hour (0–23, local to quietHoursTimezone). No runs in [start, end).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_QUIET_HOURS_START',
+  },
+  {
+    key: 'heartbeat.quietHoursEnd',
+    category: 'heartbeat',
+    valueType: 'number',
+    defaultValue: 7,
+    description: 'Quiet-hours end hour (0–23). Equal to start disables quiet hours.',
+    isSecret: false,
+    envVar: 'HEARTBEAT_QUIET_HOURS_END',
+  },
+  {
+    key: 'heartbeat.quietHoursTimezone',
+    category: 'heartbeat',
+    valueType: 'string',
+    defaultValue: 'UTC',
+    description: 'IANA timezone the quiet-hours window and daily cap are evaluated in.',
+    isSecret: false,
+    envVar: 'HEARTBEAT_QUIET_HOURS_TZ',
+  },
+  {
+    key: 'heartbeat.maxRunsPerDay',
+    category: 'heartbeat',
+    valueType: 'number',
+    defaultValue: 24,
+    description: 'Hard cap on heartbeat runs per user per calendar day (1–288).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_MAX_RUNS_PER_DAY',
+  },
 ];
 
 /** Get a setting definition by key */
