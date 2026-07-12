@@ -10,6 +10,24 @@ sourcemaps = true
 # Test configuration
 coverage = true
 coverageDir = "coverage"
+# Write coverage to `coverage/lcov.info` instead of dumping the full text table
+# to stdout. That end-of-run table is ~300 rows written to stdout in one burst;
+# on the GitHub Actions log pipe that write intermittently fails with
+# `error: An internal error occurred (WriteFailed)` -> `exited with code 1`,
+# even though every test passed (no `(fail)` line is ever printed). The crash
+# lands near the end of the table, whose last rows are the temp extension
+# fixtures the loader test dynamically imports
+# (`../../../tmp/octipus-ext-*/.../{pingpong,broken,first,second,bad,good}.ts`,
+# which sort after every `src/…` path) — hence the "extension fixture path at
+# the tail" symptom. Coverage is still fully collected, just to a file.
+# (Devs who want the console table locally can pass `--coverage-reporter=text`.)
+coverageReporter = ["lcov"]
+# The loader test (`src/extensions/loader.test.ts`) writes throwaway `.ts`
+# extensions under `os.tmpdir()` and imports them; bun instruments every
+# imported file, so these ephemeral (already-`rmSync`'d) fixtures would
+# otherwise pollute the coverage data with `../../../tmp/octipus-ext-*` entries.
+# They are test scratch, not source — exclude them from coverage.
+coveragePathIgnorePatterns = ["**/octipus-ext-*/**"]
 # Reap the per-test `mkdtempSync(tmpdir(), 'octipus-…')` scratch dirs that leak
 # ~140 dirs/run and fill a tmpfs `/tmp` within days. See the file's header.
 preload = ["./src/test-helpers/tmp-cleanup.ts"]

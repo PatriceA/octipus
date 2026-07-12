@@ -73,3 +73,6 @@ eval/results/*.json
 
 # Assistant runtime data (logs, prompt dumps, etc.)
 .assistant/
+
+# Test coverage output (bun writes coverage/lcov.info)
+coverage/
