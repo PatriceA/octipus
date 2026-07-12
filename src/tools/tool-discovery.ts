@@ -15,8 +15,11 @@
  */
 
 import type { ToolHandler } from '@/core/agent-base';
+import { rankToolsByQuery } from '@/tools/tool-search';
 
 const TOOL_DISCOVERY_TOOL_ID = 'tool_discovery';
+/** Default number of tools returned by a `list_tools` semantic query. */
+const SEARCH_LIMIT = 15;
 
 /**
  * Build the `list_tools` / `describe_tool` handlers closed over a worker's
@@ -34,18 +37,35 @@ export function buildToolDiscoveryHandlers(longTail: ToolHandler[]): ToolHandler
       description:
         'List additional tools available to you beyond the ones already shown. ' +
         'Returns each tool name and a one-line description (no parameters). ' +
+        'Pass an optional `query` describing what you want to do to get the most ' +
+        'relevant tools ranked first (recommended when the list is long). ' +
         'Call describe_tool with a name to get its parameter schema before using it, ' +
         'then call the tool directly by its name.',
       parameters: {
         type: 'object',
-        properties: {},
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              'Optional. What you want to accomplish (e.g. "read a PDF", "send a Slack message"). ' +
+              'Ranks the additional tools by relevance and returns the best matches.',
+          },
+        },
       },
       toolId: TOOL_DISCOVERY_TOOL_ID,
-      execute: async () =>
-        Array.from(byName.values()).map((t) => ({
+      execute: async (args) => {
+        const all = Array.from(byName.values()).map((t) => ({
           name: t.name,
           description: t.description,
-        })),
+        }));
+        const query = typeof args?.query === 'string' ? args.query : '';
+        if (query.trim()) {
+          // Semantic ranking; falls back to the full list on any failure.
+          const ranked = await rankToolsByQuery(all, query, SEARCH_LIMIT);
+          if (ranked) return ranked;
+        }
+        return all;
+      },
     },
     {
       name: 'describe_tool',
