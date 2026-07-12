@@ -532,3 +532,72 @@ Available via `{ "type": "command", "name": "<cmd>" }`:
 ### Legacy WebSocket (deprecated)
 
 The old `/ws?token=<jwt>` endpoint still works during migration but will be removed. Use `/gateway` for new integrations.
+
+## OpenAI-compatible API (`/v1`)
+
+Octipus exposes an OpenAI-compatible surface at `/v1` so off-the-shelf OpenAI
+SDKs can talk to it. Authenticate with a personal access token
+(`Authorization: Bearer octi_…`) exactly like `/api`. The `api:chat` scope is
+enforced on completions (unscoped tokens are full-access — see
+[token scopes](#api-tokens)).
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/models` | List available models: `octipus/orchestrator` + every registry model. |
+| POST | `/v1/chat/completions` | Chat completion (streaming and non-streaming). |
+
+### Model modes
+
+- **`octipus/orchestrator`** (default when `model` is omitted) runs the latest
+  user message through the full classify → route orchestrator pipeline. This
+  mode is **session-stateful**: pass a stable `user` field (or an
+  `X-Octipus-Session` header) to keep a conversation sticky; otherwise each
+  call runs in a fresh ephemeral session.
+- **A registry model id** (e.g. `gpt-4o`, `llama3.2`, from `GET /v1/models`) is
+  a single-turn **passthrough** to that provider — no tools, no session — and
+  honors OpenAI's stateless `messages`-array semantics exactly. Real provider
+  token usage is returned.
+
+### Example — Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://your-host/v1", api_key="octi_…")
+
+# Orchestrator pipeline
+resp = client.chat.completions.create(
+    model="octipus/orchestrator",
+    messages=[{"role": "user", "content": "Summarize today's open PRs"}],
+    user="my-session-id",  # optional: keep the conversation sticky
+)
+print(resp.choices[0].message.content)
+
+# Passthrough to a specific model, streaming
+for chunk in client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Write a haiku about octopuses"}],
+    stream=True,
+):
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+### Example — curl
+
+```bash
+curl https://your-host/v1/chat/completions \
+  -H "Authorization: Bearer octi_…" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"octipus/orchestrator","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### Notes & limits
+
+- **Streaming** (`stream: true`) is protocol-correct SSE that chunks the final
+  message text. Token-true streaming (per-delta) is a planned follow-up.
+- `octipus/<role>` model ids (forced single-role) are **not yet wired** and
+  return `400 model_not_found`; use `octipus/orchestrator` or a registry model.
+- Errors use the OpenAI error envelope (`invalid_request_error`,
+  `authentication_error`, `server_error`) so SDK error handling works.

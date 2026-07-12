@@ -43,8 +43,13 @@ export const authGuard = new Elysia({ name: 'auth-guard' })
   .onBeforeHandle({ as: 'global' }, (ctx) => {
     const url = new URL(ctx.request.url);
 
-    // Skip guard for CORS preflight, non-API routes, and public paths
-    if (ctx.request.method === 'OPTIONS' || !url.pathname.startsWith('/api/') || isPublicPath(url.pathname)) {
+    // Guarded surfaces: the `/api/` group and the OpenAI-compatible `/v1/`
+    // group. Everything else (static assets, the WS upgrade, etc.) is handled
+    // elsewhere. `/v1` is NOT public — it carries the same auth as `/api`.
+    const isGuarded = url.pathname.startsWith('/api/') || url.pathname.startsWith('/v1/');
+
+    // Skip guard for CORS preflight, non-guarded routes, and public paths.
+    if (ctx.request.method === 'OPTIONS' || !isGuarded || isPublicPath(url.pathname)) {
       return;
     }
 
