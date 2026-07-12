@@ -7,6 +7,165 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### OpenClaw gap integration — eight phases (2026-07-12, PRs #199–#207)
+
+Closes the gaps ranked "worth closing" in `docs/OPENCLAW-COMPARISON.md`,
+delivered as eight independently-reviewed, CI-green PRs. Plan and
+per-workstream status in
+[`docs/plans/openclaw-gap-integration.md`](docs/plans/openclaw-gap-integration.md).
+
+- **CI & security hardening (WS1 — PRs #199, #201, #202).**
+  `bun audit` is now **blocking** (with a reviewable allowlist);
+  CodeQL, semgrep (`p/typescript` + `p/security-audit`), zizmor
+  workflow audit, and `dependency-review` run on every PR; a
+  tag-driven `release.yml` extracts the CHANGELOG section and syncs
+  `package.json` on `v*` tags; an install smoke test runs
+  `install.sh` + `octi doctor` on ubuntu **and** macOS. Also fixed the
+  repo's long-standing CI flakiness — a bun coverage stdout burst was
+  crashing test runs with `WriteFailed`; `coverageReporter=["lcov"]`
+  in `bunfig.toml` removes the ~530-row table from the pipe.
+- **Observability (WS4 — PR #199).** Prometheus metrics via
+  `prom-client` (`src/core/telemetry.ts`) with `record*` helpers that
+  never throw, and end-to-end `runId` correlation via
+  `AsyncLocalStorage` (`src/core/run-context.ts`) stamped into pino
+  logs and exposed on `/metrics`. **Operator-visible:** `/metrics`
+  now serves a real registry; legacy gauge names preserved.
+- **API-token scope enforcement (WS6.1 — PR #199).**
+  `src/security/scopes.ts` — token scopes are now enforced, not just
+  stored. **Back-compat:** a token with *empty* scopes retains
+  full access, so existing tokens are unaffected.
+- **OpenAI-compatible HTTP API (WS6 — PR #200).** New `GET /v1/models`
+  and `POST /v1/chat/completions`. `model: octipus/orchestrator`
+  (default) runs the full pipeline; `octipus/<role>` forces a role; a
+  raw registry model id is a single-turn passthrough. Protocol-correct
+  SSE streaming (`stream: true`) and an OpenAI error envelope so
+  off-the-shelf SDKs work. **User-visible:** point any OpenAI client at
+  `/v1` with an `octi_` token.
+- **Heartbeat / proactive loop (WS2 — PR #203).** A cron-runner-driven
+  periodic per-user turn, gated **cheap-first** (quiet hours → quota →
+  a pending-work probe, all before any LLM call). Standing instructions
+  come from a pinned `HEARTBEAT` note. Migration 0077 adds the
+  `heartbeat` trigger type. **Operator-visible:** off unless a
+  `HEARTBEAT` note is pinned.
+- **`tool_search` (WS5 — PR #204).** Embedding-based semantic ranking
+  layered onto the existing lazy tool discovery and wired into
+  `list_tools`, so large role tool-sets surface the right tool by
+  meaning, not just name.
+- **Local-runtime presets (WS8 — PR #205).** Model presets +
+  autodiscovery for local runtimes (Ollama / LM Studio / vLLM / …)
+  reusing the OpenAI-compat provider, plus `/api/models/presets` and
+  `/api/models/discover`.
+- **Versioned plugin SDK (WS3 — PR #207).** `@octipus/plugin-sdk`
+  publishes the plugin contract (manifest types, `validateManifest`,
+  `checkApiVersion` with semver gating) and a `validatePlugin` kit
+  that dry-runs a plugin's full lifecycle. New `octi plugin validate
+  <dir>` CLI and a `plugin-validate` CI job over `extensions/*`.
+  Consumed by the host via a tsconfig path alias — zero install
+  impact. **Plugin authors:** set `apiVersion` + `capabilities.tools`
+  in `plugin.json` (see `docs/PLUGINS.md`).
+
+**Deferred (tracked on the roadmap):** token-true streaming for `/v1`
+(needs a token-delta path through the orchestrator — step-1 SSE ships
+now), an inbound email channel (ASK-gated), OpenTelemetry traces
+(metrics + `runId` shipped; the OTel SDK is dependency-blocked in the
+build environment), and plugin remote-install/signing. Subscription
+OAuth was dropped (Octipus is multi-user only).
+
+### Voice — first-class, multi-surface (2026-07-10, PRs #187–#197)
+
+Voice becomes a real channel across web, TUI, and messaging, with a
+local-first STT path and a cloud TTS default so it works with no host
+setup.
+
+- **Live voice conversation in the web chat (#191).** Hands-free mode:
+  talk, and Octipus streams a reply and speaks it back, with background
+  agents spawning exactly as in text. Half-duplex loop (mic →
+  VAD-segmented utterance → local `whisper.cpp` transcribe → the same
+  pipeline as text → speak → listen), a live-voice toggle +
+  listening/thinking/speaking chip in the composer, and graceful
+  text-only degrade when TTS is off. **User-visible:** TTS default
+  flipped to cloud (Mistral Voxtral) so voice-out works out of the box;
+  piper stays the local opt-in. Streaming STT + barge-in deferred to a
+  realtime phase.
+- **Voice on every channel + Telegram voice-out + TUI push-to-talk
+  (#195, #197).** Voice-in across all channels, Telegram voice replies,
+  and push-to-talk voice in the TUI.
+- **Mistral vision + OCR and Voxtral STT/TTS (#188, #190).** Native
+  Mistral vision + OCR; Voxtral speech-to-text and text-to-speech
+  engines.
+- **Local whisper reliability (#193, #194).** Cross-platform fixes to
+  decode / language-detect / gating / install so local `whisper.cpp`
+  works reliably.
+- **Windows `octi.cmd` parity (#187).** The Windows launcher reaches
+  command parity with the bash `octi`.
+
+### Swarm reliability — release-candidate hardening (2026-07-06–08, PRs #179–#186, #196)
+
+A budget/liveness diagnosis arc (RC5/RC7) that makes swarm budgets
+actually bind and stops orphaned agents from outliving their parents.
+
+- **Budgets bind; detached orphans are killed (#181, #182).** On
+  *normal* completion (not just failure) a parent now aborts + cancels
+  any detached child still pending after auto-collect, so answering the
+  user no longer leaves a child running. The orphan reaper actually
+  *stops* unambiguous orphans (a detached child of an already-terminal
+  parent) instead of only relabeling DB rows. The token-budget cap
+  binds even under providers that under-report usage.
+- **Capability + context-window gates at spawn (#183, #186).** A
+  worker's model is gated for capability at binding time and for
+  context-window fit at spawn — failing loud instead of mid-turn.
+- **Liveness-gated reaper + hard backstop (#185, #184).** A
+  heartbeat / last-activity signal gates the age-based reaper so a
+  healthy long-running orchestrator isn't torn down; an absolute
+  backstop resolves a wedged `collect_children` wait.
+- **Fan-out + relay correctness (#180, #196).** Depth-1 subagents are
+  discoverable so fan-out can happen; fixes for scaffolding leaks,
+  duplicate spawns, per-child relays, and misread child status.
+- **Also:** research-drift failure fix (#179); each spawned worker now
+  sees its siblings' prior actions; 60 s dedup on identical sends to the
+  same target; a `remember_this` loop + duplicate-memory fix; the saved
+  research report is conditional rather than mandatory; the orphan
+  reaper runs periodically, not only at boot.
+
+### Provider correctness + orchestrator robustness (2026-07-04, PRs #172–#177)
+
+- **Gemini tool calling fixed; every provider lane hardened (#174).**
+  `flash-lite` is now usable as an orchestrator — the QA conclusion
+  "flash-lite can't tool call" was an integration bug. Schemas are
+  sanitized for Gemini (`$schema`/`$id`/`$defs` stripped, `$ref`
+  preserved), orphaned tool-calls get synthesized error results,
+  empty-content turns are filtered, and a new
+  `toolChoice: auto|required|none` maps per provider (OpenAI
+  `tool_choice` / Gemini `functionCallingConfig.mode`). Truncated turns
+  retry natively with more tokens before the toolshim; one shared
+  `parseToolCallArguments` helper across providers.
+- **Orchestrator relay fidelity + child-aware timeouts (#175).**
+  Auto-collect gives each forgotten detached child a real relay budget
+  (2–12k chars) instead of truncating to 500, with a deterministic
+  fallback that appends child results verbatim when the final answer is
+  a stub. `collect_children` is on the lite-mode tool surface. A
+  stopped child emits a complete-shaped terminal event so the UI
+  spinner resolves and a detached parent finalizes.
+- **CLI agent fidelity + MCP session-before-spawn (#173, #176).**
+  CLI-agent event/tool-tracking fidelity; the MCP path creates a
+  session before spawning an agent.
+- **Fixes (#172, #177):** experts null-override, dev-session workspace
+  root, and model-lane visibility; a bun-test preload reaps leaked
+  per-test `/tmp` scratch dirs.
+
+### `writing` model lane (2026-07-02, PR #171)
+
+- **Operator-visible:** Long-form roles (`research`, `writer`, `pm`,
+  `communication`) all funneled into the single `agents` model lane
+  after topic consolidation, so they couldn't be bound to a cheaper /
+  faster model than coding work. A new canonical `writing` lane is added
+  and those four roles re-pointed to it (alias-table only — no role
+  config changes). Migration 0075 seeds the writing lane's binding from
+  the current `agents` binding so nothing fails loud on deploy; rebind
+  `writing` to a flash model on the Topics page. Mirrored in the web
+  Topics UI and the health feature list. (Routing analysis in #169;
+  e2e topic-coverage fix in #170.)
+
 ### Core file refactor (2026-07-01, PR #167)
 
 - **Programmer-visible:** Split the four largest logic-heavy files
@@ -29,6 +188,33 @@ labels reflect blast radius, not contract guarantees.
   long-running child results actually land. Swarm budget accounting reconciled:
   canonical wall-clock is 600 s (10 min) per level, and child spend feeds the
   shared pool.
+
+### Robustness + MCP auto-reconnect + permission queue UI (2026-07-01, PR #168)
+
+- **Operator-visible:** MCP servers **auto-reconnect** after a drop, and
+  a **permission-queue UI** surfaces pending approvals. Approval-manager
+  global-resolution and timeout bugs fixed; worker spawners proactively
+  check tool availability; the skill markdown parser moved to `js-yaml`;
+  registry + visual-analyzer test coverage added. Docs: QA sections for
+  topic model-roles / session changes / detachments, a roadmap sweep,
+  and seven shipped design notes archived under `.octipus/archive/`.
+
+### Provider, desktop, and web fixes (2026-06-26–28)
+
+- **Desktop lifecycle (#164).** `octi desktop` backgrounds by default so
+  the GUI survives closing the terminal (`--foreground`/`--stop` to
+  control); `octi stop` / `uninstall` reap the desktop app; new
+  `octi start/restart --backend-only` (aliases `--headless` / `--no-web`)
+  run the backend with no UI so desktop/TUI users attach their own
+  client; fixed a desktop-dev `ChunkLoadError` by giving `next dev` its
+  own `.next-desktop` cache separate from the static-export build.
+- **Provider / prompt fixes.** DeepSeek: always send `reasoning_content`
+  on tool-call turns; the orchestrator no longer treats a thinking-only
+  turn as the final answer; the current date is stamped into the prompt.
+- **Browser extension** now authenticates the bridge with an API token
+  instead of the master key.
+- **Web:** a refresh button on provider model-discovery; DocumentCard
+  hydration-error fix (nested buttons).
 
 ### QA batch — end-user surfaces (2026-06-10)
 
