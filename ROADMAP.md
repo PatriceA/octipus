@@ -43,6 +43,28 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Next (months)
 
+- **Token-true streaming for `/v1/chat/completions`.** The OpenAI-compat
+  API (shipped 2026-07-12) streams protocol-correct SSE that chunks the
+  *final* text. True token-by-token streaming needs a token-delta path
+  that does not exist yet: `ProviderRouter.complete` returns full text
+  and the orchestrator emits only structured events (`status_update`,
+  `worker_spawned`, …). The work is provider streaming → orchestrator
+  delta events → SSE bridge keyed by the shipped WS4 `runId`, not a
+  bridge over existing events. Do it once a provider-level streaming
+  interface lands.
+- **Inbound email channel.** A reply-drafts-only email adapter
+  (**ASK-gated**: every send is a human-approved draft, per the
+  gap-integration decision). Blocked on a reusable channel-adapter
+  harness — the same harness would serve Signal / Matrix (under
+  **Later**). The email *triage* surface already shipped (2026-06-03 /
+  2026-06-10); this is the missing *inbound conversational channel*.
+- **OpenTelemetry traces.** Prometheus metrics + `runId` correlation
+  shipped (WS4, 2026-07-12); spans are the remaining half. Blocked on
+  packaging — the OTel SDK's ~20 transitive packages can't currently
+  install through the build environment's package proxy. Pick up when
+  the dependency constraint lifts; the `runId` propagation it would key
+  on is already in place.
+
 - **TUI — remaining items.**
   - Mouse wheel scrolling once pi-tui exposes mouse APIs upstream.
     The messages pane already exposes `scrollUp/scrollDown`;
@@ -102,13 +124,46 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
 - **Voice as a first-class channel.** Today STT/TTS works through the gateway; we want full duplex voice with interruption handling and emotion-aware routing.
 - **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker.
-- **Plugin signing & permissions.** Today plugins in `extensions/` run with full host trust. Capability declarations + signature verification.
+- **Plugin signing & permissions.** Today plugins in `extensions/` run with full host trust. Capability declarations + signature verification. The versioned `@octipus/plugin-sdk` contract (manifest `capabilities`, apiVersion gating, `validatePlugin`) shipped 2026-07-12 (WS3); this item is the remaining phase-3 work — remote install (npm/git) plus signature verification on top of that contract.
 - **Cost-aware routing.** Router considers per-provider cost in addition to capability. Already partial; we want it tunable per user.
 - **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering.
 - **Session-as-tree (fork/branch-aware sessions).** Today messages are a linear PG sequence per session. Add `parentId` on messages and a `/tree` navigation command so users can fork from any point, edit, and replay. Pi-mono's session v3. Defer until a real fork UX is on the table — linear is fine while it isn't.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-07-12 — OpenClaw gap integration (eight phases)
+
+Closed the gaps ranked "worth closing" in
+[`docs/OPENCLAW-COMPARISON.md`](docs/OPENCLAW-COMPARISON.md), delivered
+as eight independently-reviewed, CI-green PRs (#199–#207). Plan +
+per-workstream status in
+[`docs/plans/openclaw-gap-integration.md`](docs/plans/openclaw-gap-integration.md);
+operator/integrator notes in
+[`CHANGELOG.md`](CHANGELOG.md#openclaw-gap-integration--eight-phases-2026-07-12-prs-199207).
+
+- **CI & security (WS1).** Blocking `bun audit` + allowlist, CodeQL,
+  semgrep, zizmor, dependency-review, cross-OS install smoke, tag-driven
+  release automation. Also root-caused and fixed the repo's chronic CI
+  flakiness (bun coverage stdout `WriteFailed` → `coverageReporter=["lcov"]`).
+- **Observability (WS4).** prom-client `/metrics` + `runId` correlation
+  through `AsyncLocalStorage`, stamped into pino logs.
+- **OpenAI-compatible `/v1` API (WS6).** `/v1/models` +
+  `/v1/chat/completions` (orchestrator / role / passthrough), SSE, OpenAI
+  error envelope. API-token **scope enforcement** landed alongside
+  (empty scopes = full-access back-compat).
+- **Heartbeat (WS2).** Cron-driven per-user proactive loop, gated
+  cheap-first (quiet hours / quota / pending-work probe before any LLM
+  call), driven by a pinned `HEARTBEAT` note.
+- **`tool_search` (WS5).** Embedding-based semantic ranking over the
+  existing lazy tool discovery, wired into `list_tools`.
+- **Local-runtime presets (WS8).** Presets + autodiscovery for local
+  runtimes reusing the OpenAI-compat provider.
+- **Versioned plugin SDK (WS3).** `@octipus/plugin-sdk` (contract +
+  `validatePlugin` kit), `octi plugin validate` CLI, `plugin-validate`
+  CI job; consumed via tsconfig alias (zero install impact).
+
+Deferred items from this arc are under **Next** and **Later** below.
 
 ### 2026-07-01 — Refactor + changes review + roadmap sweep
 

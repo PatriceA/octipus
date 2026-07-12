@@ -7,6 +7,70 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### OpenClaw gap integration — eight phases (2026-07-12, PRs #199–#207)
+
+Closes the gaps ranked "worth closing" in `docs/OPENCLAW-COMPARISON.md`,
+delivered as eight independently-reviewed, CI-green PRs. Plan and
+per-workstream status in
+[`docs/plans/openclaw-gap-integration.md`](docs/plans/openclaw-gap-integration.md).
+
+- **CI & security hardening (WS1 — PRs #199, #201, #202).**
+  `bun audit` is now **blocking** (with a reviewable allowlist);
+  CodeQL, semgrep (`p/typescript` + `p/security-audit`), zizmor
+  workflow audit, and `dependency-review` run on every PR; a
+  tag-driven `release.yml` extracts the CHANGELOG section and syncs
+  `package.json` on `v*` tags; an install smoke test runs
+  `install.sh` + `octi doctor` on ubuntu **and** macOS. Also fixed the
+  repo's long-standing CI flakiness — a bun coverage stdout burst was
+  crashing test runs with `WriteFailed`; `coverageReporter=["lcov"]`
+  in `bunfig.toml` removes the ~530-row table from the pipe.
+- **Observability (WS4 — PR #199).** Prometheus metrics via
+  `prom-client` (`src/core/telemetry.ts`) with `record*` helpers that
+  never throw, and end-to-end `runId` correlation via
+  `AsyncLocalStorage` (`src/core/run-context.ts`) stamped into pino
+  logs and exposed on `/metrics`. **Operator-visible:** `/metrics`
+  now serves a real registry; legacy gauge names preserved.
+- **API-token scope enforcement (WS6.1 — PR #199).**
+  `src/security/scopes.ts` — token scopes are now enforced, not just
+  stored. **Back-compat:** a token with *empty* scopes retains
+  full access, so existing tokens are unaffected.
+- **OpenAI-compatible HTTP API (WS6 — PR #200).** New `GET /v1/models`
+  and `POST /v1/chat/completions`. `model: octipus/orchestrator`
+  (default) runs the full pipeline; `octipus/<role>` forces a role; a
+  raw registry model id is a single-turn passthrough. Protocol-correct
+  SSE streaming (`stream: true`) and an OpenAI error envelope so
+  off-the-shelf SDKs work. **User-visible:** point any OpenAI client at
+  `/v1` with an `octi_` token.
+- **Heartbeat / proactive loop (WS2 — PR #203).** A cron-runner-driven
+  periodic per-user turn, gated **cheap-first** (quiet hours → quota →
+  a pending-work probe, all before any LLM call). Standing instructions
+  come from a pinned `HEARTBEAT` note. Migration 0077 adds the
+  `heartbeat` trigger type. **Operator-visible:** off unless a
+  `HEARTBEAT` note is pinned.
+- **`tool_search` (WS5 — PR #204).** Embedding-based semantic ranking
+  layered onto the existing lazy tool discovery and wired into
+  `list_tools`, so large role tool-sets surface the right tool by
+  meaning, not just name.
+- **Local-runtime presets (WS8 — PR #205).** Model presets +
+  autodiscovery for local runtimes (Ollama / LM Studio / vLLM / …)
+  reusing the OpenAI-compat provider, plus `/api/models/presets` and
+  `/api/models/discover`.
+- **Versioned plugin SDK (WS3 — PR #207).** `@octipus/plugin-sdk`
+  publishes the plugin contract (manifest types, `validateManifest`,
+  `checkApiVersion` with semver gating) and a `validatePlugin` kit
+  that dry-runs a plugin's full lifecycle. New `octi plugin validate
+  <dir>` CLI and a `plugin-validate` CI job over `extensions/*`.
+  Consumed by the host via a tsconfig path alias — zero install
+  impact. **Plugin authors:** set `apiVersion` + `capabilities.tools`
+  in `plugin.json` (see `docs/PLUGINS.md`).
+
+**Deferred (tracked on the roadmap):** token-true streaming for `/v1`
+(needs a token-delta path through the orchestrator — step-1 SSE ships
+now), an inbound email channel (ASK-gated), OpenTelemetry traces
+(metrics + `runId` shipped; the OTel SDK is dependency-blocked in the
+build environment), and plugin remote-install/signing. Subscription
+OAuth was dropped (Octipus is multi-user only).
+
 ### Core file refactor (2026-07-01, PR #167)
 
 - **Programmer-visible:** Split the four largest logic-heavy files
