@@ -60,8 +60,11 @@ export function matchesTrigger(hook: Hook, event: TriggerEvent, context: Trigger
       return matchesWebhookTrigger(config, context.webhook);
     }
 
-    case 'schedule': {
-      // Only match the specific hook targeted by the cron-runner
+    case 'schedule':
+    case 'heartbeat': {
+      // Only match the specific hook targeted by the cron-runner. Heartbeat is
+      // a schedule variant: the cron-runner runs the gate and fires the exact
+      // hook by id, so the match rule is identical.
       const scheduleData = event.data as { hookId?: string } | undefined;
       if (scheduleData?.hookId) {
         return hook.id === scheduleData.hookId;

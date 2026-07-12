@@ -388,6 +388,27 @@ export const vaultSyncConfigSchema = z.object({
 });
 
 // Full configuration schema
+/**
+ * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
+ * context and acts or stays silent. Off by default; a cheap deterministic gate
+ * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
+ * LLM tokens are spent. See src/core/heartbeat.ts.
+ */
+export const heartbeatConfigSchema = z.object({
+  /** Master switch. When false the cron-runner never processes heartbeat hooks. */
+  enabled: z.boolean().default(false),
+  /** Minutes between heartbeat runs per user. */
+  intervalMinutes: z.number().int().min(5).max(1440).default(60),
+  /** Quiet hours (local to `quietHoursTimezone`): no runs when the hour is in
+   *  [start, end). Equal start/end disables quiet hours. */
+  quietHoursStart: z.number().int().min(0).max(23).default(22),
+  quietHoursEnd: z.number().int().min(0).max(23).default(7),
+  quietHoursTimezone: z.string().default('UTC'),
+  /** Hard cap on heartbeat runs per user per calendar day (in the tz above). */
+  maxRunsPerDay: z.number().int().min(1).max(288).default(24),
+});
+
+// Full configuration schema
 export const configSchema = z.object({
   storageMode: storageModeSchema,
   database: databaseConfigSchema,
@@ -429,9 +450,11 @@ export const configSchema = z.object({
   rateLimit: rateLimitConfigSchema,
   swarm: swarmConfigSchema.prefault({}),
   skills: skillsConfigSchema.prefault({}),
+  heartbeat: heartbeatConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
+export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type RedisConfig = z.infer<typeof redisConfigSchema>;
