@@ -339,6 +339,12 @@ export class CoquiTTSEngine extends EventEmitter implements TTSEngine {
 }
 
 const MISTRAL_TTS_MODEL = 'voxtral-mini-tts-2603';
+/**
+ * Voxtral TTS rejects a request with no voice ("Either ref_audio or voice must
+ * be provided"), so a caller that doesn't pick one still needs a valid default —
+ * otherwise every `/speak` 500s and voice-out silently degrades to text.
+ */
+const MISTRAL_DEFAULT_VOICE = 'en_paul_neutral';
 
 /**
  * Mistral (Voxtral) text-to-speech via `POST /v1/audio/speech`.
@@ -355,7 +361,7 @@ export class MistralTTSEngine extends EventEmitter implements TTSEngine {
     this.model = MISTRAL_TTS_MODEL;
     // mp3 ≈3s end-to-end, pcm ≈0.8s. mp3 is the sane default for HTTP callers;
     // a latency-sensitive caller (telephony) should pass outputFormat: 'pcm'.
-    this.options = { voice: voiceId, outputFormat: 'mp3', ...options };
+    this.options = { outputFormat: 'mp3', ...options, voice: voiceId || options.voice || MISTRAL_DEFAULT_VOICE };
   }
 
   private async apiKey(): Promise<string> {
