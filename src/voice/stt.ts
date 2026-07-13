@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '../utils/logger';
+import { FrameAccumulator } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
@@ -87,6 +88,13 @@ export interface STTOptions {
   translate?: boolean;
   vadEnabled?: boolean;
   vadThreshold?: number;
+  /**
+   * Sliding-window size for `streamTranscribe`, in seconds. Smaller = lower
+   * latency, more whisper invocations. Whisper.cpp streaming is repeated batch
+   * over a window (there is no true incremental decode), so this is the main
+   * latency knob. Default 2 s.
+   */
+  streamWindowSeconds?: number;
 }
 
 export interface TranscriptionResult {
@@ -225,42 +233,40 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
    */
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
     const tempPath = tmpPath('-stream.wav');
-    const chunks: Uint8Array[] = [];
-
     const reader = stream.getReader();
-    let totalBytes = 0;
-    const chunkThreshold = 16000 * 2 * 3; // 3 seconds of 16kHz 16-bit audio
 
-    // Chunks are raw 16kHz mono s16 PCM (the byte-threshold math assumes it), so
-    // wrap each batch in a WAV header — that makes it conformant and lets
-    // transcribe() skip ffmpeg entirely (headerless PCM would otherwise fail
-    // ffmpeg's autodetect).
-    const flush = async (data: Buffer): Promise<string> => {
+    // Sliding window over raw 16 kHz mono s16 PCM. whisper.cpp has no true
+    // incremental decode, so streaming is repeated batch over a window; the
+    // window size is the latency knob (default 2 s, was a hard-coded 3 s).
+    // ponytail: non-overlapping windows — no cross-window token dedup, so a word
+    // split across a boundary can be lost. Add overlap + tail dedup here if
+    // boundary accuracy matters; it needs real speech to tune, so not now.
+    // Falsy/negative guard, not `?? 2` — a configured 0 or negative would reach
+    // FrameAccumulator's positive-threshold check and throw.
+    const cfg = this.options.streamWindowSeconds;
+    const windowSeconds = typeof cfg === 'number' && cfg > 0 ? cfg : 2;
+    const acc = new FrameAccumulator(Math.round(16000 * 2 * windowSeconds));
+
+    // A window is raw PCM; wrap it in a WAV header so transcribe() sees a
+    // conformant file and skips ffmpeg entirely (headerless PCM fails ffmpeg's
+    // autodetect).
+    const flush = async (data: Uint8Array): Promise<string> => {
       await Bun.write(tempPath, pcm16kMonoToWav(data));
-      const result = await this.transcribe(tempPath);
-      return result.text;
+      return (await this.transcribe(tempPath)).text;
     };
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        chunks.push(value);
-        totalBytes += value.length;
-
-        if (totalBytes >= chunkThreshold) {
-          const audioData = Buffer.concat(chunks);
-          chunks.length = 0;
-          totalBytes = 0;
-          const text = await flush(audioData);
+        for (const window of acc.push(value)) {
+          const text = await flush(window);
           if (text) yield text;
         }
       }
-
-      // Process remaining audio
-      if (chunks.length > 0) {
-        const text = await flush(Buffer.concat(chunks));
+      const tail = acc.flush();
+      if (tail) {
+        const text = await flush(tail);
         if (text) yield text;
       }
     } finally {
