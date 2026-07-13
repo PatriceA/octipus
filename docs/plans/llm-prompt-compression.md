@@ -137,7 +137,7 @@ but is irrelevant to the automatic-caching providers, which only need a
 | **Gemini** | Implicit caching, automatic on 2.5+ models; explicit `cachedContents` API (native only, storage fee + TTL) | implicit ~75–90% on cached tokens | Stable prefix; confirm whether the OpenAI-compat layer reports/discounts implicit cache hits (open question — test and record; if not, consider native `generateContent` path later) |
 | **DeepSeek** | Automatic context caching (disk), always on | cache hits ~90% cheaper | Stable prefix; parse DeepSeek-specific `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` usage fields in `deepseek-provider.ts` |
 | **xAI Grok** | Automatic prompt caching; ~5 min window; `x-grok-conv-id` header recommended to maximize hit rate | ~75–90% depending on model | Stable prefix; set `x-grok-conv-id` per session in `grok-provider.ts`; read cached-token usage |
-| **Mistral** | No prompt caching in the public API (re-check at impl time) | — | Benefits only from Phases 3–5 (shorter prompts) |
+| **Mistral** | Explicit opt-in: set `prompt_cache_key` on chat-completions requests sharing a prefix; caches in 64-token blocks (<64-token prompts never hit); key raises hit likelihood but doesn't guarantee it | cached tokens ~10% of input price (90% off) | Send `prompt_cache_key` (stable per session, e.g. sessionId hash — no secrets in the key) in `mistral-provider.ts`; stable prefix; read `prompt_tokens_details.cached_tokens` |
 | **Ollama (local)** | KV-cache prefix reuse for the loaded model (`keep_alive`); no billing — latency win | prompt-eval skip | Stable prefix ordering makes repeated prefixes near-free to re-process locally |
 | **OpenRouter** | Pass-through: forwards Anthropic `cache_control` content blocks; automatic for OpenAI/DeepSeek-style upstreams; reports cache discount in usage/generation metadata | per upstream | Emit `cache_control` blocks for Anthropic-family models; read cached-token usage in `openrouter-provider.ts:75` |
 | **LiteLLM (proxy path)** | Pass-through of `cache_control` to Anthropic; already surfaces `cached_tokens` (`litellm-client.ts:463-476`) | per upstream | Emit `cache_control` in message content when the bound model is Anthropic-family |
@@ -150,7 +150,9 @@ Two consequences:
   — OpenAI, DeepSeek, Grok, Gemini get their discounts with zero request
   changes, and Ollama gets latency. It ships first.
 - **Only Anthropic needs request-shape work** (breakpoints + native
-  path), plus small usage-parsing additions for DeepSeek/Grok/OpenRouter.
+  path). Mistral and Grok need one-line request additions
+  (`prompt_cache_key` / `x-grok-conv-id`), and
+  DeepSeek/Grok/Mistral/OpenRouter need small usage-parsing additions.
 
 ---
 
@@ -222,6 +224,8 @@ prefix for most providers.
 ### 2c. Provider-specific follow-ups
 
 - Grok: send `x-grok-conv-id: <sessionId hash>` per request.
+- Mistral: send `prompt_cache_key: <sessionId hash>` per request (no
+  secrets/PII in the key); parse `prompt_tokens_details.cached_tokens`.
 - DeepSeek: parse hit/miss usage fields.
 - Gemini: measure whether OpenAI-compat surfaces implicit-cache discounts;
   document the finding in this file; only then evaluate a native path.
@@ -327,4 +331,5 @@ and appended to this document.
 - Gemini context/implicit caching: https://ai.google.dev/gemini-api/docs/caching
 - xAI prompt caching: https://docs.x.ai/developers/advanced-api-usage/prompt-caching
 - DeepSeek context caching: https://api-docs.deepseek.com/guides/kv_cache
+- Mistral prompt caching: https://docs.mistral.ai/studio-api/conversations/advanced/prompt-caching
 - OpenRouter prompt caching: https://openrouter.ai/docs/features/prompt-caching
