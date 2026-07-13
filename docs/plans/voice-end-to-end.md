@@ -151,9 +151,70 @@ cross-platform capture. Fine for Linux; note it, don't paper over it.
 
 ## Phase 4 — Realtime upgrade *(optional, only if Phase 1 UX justifies it)*
 
-Wire the #190 `streamTranscribe` + a duplex WS for barge-in and lowest latency, and the
-dead telephony media-stream (`streamUrl` / `<Connect><Stream>`, no WS handler today).
-This is where the resample question (16 kHz mono s16le) actually has to be answered.
+> Detailed plan added 2026-07-12 after a full audit of the realtime seams. Split into
+> four independently-shippable sub-PRs; ship the verifiable ones first.
+
+### The core gap
+Everything realtime hinges on one missing primitive: a **continuous 48 kHz → 16 kHz mono
+s16le resampler**. Today resampling is batch-only — browser `OfflineAudioContext` on a whole
+recorded blob (`web/hooks/useVoiceConversation.ts:311` `encodeWav16kMono`) and server ffmpeg
+on a file (`src/voice/stt.ts:62` `toWhisperWav`). The streaming STT engines
+(`stt.ts:106,226,527`) assume the caller already delivers conformant 16 kHz PCM;
+`stripWavHeader` (`stt.ts:447`) is a *guard*, not a converter. Fix the resampler and the rest
+is wiring.
+
+### 4a — Realtime foundation *(pure functions; fully testable here)*
+Shared primitives both web-realtime and telephony need, as tested library code — no endpoints:
+- `resamplePcm16(input, inRate, outRate)` + a **stateful streaming** variant (carries the
+  fractional sample position across frames).
+- **μ-law codec** `muLawDecode/Encode` (8 kHz PCM16 ↔ G.711) — telephony needs it; harmless for web.
+- A **frame accumulator** adapting pushed PCM16 frames into the `ReadableStream<Uint8Array>`
+  that `streamTranscribe` consumes, with a byte-threshold flush.
+- **Files:** new `src/voice/audio-codec.ts` + `audio-codec.test.ts`. 100% unit-testable
+  (sine round-trips, rate ratios). **This is the safe first PR.**
+
+### 4b — Web duplex WS + live capture *(logic testable; e2e needs a browser mic + Mistral key)*
+- **Server:** new `app.ws('/voice', …)` in `src/api/voice-ws.ts` — NOT the JSON `/gateway`
+  (it decodes all binary to string, `gateway-ws.ts:50`). Reuse the `getSessionManager().validate`
+  URL-token handshake like `/ws` (`websocket.ts:41`). Bridge inbound binary frames → 4a
+  accumulator → `MistralSTTEngine.streamTranscribe` (`stt.ts:527`, the only real streaming STT;
+  whisper "streaming" is 3 s batch re-runs, `stt.ts:232`). Emit partial transcripts back.
+- **Browser:** an **AudioWorklet** off the existing `getUserMedia` stream
+  (`useVoiceConversation.ts:250`) emitting 16 kHz mono s16le frames (reuse the Float32→PCM16
+  logic from `pcmToWav` `:335`), replacing the per-utterance `MediaRecorder` + `encodeWav16kMono`
+  batch path in live mode.
+- **Gate the feature behind Mistral-key availability** — local whisper can't stream low-latency.
+
+### 4c — Streaming reply + barge-in *(the UX payoff)*
+- **Barge-in:** run the RMS VAD *during* `speaking` (today gated to `listening`,
+  `useVoiceConversation.ts:233`); on detected speech, stop the `<audio>` sink (`:106`) and
+  reopen STT. Large perceived win, mostly verifiable now (state-machine logic).
+- **Streaming TTS:** wire `MistralTTSEngine`'s documented `stream:true` SSE gap (`tts.ts:394`)
+  so the reply speaks as it synthesizes.
+- **Streaming assistant text (deep):** replies aren't token-streamed to clients — the gateway
+  union is closed (`protocol.ts:40`) and emits the whole reply once (`message-handler.ts:240`).
+  Add a `chat.response.delta` event + surface orchestrator token deltas. Biggest blast radius;
+  do it last, behind a flag.
+
+### 4d — Telephony media-stream *(DEFERRED — untestable without a live carrier)*
+New WSS `/voice/media/:provider` speaking Twilio's `start/media/stop` protocol, μ-law 8 kHz
+(reuses the 4a codec), wiring the currently-dead `streamUrl` branch (`twilio.ts:114`, its only
+`<Connect><Stream>`) off the `voice.publicUrl` setting (`voice.ts:74`). **Cannot be verified
+without a live Twilio number + a public `wss://`** — codec/parser units are testable, the
+handshake is not. Its own PR when a real carrier line is available; independent of the
+web-realtime work (shares only the STT/TTS engines, not the WS handlers).
+
+### Recommended sequencing
+**4a → (4c barge-in) → 4b → 4c streaming → 4d.** Ship 4a (tested foundation) and the barge-in
+slice first — both complete and verifiable now. 4b / 4c-streaming / 4d each need external
+resources (Mistral key, browser mic, Twilio) to verify end-to-end, so flag them and land as
+their capabilities become testable.
+
+### Open decisions
+1. **Local-first vs cloud realtime** — true low-latency streaming STT is Mistral-only (cloud).
+   Gate realtime behind a Mistral key, or degrade to the 3 s-window whisper batch?
+2. **Streaming assistant deltas** (4c) touch the orchestrator/gateway core — worth it, or is
+   "speak the whole reply, but interruptible" (barge-in without token-streaming) enough?
 
 ---
 
