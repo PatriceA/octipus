@@ -133,6 +133,26 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
     session = inboundSession;
     apiLogger.info({ callId: session.id, provider, caller: callerNumber, policy: inboundPolicy }, 'Inbound call accepted');
 
+    // Realtime media-stream path (Phase 4d): if a public wss base is configured
+    // and streaming is enabled, hand the call to the bidirectional media socket
+    // (low-latency, barge-in) instead of the turn-based <Gather> loop. Requires
+    // voice.publicUrl (Twilio must reach a public wss); falls back to Gather.
+    const streamingSetting = await settingsSvc.get('voice.streaming');
+    const streamingEnabled = streamingSetting === true || streamingSetting === 'true';
+    // Only Twilio implements <Connect><Stream>; Plivo/Telnyx would greet-then-
+    // hangup, so keep them on the working <Gather> loop.
+    if (streamingEnabled && publicBase && provider === 'twilio') {
+      const wssBase = publicBase.replace(/^http/, 'ws');
+      const { mintMediaStreamToken } = await import('../voice-media-ws');
+      const token = mintMediaStreamToken(String(body.CallSid || session.id));
+      const streamUrl = `${wssBase}/voice/media/${provider}?token=${token}`;
+      apiLogger.info({ callId: session.id, streamUrl: streamUrl.replace(token, '***') }, 'Answering with media stream');
+      return telephonyProvider.generateAnswerResponse({
+        message: 'Hello, how can I help you?',
+        streamUrl,
+      });
+    }
+
     // Answer with a greeting and start gathering speech
     return telephonyProvider.generateAnswerResponse({
       message: 'Hello, how can I help you?',

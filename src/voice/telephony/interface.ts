@@ -62,6 +62,8 @@ export interface TelephonyProvider {
     gatherSpeech?: boolean; // Enable speech-to-text gathering
     gatherTimeout?: number;
     callbackUrl?: string;
+    /** Bidirectional media-stream URL (Phase 4d) — emits <Connect><Stream>. */
+    streamUrl?: string;
   }): string;
 
   /** Generate response to hang up the call */
