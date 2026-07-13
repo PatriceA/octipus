@@ -920,6 +920,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'voice.streaming',
+    category: 'voice',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Answer calls with a bidirectional media stream (Phase 4d — low-latency STT/TTS + barge-in) instead of the turn-based <Gather> loop. Requires voice.publicUrl to be a public URL Twilio can reach over wss. Falls back to <Gather> if unset.',
+    isSecret: false,
+  },
+  {
     key: 'voice.inboundPolicy',
     category: 'voice',
     valueType: 'string',
