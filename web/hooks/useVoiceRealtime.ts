@@ -45,6 +45,12 @@ const MAX_TTS_CHARS = 5000;
 // Fallback flush when STT emits nothing after silence; > the 2 s whisper window
 // so the real tail transcript (fast path) still wins in the common case.
 const DISPATCH_GRACE_MS = 3500;
+// Barge-in: interrupt the assistant's spoken reply when the user talks over it.
+// Threshold is higher than RMS_SPEAKING and requires sustained speech, because
+// the mic still hears residual TTS (browser AEC cancels most, not all) — this
+// margin keeps the assistant's own voice from self-interrupting.
+const RMS_BARGE_IN = 0.04;
+const BARGE_IN_MS = 300;
 
 // AudioWorklet processor: native-rate Float32 frames → Int16 PCM, posted to the
 // main thread. The AudioContext is forced to 16 kHz, so the browser resamples
@@ -86,6 +92,7 @@ export function useVoiceRealtime({
   const prevTurnRef = useRef(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  const playbackIdRef = useRef(0); // bumped to cancel in-flight TTS playback (barge-in / new turn)
 
   // Running transcript bookkeeping (whole session).
   const fullRef = useRef(''); // latest server full transcript
@@ -118,44 +125,81 @@ export function useVoiceRealtime({
     sendRef.current(delta);
   }, [setPhase]);
 
+  // Stop any in-flight TTS playback and invalidate its speak() loop. Used by
+  // barge-in (user speaks over the reply) and when a new turn supersedes an old
+  // one. Bumping the token makes the running speak() bail at its next check.
+  const stopPlayback = useCallback(() => {
+    playbackIdRef.current++;
+    const a = audioElRef.current;
+    if (a) {
+      a.pause();
+      a.src = '';
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  }, []);
+
+  // Speak the reply, streaming per sentence so time-to-first-audio is one
+  // sentence, not the whole reply. `/speak` is called per sentence (no new
+  // endpoint). Sequential synth→play (not prefetched): exactly one object URL is
+  // alive at a time and it's revoked the moment it's done, so barge-in / a
+  // superseding turn can't leak blobs. Barge-in or a new turn bumps
+  // playbackIdRef, and every await re-checks it to bail promptly.
   const speak = useCallback(
     async (text: string) => {
+      const myId = ++playbackIdRef.current;
       setPhase('speaking');
-      try {
+      const clipped = text.slice(0, MAX_TTS_CHARS);
+      const sentences = clipped.match(/[^.!?]+[.!?]*/g)?.map((s) => s.trim()).filter(Boolean) || [clipped];
+      const audio = audioElRef.current ?? new Audio();
+      audioElRef.current = audio;
+
+      const synth = async (sentence: string): Promise<string | null> => {
         const res = await fetch('/api/voice/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text.slice(0, MAX_TTS_CHARS) }),
+          body: JSON.stringify({ text: sentence }),
           credentials: 'include',
         });
         if (!res.ok) {
           if (res.status === 503) setError('Voice replies are off — enable a TTS provider in settings.');
-          setPhase('listening');
-          return;
+          return null; // caller stops the reply rather than POSTing every sentence
         }
-        const arrayBuf = await res.arrayBuffer();
+        const buf = await res.arrayBuffer();
         const type = res.headers.get('Content-Type') || 'audio/mpeg';
-        const revoke = () => {
-          if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-          audioUrlRef.current = null;
-        };
-        revoke();
-        const url = URL.createObjectURL(new Blob([arrayBuf], { type }));
-        audioUrlRef.current = url;
-        const audio = audioElRef.current ?? new Audio();
-        audioElRef.current = audio;
-        audio.src = url;
-        audio.onended = () => {
-          revoke();
-          if (stateRef.current === 'speaking') setPhase('listening');
-        };
-        await audio.play().catch(() => {
-          revoke();
-          setPhase('listening');
+        return URL.createObjectURL(new Blob([buf], { type }));
+      };
+
+      // Resolves true if the clip played to completion, false on autoplay block /
+      // decode error (caller then stops rather than silently churning sentences).
+      const play = (url: string) =>
+        new Promise<boolean>((resolve) => {
+          audioUrlRef.current = url;
+          audio.src = url;
+          audio.onended = () => resolve(true);
+          audio.onerror = () => resolve(false);
+          void audio.play().then(undefined, () => resolve(false));
         });
-      } catch (err) {
-        console.error('Voice synthesis failed:', err);
-        setPhase('listening');
+
+      try {
+        for (const sentence of sentences) {
+          const url = await synth(sentence).catch(() => null);
+          if (playbackIdRef.current !== myId) {
+            if (url) URL.revokeObjectURL(url); // cancelled between synth and play
+            return;
+          }
+          if (!url) break; // synth failed (503/error) — stop, don't hammer /speak
+          const ok = await play(url);
+          if (playbackIdRef.current !== myId) return; // barged: stopPlayback revoked url
+          URL.revokeObjectURL(url); // done with this clip — revoke immediately
+          if (audioUrlRef.current === url) audioUrlRef.current = null;
+          if (!ok) break; // autoplay blocked / decode error — stop the reply
+        }
+      } finally {
+        // Only advance if we're still the active playback (not barged/superseded).
+        if (playbackIdRef.current === myId && stateRef.current === 'speaking') setPhase('listening');
       }
     },
     [setPhase],
@@ -187,6 +231,13 @@ export function useVoiceRealtime({
     let lastVoice = 0;
     let hadSpeech = false;
     let awaitingSince = 0; // when trailing silence began waiting for the STT tail
+    let bargeStart = 0; // when sustained over-talk began during playback
+    // Pre-roll: while not listening, keep the last ~0.5 s of mic frames so a
+    // barge-in doesn't lose its opening words (they're spoken before the state
+    // flips to listening). Flushed to STT on barge-in.
+    const PREROLL_MAX_BYTES = 16000; // ~0.5 s of 16 kHz s16le
+    let preRoll: ArrayBuffer[] = [];
+    let preRollBytes = 0;
 
     const tick = () => {
       if (cancelled || !analyser || !vadBuf) return;
@@ -224,6 +275,26 @@ export function useVoiceRealtime({
           awaitingSince = 0;
           dispatchUtterance();
         }
+      } else if (stateRef.current === 'speaking') {
+        // Barge-in: sustained over-talk interrupts the reply and reopens the mic.
+        if (rms >= RMS_BARGE_IN) {
+          if (!bargeStart) bargeStart = now;
+          if (now - bargeStart >= BARGE_IN_MS) {
+            bargeStart = 0;
+            hadSpeech = false; // let the new utterance segment cleanly
+            stopPlayback();
+            setPhase('listening');
+            // Flush the pre-roll so the interruption's opening words (spoken
+            // during 'speaking', before this flip) actually reach STT.
+            if (ws?.readyState === WebSocket.OPEN) for (const b of preRoll) ws.send(b);
+            preRoll = [];
+            preRollBytes = 0;
+          }
+        } else {
+          bargeStart = 0;
+        }
+      } else {
+        bargeStart = 0;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -235,7 +306,11 @@ export function useVoiceRealtime({
           window.AudioContext ||
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         ctx = new AudioCtx({ sampleRate: 16000 });
-        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // echoCancellation lets barge-in work — the browser AEC subtracts the
+        // assistant's own TTS playback from the mic so it can't self-interrupt.
+        const s = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
         if (cancelled) {
           s.getTracks().forEach((t) => t.stop());
           return;
@@ -298,9 +373,18 @@ export function useVoiceRealtime({
         const src = ctx.createMediaStreamSource(s);
         const node = new AudioWorkletNode(ctx, 'pcm-worklet');
         node.port.onmessage = (e) => {
-          // Stream frames only while listening (half-duplex).
-          if (ws?.readyState === WebSocket.OPEN && stateRef.current === 'listening') {
-            ws.send(e.data as ArrayBuffer);
+          const frame = e.data as ArrayBuffer;
+          // Stream frames only while listening (half-duplex). While not
+          // listening, keep a short pre-roll so barge-in can recover its opening
+          // words (see the barge-in flush in tick).
+          if (stateRef.current === 'listening') {
+            if (ws?.readyState === WebSocket.OPEN) ws.send(frame);
+          } else {
+            preRoll.push(frame);
+            preRollBytes += frame.byteLength;
+            while (preRollBytes > PREROLL_MAX_BYTES && preRoll.length) {
+              preRollBytes -= preRoll.shift()!.byteLength;
+            }
           }
         };
         src.connect(node);
@@ -350,14 +434,7 @@ export function useVoiceRealtime({
       } catch {
         /* already closed */
       }
-      if (audioElRef.current) {
-        audioElRef.current.pause();
-        audioElRef.current.src = '';
-      }
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-        audioUrlRef.current = null;
-      }
+      stopPlayback(); // pause audio, revoke url, and bail any in-flight speak() loop
       ctx?.close().catch(() => {});
       mediaStream?.getTracks().forEach((t) => t.stop());
       fullRef.current = '';
@@ -367,7 +444,7 @@ export function useVoiceRealtime({
       setPartial('');
       setPhase('idle');
     };
-  }, [enabled, engine, setPhase, dispatchUtterance]);
+  }, [enabled, engine, setPhase, dispatchUtterance, stopPlayback]);
 
   return { state, error, partial };
 }
