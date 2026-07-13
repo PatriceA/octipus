@@ -223,7 +223,11 @@ export function createWebSocket(path: string = '/ws'): WebSocket {
  * `createWebSocket` was used from the browser — call sites that ran in
  * Node (tests, SSR) keep the sync entry point.
  */
-export async function createAuthenticatedWebSocket(path: string = '/ws'): Promise<WebSocket> {
+export async function createAuthenticatedWebSocket(
+  path: string = '/ws',
+  query?: Record<string, string>,
+): Promise<WebSocket> {
   const token = await getWsToken();
-  return new WebSocket(`${buildWsBase()}${path}?token=${token ?? ''}`);
+  const params = new URLSearchParams({ token: token ?? '', ...(query ?? {}) });
+  return new WebSocket(`${buildWsBase()}${path}?${params.toString()}`);
 }

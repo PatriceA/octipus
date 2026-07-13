@@ -19,6 +19,7 @@ import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/wo
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import { useVoiceConversation } from '@/hooks/useVoiceConversation';
+import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { useWorkspace } from '@/lib/workspace-context';
 
 interface ToolCallInfo {
@@ -118,6 +119,7 @@ export default function ChatPage() {
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
+  const [realtimeMode, setRealtimeMode] = useState(false);
   // Real STT availability (whisper runs, or a cloud key is set) — the voice
   // feature disables itself when neither is present.
   const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
@@ -1524,15 +1526,26 @@ export default function ChatPage() {
   // Live voice conversation: transcribe → sendMessage (same pipeline as text,
   // so agents spawn as usual) → speak the reply. The hook re-reads these each
   // render via a ref, so plain closures (not memoized) are correct here.
+  const latestAssistantReply = () => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i].content;
+    }
+    return null;
+  };
+
   const voice = useVoiceConversation({
     enabled: voiceMode,
     isTurnActive: isLoading,
-    getAssistantReply: () => {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'assistant') return messages[i].content;
-      }
-      return null;
-    },
+    getAssistantReply: latestAssistantReply,
+    sendTranscript: (t) => sendMessage(t),
+  });
+
+  // Realtime (streaming) voice — Phase 4b. Mutually exclusive with the turn-based
+  // mode above (one mic owner); the toggles below enforce it.
+  const realtime = useVoiceRealtime({
+    enabled: realtimeMode,
+    isTurnActive: isLoading,
+    getAssistantReply: latestAssistantReply,
     sendTranscript: (t) => sendMessage(t),
   });
 
@@ -1629,7 +1642,18 @@ export default function ChatPage() {
             voiceState={voice.state}
             voiceError={voice.error || voiceUnavailableReason}
             voiceAvailable={voiceAvailable !== false}
-            onToggleVoiceMode={() => setVoiceMode((v) => !v)}
+            onToggleVoiceMode={() => {
+              setRealtimeMode(false); // exclusive with realtime
+              setVoiceMode((v) => !v);
+            }}
+            realtimeMode={realtimeMode}
+            realtimeState={realtime.state}
+            realtimePartial={realtime.partial}
+            realtimeError={realtime.error}
+            onToggleRealtimeMode={() => {
+              setVoiceMode(false); // exclusive with turn-based
+              setRealtimeMode((v) => !v);
+            }}
           />
         </div>
       </div>
