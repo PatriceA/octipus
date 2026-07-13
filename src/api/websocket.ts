@@ -11,6 +11,7 @@ import { getPermissionManager, type PermissionRequestEvent } from '@/security/pe
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import { getBrowserBridge } from './browser-bridge';
+import { setupVoiceWebSocket } from './voice-ws';
 
 interface WebSocketData {
   userId?: string;
@@ -569,4 +570,6 @@ export function setupWebSocket(app: Elysia): void {
     },
   });
 
+  // Realtime voice duplex socket (Phase 4b): browser PCM frames → streaming STT.
+  setupVoiceWebSocket(app);
 }

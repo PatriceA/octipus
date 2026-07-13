@@ -7,12 +7,14 @@ import {
   Mic,
   Music,
   Paperclip,
+  Radio,
   Send,
   Square,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { VoiceState } from '@/hooks/useVoiceConversation';
+import type { RealtimeState } from '@/hooks/useVoiceRealtime';
 import { cn } from '@/lib/utils';
 import { AudioWaveform } from './audio-waveform';
 
@@ -44,6 +46,12 @@ interface PromptInputProps {
   /** False when STT is unavailable (no whisper, no cloud key) — disables the toggle. */
   voiceAvailable?: boolean;
   onToggleVoiceMode?: () => void;
+  /** Realtime (streaming) voice — the Phase 4b duplex-WS mode. */
+  realtimeMode?: boolean;
+  realtimeState?: RealtimeState;
+  realtimePartial?: string;
+  realtimeError?: string | null;
+  onToggleRealtimeMode?: () => void;
 }
 
 function getAttachmentType(file: File): Attachment['type'] {
@@ -86,11 +94,25 @@ const VOICE_STATE_LABEL: Record<VoiceState, string> = {
   error: 'mic error',
 };
 
+const REALTIME_STATE_LABEL: Record<RealtimeState, string> = {
+  idle: 'starting…',
+  connecting: 'connecting…',
+  listening: 'listening',
+  thinking: 'thinking',
+  speaking: 'speaking',
+  error: 'mic error',
+};
+
 export default function PromptInput({
   onSend,
   disabled = false,
   placeholder = 'Type a message...',
   voiceMode = false,
+  realtimeMode = false,
+  realtimeState = 'idle',
+  realtimePartial = '',
+  realtimeError = null,
+  onToggleRealtimeMode,
   voiceState = 'idle',
   voiceError = null,
   voiceAvailable = true,
@@ -625,6 +647,43 @@ export default function PromptInput({
           <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5">
             <span className={cn('dot dot-live h-1.5 w-1.5', voiceState === 'error' ? 'text-error bg-error' : 'text-primary bg-primary')} />
             <span className="text-xs text-accent">{VOICE_STATE_LABEL[voiceState]}<span className="term-caret" /></span>
+          </div>
+        )}
+
+        {/* Realtime (streaming) voice toggle — Phase 4b */}
+        {onToggleRealtimeMode && (
+          <button
+            type="button"
+            onClick={voiceAvailable ? onToggleRealtimeMode : undefined}
+            disabled={!voiceAvailable}
+            className={cn(
+              'rounded-lg p-2 transition-colors',
+              !voiceAvailable
+                ? 'text-on-surface-variant/40 cursor-not-allowed'
+                : realtimeMode
+                  ? 'bg-primary/15 text-primary hover:bg-primary/25'
+                  : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+            )}
+            title={
+              !voiceAvailable
+                ? voiceError || 'Voice unavailable — run `octi setup` to install local voice'
+                : realtimeMode
+                  ? 'Exit realtime voice'
+                  : 'Start realtime (streaming) voice'
+            }
+          >
+            <Radio className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Realtime voice state + live partial transcript (or error) */}
+        {realtimeMode && (
+          <div className={cn('flex items-center gap-1.5 rounded-lg px-3 py-1.5 max-w-[16rem]', realtimeError ? 'bg-error/10' : 'bg-primary/10')}>
+            <span className={cn('dot dot-live h-1.5 w-1.5', realtimeState === 'error' || realtimeError ? 'text-error bg-error' : 'text-primary bg-primary')} />
+            <span className={cn('truncate text-xs', realtimeError ? 'text-error' : 'text-accent')} title={realtimeError || undefined}>
+              {realtimeError || realtimePartial || REALTIME_STATE_LABEL[realtimeState]}
+              {!realtimeError && <span className="term-caret" />}
+            </span>
           </div>
         )}
 
