@@ -177,13 +177,17 @@ Shared primitives both web-realtime and telephony need, as tested library code �
 - **Server:** new `app.ws('/voice', …)` in `src/api/voice-ws.ts` — NOT the JSON `/gateway`
   (it decodes all binary to string, `gateway-ws.ts:50`). Reuse the `getSessionManager().validate`
   URL-token handshake like `/ws` (`websocket.ts:41`). Bridge inbound binary frames → 4a
-  accumulator → `MistralSTTEngine.streamTranscribe` (`stt.ts:527`, the only real streaming STT;
-  whisper "streaming" is 3 s batch re-runs, `stt.ts:232`). Emit partial transcripts back.
+  accumulator → the streaming STT engine. **Main path = whisper.cpp sliding-window `--stream`**
+  (reuse the committed binary; ~0.5–2 s latency, local, all surfaces). `MistralSTTEngine.streamTranscribe`
+  (`stt.ts:527`) stays as the cloud upgrade. Note: the current whisper path at `stt.ts:232` re-runs
+  3 s batches — replace it with the binary's real streaming mode, don't build on the batch re-run.
+  Emit partial transcripts back.
 - **Browser:** an **AudioWorklet** off the existing `getUserMedia` stream
   (`useVoiceConversation.ts:250`) emitting 16 kHz mono s16le frames (reuse the Float32→PCM16
   logic from `pcmToWav` `:335`), replacing the per-utterance `MediaRecorder` + `encodeWav16kMono`
   batch path in live mode.
-- **Gate the feature behind Mistral-key availability** — local whisper can't stream low-latency.
+- **Default to local whisper.cpp streaming; Mistral is the opt-in cloud upgrade** (gated on key
+  for best-accuracy/multilingual). Local streaming is the main path, not a degraded fallback.
 
 ### 4c — Streaming reply + barge-in *(the UX payoff)*
 - **Barge-in:** run the RMS VAD *during* `speaking` (today gated to `listening`,
@@ -211,10 +215,28 @@ resources (Mistral key, browser mic, Twilio) to verify end-to-end, so flag them 
 their capabilities become testable.
 
 ### Open decisions
-1. **Local-first vs cloud realtime** — true low-latency streaming STT is Mistral-only (cloud).
-   Gate realtime behind a Mistral key, or degrade to the 3 s-window whisper batch?
+1. **Local-first vs cloud realtime** — **decided: local-first, one engine.** Streaming STT is
+   *not* Mistral-only — that framing was wrong. whisper.cpp already ships a **sliding-window
+   streaming mode** (`--stream`, ~0.5–2 s latency); the "3 s batch re-run" at `stt.ts:232` is a
+   *usage choice*, not an engine limit. **Main path: wire whisper.cpp's streaming mode**, reusing
+   the binary already committed to `models/whisper/` — no new dep, works CPU/Metal/cross-platform,
+   and it's the *same* engine the server-side TUI/channels paths use (one engine, not a per-surface
+   zoo). Mistral streaming stays as the **cloud upgrade** for best-accuracy/multilingual, gated on key.
 2. **Streaming assistant deltas** (4c) touch the orchestrator/gateway core — worth it, or is
    "speak the whole reply, but interruptible" (barge-in without token-streaming) enough?
+
+### Future upgrade — Moonshine in the browser *(not now)*
+A 2026 model class (**Moonshine v2**, MIT for English) is *built* for streaming — sub-second, low
+token-revision — and has an official **in-browser** path (`onnx-community/moonshine-*-ONNX` via
+Transformers.js, WebGPU-accelerated + WASM fallback). For WebUI live voice this would run STT
+**100% in the browser** — no `/transcribe` round-trip, no server load, no API key. Tempting, but
+**deferred on purpose:** the server-side TUI + channels paths need whisper regardless, so adopting
+Moonshine *just* for the browser means maintaining two STT engines. Stick to one (whisper streaming)
+until the browser-local UX win justifies the second engine. Caveat when revisited: Moonshine is
+English-first (8 langs), so whisper/Voxtral stay the multilingual fallback — the real axis is
+language + hardware, not local-vs-cloud. **Engine choice ladder:** whisper.cpp streaming (main,
+multilingual, all surfaces) → Mistral (cloud, best accuracy) → Moonshine Web (future, English,
+browser-local).
 
 ---
 
