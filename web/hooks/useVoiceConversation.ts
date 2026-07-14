@@ -28,10 +28,10 @@ export type VoiceState =
 
 interface UseVoiceConversationArgs {
   enabled: boolean;
-  /** True while a chat turn is in flight (chat page `isLoading`). */
+  /** True while a chat turn is in flight (chat page `isLoading`). On its falling
+   * edge, if still 'thinking' (no reply was spoken — e.g. an error), the mic is
+   * unstuck back to 'listening'. NOT the speak trigger; that's the page. */
   isTurnActive: boolean;
-  /** Latest assistant reply text, read on the turn's falling edge to be spoken. */
-  getAssistantReply: () => string | null;
   /** Feed a transcript into the normal chat turn (i.e. sendMessage). */
   sendTranscript: (text: string) => void;
 }
@@ -45,35 +45,36 @@ const MIN_UTTERANCE_MS = 350; // ignore lip-smacks / clicks shorter than this
 const MAX_UTTERANCE_MS = 30_000; // hard cap on a single utterance
 const MAX_TTS_CHARS = 5000; // matches the /speak route's cap
 
-export function useVoiceConversation({
-  enabled,
-  isTurnActive,
-  getAssistantReply,
-  sendTranscript,
-}: UseVoiceConversationArgs) {
+export function useVoiceConversation({ enabled, isTurnActive, sendTranscript }: UseVoiceConversationArgs) {
   const [state, setState] = useState<VoiceState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
 
   const stateRef = useRef<VoiceState>('idle');
   const sendRef = useRef(sendTranscript);
-  const replyRef = useRef(getAssistantReply);
-  const pendingSpeakRef = useRef(false); // a voice turn is awaiting its reply
   const prevTurnRef = useRef(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null); // current TTS blob URL, for cleanup
 
-  // Keep the latest page callbacks reachable from the capture closures without
+  // Keep the latest page callback reachable from the capture closures without
   // re-running the mic effect (ref writes in an effect, never during render).
   useEffect(() => {
     sendRef.current = sendTranscript;
-    replyRef.current = getAssistantReply;
   });
 
   const setPhase = useCallback((s: VoiceState) => {
     stateRef.current = s;
     setState(s);
   }, []);
+
+  // Safety net: when a turn ends without the page speaking a reply (chat_error,
+  // empty response), we'd be wedged in 'thinking'. On the turn's falling edge,
+  // if speak() didn't move us to 'speaking', return to 'listening'.
+  useEffect(() => {
+    const was = prevTurnRef.current;
+    prevTurnRef.current = isTurnActive;
+    if (was && !isTurnActive && stateRef.current === 'thinking') setPhase('listening');
+  }, [isTurnActive, setPhase]);
 
   const speak = useCallback(
     async (text: string) => {
@@ -124,19 +125,6 @@ export function useVoiceConversation({
     [setPhase],
   );
 
-  // Speak the assistant reply on the chat turn's falling edge. setState is
-  // deferred to a microtask so it doesn't fire synchronously inside the effect.
-  useEffect(() => {
-    const was = prevTurnRef.current;
-    prevTurnRef.current = isTurnActive;
-    if (was && !isTurnActive && pendingSpeakRef.current) {
-      pendingSpeakRef.current = false;
-      const reply = replyRef.current();
-      if (reply && reply.trim()) queueMicrotask(() => void speak(reply));
-      else queueMicrotask(() => setPhase('listening'));
-    }
-  }, [isTurnActive, speak, setPhase]);
-
   // ── Mic + VAD lifecycle ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled) return;
@@ -185,7 +173,8 @@ export function useVoiceConversation({
         const text = (data?.text || '').trim();
         if (text) {
           setError(null);
-          pendingSpeakRef.current = true;
+          // Reply is spoken when the page receives the chat_response and calls
+          // speak() — decoupled from turn timing, so no stale-reply reads.
           setPhase('thinking');
           sendRef.current(text);
         } else {
@@ -297,12 +286,11 @@ export function useVoiceConversation({
       ctx?.close().catch(() => {});
       mediaStream?.getTracks().forEach((t) => t.stop());
       setStream(null);
-      pendingSpeakRef.current = false;
       setPhase('idle');
     };
   }, [enabled, setPhase]);
 
-  return { state, error, stream };
+  return { state, error, stream, speak };
 }
 
 /**

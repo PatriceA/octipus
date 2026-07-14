@@ -1,26 +1,26 @@
 'use client';
 
-import { Paperclip, PanelRight, PanelRightClose, X } from 'lucide-react';
+import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import FileViewer from '@/components/chat/file-viewer';
 import MessageTimeline, {
   type ChatMessageData,
   type MessageMetadata,
   type TeamState,
   type TrackedAgent,
 } from '@/components/chat/message-timeline';
-import FileViewer from '@/components/chat/file-viewer';
 import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-session-dialog';
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
-import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
-import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
-import { usePermissions } from '@/lib/permission-context';
 import { useVoiceConversation } from '@/hooks/useVoiceConversation';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
+import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
+import { usePermissions } from '@/lib/permission-context';
 import { useWorkspace } from '@/lib/workspace-context';
+import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 
 interface ToolCallInfo {
   id: string;
@@ -690,12 +690,30 @@ export default function ChatPage() {
             if (!activeSessionId) setActiveSessionId(data.sessionId);
           }
         }
+        // Speak the reply only for a spoken turn (typed turns stay silent even
+        // with the mic on). This is THE fresh, complete reply — no stale scan.
+        if (voiceTurnRef.current) {
+          voiceTurnRef.current = false;
+          if (typeof data.response === 'string') speakRef.current(data.response);
+        }
         break;
       }
+
+      case 'speak':
+        // Lifecycle narration pushed by the backend narrator (spawn ack, agent
+        // done) over /ws — supplemental to the spoken reply above.
+        // ponytail: shares the single Audio element with the reply, so a
+        // narration and reply arriving within ~seconds cut each other off. Fine
+        // in practice — the spawn ack plays immediately and the answer lands
+        // minutes later; add a small playback queue if fast tasks make it audible.
+        if (typeof data.text === 'string') speakRef.current(data.text);
+        break;
 
       case 'chat_error':
         setIsLoading(false);
         setStatusMessage(null);
+        voiceTurnRef.current = false; // failed spoken turn — don't speak the next reply
+        // The voice hook unsticks itself from 'thinking' on isLoading's falling edge.
         if (eventSessionId || activeSessionId) {
           const sid = eventSessionId || activeSessionId!;
           updateSessionState(sid, (prev) => ({
@@ -1523,21 +1541,19 @@ export default function ChatPage() {
       .catch(() => setVoiceAvailable(false));
   }, []);
 
-  // Live voice conversation: transcribe → sendMessage (same pipeline as text,
-  // so agents spawn as usual) → speak the reply. The hook re-reads these each
-  // render via a ref, so plain closures (not memoized) are correct here.
-  const latestAssistantReply = () => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') return messages[i].content;
-    }
-    return null;
-  };
+  // Only replies to a spoken turn are read aloud. sendTranscript (the voice
+  // hooks' path into sendMessage) sets this; a typed message leaves it false, so
+  // typing while the mic is on doesn't get the reply spoken back.
+  const voiceTurnRef = useRef(false);
 
+  // Live voice conversation: transcribe → sendMessage (same pipeline as text, so
+  // agents spawn as usual). The reply is spoken when its chat_response arrives
+  // (see speakRef below + the chat_response/speak WS cases) — decoupled from turn
+  // timing, so no stale-reply reads.
   const voice = useVoiceConversation({
     enabled: voiceMode,
     isTurnActive: isLoading,
-    getAssistantReply: latestAssistantReply,
-    sendTranscript: (t) => sendMessage(t),
+    sendTranscript: (t) => { voiceTurnRef.current = true; sendMessage(t); },
   });
 
   // Realtime (streaming) voice — Phase 4b. Mutually exclusive with the turn-based
@@ -1545,9 +1561,39 @@ export default function ChatPage() {
   const realtime = useVoiceRealtime({
     enabled: realtimeMode,
     isTurnActive: isLoading,
-    getAssistantReply: latestAssistantReply,
-    sendTranscript: (t) => sendMessage(t),
+    sendTranscript: (t) => { voiceTurnRef.current = true; sendMessage(t); },
   });
+
+  // Route spoken output to whichever voice mode owns the mic. Held in a ref so
+  // the WS message handler (a stale closure captured in an effect) always calls
+  // the current speak(); a no-op when voice is off.
+  const speakRef = useRef<(text: string) => void>(() => {});
+  useEffect(() => {
+    speakRef.current = (text: string) => {
+      if (!text || !text.trim()) return;
+      if (realtimeMode) realtime.speak?.(text);
+      else if (voiceMode) voice.speak?.(text);
+    };
+  });
+
+  // Tell the backend when this session enters/leaves voice mode, so the
+  // orchestrator's propose-then-confirm gate + lifecycle narration apply. On a
+  // session switch, turn voice OFF for the previous session first so its flag
+  // isn't left set in the orchestrator.
+  const prevVoiceSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    const on = voiceMode || realtimeMode;
+    const prev = prevVoiceSessionRef.current;
+    if (prev && prev !== activeSessionId) {
+      ws.send(JSON.stringify({ type: 'voice', on: false, sessionId: prev }));
+    }
+    if (activeSessionId) {
+      ws.send(JSON.stringify({ type: 'voice', on, sessionId: activeSessionId }));
+    }
+    prevVoiceSessionRef.current = on ? activeSessionId : null;
+  }, [voiceMode, realtimeMode, activeSessionId]);
 
   return (
     <div className="h-full flex">

@@ -4,12 +4,12 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import type { SessionContext } from '@/db/schema/sessions';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
-import { formatDateTimeContext } from '@/utils/date-context';
 
 /**
  * Generate a direct LLM response for casual messages (no orchestrator/worker needed).
@@ -28,10 +28,15 @@ export async function directResponse(
    * after the base prompt; empty string = no-op.
    */
   extraSystemContext: string = '',
+  /**
+   * Skip complexity-based routing and use this exact model. The voice plan gate
+   * passes the fast `voice`-topic model here so spoken planning turns stay snappy.
+   */
+  modelOverride?: string,
 ): Promise<{ response: string; metadata: ResponseMetadata }> {
   const startTime = Date.now();
   const client = getLiteLLMClient();
-  const modelName = await modelSelector.selectByComplexity(complexity);
+  const modelName = modelOverride || (await modelSelector.selectByComplexity(complexity));
 
   await messageRepository.create({ sessionId, role: 'user', content: message });
   await sessionRepository.incrementMessageCount(sessionId);
