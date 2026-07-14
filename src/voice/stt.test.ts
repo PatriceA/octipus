@@ -1,5 +1,18 @@
 import { describe, test, expect } from 'bun:test';
-import { isConformantWav, stripWavHeader } from './stt';
+import { isConformantWav, stripWavHeader, stripNonSpeech } from './stt';
+
+describe('stripNonSpeech', () => {
+  test('removes whisper blank/non-speech annotations', () => {
+    expect(stripNonSpeech('[BLANK_AUDIO] hello [BLANK_AUDIO]').trim()).toBe('hello');
+    expect(stripNonSpeech('[ Silence ] tell me [MUSIC PLAYING]').trim()).toBe('tell me');
+    expect(stripNonSpeech('(inaudible) can you hear me').trim()).toBe('can you hear me');
+  });
+
+  test('leaves real speech (and ordinary brackets/parens) intact', () => {
+    expect(stripNonSpeech('use option (a) not [b]')).toBe('use option (a) not [b]');
+    expect(stripNonSpeech('the quick brown fox')).toBe('the quick brown fox');
+  });
+});
 
 // STT integration tests require the bundled whisper-cpp binary plus a
 // downloaded model file and a WAV audio fixture, none of which ship

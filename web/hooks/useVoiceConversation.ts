@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { stripForSpeech } from '@/lib/voice-speech';
 
 /**
  * Turn-based (half-duplex) voice conversation loop for the web chat.
@@ -81,7 +82,7 @@ export function useVoiceConversation({
         const res = await fetch('/api/voice/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text.slice(0, MAX_TTS_CHARS) }),
+          body: JSON.stringify({ text: stripForSpeech(text).slice(0, MAX_TTS_CHARS) }),
           credentials: 'include',
         });
         if (!res.ok) {
