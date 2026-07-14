@@ -33,8 +33,10 @@ interface UseVoiceRealtimeArgs {
   enabled: boolean;
   /** 'whisper' (local, default) or 'mistral' (cloud low-latency, needs key). */
   engine?: 'whisper' | 'mistral';
+  /** True while a chat turn is in flight. On its falling edge, if still
+   * 'thinking' (no reply spoken — e.g. an error), the mic is unstuck to
+   * 'listening'. NOT the speak trigger; that's the page. */
   isTurnActive: boolean;
-  getAssistantReply: () => string | null;
   sendTranscript: (text: string) => void;
 }
 
@@ -75,21 +77,13 @@ class PCMWorklet extends AudioWorkletProcessor {
 registerProcessor('pcm-worklet', PCMWorklet);
 `;
 
-export function useVoiceRealtime({
-  enabled,
-  engine = 'whisper',
-  isTurnActive,
-  getAssistantReply,
-  sendTranscript,
-}: UseVoiceRealtimeArgs) {
+export function useVoiceRealtime({ enabled, engine = 'whisper', isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
   const [state, setState] = useState<RealtimeState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(''); // live in-progress utterance text
 
   const stateRef = useRef<RealtimeState>('idle');
   const sendRef = useRef(sendTranscript);
-  const replyRef = useRef(getAssistantReply);
-  const pendingSpeakRef = useRef(false);
   const prevTurnRef = useRef(false);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
@@ -102,7 +96,6 @@ export function useVoiceRealtime({
 
   useEffect(() => {
     sendRef.current = sendTranscript;
-    replyRef.current = getAssistantReply;
   });
 
   const setPhase = useCallback((s: RealtimeState) => {
@@ -121,7 +114,8 @@ export function useVoiceRealtime({
     dispatchedLenRef.current = fullRef.current.length;
     setPartial('');
     setError(null);
-    pendingSpeakRef.current = true;
+    // Reply is spoken when the page receives the chat_response and calls speak()
+    // — decoupled from turn timing, so no stale-reply reads.
     setPhase('thinking');
     sendRef.current(delta);
   }, [setPhase]);
@@ -210,17 +204,14 @@ export function useVoiceRealtime({
     [setPhase],
   );
 
-  // Speak the reply on the chat turn's falling edge (same pattern as turn hook).
+  // Safety net: unstick from 'thinking' on a turn that ends without a spoken
+  // reply (chat_error / empty response). speak() moves us to 'speaking' first,
+  // so this only fires when nothing was spoken.
   useEffect(() => {
     const was = prevTurnRef.current;
     prevTurnRef.current = isTurnActive;
-    if (was && !isTurnActive && pendingSpeakRef.current) {
-      pendingSpeakRef.current = false;
-      const reply = replyRef.current();
-      if (reply && reply.trim()) queueMicrotask(() => void speak(reply));
-      else queueMicrotask(() => setPhase('listening'));
-    }
-  }, [isTurnActive, speak, setPhase]);
+    if (was && !isTurnActive && stateRef.current === 'thinking') setPhase('listening');
+  }, [isTurnActive, setPhase]);
 
   // ── Mic + worklet + WS lifecycle ─────────────────────────────────────────────
   useEffect(() => {
@@ -445,11 +436,10 @@ export function useVoiceRealtime({
       fullRef.current = '';
       dispatchedLenRef.current = 0;
       awaitingFinalRef.current = false;
-      pendingSpeakRef.current = false;
       setPartial('');
       setPhase('idle');
     };
   }, [enabled, engine, setPhase, dispatchUtterance, stopPlayback]);
 
-  return { state, error, partial };
+  return { state, error, partial, speak };
 }

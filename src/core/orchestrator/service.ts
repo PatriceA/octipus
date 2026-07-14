@@ -7,15 +7,16 @@ import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-
 import { recordClassification, recordOrchestratorRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext } from '@/core/types';
-import { WorkspaceFS } from '@/security/workspace-fs';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import type { ApprovalRequest } from './approval-manager';
 import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
+import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
 import { runOrchestrator } from './orchestrator-runner';
@@ -25,6 +26,15 @@ import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
 import { handleExpertMessage, spawnWorker } from './worker-spawner';
+
+/**
+ * System directive for a spoken planning turn: describe the approach briefly and
+ * ask to start, instead of dumping a written plan. Read aloud, so keep it short.
+ */
+const VOICE_PLANNING_DIRECTIVE =
+  'You are in a live VOICE conversation and this is a PLANNING turn — do NOT start any work yet. ' +
+  'In two or three short spoken sentences, say how you would approach the task below, then ask whether you should start. ' +
+  'Be conversational and concise (it will be read aloud); do not write a long numbered plan or restate the task verbatim.\n\nTask to plan: ';
 
 interface OrchestratorEventHandler {
   (event: OrchestratorEvent): void;
@@ -43,6 +53,29 @@ export class OrchestratorService {
   private approvalManager = new ApprovalManager();
   private modelSelector = new ModelSelector();
   private _lastWorkerResult: string | null = null;
+  /** Voice "propose-then-confirm" gate + the set of sessions currently in voice mode. */
+  private planGate = new VoicePlanGate();
+  private voiceSessions = new Set<string>();
+
+  /** Toggle voice mode for a session (set by the mic in the web client). Off clears any pending plan. */
+  setVoiceMode(sessionId: string, on: boolean): void {
+    if (on) {
+      this.voiceSessions.add(sessionId);
+    } else {
+      this.voiceSessions.delete(sessionId);
+      this.planGate.clear(sessionId);
+    }
+  }
+
+  /** The fast model mapped to the `voice` topic, or undefined if none is mapped. */
+  private async resolveVoiceModel(): Promise<string | undefined> {
+    try {
+      const routing = await this.modelSelector.selectForWorker('voice', false);
+      return routing.model || undefined; // '' ⇒ topic unmapped ⇒ fall back to complexity routing
+    } catch {
+      return undefined;
+    }
+  }
 
   /**
    * Subscribe to orchestrator events. The gateway hub does this at startup
@@ -122,6 +155,12 @@ export class OrchestratorService {
      * undefined ⇒ use the heuristic.
      */
     forcedOutputMode?: 'inline' | 'file',
+    /**
+     * Internal: the voice plan gate's execute path re-dispatches the confirmed
+     * work through this method with the gate bypassed, so the work runs the
+     * normal way instead of being re-proposed.
+     */
+    bypassVoiceGate = false,
   ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
@@ -384,6 +423,46 @@ export class OrchestratorService {
         { sessionId, classification: classification.type, confidence: classification.confidence, outputMode: effectiveOutputMode, channel },
         'Message classified',
       );
+
+      // Voice "propose-then-confirm" gate: a spoken work turn describes its
+      // approach and waits for the user's go instead of spawning immediately.
+      // Typed turns skip this entirely — voiceSessions only holds mic-on sessions.
+      if (!bypassVoiceGate && this.voiceSessions.has(resolvedSessionId)) {
+        // Cancellation is disambiguated inside decide() — the classifier tags both
+        // "yes" and "no" as 'approval', so we pass only isWork and let the gate's
+        // wording checks decide confirm vs cancel.
+        const action = this.planGate.decide(resolvedSessionId, message, classification.type === 'task');
+        if (action.kind === 'execute') {
+          // Confirmed. Record the "yes" turn, then run the stored work the normal
+          // way (gate bypassed so it isn't re-proposed), replaying the files the
+          // proposing turn carried.
+          await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+          await sessionRepository.incrementMessageCount(resolvedSessionId);
+          // ponytail: the re-dispatch persists workMessage again via the work path
+          // (router-turn), so a cold request shows once from the propose turn and
+          // once here — cosmetic transcript dup. Thread a skip-persist flag through
+          // runOrchestrator if it ever bloats context enough to matter.
+          return this.handleMessageInner(
+            resolvedSessionId, userId, action.workMessage, channel, expertId, action.attachedFiles, forcedOutputMode, true,
+          );
+        }
+        if (action.kind === 'propose') {
+          // Plan out loud on the fast voice model; the user's actual utterance is
+          // persisted, the accumulated task rides in the planning directive.
+          const voiceModel = await this.resolveVoiceModel();
+          const { response, metadata } = await directResponse(
+            message, resolvedSessionId, userId, this.modelSelector,
+            classification.complexity ?? 'moderate', inputGuard.flags,
+            VOICE_PLANNING_DIRECTIVE + action.workMessage, voiceModel,
+          );
+          // Carry this turn's files (cold) or the ones already accumulated (refinement).
+          this.planGate.recordProposal(
+            resolvedSessionId, action.workMessage, action.attachedFiles.length ? action.attachedFiles : attachedFiles,
+          );
+          return { response, sessionId: resolvedSessionId, classification, metadata };
+        }
+        // action.kind === 'passthrough' → fall through to normal handling below.
+      }
 
       // Memory-redesign Phase D — best-effort long-term memory
       // injection. Auto-no-ops when the memories table is empty or
