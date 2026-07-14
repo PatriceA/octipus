@@ -678,9 +678,9 @@ export default function PromptInput({
 
         {/* Realtime voice state + live partial transcript (or error) */}
         {realtimeMode && (
-          <div className={cn('flex items-center gap-1.5 rounded-lg px-3 py-1.5 max-w-[16rem]', realtimeError ? 'bg-error/10' : 'bg-primary/10')}>
-            <span className={cn('dot dot-live h-1.5 w-1.5', realtimeState === 'error' || realtimeError ? 'text-error bg-error' : 'text-primary bg-primary')} />
-            <span className={cn('truncate text-xs', realtimeError ? 'text-error' : 'text-accent')} title={realtimeError || undefined}>
+          <div className={cn('flex items-start gap-1.5 rounded-lg px-3 py-2 max-w-[32rem]', realtimeError ? 'bg-error/10' : 'bg-primary/10')}>
+            <span className={cn('dot dot-live h-1.5 w-1.5 mt-1.5 shrink-0', realtimeState === 'error' || realtimeError ? 'text-error bg-error' : 'text-primary bg-primary')} />
+            <span className={cn('text-sm leading-snug line-clamp-4 break-words', realtimeError ? 'text-error' : 'text-accent')} title={realtimeError || realtimePartial || undefined}>
               {realtimeError || realtimePartial || REALTIME_STATE_LABEL[realtimeState]}
               {!realtimeError && <span className="term-caret" />}
             </span>
