@@ -7,6 +7,37 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Live voice conversation — talk to the orchestrator (2026-07-13/14, PRs #210–#217)
+
+Realtime, hands-free voice in the web chat that runs the full orchestrator
+pipeline. Architecture + tuning knobs in [`docs/VOICE.md`](docs/VOICE.md)
+("Realtime Web Voice Conversation").
+
+- **Realtime duplex voice (Phase 4, #210–#213).** `/voice` WebSocket streams
+  16 kHz PCM off an AudioWorklet through streaming STT (local whisper.cpp or
+  Mistral Voxtral); per-sentence streaming TTS with **barge-in**; and a Twilio
+  media-stream path (`/voice/media/:provider`) for duplex phone calls.
+- **Propose-then-confirm gate (#216).** With the mic on, a work request isn't
+  dispatched blind — Octipus proposes an approach (or asks one short clarifying
+  question when the request is vague) and only executes on your spoken "yes";
+  "no" cancels, anything else refines. Runs on the fast model mapped to the
+  **`voice` topic**; read-only over the orchestrator (can't self-spawn). Voice
+  turns only — typed chat is unchanged.
+- **Backend narrator (#216).** Agent lifecycle is spoken as it happens
+  (`worker_spawned`/`worker_completed` → `{type:"speak"}` frames over `/ws`),
+  session-scoped; the reply is spoken fresh from each `chat_response`, fixing the
+  stale-reply repeat.
+- **Make the spoken loop usable (#214).** Default Mistral TTS voice
+  (`en_paul_neutral`) so `/speak` stops 500-ing; whisper `[BLANK_AUDIO]` filtered
+  at the root; `Sources:` footer + markdown stripped before TTS.
+- **Live-testing fixes (#217).** Gate now also catches `ambiguous` turns (vague
+  speech rarely scores as a clean `task`); warmer, conversational planning tone;
+  utterance silence window widened to 2000 ms so a pause doesn't split a
+  sentence; Voxtral wired for realtime STT; enlarged live-transcript readout; and
+  a **WebSocket reconnect-storm fix** — the auth-ticket failsafe no longer opens
+  empty-token sockets or retries at a flat interval, so a rate-limited
+  `/auth/ws-ticket` backs off and recovers instead of looping.
+
 ### OpenClaw gap integration — eight phases (2026-07-12, PRs #199–#207)
 
 Closes the gaps ranked "worth closing" in `docs/OPENCLAW-COMPARISON.md`,

@@ -42,7 +42,11 @@ interface UseVoiceRealtimeArgs {
 
 // VAD tuning — same knobs as the turn hook (real mics/rooms vary).
 const RMS_SPEAKING = 0.015;
-const SILENCE_MS = 900;
+// Trailing silence that ends an utterance. Short windows split a sentence on a
+// thinking pause and feed its tail into the next turn. 2000 ms tolerates normal
+// mid-sentence pauses. ponytail: calibration knob — raise if it still cuts you
+// off, lower if replies feel laggy.
+const SILENCE_MS = 2000;
 const MIN_SPEECH_MS = 350;
 const MAX_TTS_CHARS = 5000;
 // Fallback flush when STT emits nothing after silence; > the 2 s whisper window

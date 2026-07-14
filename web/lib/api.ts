@@ -228,6 +228,11 @@ export async function createAuthenticatedWebSocket(
   query?: Record<string, string>,
 ): Promise<WebSocket> {
   const token = await getWsToken();
-  const params = new URLSearchParams({ token: token ?? '', ...(query ?? {}) });
+  // No ticket (session expired, or /auth/ws-ticket rate-limited) → do NOT open a
+  // socket with an empty token. The backend rejects it instantly, and the
+  // caller's reconnect loop would then hammer ws-ticket into a 429 storm that
+  // never recovers. Throw so the caller backs off and retries instead.
+  if (!token) throw new Error('No WebSocket auth ticket available');
+  const params = new URLSearchParams({ token, ...(query ?? {}) });
   return new WebSocket(`${buildWsBase()}${path}?${params.toString()}`);
 }

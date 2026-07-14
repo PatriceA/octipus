@@ -573,9 +573,15 @@ export default function ChatPage() {
           if (wsInstance === ws) setConnectionStatus('disconnected');
         };
       } catch {
+        // Ticket fetch failed (e.g. /auth/ws-ticket rate-limited). Grow the
+        // backoff here too — otherwise this path retried at a flat 1s and kept
+        // the rate-limit window pinned, so it never recovered.
         setConnectionStatus('disconnected');
         if (!cancelled) {
-          reconnectTimer = setTimeout(connect, reconnectDelay.current);
+          reconnectTimer = setTimeout(() => {
+            reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, 30000);
+            connect();
+          }, reconnectDelay.current);
         }
       }
     };
@@ -1560,6 +1566,9 @@ export default function ChatPage() {
   // mode above (one mic owner); the toggles below enforce it.
   const realtime = useVoiceRealtime({
     enabled: realtimeMode,
+    // Mistral Voxtral streaming STT — more accurate than local whisper-small
+    // (needs the Mistral key, which is configured). Backend /voice honors ?engine.
+    engine: 'mistral',
     isTurnActive: isLoading,
     sendTranscript: (t) => { voiceTurnRef.current = true; sendMessage(t); },
   });
