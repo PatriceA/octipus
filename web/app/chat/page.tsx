@@ -573,9 +573,15 @@ export default function ChatPage() {
           if (wsInstance === ws) setConnectionStatus('disconnected');
         };
       } catch {
+        // Ticket fetch failed (e.g. /auth/ws-ticket rate-limited). Grow the
+        // backoff here too — otherwise this path retried at a flat 1s and kept
+        // the rate-limit window pinned, so it never recovered.
         setConnectionStatus('disconnected');
         if (!cancelled) {
-          reconnectTimer = setTimeout(connect, reconnectDelay.current);
+          reconnectTimer = setTimeout(() => {
+            reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, 30000);
+            connect();
+          }, reconnectDelay.current);
         }
       }
     };
