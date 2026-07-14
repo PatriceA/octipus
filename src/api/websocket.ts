@@ -10,9 +10,10 @@ import { getSessionManager } from '@/security/auth/session';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
+import { narrate } from '@/voice/narrator';
 import { getBrowserBridge } from './browser-bridge';
-import { setupVoiceWebSocket } from './voice-ws';
 import { setupVoiceMediaWebSocket } from './voice-media-ws';
+import { setupVoiceWebSocket } from './voice-ws';
 
 interface WebSocketData {
   userId?: string;
@@ -22,6 +23,11 @@ interface WebSocketData {
   unsubscribePermissions?: () => void;
   /** Browser-bridge auth flag — true once the bridge handshake succeeded. */
   _bridgeAuthed?: boolean;
+  /** Client is in voice mode — narrate lifecycle events as `speak` frames. */
+  voiceOn?: boolean;
+  /** The session this connection put into voice mode — used to scope narration
+   * to it and to clear the orchestrator's voice flag when the socket closes. */
+  voiceSessionId?: string;
 }
 
 /**
@@ -110,6 +116,14 @@ export function setupWebSocket(app: Elysia): void {
           data: event.data,
           timestamp: event.timestamp,
         });
+        // Narrate lifecycle to voice clients — decoupled from the slow reply path,
+        // so long agent turns get acked/announced instead of read back stale.
+        // Scoped to the voice-mode session so a user's OTHER sessions (2nd tab,
+        // background run) don't get narrated into this conversation.
+        if (wsData(ws).voiceOn && event.sessionId === wsData(ws).voiceSessionId) {
+          const line = narrate(event);
+          if (line) safeSend({ type: 'speak', text: line });
+        }
       });
 
       // Subscribe to document processing events for this user
@@ -238,6 +252,19 @@ export function setupWebSocket(app: Elysia): void {
           case 'typing':
             // Broadcast typing indicator (if needed)
             break;
+
+          case 'voice': {
+            // Toggle voice mode: narrate lifecycle to this connection, and put the
+            // active session into the orchestrator's propose-then-confirm gate.
+            data.voiceOn = !!parsed.on;
+            const voiceSid = parsed.sessionId ? String(parsed.sessionId) : data.voiceSessionId;
+            if (voiceSid) {
+              getOrchestratorService().setVoiceMode(voiceSid, !!parsed.on);
+              // Remember the session so close() can clear it; forget it on 'off'.
+              data.voiceSessionId = parsed.on ? voiceSid : undefined;
+            }
+            break;
+          }
 
           case 'permission_response':
             // Handle permission approval/denial
@@ -369,6 +396,13 @@ export function setupWebSocket(app: Elysia): void {
 
     close(ws) {
       const data = wsData(ws);
+
+      // Clear this connection's voice flag so a session left in voice mode isn't
+      // stuck in the propose-then-confirm gate after a refresh/disconnect.
+      if (data.voiceSessionId) {
+        getOrchestratorService().setVoiceMode(data.voiceSessionId, false);
+        data.voiceSessionId = undefined;
+      }
 
       // Only clean up if this is still the active connection for this user
       const active = data.userId ? activeConnections.get(data.userId) : null;

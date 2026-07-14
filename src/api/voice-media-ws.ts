@@ -1,11 +1,11 @@
-import type { Elysia } from 'elysia';
-import { spawn } from 'bun';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rm } from 'node:fs/promises';
+import { spawn } from 'bun';
+import type { Elysia } from 'elysia';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
-import { TwilioInboundDecoder, pcm16kToTwilioMedia } from '@/voice/telephony/media-bridge';
+import { pcm16kToTwilioMedia, TwilioInboundDecoder } from '@/voice/telephony/media-bridge';
 import { generatePhoneReply, type PhoneTurn } from '@/voice/telephony/reply';
 
 /**
@@ -132,7 +132,7 @@ async function startTurn(st: MediaState): Promise<void> {
   st.silenceFrames = 0;
   const { whisperModelPath } = await import('@/voice/whisper');
   const { WhisperEngine } = await import('@/voice/stt');
-  const engine = new WhisperEngine(whisperModelPath(), {
+  const engine = new WhisperEngine(getConfig().voice.whisperModelPath || whisperModelPath(), {
     language: getConfig().voice.language || 'en',
     streamWindowSeconds: 2,
   });
