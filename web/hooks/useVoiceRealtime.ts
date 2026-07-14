@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createAuthenticatedWebSocket } from '@/lib/api';
+import { stripForSpeech } from '@/lib/voice-speech';
 
 /**
  * Realtime (streaming) voice loop for web chat — the Phase 4b upgrade over the
@@ -151,7 +152,11 @@ export function useVoiceRealtime({
     async (text: string) => {
       const myId = ++playbackIdRef.current;
       setPhase('speaking');
-      const clipped = text.slice(0, MAX_TTS_CHARS);
+      const clipped = stripForSpeech(text).slice(0, MAX_TTS_CHARS);
+      if (!clipped) {
+        setPhase('listening');
+        return;
+      }
       const sentences = clipped.match(/[^.!?]+[.!?]*/g)?.map((s) => s.trim()).filter(Boolean) || [clipped];
       const audio = audioElRef.current ?? new Audio();
       audioElRef.current = audio;

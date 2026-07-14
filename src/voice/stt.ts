@@ -12,6 +12,18 @@ function tmpPath(suffix: string): string {
   return join(tmpdir(), `whisper-${crypto.randomUUID()}${suffix}`);
 }
 
+/**
+ * Strip whisper.cpp's non-speech annotations — `[BLANK_AUDIO]`, `[ Silence ]`,
+ * `[MUSIC]`, `(inaudible)`, etc. — which it emits for silent/ambiguous windows.
+ * They're noise in a live loop: they get spoken back and pollute the transcript.
+ */
+export function stripNonSpeech(text: string): string {
+  return text
+    .replace(/\[\s*(?:BLANK_AUDIO|SILENCE|MUSIC|SOUND|NOISE|INAUDIBLE|APPLAUSE|LAUGHTER|PAUSE)[^\]]*\]/gi, ' ')
+    .replace(/\(\s*(?:silence|inaudible|no audio|blank audio|music|background noise)[^)]*\)/gi, ' ')
+    .replace(/\s{2,}/g, ' ');
+}
+
 /** Wrap raw 16 kHz mono s16 PCM in a 44-byte WAV header so whisper.cpp accepts it. */
 function pcm16kMonoToWav(pcm: Uint8Array): Buffer {
   const header = Buffer.alloc(44);
@@ -205,11 +217,11 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       //   { result: { language }, transcription: [{ timestamps: { from, to }, offsets: { from, to }, text }] }
       const transcription: Array<{ timestamps: { from: string; to: string }; offsets: { from: number; to: number }; text: string }> = raw.transcription || [];
 
-      const fullText = transcription.map(t => t.text).join('').trim();
+      const fullText = stripNonSpeech(transcription.map(t => t.text).join('')).trim();
       const segments = transcription.map(t => ({
         start: t.offsets.from / 1000,
         end: t.offsets.to / 1000,
-        text: t.text?.trim() || '',
+        text: stripNonSpeech(t.text || '').trim(),
         confidence: 1.0, // whisper.cpp JSON doesn't include per-segment confidence
       }));
 
