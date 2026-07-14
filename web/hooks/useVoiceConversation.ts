@@ -40,7 +40,10 @@ interface UseVoiceConversationArgs {
 // ponytail: RMS threshold + silence timeout, no VAD library. The AudioContext
 // analyser is the same one audio-waveform.tsx already mounts. Tune per feedback.
 const RMS_SPEAKING = 0.015; // above this = speech present
-const SILENCE_MS = 900; // trailing silence that ends an utterance
+// Trailing silence that ends an utterance. 900 ms chopped phrases mid-thought on
+// natural pauses; 1400 tolerates them. ponytail: calibration knob — raise if it
+// still cuts you off, lower if it feels laggy to respond.
+const SILENCE_MS = 1400;
 const MIN_UTTERANCE_MS = 350; // ignore lip-smacks / clicks shorter than this
 const MAX_UTTERANCE_MS = 30_000; // hard cap on a single utterance
 const MAX_TTS_CHARS = 5000; // matches the /speak route's cap

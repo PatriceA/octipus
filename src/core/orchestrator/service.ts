@@ -32,9 +32,12 @@ import { handleExpertMessage, spawnWorker } from './worker-spawner';
  * ask to start, instead of dumping a written plan. Read aloud, so keep it short.
  */
 const VOICE_PLANNING_DIRECTIVE =
-  'You are in a live VOICE conversation and this is a PLANNING turn — do NOT start any work yet. ' +
-  'In two or three short spoken sentences, say how you would approach the task below, then ask whether you should start. ' +
-  'Be conversational and concise (it will be read aloud); do not write a long numbered plan or restate the task verbatim.\n\nTask to plan: ';
+  'You are in a live VOICE conversation. This is a PLANNING turn — do NOT start any work or spawn anything yet. ' +
+  'Set aside any terse or dry house style for this turn: be warm, natural and conversational, because this is read aloud. ' +
+  'If the request is vague or under-specified (common with speech), do NOT guess and do NOT reply "inadequate/specify" — ' +
+  'ask ONE short, friendly clarifying question to pin down what they actually want. ' +
+  'If it is clear enough, say in one or two sentences how you would approach it, then ask whether you should start. ' +
+  'Keep it brief; no numbered plans, no restating their words verbatim.\n\nThe user said: ';
 
 interface OrchestratorEventHandler {
   (event: OrchestratorEvent): void;
@@ -428,10 +431,14 @@ export class OrchestratorService {
       // approach and waits for the user's go instead of spawning immediately.
       // Typed turns skip this entirely — voiceSessions only holds mic-on sessions.
       if (!bypassVoiceGate && this.voiceSessions.has(resolvedSessionId)) {
-        // Cancellation is disambiguated inside decide() — the classifier tags both
-        // "yes" and "no" as 'approval', so we pass only isWork and let the gate's
-        // wording checks decide confirm vs cancel.
-        const action = this.planGate.decide(resolvedSessionId, message, classification.type === 'task');
+        // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
+        // usually under-specified → the classifier falls to 'ambiguous', which would
+        // otherwise reach the raw orchestrator and get blind-dispatched or dryly told
+        // to "specify X". Routing 'ambiguous' through the gate turns those into a
+        // friendly clarify/plan exchange instead. Cancellation is disambiguated
+        // inside decide() (the classifier tags both "yes" and "no" as 'approval').
+        const isWork = classification.type === 'task' || classification.type === 'ambiguous';
+        const action = this.planGate.decide(resolvedSessionId, message, isWork);
         if (action.kind === 'execute') {
           // Confirmed. Record the "yes" turn, then run the stored work the normal
           // way (gate bypassed so it isn't re-proposed), replaying the files the
