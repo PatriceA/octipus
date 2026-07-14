@@ -41,6 +41,94 @@ voice.language = en
 
 ---
 
+## Realtime Web Voice Conversation
+
+The web chat (`/chat`) has a live, hands-free voice mode: you speak, Octipus
+transcribes, runs the **same orchestrator pipeline as typed chat**, and speaks
+the reply back — with barge-in and per-sentence streaming TTS. Two mic modes
+share one owner (only one active at a time):
+
+- **Turn-based** (`web/hooks/useVoiceConversation.ts`): record an utterance →
+  `POST /api/voice/transcribe` → send as a chat turn → speak the reply.
+- **Realtime / streaming** (`web/hooks/useVoiceRealtime.ts`, Phase 4b): holds a
+  duplex WebSocket to `/voice` open, streams 16 kHz mono PCM off an AudioWorklet,
+  and receives a running transcript back. Client-side VAD segments utterances;
+  barge-in interrupts the spoken reply when you talk over it (Phase 4c).
+
+### The speak-to-the-orchestrator loop
+
+A spoken turn runs the *same* path as text — classification, memory, agent
+spawning — so nothing downstream is voice-specific. What differs is a
+**voice-only conversation layer** inside the orchestrator:
+
+**Propose-then-confirm gate** (`src/core/orchestrator/voice-plan-gate.ts`, wired
+in `src/core/orchestrator/service.ts` `handleMessageInner`). With the mic on, a
+work request is **not dispatched immediately**. Octipus proposes an approach out
+loud — or asks one short clarifying question when the request is vague — and
+waits for your go:
+
+- work **or ambiguous** turn → **propose** (on the fast voice model)
+- "yes / go / do it" → **execute** the stored plan via the normal work path
+- "no / cancel / stop" → drop the plan, keep chatting
+- anything else → **refine**: fold the new guidance in and re-propose
+
+Pending-plan state is per-session and in-memory. Affirmation vs. cancellation is
+decided by wording, because the classifier tags both "yes" and "no" as
+`approval`. The gate is **read-only over the orchestrator** — it can't spawn
+anything itself, so there's no runaway; the only thing that starts work is your
+spoken confirmation. Typed chat is unaffected (gated on a per-session voice
+flag set by the mic toggle over `/ws`).
+
+**Backend narrator** (`src/voice/narrator.ts`, wired in `src/api/websocket.ts`).
+Long agent turns are narrated as they happen instead of read back stale:
+orchestrator lifecycle events (`worker_spawned`, `worker_completed`) become
+`{type:"speak"}` frames over the persistent `/ws` socket ("On it — I've started
+the researcher…"), scoped to the voice-mode session. The actual reply is spoken
+from the `chat_response` message, **fresh per turn** — so voice is decoupled from
+turn timing and never repeats a stale answer.
+
+**Fast voice model.** Interactive planning turns run on whatever model is mapped
+to the **`voice` topic** (e.g. a flash-tier model) so they stay snappy; the heavy
+work after handoff uses normal routing. Map it on the Models/Topics page, or
+`registry.updateModel(name, { topicRoles: { voice: 'primary' } })`.
+
+### STT engine for the realtime loop
+
+The `/voice` WebSocket accepts `?engine=`:
+
+- **whisper** (default) — local whisper.cpp streaming; no key, offline. Prefer
+  `ggml-small.bin` (`voice.whisperModelPath`) over `base` for accuracy. Streaming
+  windows must be ≥ 2 s (1 s windows return empty on the base model).
+- **mistral** — Mistral Voxtral realtime streaming STT (cloud, needs the Mistral
+  key); more accurate than local small.
+
+### Tuning knobs (web)
+
+- **`SILENCE_MS`** in both voice hooks — trailing silence that ends an utterance.
+  Raise if a thinking pause splits your sentence into two turns; lower if replies
+  feel laggy. (Currently 2000 ms.)
+- **Barge-in RMS / duration** thresholds in `useVoiceRealtime.ts` — the mic still
+  hears residual TTS (browser AEC cancels most, not all), so these keep the
+  assistant's own voice from self-interrupting.
+
+### Key files
+
+| Area | File |
+|------|------|
+| Realtime STT WebSocket (`/voice`) | `src/api/voice-ws.ts` |
+| Backend narrator + `speak` frames | `src/voice/narrator.ts`, `src/api/websocket.ts` |
+| Propose-then-confirm gate | `src/core/orchestrator/voice-plan-gate.ts`, `src/core/orchestrator/service.ts` |
+| Telephony media stream (`/voice/media/:provider`) | `src/api/voice-media-ws.ts` |
+| Web hooks | `web/hooks/useVoiceRealtime.ts`, `web/hooks/useVoiceConversation.ts` |
+| Audio codec (μ-law / resample) | `src/voice/audio-codec.ts` |
+
+> **Known gap:** streaming TTS synthesizes and plays one sentence at a time, so
+> there's an audible pause between sentences (the next sentence's synth
+> round-trip). Prefetching the next clip while the current one plays would close
+> it.
+
+---
+
 ## Phone Calls
 
 Make and receive actual phone calls through telephony providers. Octipus uses the existing STT/TTS pipeline for audio processing and routes conversations through an expert for fast, direct LLM responses.

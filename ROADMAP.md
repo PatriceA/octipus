@@ -122,7 +122,7 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 - **Federation.** Multiple octipus instances coordinating — your home octipus talks to your work octipus talks to a friend's octipus, with explicit consent and audit trails.
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
-- **Voice as a first-class channel.** Today STT/TTS works through the gateway; we want full duplex voice with interruption handling and emotion-aware routing.
+- **Voice as a first-class channel.** Full-duplex realtime voice with barge-in and a propose-then-confirm conversation layer shipped 2026-07-13/14 (Phase 4 + #216/#217; see Done below). Remaining: emotion-aware routing, prefetched streaming TTS to close the inter-sentence gap, and Voxtral for the turn-based path too.
 - **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker.
 - **Plugin signing & permissions.** Today plugins in `extensions/` run with full host trust. Capability declarations + signature verification. The versioned `@octipus/plugin-sdk` contract (manifest `capabilities`, apiVersion gating, `validatePlugin`) shipped 2026-07-12 (WS3); this item is the remaining phase-3 work — remote install (npm/git) plus signature verification on top of that contract.
 - **Cost-aware routing.** Router considers per-provider cost in addition to capability. Already partial; we want it tunable per user.
@@ -131,6 +131,20 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 
 ## Done (recent)
+
+### 2026-07-13/14 — Live voice conversation (PRs #210–#217)
+
+Hands-free voice in the web chat that talks to the orchestrator, not a
+bolt-on. Realtime duplex `/voice` WebSocket (streaming whisper.cpp or
+Mistral Voxtral STT) with per-sentence streaming TTS and **barge-in**;
+a Twilio media-stream path for phone calls; a **propose-then-confirm
+gate** so a spoken work request is planned/clarified and confirmed
+before it spawns (on the fast `voice`-topic model, read-only over the
+orchestrator); a **backend narrator** that speaks agent lifecycle as it
+happens and the reply fresh per turn (no more stale-reply repeat); plus
+a WebSocket reconnect-storm fix in the auth-ticket failsafe. Architecture
+in [`docs/VOICE.md`](docs/VOICE.md); plan/handoff in
+[`docs/plans/voice-live-conversation-fixes.md`](docs/plans/voice-live-conversation-fixes.md).
 
 ### 2026-07-12 — OpenClaw gap integration (eight phases)
 
