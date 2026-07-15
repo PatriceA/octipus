@@ -39,6 +39,25 @@ describe('composeChildMessage — date grounding', () => {
     // that could disagree with the local date near midnight.
     expect(msg).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
+
+  test('brief drops the ~1.5KB policy but keeps a compact high-salience reminder (Phase 4)', () => {
+    const msg = composeChildMessage(brief, {
+      availableToolNames: ['websearch__search'],
+      canSpawnChildren: true,
+    });
+    // The full policy moved to buildDelegationGuidance() → system prompt...
+    expect(msg).not.toContain('DELEGATION POLICY');
+    expect(msg).not.toContain('HOW SPAWNING WORKS');
+    // ...but a short trailing reminder remains so weak models still act on it.
+    expect(msg).toContain('spawn_child');
+    expect(msg).toContain('collect_children');
+    expect(msg.length).toBeLessThan(1200); // nowhere near the old ~1.5KB block
+  });
+
+  test('leaf subagents still get the no-delegation reminder in the brief', () => {
+    const msg = composeChildMessage(brief, { availableToolNames: [], canSpawnChildren: false });
+    expect(msg).toContain('leaf subagent');
+  });
 });
 
 // ── syncParentTokenUsage: node budget reflects live worker spend ──────
