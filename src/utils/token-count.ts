@@ -66,3 +66,30 @@ export function estimateTokens(content: string): number {
   }
   return count;
 }
+
+const TRUNCATION_MARKER = '\n…[truncated]';
+
+/**
+ * Truncate text so the result — INCLUDING the truncation marker — is at most
+ * `budget` tokens. Used to bound per-section context injections (AGENTS.md
+ * guides, indexes, maps) so one oversized section can't blow the prompt budget.
+ * Cuts on real token boundaries (encode → slice ids → decode), so it never
+ * exceeds the budget and never splits a surrogate pair. Falls back to a chars/4
+ * cut only if the encoder can't load.
+ */
+export function truncateToTokens(text: string, budget: number): string {
+  if (budget <= 0) return '';
+  const enc = getEncoder();
+  if (!enc) {
+    // Encoder unavailable: approximate with chars/4, leaving room for the marker.
+    if (Math.ceil(text.length / 4) <= budget) return text;
+    const keepChars = Math.max(0, (budget - 4) * 4);
+    return `${text.slice(0, keepChars).trimEnd()}${TRUNCATION_MARKER}`;
+  }
+  const ids = enc.encode(text);
+  if (ids.length <= budget) return text;
+  // Reserve the marker's tokens so the TOTAL stays within budget.
+  const markerTokens = enc.encode(TRUNCATION_MARKER).length;
+  const keep = Math.max(0, budget - markerTokens);
+  return `${enc.decode(ids.slice(0, keep)).trimEnd()}${TRUNCATION_MARKER}`;
+}
