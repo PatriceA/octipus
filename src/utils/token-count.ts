@@ -66,3 +66,20 @@ export function estimateTokens(content: string): number {
   }
   return count;
 }
+
+/**
+ * Deterministically truncate text to approximately `budget` tokens, appending
+ * an ellipsis marker when trimmed. Used to bound per-section context injections
+ * (AGENTS.md guides, indexes, maps) so one oversized section can't blow the
+ * prompt budget. Uses the section's own chars-per-token ratio for a
+ * single-pass, encoder-free cut (estimate stays within a few % of the real
+ * count for prose/markdown).
+ */
+export function truncateToTokens(text: string, budget: number): string {
+  if (budget <= 0) return '';
+  const tokens = estimateTokens(text);
+  if (tokens <= budget) return text;
+  const charsPerToken = text.length / tokens;
+  const keep = Math.max(0, Math.floor(budget * charsPerToken));
+  return `${text.slice(0, keep).trimEnd()}\n…[truncated to ~${budget} tokens]`;
+}

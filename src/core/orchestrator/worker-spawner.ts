@@ -14,6 +14,7 @@ import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
+import { truncateToTokens } from '@/utils/token-count';
 import { loadAgentsMd } from './agents-md';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
@@ -24,6 +25,9 @@ import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
 import { formatDateTimeContext } from '@/utils/date-context';
+
+/** Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2). */
+const AGENTS_MD_GUIDE_TOKEN_BUDGET = 800;
 
 /**
  * Optional swarm wiring for `spawnWorker`. When provided, the worker is
@@ -519,7 +523,11 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     const agentsGuide = await loadAgentsMd(devProjectPath);
     if (agentsGuide) {
       const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
-      semiStaticParts.push(`\n\n--- AGENTS.md (${projectName}) ---\n${agentsGuide}`);
+      // Bound this per-section injection (Phase 5 item 2) — a large AGENTS.md
+      // shouldn't be able to dominate the prompt budget; agents read the full
+      // file on demand anyway.
+      const bounded = truncateToTokens(agentsGuide, AGENTS_MD_GUIDE_TOKEN_BUDGET);
+      semiStaticParts.push(`\n\n--- AGENTS.md (${projectName}) ---\n${bounded}`);
     }
   }
 

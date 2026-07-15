@@ -195,6 +195,27 @@ think you need to break one, open an issue first.
 - **DB schema change** → edit Drizzle schema in `src/db/schema/`, then
   `bun run db:generate` to produce a migration, then `bun run db:migrate`.
 
+## Voice Integration Architecture
+
+Octipus features a comprehensive voice subsystem (`src/voice/`) divided into three distinct execution paths:
+
+1. **Batch Processing (REST API)**
+   - **Endpoints:** `/api/voice/transcribe` and `/api/voice/speak` (in `src/api/routes/voice.ts`).
+   - **Engines:** Supports cloud providers (OpenAI Whisper, Mistral Voxtral) and local engines (Whisper.cpp, Piper, Edge TTS, Coqui) interchangeably.
+   - **Usage:** Standard HTTP requests for one-off transcription or synthesis. Implements strict limits (e.g., max 5000 chars for TTS) to prevent billing abuse.
+
+2. **Live Voice (Push-to-Talk & Wake Word)**
+   - **Implementation:** `VoiceService` (`src/voice/index.ts`).
+   - **Features:** Supports wake-word detection (Sherpa, Picovoice Porcupine, VAD) via `startListening()`.
+   - **Limitations:** Push-to-Talk (`startRecording()`) currently hardcodes the `arecord` binary, restricting mic capture strictly to Linux/ALSA environments.
+   - **Streaming:** Supports `streamTranscribe()` and `streamSpeak()` generators for real-time WebSocket clients.
+
+3. **Telephony (Phone Calls)**
+   - **Providers:** Twilio, Telnyx, Plivo (`src/voice/telephony/`).
+   - **Standard Path:** Turn-based conversation using webhooks (`/api/voice/webhook/:provider`) and TwiML `<Gather>`.
+   - **Fast Path:** Bypasses the standard multi-agent Orchestrator routing to ensure low-latency responses (direct LiteLLM call with a short-response expert prompt).
+   - **Media Stream Path (Phase 4d):** For Twilio, an optional WebSocket media bridge (`/api/voice-media-ws.ts`) handles bidirectional `<Connect><Stream>` payload (8kHz μ-law ↔ 16kHz PCM), enabling real-time streaming STT, VAD turn-taking, and caller barge-in.
+
 ## Things to avoid
 
 - Adding a dependency for something doable in ~20 lines.
