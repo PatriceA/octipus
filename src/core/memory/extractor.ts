@@ -123,7 +123,13 @@ export function parseExtractorResponse(raw: string): CandidateFact[] {
 export async function extractFacts(input: ExtractorInput): Promise<CandidateFact[]> {
   if (!looksWorthExtracting(input.userMessage)) return [];
 
-  const model = await getModelRegistry().getModelForTopic('background');
+  let model;
+  try {
+    model = await getModelRegistry().getModelForTopic('background');
+  } catch (err) {
+    if (err instanceof Error && err.message === 'Database not initialized') return [];
+    throw err;
+  }
   if (!model) {
     coreLogger.debug('memory.extractor: no model bound to the "background" topic — skipping');
     return [];
