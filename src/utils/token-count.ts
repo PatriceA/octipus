@@ -33,10 +33,18 @@ const TOKEN_CACHE_MAX = 4096;
  * chars/4 fallback. Used for pre-flight budgeting/compaction only — provider
  * `usage` remains ground truth for billing.
  */
+// Only strings this long are worth a cache slot: short, frequently-changing
+// strings (e.g. per-turn memory lines) encode in microseconds and would only
+// evict the large append-only history entries the cache exists to serve.
+const TOKEN_CACHE_MIN_LEN = 512;
+
 export function estimateTokens(content: string): number {
   if (!content) return 0;
-  const cached = tokenCache.get(content);
-  if (cached !== undefined) return cached;
+  const cacheable = content.length >= TOKEN_CACHE_MIN_LEN;
+  if (cacheable) {
+    const cached = tokenCache.get(content);
+    if (cached !== undefined) return cached;
+  }
 
   let count: number;
   const enc = getEncoder();
@@ -50,9 +58,11 @@ export function estimateTokens(content: string): number {
     count = Math.ceil(content.length / 4);
   }
 
-  if (tokenCache.size >= TOKEN_CACHE_MAX) {
-    tokenCache.delete(tokenCache.keys().next().value as string);
+  if (cacheable) {
+    if (tokenCache.size >= TOKEN_CACHE_MAX) {
+      tokenCache.delete(tokenCache.keys().next().value as string);
+    }
+    tokenCache.set(content, count);
   }
-  tokenCache.set(content, count);
   return count;
 }

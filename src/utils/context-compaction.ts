@@ -31,7 +31,12 @@ async function condenseForSummary(
   summaryModel: string,
   userId: string | undefined,
 ): Promise<string> {
-  if (serialized.length <= SUMMARY_INPUT_CHARS) return serialized;
+  // Single-pass zone: a history at most ~2× the single-pass size loses little
+  // to a plain head-slice, and map-reduce (N map calls + reduce) isn't worth
+  // its 3–9× cost/latency. Only genuinely long histories pay for chunking.
+  if (serialized.length <= 2 * SUMMARY_INPUT_CHARS) {
+    return serialized.slice(0, SUMMARY_INPUT_CHARS);
+  }
 
   const client = getLiteLLMClient();
   const chunks: string[] = [];
@@ -63,12 +68,26 @@ async function condenseForSummary(
     maxTokens: 250,
   });
 
-  const partials = await Promise.all(
-    chunks.map(async (chunk, idx) => {
-      const res = await client.complete(mapOpts(chunk));
-      return `[Part ${idx + 1}] ${res.content}`;
-    }),
+  // allSettled, not all: one transient map-call failure must NOT discard the
+  // other (paid-for) partial summaries and collapse the whole compaction to the
+  // keyword fallback. Keep whatever succeeded, in order.
+  const settled = await Promise.allSettled(
+    chunks.map((chunk) => client.complete(mapOpts(chunk))),
   );
+  const partials = settled
+    .map((s, idx) => (s.status === 'fulfilled' ? `[Part ${idx + 1}] ${s.value.content}` : null))
+    .filter((p): p is string => p !== null);
+
+  const failures = settled.length - partials.length;
+  if (failures > 0) {
+    coreLogger.warn(
+      { failures, total: settled.length },
+      'summarizer: some map-chunk summaries failed — proceeding with the rest',
+    );
+  }
+  // Every chunk failed — fall back to the plain head-slice so the reduce pass
+  // still produces a real summary rather than throwing.
+  if (partials.length === 0) return serialized.slice(0, SUMMARY_INPUT_CHARS);
   return partials.join('\n\n');
 }
 

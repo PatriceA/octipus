@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Memory } from '@/db/schema/memories';
-import { renderMemoriesBlock } from './retrieval';
+import { estimateTokens } from '@/utils/token-count';
+import { DEFAULT_MEMORY_TOKEN_BUDGET, renderMemoriesBlock } from './retrieval';
 
 const mem = (content: string, factType = 'preference', confidence = 1): Memory =>
   ({ content, factType, confidence } as Memory);
@@ -36,5 +37,15 @@ describe('renderMemoriesBlock — token budget', () => {
 
   test('returns empty string when nothing fits the budget', () => {
     expect(renderMemoriesBlock([mem('y'.repeat(2000))], 20)).toBe('');
+  });
+
+  test('default budget bounds total tokens (no unbounded expansion from limit 8/12→20)', () => {
+    // The invariant is a bounded TOKEN footprint, not a row count — 20 tiny
+    // rows fitting in ~190 tok is fine; a few large rows must still be capped.
+    // Regression guard for the "raising candidate limit injects more" finding.
+    expect(DEFAULT_MEMORY_TOKEN_BUDGET).toBeLessThanOrEqual(300);
+    const rows = Array.from({ length: 20 }, () => mem('x'.repeat(400)));
+    const block = renderMemoriesBlock(rows);
+    expect(estimateTokens(block)).toBeLessThanOrEqual(DEFAULT_MEMORY_TOKEN_BUDGET);
   });
 });

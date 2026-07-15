@@ -14,11 +14,15 @@
  */
 
 import type { Memory } from '@/db/schema/memories';
+import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 import { type MemoryAccessScope, getMemoryRepository } from './repository';
 
-/** Default token budget for the injected memory block (Phase 5). */
-export const DEFAULT_MEMORY_TOKEN_BUDGET = 400;
+// Default token budget for the injected memory block (Phase 5). Sized to
+// roughly the PRIOR footprint (the old flat 8–12 short rows ≈ 150–250 tok) so
+// the token cap TRIMS large rows without silently injecting MORE than before —
+// the win is bounding oversized rows, not admitting more of them.
+export const DEFAULT_MEMORY_TOKEN_BUDGET = 250;
 
 export async function retrieveForContext(scope: MemoryAccessScope & { limit?: number }): Promise<Memory[]> {
   const repo = getMemoryRepository();
@@ -46,14 +50,26 @@ export function renderMemoriesBlock(
   const HEADER = '\n\nKnown about the user (long-term memory):\n';
   let used = estimateTokens(HEADER);
   const lines: string[] = [];
+  let dropped = 0;
   for (const m of rows) {
     const conf = typeof m.confidence === 'number' ? m.confidence : 1;
     const tag = conf < 0.9 ? `${m.factType}, p≈${conf.toFixed(2)}` : m.factType;
     const line = `- (${tag}) ${m.content}`;
     const cost = estimateTokens(line) + 1; // +1 for the joining newline
-    if (used + cost > tokenBudget) continue; // skip; a cheaper later row may fit
+    if (used + cost > tokenBudget) {
+      dropped++;
+      continue; // skip; a cheaper later row may fit
+    }
     lines.push(line);
     used += cost;
+  }
+  // Fail loud: an operator debugging "agent forgot a known fact" needs to see
+  // that memory was budget-trimmed, not silently absent.
+  if (dropped > 0) {
+    coreLogger.debug(
+      { rendered: lines.length, dropped, tokenBudget, usedTokens: used },
+      'memory block trimmed to token budget',
+    );
   }
   if (lines.length === 0) return '';
   return `${HEADER}${lines.join('\n')}\n`;
