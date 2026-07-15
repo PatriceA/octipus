@@ -26,8 +26,11 @@ import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
 import { formatDateTimeContext } from '@/utils/date-context';
 
-/** Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2). */
-const AGENTS_MD_GUIDE_TOKEN_BUDGET = 800;
+// Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2).
+// ≈ the existing 8000-char cap in loadAgentsMd, so a normal guide isn't trimmed
+// further — this converts that char cap to a correct TOKEN cap, which bites only
+// for token-dense guides (code/tables/CJK) that a char cap under-bounds.
+const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
 
 /**
  * Optional swarm wiring for `spawnWorker`. When provided, the worker is
@@ -523,9 +526,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     const agentsGuide = await loadAgentsMd(devProjectPath);
     if (agentsGuide) {
       const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
-      // Bound this per-section injection (Phase 5 item 2) — a large AGENTS.md
-      // shouldn't be able to dominate the prompt budget; agents read the full
-      // file on demand anyway.
+      // Bound this per-section injection in TOKENS (Phase 5 item 2). Budget ≈
+      // the existing 8000-char cap, so prose guides pass through unchanged; only
+      // token-dense guides (which a char cap under-bounds) get trimmed.
       const bounded = truncateToTokens(agentsGuide, AGENTS_MD_GUIDE_TOKEN_BUDGET);
       semiStaticParts.push(`\n\n--- AGENTS.md (${projectName}) ---\n${bounded}`);
     }

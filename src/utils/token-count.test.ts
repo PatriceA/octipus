@@ -14,12 +14,20 @@ describe('truncateToTokens', () => {
     expect(truncateToTokens(t, 1000)).toBe(t);
   });
 
-  test('trims to approximately the budget and marks truncation', () => {
+  test('result INCLUDING the marker never exceeds the budget', () => {
     const big = 'word '.repeat(2000); // ~2000 tokens
     const out = truncateToTokens(big, 100);
-    expect(out).toContain('…[truncated to ~100 tokens]');
-    expect(estimateTokens(out)).toBeLessThan(200); // near budget, not the full 2000
+    expect(out).toContain('…[truncated]');
+    expect(estimateTokens(out)).toBeLessThanOrEqual(100); // hard cap, marker included
     expect(out.length).toBeLessThan(big.length);
+  });
+
+  test('cuts on token boundaries — no lone surrogate at the edge', () => {
+    // Astral-plane chars (emoji) must not be split into a replacement char.
+    const emoji = '😀'.repeat(500);
+    const out = truncateToTokens(emoji, 50);
+    expect(estimateTokens(out)).toBeLessThanOrEqual(50);
+    expect(out).not.toContain('�'); // no replacement char
   });
 
   test('budget <= 0 yields empty', () => {
