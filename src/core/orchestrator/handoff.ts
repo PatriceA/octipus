@@ -229,6 +229,30 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
   };
 }
 
+/**
+ * Instruction appended to every NON-final pipeline stage so it emits the
+ * ```handoff block `parseStructuredHandoff` consumes (Phase B3). Kept next to
+ * the parser above so the emitted shape and the parsed shape can't drift. The
+ * regex extractors below stay as the loud fallback for stages (or models) that
+ * don't produce the block.
+ */
+export const HANDOFF_EMIT_INSTRUCTION = `
+
+---
+PIPELINE HANDOFF — after your normal report above, append a machine-readable handoff for the next stage as a fenced code block tagged \`handoff\` containing ONLY this JSON (no prose inside the fence):
+
+\`\`\`handoff
+{
+  "completedWork": "1-3 sentence summary of what THIS stage produced",
+  "decisions": ["a key decision the next stage must respect"],
+  "artifacts": ["a file path / URL you created or changed"],
+  "openQuestions": ["anything unresolved the next stage should address"],
+  "nextStageInstructions": "explicit, actionable instruction for the next stage"
+}
+\`\`\`
+
+Use [] for any field with nothing to report. The block is DATA for the pipeline (not shown to the user) — keep your normal prose report above it.`;
+
 // ── Internal extraction helpers ──────────────────────────────────
 
 function extractDecisions(output: string): string[] {

@@ -10,7 +10,7 @@ import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '
 import { pipelineStages, pipelines } from '@/db/schema/pipelines';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
+import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext } from './handoff';
 
 /** Coerce an arbitrary value to the enumerated QA confidence (or undefined). */
 function normalizeConfidence(v: unknown): QAValidationResult['confidence'] {
@@ -130,11 +130,14 @@ export class PipelineManager {
 
       // Build input from template, using structured handoff chain when available
       const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
-      const input = expandPromptTemplate(stageTemplate.promptTemplate, {
+      let input = expandPromptTemplate(stageTemplate.promptTemplate, {
         description,
         previousOutput: handoffText || previousOutput,
         ...paramVars,
       });
+      // Non-final stages emit a structured ```handoff block for the next stage
+      // (Phase B3) — createHandoffContext below prefers it over regex scraping.
+      if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
 
       // Update stage input
       await this.updateStage(stage.id, { input, status: 'running' });
@@ -602,7 +605,9 @@ export class PipelineManager {
       // Build input using structured handoff chain when available
       const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
       const contextInput = handoffText || previousOutput;
-      const input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
+      let input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
+      // Non-final stages emit a structured ```handoff block (Phase B3).
+      if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
 
       await this.updateStage(stage.id, { input, status: 'running' });
       await this.updatePipeline(pipeline.id, { currentStageIndex: i, status: 'running' });
