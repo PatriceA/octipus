@@ -13,6 +13,20 @@ import { cacheAffinityKey, extractCachedTokens } from './usage';
 
 const GROK_BASE_URL = 'https://api.x.ai/v1';
 
+// Per-request options shared by complete() and stream(): the abort signal plus,
+// for Phase 2c, a stable per-session x-grok-conv-id that maximizes automatic
+// prompt-cache hit rate on the static prefix. Header — ignored by the server if
+// unrecognized, so it can't break a request.
+function grokReqOpts(
+  options: CompletionOptions
+): { signal?: AbortSignal; headers?: Record<string, string> } {
+  const reqOpts: { signal?: AbortSignal; headers?: Record<string, string> } = {};
+  if (options.signal) reqOpts.signal = options.signal;
+  const convId = cacheAffinityKey(options.sessionId, options.userId);
+  if (convId) reqOpts.headers = { 'x-grok-conv-id': convId };
+  return reqOpts;
+}
+
 // Reasoning streams may run minutes; vendor recommends ~3600s client timeout.
 // https://docs.x.ai/docs/guides/streaming-response
 const REASONING_TIMEOUT_MS = 3_600_000;
@@ -55,12 +69,7 @@ export class GrokProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
-    // Grok prompt caching is automatic; a stable per-session conversation id
-    // maximizes the hit rate on the cached static prefix (Phase 2c).
-    const convId = cacheAffinityKey(options.sessionId);
-    const reqOpts: { signal?: AbortSignal; headers?: Record<string, string> } = {};
-    if (options.signal) reqOpts.signal = options.signal;
-    if (convId) reqOpts.headers = { 'x-grok-conv-id': convId };
+    const reqOpts = grokReqOpts(options);
 
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
@@ -165,7 +174,7 @@ export class GrokProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, grokReqOpts(options));
     } catch (err) {
       throw classifyError(err, 'grok');
     }

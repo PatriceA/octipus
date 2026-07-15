@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * Normalize provider prompt-cache usage fields into CompletionResult.usage.
  *
@@ -20,15 +22,18 @@ export function extractCachedTokens(rawUsage: unknown): {
 }
 
 /**
- * Stable, opaque prompt-cache affinity key derived from a session id. Providers
- * that route requests to a cached prefix by key (Mistral `prompt_cache_key`,
- * Grok `x-grok-conv-id`) get better hit rates when same-session requests share
- * one. Hashed so no raw session id / PII leaves the process.
+ * Stable, opaque prompt-cache affinity key derived from session + user id.
+ * Providers that route requests to a cached prefix by key (Mistral
+ * `prompt_cache_key`, Grok `x-grok-conv-id`) get better hit rates when
+ * same-session requests share one. Hashed (SHA-256, 128-bit prefix) so no raw
+ * id / PII leaves the process; salted with userId so distinct users can never
+ * collide onto one another's cache-affinity key.
  */
-export function cacheAffinityKey(sessionId: string | undefined): string | undefined {
+export function cacheAffinityKey(
+  sessionId: string | undefined,
+  userId?: string
+): string | undefined {
   if (!sessionId) return undefined;
-  // djb2 — cheap, non-crypto; we only need a stable opaque token, not security.
-  let h = 5381;
-  for (let i = 0; i < sessionId.length; i++) h = ((h << 5) + h + sessionId.charCodeAt(i)) | 0;
-  return `octi-${(h >>> 0).toString(36)}`;
+  const digest = createHash('sha256').update(`${userId ?? ''}:${sessionId}`).digest('hex');
+  return `octi-${digest.slice(0, 32)}`;
 }

@@ -16,6 +16,9 @@ describe('cacheAffinityKey', () => {
   test('different ids map to different keys', () => {
     expect(cacheAffinityKey('session-a')).not.toBe(cacheAffinityKey('session-b'));
   });
+  test('same session but different users never share a key (user-salted)', () => {
+    expect(cacheAffinityKey('s1', 'userA')).not.toBe(cacheAffinityKey('s1', 'userB'));
+  });
 });
 
 describe('extractCachedTokens', () => {
