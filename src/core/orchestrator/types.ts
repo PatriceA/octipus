@@ -15,6 +15,14 @@ export interface QAValidationResult {
   issues: string[];
   feedback: string;
   retryCount: number;
+  /**
+   * Enumerated verdict confidence (Phase 3). Enumerated, not a probability
+   * float — LLM self-reported probabilities are poorly calibrated. `undefined`
+   * when the stage didn't report one (not defaulted — a missing signal stays
+   * missing). A low-confidence pass may warrant a retry even though `passed`
+   * is true.
+   */
+  confidence?: 'high' | 'medium' | 'low';
 }
 
 export interface RoleConfig {

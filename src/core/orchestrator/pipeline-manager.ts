@@ -11,6 +11,16 @@ import { pipelineStages, pipelines } from '@/db/schema/pipelines';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
+
+/** Coerce an arbitrary value to the enumerated QA confidence (or undefined). */
+function normalizeConfidence(v: unknown): QAValidationResult['confidence'] {
+  return v === 'high' || v === 'medium' || v === 'low' ? v : undefined;
+}
+/** Pull a stated `confidence: high|medium|low` (JSON or prose) from raw text. */
+function parseConfidence(text: string): QAValidationResult['confidence'] {
+  const m = text.match(/confidence["\s]*[:=]\s*["']?(high|medium|low)/i);
+  return m ? (m[1].toLowerCase() as 'high' | 'medium' | 'low') : undefined;
+}
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
@@ -942,6 +952,7 @@ export class PipelineManager {
           issues: Array.isArray(parsed.issues) ? parsed.issues : [],
           feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
           retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
+          confidence: normalizeConfidence(parsed.confidence),
         };
       }
     } catch { /* fall through */ }
@@ -959,6 +970,7 @@ export class PipelineManager {
           : [],
         feedback: feedbackMatch ? feedbackMatch[1] : '',
         retryCount: 0,
+        confidence: parseConfidence(output),
       };
     }
 
@@ -1025,6 +1037,7 @@ export class PipelineManager {
       issues,
       feedback: passed ? '' : (output.slice(0, 2000)),
       retryCount: 0,
+      confidence: parseConfidence(output),
     };
   }
 

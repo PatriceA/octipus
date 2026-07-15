@@ -124,11 +124,30 @@ export async function createHandoffContext(params: {
 }): Promise<HandoffContext> {
   const { from, to, originalRequest, stageOutput } = params;
 
-  const decisions = extractDecisions(stageOutput);
-  const openQuestions = extractOpenQuestions(stageOutput);
-  const artifacts = extractArtifacts(stageOutput);
-  const completedWork = summarizeOutput(stageOutput);
-  const instructions = buildInstructions(from, to, stageOutput);
+  // Prefer a schema-enforced handoff block if the stage emitted one — exact
+  // structure, no lossy regex. Fall back PER FIELD when the block omits one
+  // (empty string/array is a miss, not a value), and say so loudly (fail loud).
+  const structured = parseStructuredHandoff(stageOutput);
+  const decisions = structured?.decisions.length ? structured.decisions : extractDecisions(stageOutput);
+  const openQuestions = structured?.openQuestions.length ? structured.openQuestions : extractOpenQuestions(stageOutput);
+  const artifacts = structured?.artifacts.length ? structured.artifacts : extractArtifacts(stageOutput);
+  const completedWork = structured?.completedWork
+    ? summarizeOutput(structured.completedWork)
+    : summarizeOutput(stageOutput);
+  // Always compute the built instructions — they carry the automatic
+  // error/warning flag and role-transition hint the structured block won't.
+  // The stage's own nextStageInstructions, if any, lead.
+  const builtInstructions = buildInstructions(from, to, stageOutput);
+  const instructions = [structured?.instructions, builtInstructions]
+    .filter((s): s is string => !!s && s.length > 0)
+    .join('\n\n');
+
+  if (!structured) {
+    coreLogger.info(
+      { from: `${from.stageName || from.role}`, to: `${to.stageName || to.role}` },
+      'handoff: no structured block found — fell back to prose extraction',
+    );
+  }
 
   const handoff: HandoffContext = {
     id: generateId(),
@@ -148,6 +167,7 @@ export async function createHandoffContext(params: {
       handoffId: handoff.id,
       from: `${from.stageName || from.role}`,
       to: `${to.stageName || to.role}`,
+      structured: !!structured,
       decisionsCount: decisions.length,
       artifactsCount: artifacts.length,
       questionsCount: openQuestions.length,
@@ -156,6 +176,57 @@ export async function createHandoffContext(params: {
   );
 
   return handoff;
+}
+
+interface StructuredHandoff {
+  decisions: string[];
+  openQuestions: string[];
+  artifacts: string[];
+  instructions: string;
+  completedWork: string;
+}
+
+const HANDOFF_ITEM_MAX = 500; // per-item char bound, matches the regex extractors
+
+/**
+ * Extract a schema-enforced handoff from a stage's output. Stages opt in ONLY
+ * by emitting an explicit fenced ```handoff block — a generic ```json block is
+ * NOT treated as a handoff (a doc/example block that happens to mention
+ * "handoff" must not override real prose extraction). Returns null when absent
+ * or malformed — the caller falls back to regex scraping. Every field is
+ * coerced to the expected type and per-item length-bounded; embedded text is
+ * DATA only (populates string arrays, never executes), narrowing the injection
+ * surface a compromised stage can steer.
+ */
+export function parseStructuredHandoff(output: string): StructuredHandoff | null {
+  const fenced = output.match(/```handoff\s*\n?([\s\S]*?)\n?```/);
+  if (!fenced) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fenced[1].trim());
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+
+  const h = raw as Record<string, unknown>;
+  const strArray = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v
+          .filter((x): x is string => typeof x === 'string' && x.length > 0)
+          .map((x) => x.slice(0, HANDOFF_ITEM_MAX))
+          .slice(0, 20)
+      : [];
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+  return {
+    decisions: strArray(h.decisions),
+    openQuestions: strArray(h.openQuestions),
+    artifacts: strArray(h.artifacts),
+    // Accept either name — plan calls it nextStageInstructions.
+    instructions: str(h.instructions) || str(h.nextStageInstructions),
+    completedWork: str(h.completedWork),
+  };
 }
 
 // ── Internal extraction helpers ──────────────────────────────────

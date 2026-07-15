@@ -206,6 +206,48 @@ describe('formatChildResult', () => {
     expect(s).toContain('{"foo":"bar"}');
   });
 
+  test('renders the deterministic receipt so the parent can audit ground truth', () => {
+    const r: ChildResult = {
+      nodeId: 'n-r',
+      kind: 'agent',
+      status: 'ok',
+      output: 'I edited the files and ran the tests',
+      usedTokens: 10,
+      durationMs: 20,
+      spawnedChildren: [],
+      receipt: {
+        schemaVersion: 1,
+        nodeId: 'n-r',
+        kind: 'agent',
+        status: 'ok',
+        sideEffects: {
+          toolCalls: 5, filesChanged: 0, commandsRun: 0, approvalsRequired: 0,
+          approvalsDenied: 0, autoApproved: 0, permissionDenials: 2, toolErrors: 1,
+          byName: { read_file: 5 },
+        },
+        tokens: { used: 10, cap: 1000 },
+        durationMs: 20,
+        unavailable: [],
+        notCertified: [],
+      },
+    };
+    const s = formatChildResult(r);
+    // Child claims it edited files, but the receipt says filesChanged=0 — the
+    // parent can now catch the discrepancy without re-reading the transcript.
+    expect(s).toContain('<receipt');
+    expect(s).toContain('filesChanged="0"');
+    expect(s).toContain('toolErrors="1"');
+    expect(s).toContain('denials="2"');
+  });
+
+  test('omits the receipt block when there is no receipt (no worker ran)', () => {
+    const r: ChildResult = {
+      nodeId: 'n-nr', kind: 'agent', status: 'denied', output: '',
+      usedTokens: 0, durationMs: 0, spawnedChildren: [],
+    };
+    expect(formatChildResult(r)).not.toContain('<receipt');
+  });
+
   test('appends notes when present', () => {
     const r: ChildResult = {
       nodeId: 'n2',
