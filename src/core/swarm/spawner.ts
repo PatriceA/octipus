@@ -872,7 +872,10 @@ export class SwarmSpawner {
     // synthesizing against output that missed the brief.
     // Enforce a declared expectedOutput.schema as an implicit output gate
     // (Phase B1), in addition to any scorers the parent attached explicitly.
-    const schemaScorer = deriveSchemaScorer(opts.brief.expectedOutput?.schema);
+    // Only for shape=json — a schema on a markdown/summary deliverable is not a
+    // JSON contract and must not flip a correct non-JSON result to failed.
+    const eo = opts.brief.expectedOutput;
+    const schemaScorer = eo?.shape === 'json' ? deriveSchemaScorer(eo.schema) : null;
     const effectiveScorers: Scorer[] = [
       ...(schemaScorer ? [schemaScorer] : []),
       ...(opts.scorers ?? []),
@@ -1383,13 +1386,14 @@ export function composeChildMessage(
   }
 
   const eo = brief.expectedOutput;
-  if (eo.schema) {
-    // Schema declared (Phase B1): the child's ENTIRE reply must be one JSON
+  if (eo.shape === 'json' && eo.schema) {
+    // shape=json + schema (Phase B1): the child's ENTIRE reply must be one JSON
     // object matching it — a shape gate validates this on return and fails loud
-    // (contract_failed) otherwise. No markdown fence, or the gate can't parse it.
+    // (contract_failed) otherwise. Only for shape=json: a schema attached to a
+    // markdown/summary deliverable does NOT override the declared shape.
     parts.push(
-      `Expected output: return ONLY a single JSON object — no prose, no markdown code fence — ` +
-        `that conforms to this JSON Schema (every "required" key MUST be present):\n` +
+      `Expected output: return ONLY a single JSON object that conforms to this JSON Schema ` +
+        `(every "required" key MUST be present):\n` +
         `${JSON.stringify(eo.schema)}\n` +
         `(max ${eo.maxTokens} tokens). Your entire reply must be that JSON object.`,
     );

@@ -11,14 +11,15 @@ async function run(scorers: Scorer[], output: unknown, notes?: string) {
 }
 
 describe('deriveSchemaScorer (Phase B1)', () => {
-  it('derives a json scorer with requiredKeys from the schema `required`', () => {
+  it('derives a json+object scorer with requiredKeys from the schema `required`', () => {
     const s = deriveSchemaScorer({ type: 'object', required: ['verdict', 'score'], properties: { verdict: {}, score: {}, notes: {} } });
-    expect(s).toEqual({ kind: 'json', requiredKeys: ['verdict', 'score'] });
+    expect(s).toEqual({ kind: 'json', requiredKeys: ['verdict', 'score'], object: true });
   });
 
-  it('falls back to all property names when no `required` is declared', () => {
+  it('does NOT promote optional properties to required (JSON-Schema is optional-by-default)', () => {
+    // properties but no `required` → requiredKeys empty; object-ness still enforced.
     const s = deriveSchemaScorer({ type: 'object', properties: { a: {}, b: {} } });
-    expect(s).toEqual({ kind: 'json', requiredKeys: ['a', 'b'] });
+    expect(s).toEqual({ kind: 'json', requiredKeys: [], object: true });
   });
 
   it('returns null for a non-object / absent schema', () => {
@@ -39,8 +40,17 @@ describe('deriveSchemaScorer (Phase B1)', () => {
     expect(missing.passed).toBe(false);
     expect(missing.failures[0].reason).toMatch(/missing required keys: verdict/);
     // Conforming JSON → passes.
-    const ok = await run([scorer], JSON.stringify({ verdict: 'pass' }));
-    expect(ok.passed).toBe(true);
+    expect((await run([scorer], JSON.stringify({ verdict: 'pass' }))).passed).toBe(true);
+    // Conforming JSON wrapped in a ```json fence → still passes (fence tolerated).
+    expect((await run([scorer], '```json\n{"verdict":"pass"}\n```')).passed).toBe(true);
+  });
+
+  it('object-ness is enforced even with no required keys (rejects bare non-objects)', async () => {
+    const scorer = deriveSchemaScorer({ type: 'object' })!; // requiredKeys: []
+    expect((await run([scorer], '42')).passed).toBe(false);
+    expect((await run([scorer], 'null')).passed).toBe(false);
+    expect((await run([scorer], '[1,2]')).passed).toBe(false);
+    expect((await run([scorer], '{"anything":true}')).passed).toBe(true);
   });
 });
 
