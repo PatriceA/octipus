@@ -10,6 +10,8 @@ describe('isAnthropicFamily', () => {
     expect(isAnthropicFamily('claude-3-5-sonnet')).toBe(true);
     expect(isAnthropicFamily('openai/gpt-4o')).toBe(false);
     expect(isAnthropicFamily('gemini-2.0-flash')).toBe(false);
+    // Not fooled by "anthropic" as a non-prefix substring of a foreign backend.
+    expect(isAnthropicFamily('anthropic-gateway/llama-70b')).toBe(false);
   });
 });
 
@@ -55,5 +57,16 @@ describe('applyAnthropicCacheControl', () => {
     const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: 'short' + VOLATILE }];
     expect(applyAnthropicCacheControl(messages)).toBe(false);
     expect(messages[0].content).toBe('short' + VOLATILE);
+  });
+
+  test('marks only the FIRST splittable system message (stays under the 4-breakpoint cap)', () => {
+    const big = 'S'.repeat(5000) + VOLATILE;
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: big },
+      { role: 'system', content: big },
+    ];
+    expect(applyAnthropicCacheControl(messages)).toBe(true);
+    expect(Array.isArray(messages[0].content)).toBe(true); // first rewritten
+    expect(messages[1].content).toBe(big); // second left as-is → single breakpoint
   });
 });

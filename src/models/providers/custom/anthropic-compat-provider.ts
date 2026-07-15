@@ -7,7 +7,7 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../../lit
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
-import { splitVolatileSystem } from '../prompt-cache';
+import { buildCachedBlocks, splitVolatileSystem } from '../prompt-cache';
 
 /**
  * Custom Anthropic-compatible provider.
@@ -231,11 +231,7 @@ type AnthropicSystem =
 export function buildCachedSystem(system: string): AnthropicSystem {
   const split = splitVolatileSystem(system);
   if (!split) return system;
-  const blocks: Exclude<AnthropicSystem, string> = [
-    { type: 'text', text: split.staticPart, cache_control: { type: 'ephemeral' } },
-  ];
-  if (split.volatilePart) blocks.push({ type: 'text', text: split.volatilePart });
-  return blocks;
+  return buildCachedBlocks(split);
 }
 
 /**

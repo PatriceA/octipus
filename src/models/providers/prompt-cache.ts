@@ -29,38 +29,54 @@ export function splitVolatileSystem(system: string): { staticPart: string; volat
   return { staticPart: system.slice(0, m.index), volatilePart: system.slice(m.index) };
 }
 
+/** Cache-breakpoint content block. `cache_control` is an Anthropic pass-through
+ * field the OpenAI SDK types don't model; the volatile block omits it. */
+type CachedBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
+
 /**
- * True when a model routes to an Anthropic upstream — the only family whose
- * OpenAI-compat endpoints (via LiteLLM / OpenRouter) honor `cache_control`
- * content blocks. Name-based: an Anthropic model aliased to something without
- * "claude"/"anthropic" in its id won't be detected (acceptable — it just
- * doesn't get the cache breakpoint, same as before).
+ * Build the [static (cached), volatile (uncached)] content blocks for a split.
+ * The ONE source of the block shape — both the native `system` array
+ * (buildCachedSystem) and the OpenAI-compat message content (below) use it, so
+ * the two wire shapes can't drift out of lockstep.
  */
-export function isAnthropicFamily(model: string): boolean {
-  return /claude|anthropic/i.test(model);
+export function buildCachedBlocks(split: { staticPart: string; volatilePart: string }): CachedBlock[] {
+  const blocks: CachedBlock[] = [{ type: 'text', text: split.staticPart, cache_control: { type: 'ephemeral' } }];
+  if (split.volatilePart) blocks.push({ type: 'text', text: split.volatilePart });
+  return blocks;
 }
 
 /**
- * Rewrite any system message whose content spans the static/volatile boundary
- * into OpenAI-style content blocks carrying an Anthropic `cache_control`
- * ephemeral breakpoint at that boundary. Mutates `messages` in place; a no-op
- * (leaves the plain string) when the prompt has no cacheable split. Only call
- * this for Anthropic-family models — other upstreams may reject the field.
- * Returns true if a breakpoint was applied (for telemetry/tests).
+ * True when a model routes to an Anthropic upstream — the only family whose
+ * OpenAI-compat endpoints (via LiteLLM / OpenRouter) honor `cache_control`
+ * content blocks. Heuristic: "claude" in an id is effectively always Anthropic,
+ * and "anthropic/" is the provider path segment. Deliberately does NOT match a
+ * bare "anthropic" elsewhere in the id (e.g. an "anthropic-gateway/llama" alias
+ * pointing at a non-Anthropic backend), which would otherwise get cache_control
+ * blocks a strict upstream 400s on. An Anthropic model aliased without either
+ * token just misses the breakpoint (same as before) — a safe false negative.
+ */
+export function isAnthropicFamily(model: string): boolean {
+  return /claude/i.test(model) || /(^|\/)anthropic\//i.test(model);
+}
+
+/**
+ * Rewrite the FIRST system message that spans the static/volatile boundary into
+ * OpenAI-style content blocks carrying an Anthropic `cache_control` ephemeral
+ * breakpoint. Mutates `messages` in place; a no-op (leaves the plain string)
+ * when nothing is cacheable. Only the first splittable system message is marked
+ * — one breakpoint is all the assembled prompt needs, and it keeps us well
+ * under Anthropic's 4-breakpoint cap even if a request carries several system
+ * turns. Only call this for Anthropic-family models — other upstreams may
+ * reject the field. Returns true if a breakpoint was applied (used by tests;
+ * callers may log it).
  */
 export function applyAnthropicCacheControl(messages: ChatCompletionMessageParam[]): boolean {
-  let applied = false;
   for (const msg of messages) {
     if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
     const split = splitVolatileSystem(msg.content);
     if (!split) continue;
-    // cache_control is an Anthropic pass-through field the OpenAI SDK/types
-    // don't model, so build the blocks untyped and assign through a cast.
-    (msg as { content: unknown }).content = [
-      { type: 'text', text: split.staticPart, cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: split.volatilePart },
-    ];
-    applied = true;
+    (msg as { content: unknown }).content = buildCachedBlocks(split);
+    return true;
   }
-  return applied;
+  return false;
 }
