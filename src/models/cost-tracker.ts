@@ -15,6 +15,22 @@ export interface ModelUsageStats extends UsageStats {
   modelName: string;
 }
 
+// Cached prompt-read price as a fraction of the base input rate, by provider
+// family. Anthropic/Mistral/DeepSeek publish ~0.1×; OpenAI/Grok/Gemini ~0.5×.
+// Unknown providers default to 0.25× (see calculateCost).
+const CACHED_READ_MULTIPLIER: Record<string, number> = {
+  anthropic: 0.1,
+  'custom-anthropic': 0.1,
+  mistral: 0.1,
+  deepseek: 0.1,
+  openai: 0.5,
+  'custom-openai': 0.5,
+  grok: 0.5,
+  gemini: 0.5,
+  'custom-gemini': 0.5,
+  openrouter: 0.5,
+};
+
 export interface DailyUsage {
   date: string;
   inputTokens: number;
@@ -57,12 +73,13 @@ export class CostTracker {
   /**
    * Calculate cost for a request.
    *
-   * `cachedInputTokens` is the subset of `inputTokens` that hit a provider
-   * prompt cache; `cacheCreationTokens` is the write cost for a fresh entry.
-   * ponytail: cached-read at 0.1× and cache-write at 1.25× input price are
-   * provider-average multipliers (Anthropic/Mistral/DeepSeek reads ≈10%,
-   * Anthropic 5-min writes ≈1.25×). Upgrade path when a provider diverges
-   * materially: per-model rate columns on model_config.
+   * Convention (normalized at the provider boundary): `inputTokens` is the
+   * grand-total prompt tokens INCLUDING cached reads and cache-creation;
+   * `cachedInputTokens` and `cacheCreationTokens` are subsets of it, each
+   * billed at its own rate rather than the base input rate.
+   * ponytail: cached-read multiplier is per-provider-family (Anthropic/Mistral/
+   * DeepSeek reads ≈0.1×, OpenAI/Grok/Gemini ≈0.5×) and cache-write ≈1.25×
+   * (Anthropic 5-min). Upgrade path if a model diverges: per-model rate columns.
    */
   async calculateCost(
     modelName: string,
@@ -84,12 +101,14 @@ export class CostTracker {
     }
 
     const inputRate = model[0].costPerInputToken;
-    // Cache reads are a subset of inputTokens — bill the remainder at full price.
-    const fullPriceInput = Math.max(0, inputTokens - cachedInputTokens);
+    const readMultiplier = CACHED_READ_MULTIPLIER[model[0].provider] ?? 0.25;
+    // Cached reads + cache-creation are subsets of inputTokens billed at their
+    // own rates — the remainder is fresh input at full price.
+    const fullPriceInput = Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens);
 
     // Cost is per 1M tokens
     const inputCost = (fullPriceInput / 1_000_000) * inputRate;
-    const cachedReadCost = (cachedInputTokens / 1_000_000) * inputRate * 0.1;
+    const cachedReadCost = (cachedInputTokens / 1_000_000) * inputRate * readMultiplier;
     const cacheWriteCost = (cacheCreationTokens / 1_000_000) * inputRate * 1.25;
     const outputCost = (outputTokens / 1_000_000) * model[0].costPerOutputToken;
 

@@ -108,8 +108,18 @@ const llmLatency = new Histogram({
 });
 const llmTokens = new Counter({
   name: 'octipus_llm_tokens_total',
-  help: 'LLM tokens, by provider, model, and direction (prompt|completion|prompt_cached).',
+  help: 'LLM tokens, by provider, model, and direction (prompt|completion). prompt includes cached tokens.',
   labelNames: ['provider', 'model', 'direction'],
+  registers: [registry],
+});
+// Separate metric — NOT a direction on llmTokens — because cached tokens are a
+// subset of the prompt direction; a shared counter would double-count on any
+// sum-across-directions query. This is the cache-hit numerator; prompt is the
+// denominator.
+const llmCachedTokens = new Counter({
+  name: 'octipus_llm_cached_tokens_total',
+  help: 'Cached prompt tokens (subset of prompt-direction llm_tokens), by provider and model.',
+  labelNames: ['provider', 'model'],
   registers: [registry],
 });
 const swarmSpawns = new Counter({
@@ -183,10 +193,10 @@ export function recordLlmRequest(
     if (tokens?.completion && tokens.completion > 0) {
       llmTokens.inc({ provider: p, model: m, direction: 'completion' }, tokens.completion);
     }
-    // Cached prompt tokens are a subset of `prompt` — a separate series so a
-    // dashboard can show cache-hit ratio without double-counting input cost.
+    // Cached prompt tokens are a subset of `prompt` — its own metric so a
+    // dashboard can show cache-hit ratio without double-counting input volume.
     if (tokens?.cached && tokens.cached > 0) {
-      llmTokens.inc({ provider: p, model: m, direction: 'prompt_cached' }, tokens.cached);
+      llmCachedTokens.inc({ provider: p, model: m }, tokens.cached);
     }
   });
 }

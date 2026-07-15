@@ -10,6 +10,7 @@ import type { AgentMessage, ToolCall } from '@/core/types';
 import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
+import { extractCachedTokens } from '@/models/providers/usage';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
@@ -460,11 +461,6 @@ export class LiteLLMClient {
       // back into the next assistant message by formatMessages above.
       const reasoningContent = (choice.message as { reasoning_content?: string }).reasoning_content;
 
-      // Cache tokens where the upstream reports them (OpenAI/Anthropic-via-proxy
-      // expose prompt_tokens_details.cached_tokens). Left undefined otherwise.
-      const cachedTokens = (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)
-        ?.prompt_tokens_details?.cached_tokens;
-
       const result: CompletionResult = {
         content,
         finishReason: choice.finish_reason || 'stop',
@@ -472,7 +468,8 @@ export class LiteLLMClient {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
-          ...(cachedTokens != null ? { cacheReadTokens: cachedTokens } : {}),
+          // OpenAI/Anthropic/DeepSeek-via-proxy cached-read normalization.
+          ...extractCachedTokens(response.usage),
         },
         model: response.model,
         latencyMs,

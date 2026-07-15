@@ -46,21 +46,40 @@ function getEncoder(): Tiktoken | null {
   return encoder;
 }
 
+// calculateTotalTokens re-estimates the whole (append-only) history every agent
+// turn, so encoding is memoized by content string — unchanged prior messages
+// become cache hits and only new text is BPE-encoded. Bounded to cap memory;
+// evicts oldest on overflow.
+const tokenCache = new Map<string, number>();
+const TOKEN_CACHE_MAX = 4096;
+
 /**
  * Estimate token count for a string using the o200k_base tokenizer, with a
- * chars/4 fallback. Used for pre-flight budgeting/compaction only.
+ * chars/4 fallback. Used for pre-flight budgeting/compaction only — provider
+ * `usage` remains ground truth for billing.
  */
 export function estimateTokens(content: string): number {
   if (!content) return 0;
+  const cached = tokenCache.get(content);
+  if (cached !== undefined) return cached;
+
+  let count: number;
   const enc = getEncoder();
   if (enc) {
     try {
-      return enc.encode(content).length;
+      count = enc.encode(content).length;
     } catch {
-      // fall through to heuristic
+      count = Math.ceil(content.length / 4);
     }
+  } else {
+    count = Math.ceil(content.length / 4);
   }
-  return Math.ceil(content.length / 4);
+
+  if (tokenCache.size >= TOKEN_CACHE_MAX) {
+    tokenCache.delete(tokenCache.keys().next().value as string);
+  }
+  tokenCache.set(content, count);
+  return count;
 }
 
 /**
