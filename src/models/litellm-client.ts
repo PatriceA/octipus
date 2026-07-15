@@ -11,6 +11,7 @@ import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-te
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { extractCachedTokens } from '@/models/providers/usage';
+import { applyAnthropicCacheControl, isAnthropicFamily } from '@/models/providers/prompt-cache';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
@@ -432,6 +433,10 @@ export class LiteLLMClient {
       stream: false,
     };
 
+    // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
+    // content blocks to Anthropic upstreams, so cache the static prefix.
+    if (isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages);
+
     if (options.tools?.length) {
       params.tools = options.tools;
       params.tool_choice = options.toolChoice ?? 'auto';
@@ -615,6 +620,8 @@ export class LiteLLMClient {
       stop: options.stopSequences,
       stream: true,
     };
+
+    if (isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages);
 
     if (options.tools?.length) {
       params.tools = options.tools;
